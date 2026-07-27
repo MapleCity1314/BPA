@@ -1,0 +1,23 @@
+---
+title: JSON Schema
+description: BPA 协议与公共模型的机器可读 JSON Schema 下载。
+---
+
+import SpecDownloads from "../../../components/SpecDownloads.astro";
+
+这里列出的文件由构建过程从 `packages/schemas/schema` 白名单复制。发布文件必须与仓库源文件字节一致。
+
+<SpecDownloads />
+
+## 使用方式
+
+Schema 使用 JSON Schema Draft 2020-12。Browser Protocol 对未知字段严格失败，并通过绝对 `$id` 引用 Permission Grant、Timing Policy 和 Risk Signal。
+
+`$id` 是规范身份，不保证可以直接作为下载 URL。外部工具应使用本页提供的 `/specs/` 地址获取文件，同时保留 Schema 内原始 `$id`。
+
+## 稳定性
+
+- `v1`：字段语义与安全边界已经确认；不兼容变化需要新 Major。
+- `v1alpha1`：允许结构调整；实现方必须固定版本并执行兼容测试。
+
+本网站不会自动发布目录中的新 Schema。每个新增文件都必须显式加入公开白名单。

@@ -1,0 +1,38 @@
+<figure class="protocol-flow" aria-labelledby="protocol-flow-title">
+  <figcaption id="protocol-flow-title">
+    一次可恢复的命令往返
+    <span>Gateway 与 Extension Bridge 各自维护序列并明确确认。</span>
+  </figcaption>
+  <div class="protocol-flow__lanes" aria-hidden="true">
+    <div class="protocol-flow__lane">Gateway</div>
+    <div class="protocol-flow__lane protocol-flow__lane--right">
+      Extension Bridge
+    </div>
+  </div>
+  <ol class="protocol-flow__steps">
+    <li data-direction="right">
+      <span class="protocol-flow__type">session.welcome</span>
+      <span class="protocol-flow__detail">协商协议、公钥与恢复令牌</span>
+    </li>
+    <li data-direction="left">
+      <span class="protocol-flow__type">capability.report</span>
+      <span class="protocol-flow__detail">声明可执行能力与风险等级</span>
+    </li>
+    <li data-direction="right">
+      <span class="protocol-flow__type">command.dispatch</span>
+      <span class="protocol-flow__detail">绑定权限、截止时间与 Fencing Token</span>
+    </li>
+    <li data-direction="left">
+      <span class="protocol-flow__type">command.result</span>
+      <span class="protocol-flow__detail">先持久化结果，再发送最终状态</span>
+    </li>
+    <li data-direction="right">
+      <span class="protocol-flow__type">result.ack</span>
+      <span class="protocol-flow__detail">确认接收后，Bridge 才能清理正文</span>
+    </li>
+  </ol>
+  <p class="protocol-flow__alternative">
+    文本说明：Gateway 先建立会话，Bridge 报告能力；命令携带最小权限与
+    Fencing Token，结果经确认后才进入终态。
+  </p>
+</figure>

@@ -1,0 +1,20 @@
+---
+import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+
+const home = import.meta.env.BASE_URL;
+---
+
+<StarlightPage
+  frontmatter={{
+    title: "页面不存在",
+    description: "请求的 BPA 协议文档页面不存在。",
+    pagefind: false
+  }}
+  hasSidebar={false}
+>
+  <div class="bpa-not-found">
+    <p class="bpa-not-found__code">404</p>
+    <p>检查地址，或返回协议概览继续查找。</p>
+    <a href={home}>返回协议概览</a>
+  </div>
+</StarlightPage>

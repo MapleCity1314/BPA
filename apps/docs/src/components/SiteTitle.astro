@@ -1,0 +1,9 @@
+---
+const { siteTitleHref } = Astro.props as { siteTitleHref: string };
+---
+
+<a class="bpa-site-title" href={siteTitleHref} aria-label="BPA Protocols 首页">
+  <span class="bpa-site-title__brand">BPA</span>
+  <span class="bpa-site-title__section">/ Protocols</span>
+  <span class="bpa-site-title__status">v1</span>
+</a>

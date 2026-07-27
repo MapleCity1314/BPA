@@ -1,0 +1,60 @@
+---
+title: 规范消息样例
+description: 覆盖 Browser Protocol v1 全部消息类型的中性 JSON 样例。
+---
+
+完整样例覆盖 Session、Capability、Command、Result、Cancel、Heartbeat、Evidence 与恢复消息。示例使用 `example.com` 和通用节点标识，不包含业务适配器或真实凭据。
+
+<a class="sl-link-button primary" href={`${import.meta.env.BASE_URL}specs/browser-protocol-v1.messages.json`} download>
+  下载完整 JSON
+</a>
+
+## Session Hello
+
+```json
+{
+  "protocol": "bpa.browser/1",
+  "version": "1.0.0",
+  "message_id": "message-hello",
+  "session_id": "new",
+  "seq": 0,
+  "sent_at": "2026-07-27T06:00:00.000Z",
+  "type": "session.hello",
+  "trace_id": "trace-session",
+  "payload": {
+    "browser_instance_id": "browser-example-01",
+    "extension_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "extension_version": "0.2.0",
+    "supported_protocols": ["bpa.browser/1"],
+    "last_acked_command_seq": 0
+  }
+}
+```
+
+## Command Dispatch
+
+```json
+{
+  "protocol": "bpa.browser/1",
+  "version": "1.0.0",
+  "message_id": "message-command",
+  "session_id": "session-01",
+  "seq": 2,
+  "type": "command.dispatch",
+  "payload": {
+    "command_seq": 1,
+    "workflow_id": "example.page-context-observe",
+    "node": {
+      "id": "browser.page.context.read",
+      "version": "1.1.0"
+    },
+    "fencing_token": 1,
+    "permission_grant": {
+      "domains": ["https://example.com"],
+      "risk_level": "R0"
+    }
+  }
+}
+```
+
+上面的节选只用于阅读，不是可直接校验的完整消息。下载文件包含所有必需字段，并在仓库测试中逐条通过正式 Schema 与 Session Guard。

@@ -1,0 +1,28 @@
+---
+const base = import.meta.env.BASE_URL;
+const specs = [
+  ["browser-protocol-v1.schema.json", "Browser Protocol v1", "v1"],
+  ["permission.schema.json", "Signed Permission Grant", "v1"],
+  ["timing-policy.schema.json", "Timing Policy", "v1"],
+  ["risk-signal.schema.json", "Risk Signal", "v1"],
+  ["workflow.schema.json", "Workflow", "v1alpha1"],
+  ["node.schema.json", "Node Definition", "v1alpha1"],
+  ["event.schema.json", "Execution Event", "v1"],
+  ["evidence.schema.json", "Evidence Metadata", "v1"]
+] as const;
+---
+
+<div class="spec-list">
+  <div class="spec-list__row spec-list__head" aria-hidden="true">
+    <span>规范</span><span>状态</span><span>文件</span>
+  </div>
+  {
+    specs.map(([file, label, version]) => (
+      <div class="spec-list__row">
+        <span>{label}</span>
+        <code>{version}</code>
+        <a href={`${base}specs/${file}`} download>{file}</a>
+      </div>
+    ))
+  }
+</div>

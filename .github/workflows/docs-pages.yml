@@ -1,0 +1,87 @@
+name: BPA Protocol Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/docs/**"
+      - "docs/protocols/**"
+      - "packages/schemas/schema/**"
+      - "packages/gateway-core/src/protocol.test.ts"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/docs-pages.yml"
+  pull_request:
+    paths:
+      - "apps/docs/**"
+      - "docs/protocols/**"
+      - "packages/schemas/schema/**"
+      - "packages/gateway-core/src/protocol.test.ts"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/docs-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify schemas
+        run: pnpm schema:check
+
+      - name: Verify protocol examples
+        run: pnpm vitest run packages/gateway-core/src/protocol.test.ts
+
+      - name: Build and validate docs
+        run: pnpm docs:check
+
+      - name: Configure Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: apps/docs/dist
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

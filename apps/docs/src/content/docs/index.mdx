@@ -1,0 +1,43 @@
+---
+title: 协议让浏览器执行保持可恢复、可验证
+description: BPA 对外协议、公共数据模型、JSON Schema 与规范消息样例。
+editUrl: false
+---
+
+import ProtocolFlow from "../../components/ProtocolFlow.astro";
+
+<p class="protocol-lede">
+  BPA Browser Protocol v1 定义 Browser Gateway 与真实浏览器中的 Extension
+  Bridge 如何建立会话、声明能力、发送命令、确认结果并恢复断线。协议把权限、顺序和证据放进可校验的消息，而不是依赖临时推理。
+</p>
+
+<div class="protocol-status">
+  <span>协议族 bpa.browser/1</span>
+  <span>版本 1.0.0</span>
+  <span>状态 已确认</span>
+  <span>基线 2026-07-27</span>
+</div>
+
+<ProtocolFlow />
+
+## 两端只交换受约束的消息
+
+Gateway 管理任务与浏览器会话之间的连接。Extension Bridge 使用当前浏览器登录状态执行已注册能力，并校验页面、权限和命令上下文。Native Host 只负责 Origin 校验、Chrome framing 与消息转发。
+
+协议不解释 Workflow，也不允许远程发送任意 JavaScript。每条命令都绑定节点版本、最小权限、截止时间和 Fencing Token。
+
+[阅读 Browser Protocol v1](./browser/v1/)
+
+## 规范分为稳定协议和 Alpha 模型
+
+Browser Protocol、Permission Grant、Execution Event 与 Evidence Metadata 已采用 v1 标识。Workflow 和 Node 仍是 `v1alpha1`，它们可以继续演进，不应被实现方当作稳定接口。
+
+所有机器可读文件都来自仓库中的 JSON Schema。网站只发布经过白名单审核的协议文件与中性样例。
+
+[下载 JSON Schema](./reference/schemas/) · [查看规范消息样例](./reference/examples/)
+
+## 失败必须保持可判断
+
+未知字段、错误序列、无效签名、过期权限或不匹配的会话会被拒绝。写动作已经开始但副作用无法确认时，结果必须是 `uncertain`，不能自动假定失败并重试。
+
+断线恢复从未确认的 Command Sequence 开始。Bridge 先查询本地 Pending Result；已有结果就补发，不重新执行节点。
