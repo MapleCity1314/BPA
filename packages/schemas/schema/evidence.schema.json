@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/evidence/v1",
+  "title": "BPA Evidence Metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["evidence_id", "run_id", "node_execution_id", "kind", "digest", "size", "created_at"],
+  "properties": {
+    "evidence_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "run_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "node_execution_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "kind": { "enum": ["dom_summary", "screenshot", "file", "verification", "error"] },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "size": { "type": "integer", "minimum": 0, "maximum": 1073741824 },
+    "media_type": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "storage_ref": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "classification": { "enum": ["public", "internal", "confidential", "restricted"] }
+  }
+}

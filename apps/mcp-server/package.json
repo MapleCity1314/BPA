@@ -1,0 +1,15 @@
+{
+  "name": "@bpa/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@bpa/compiler": "workspace:*",
+    "@bpa/local-core": "workspace:*",
+    "@bpa/persistence": "workspace:*",
+    "@bpa/schemas": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "yaml": "^2.8.1",
+    "zod": "^3.25.76"
+  }
+}

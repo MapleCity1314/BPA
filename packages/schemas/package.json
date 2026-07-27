@@ -1,0 +1,10 @@
+{
+  "name": "@bpa/schemas",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./browser-protocol-v1.schema.json": "./schema/browser-protocol-v1.schema.json"
+  }
+}

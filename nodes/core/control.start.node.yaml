@@ -1,0 +1,19 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: control.start
+  version: 1.0.0
+  title: 启动流程
+runtime: engine_builtin
+inputSchema:
+  type: object
+outputSchema:
+  type: object
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 1s
+  idempotency: pure
+  cancellable: true
+errors: []

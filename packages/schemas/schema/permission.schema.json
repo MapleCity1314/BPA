@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/permission/v1",
+  "title": "BPA Permission Grant",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["grant_id", "subject", "workflow", "node", "permissions", "issued_at", "expires_at"],
+  "properties": {
+    "grant_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "subject": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "workflow": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "node": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "permissions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+    },
+    "domains": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "format": "uri" }
+    },
+    "risk_level": { "enum": ["R0", "R1", "R2", "R3", "R4"] },
+    "issued_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "approval_ref": { "type": "string", "minLength": 1, "maxLength": 300 }
+  }
+}

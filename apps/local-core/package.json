@@ -1,0 +1,18 @@
+{
+  "name": "@bpa/local-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./control": "./src/control.ts",
+    "./paths": "./src/paths.ts"
+  },
+  "dependencies": {
+    "@bpa/compiler": "workspace:*",
+    "@bpa/engine": "workspace:*",
+    "@bpa/gateway-core": "workspace:*",
+    "@bpa/persistence": "workspace:*",
+    "@bpa/persistence-sqlite": "workspace:*",
+    "@bpa/schemas": "workspace:*"
+  }
+}

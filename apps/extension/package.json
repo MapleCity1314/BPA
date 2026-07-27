@@ -1,0 +1,20 @@
+{
+  "name": "@bpa/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "wxt build",
+    "dev": "wxt",
+    "prepare": "wxt prepare",
+    "typecheck": "wxt prepare && tsc --noEmit"
+  },
+  "dependencies": {
+    "@bpa/adapter-doudian": "workspace:*",
+    "@bpa/browser-bridge": "workspace:*",
+    "@bpa/schemas": "workspace:*",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "wxt": "0.21.1"
+  }
+}

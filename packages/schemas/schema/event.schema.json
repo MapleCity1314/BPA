@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/execution-event/v1",
+  "title": "BPA Execution Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "run_id", "sequence", "type", "occurred_at", "payload"],
+  "properties": {
+    "event_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "run_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "node_execution_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "type": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]+$" },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "payload": {}
+  }
+}

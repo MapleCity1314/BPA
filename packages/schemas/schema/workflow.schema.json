@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/workflow/v1alpha1",
+  "title": "BPA Workflow",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "bpa/v1alpha1" },
+    "kind": { "const": "Workflow" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "title"],
+      "properties": {
+        "id": { "$ref": "#/$defs/assetId" },
+        "version": { "$ref": "#/$defs/semver" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 4000 }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["riskLevel", "inputSchema", "outputSchema", "start", "nodes"],
+      "properties": {
+        "riskLevel": { "enum": ["R0", "R1", "R2", "R3", "R4"] },
+        "inputSchema": { "$ref": "#/$defs/jsonSchema" },
+        "outputSchema": { "$ref": "#/$defs/jsonSchema" },
+        "start": { "$ref": "#/$defs/nodeKey" },
+        "nodes": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 500,
+          "propertyNames": { "$ref": "#/$defs/nodeKey" },
+          "additionalProperties": { "$ref": "#/$defs/workflowNode" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "assetId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+      "maxLength": 160
+    },
+    "nodeKey": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "maxLength": 100
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "nodeRef": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$",
+      "maxLength": 200
+    },
+    "duration": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*(?:ms|s|m)$"
+    },
+    "jsonSchema": {
+      "type": "object"
+    },
+    "transitionMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "success": { "$ref": "#/$defs/nodeKey" },
+        "failure": { "$ref": "#/$defs/nodeKey" },
+        "timeout": { "$ref": "#/$defs/nodeKey" },
+        "rejected": { "$ref": "#/$defs/nodeKey" },
+        "cancelled": { "$ref": "#/$defs/nodeKey" },
+        "uncertain": { "$ref": "#/$defs/nodeKey" }
+      }
+    },
+    "retry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxAttempts"],
+      "properties": {
+        "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "backoff": { "$ref": "#/$defs/duration" },
+        "retryableErrors": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 50,
+          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]+$" }
+        }
+      }
+    },
+    "workflowNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["use"],
+      "properties": {
+        "use": { "$ref": "#/$defs/nodeRef" },
+        "with": {},
+        "next": { "$ref": "#/$defs/nodeKey" },
+        "on": { "$ref": "#/$defs/transitionMap" },
+        "timeout": { "$ref": "#/$defs/duration" },
+        "retry": { "$ref": "#/$defs/retry" },
+        "condition": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "description": { "type": "string", "maxLength": 1000 }
+      }
+    }
+  }
+}

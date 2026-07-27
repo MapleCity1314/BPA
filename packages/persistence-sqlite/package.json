@@ -1,0 +1,13 @@
+{
+  "name": "@bpa/persistence-sqlite",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@bpa/persistence": "workspace:*",
+    "better-sqlite3": "12.10.0"
+  }
+}

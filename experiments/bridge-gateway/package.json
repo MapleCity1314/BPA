@@ -1,0 +1,26 @@
+{
+  "name": "@bpa/bridge-gateway-experiment",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "demo": "tsx src/demo.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.3",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.2",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.3"
+  }
+}

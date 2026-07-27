@@ -1,0 +1,9 @@
+{
+  "name": "@bpa/native-host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@bpa/gateway-core": "workspace:*"
+  }
+}

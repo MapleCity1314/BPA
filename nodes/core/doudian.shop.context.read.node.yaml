@@ -1,0 +1,39 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: doudian.shop.context.read
+  version: 1.0.0
+  title: 读取当前抖店店铺上下文
+runtime: browser
+inputSchema:
+  type: object
+  additionalProperties: false
+outputSchema:
+  type: object
+  required:
+    - supported
+    - shop
+    - tab_ref
+    - page_epoch
+risk:
+  level: R0
+  permissions:
+    - browser.dom.read
+    - browser.tabs.read
+  domains:
+    - https://fxg.jinritemai.com
+execution:
+  timeoutDefault: 10s
+  idempotency: repeatable_read
+  retryableErrors:
+    - PAGE_LOADING
+    - BROWSER_DISCONNECTED
+  cancellable: true
+errors:
+  - PAGE_MISMATCH
+  - PAGE_LOADING
+  - BROWSER_DISCONNECTED
+adapter:
+  id: doudian
+  versions:
+    - 1.0.0
