@@ -35,6 +35,7 @@ export interface WorkflowNode {
   on?: TransitionMap;
   timeout?: Duration;
   retry?: Retry;
+  timing?: BPATimingPolicyV1;
   condition?: string;
   description?: string;
 }
@@ -53,4 +54,27 @@ export interface Retry {
    * @maxItems 50
    */
   retryableErrors?: string[];
+}
+export interface BPATimingPolicyV1 {
+  readiness?: {
+    timeoutMs: number;
+    stableForMs: number;
+    pollIntervalMs: number;
+  };
+  dispatchJitter?: {
+    minMs: number;
+    maxMs: number;
+    distribution: "uniform";
+  };
+  retryBackoff?: {
+    strategy: "fixed" | "exponential";
+    baseMs: number;
+    maxMs: number;
+    jitterRatio: number;
+  };
+  rateLimit?: {
+    scope: "domain" | "shop" | "tab";
+    minIntervalMs: number;
+    maxQueueMs: number;
+  };
 }

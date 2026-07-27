@@ -103,7 +103,10 @@
           "uniqueItems": true,
           "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]+$" }
         },
-        "cancellable": { "type": "boolean" }
+        "cancellable": { "type": "boolean" },
+        "timingPolicy": {
+          "$ref": "https://bpa.local/schemas/timing-policy/v1"
+        }
       }
     },
     "errors": {

@@ -21,6 +21,7 @@ import type {
 import type {
   BrowserProtocolMessage,
   NodeDefinition,
+  RiskSignal,
   RiskLevel,
   WorkflowDefinition
 } from "@bpa/schemas";
@@ -515,6 +516,18 @@ export class LocalBrowserGateway {
                 retryable?: boolean;
               }
             }),
+        ...(payload.risk_signals === undefined
+          ? {}
+          : { riskSignals: payload.risk_signals as RiskSignal[] }),
+        ...(payload.timing_observation === undefined
+          ? {}
+          : {
+              timingObservation: payload.timing_observation as {
+                rate_limit_wait_ms: number;
+                readiness_wait_ms?: number;
+                stable_for_ms?: number;
+              }
+            }),
         fencingToken: Number(payload.fencing_token)
       }
     );
@@ -569,6 +582,9 @@ export class LocalBrowserGateway {
         attempt: source.attempt,
         node,
         input: source.input,
+        ...(source.timing_policy === undefined
+          ? {}
+          : { timing_policy: source.timing_policy }),
         permission_grant: permissionGrant,
         deadline
       };

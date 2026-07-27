@@ -87,4 +87,61 @@ describe("workflow compiler", () => {
       /requires a true target/
     );
   });
+
+  it("merges timing policy overrides without allowing weaker pacing", () => {
+    const timedStart = node("control.start");
+    timedStart.execution.timingPolicy = {
+      dispatchJitter: {
+        minMs: 500,
+        maxMs: 1000,
+        distribution: "uniform"
+      },
+      rateLimit: {
+        scope: "tab",
+        minIntervalMs: 500,
+        maxQueueMs: 2000
+      }
+    };
+    const candidate = structuredClone(workflow);
+    candidate.spec.nodes.start!.timing = {
+      dispatchJitter: {
+        minMs: 100,
+        maxMs: 1000,
+        distribution: "uniform"
+      }
+    };
+    expect(() =>
+      compileWorkflow(
+        candidate,
+        new MemoryNodeCatalog([timedStart, node("control.succeed")])
+      )
+    ).toThrow(/cannot weaken the published node minimum/);
+    candidate.spec.nodes.start!.timing!.dispatchJitter!.minMs = 700;
+    expect(
+      compileWorkflow(
+        candidate,
+        new MemoryNodeCatalog([timedStart, node("control.succeed")])
+      ).nodes.start?.timing?.dispatchJitter?.minMs
+    ).toBe(700);
+  });
+
+  it("rejects timing bounds that are individually valid but contradictory", () => {
+    const candidate = structuredClone(workflow);
+    candidate.spec.nodes.start!.timing = {
+      readiness: {
+        timeoutMs: 500,
+        stableForMs: 1000,
+        pollIntervalMs: 100
+      }
+    };
+    expect(() =>
+      compileWorkflow(
+        candidate,
+        new MemoryNodeCatalog([
+          node("control.start"),
+          node("control.succeed")
+        ])
+      )
+    ).toThrow(/stableForMs cannot exceed timeoutMs/);
+  });
 });

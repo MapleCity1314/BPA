@@ -6,6 +6,11 @@ import {
 } from "@bpa/browser-bridge";
 import validateMessage from "@bpa/schemas/browser-protocol-v1.validator";
 import {
+  firstBlockingRiskSignal,
+  reserveRateLimit
+} from "@bpa/node-runtime";
+import type { RiskSignal, TimingPolicy } from "@bpa/schemas";
+import {
   listPendingResults,
   normalizePendingResultForReplay,
   removePendingResult,
@@ -15,12 +20,23 @@ import {
 const NATIVE_HOST = "com.bpa.browser";
 const PROTOCOL = "bpa.browser/1";
 const VERSION = "1.0.0";
-const capability: BridgeCapability = {
+const NODE_VERSIONS = ["1.0.0", "1.1.0"] as const;
+const capabilityBase = {
   nodeId: "doudian.shop.context.read",
-  nodeVersion: "1.0.0",
   riskLevel: "R0",
   permissions: ["browser.dom.read", "browser.tabs.read"]
 };
+
+function capabilityForVersion(version: string): BridgeCapability {
+  return {
+    ...capabilityBase,
+    nodeVersion: NODE_VERSIONS.includes(
+      version as (typeof NODE_VERSIONS)[number]
+    )
+      ? version
+      : "unsupported"
+  };
+}
 interface SessionState {
   sessionId?: string;
   incomingSeq: number;
@@ -35,6 +51,7 @@ export default defineBackground(() => {
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   const activeCommands = new Set<string>();
   const cancelledCommands = new Set<string>();
+  const pacingReservations = new Map<string, number>();
 
   const updateStatus = async (
     patch: Record<string, unknown>
@@ -84,16 +101,16 @@ export default defineBackground(() => {
         {
           capabilities: [
             {
-              node_id: capability.nodeId,
-              versions: [capability.nodeVersion],
-              risk_level: capability.riskLevel,
-              permissions: capability.permissions,
+              node_id: capabilityBase.nodeId,
+              versions: [...NODE_VERSIONS],
+              risk_level: capabilityBase.riskLevel,
+              permissions: capabilityBase.permissions,
               adapter_id: "doudian",
-              adapter_version: "1.0.0"
+              adapter_version: "1.1.0"
             }
           ],
           manifest_digest:
-            "sha256:32a34fd815012f1d849bb60dd06c37ec930cc4bcbee728c3a3c9945be2d96da6"
+            "sha256:24c82765fef8e4b128cef512968bfb4ee1532f31f2aa2b1b23f97d7b770c724d"
         },
         "trace-capabilities"
       )
@@ -129,7 +146,7 @@ export default defineBackground(() => {
             command: payload,
             publicKeySpkiBase64: session.publicKey,
             keyId: session.keyId,
-            capability,
+            capability: capabilityForVersion(payload.node.version),
             currentUrl
           })
         : { valid: false as const, reason: "SESSION_KEY_MISSING" };
@@ -167,36 +184,217 @@ export default defineBackground(() => {
       )
     );
     activeCommands.add(String(payload.command_id));
+    const commandId = String(payload.command_id);
+    const sendCancelled = (): void => {
+      send(
+        envelope(
+          "cancel.effective",
+          {
+            command_id: commandId,
+            node_execution_id: payload.node_execution_id,
+            fencing_token: payload.fencing_token,
+            status: "cancelled",
+            safe_stop: true
+          },
+          String(message.trace_id)
+        )
+      );
+    };
     let adapterResponse: {
       ok: boolean;
       output?: Record<string, unknown>;
       error?: { code: string; message: string; retryable?: boolean };
+      riskSignals?: RiskSignal[];
+      timingObservation?: {
+        readiness_wait_ms?: number;
+        stable_for_ms?: number;
+      };
     };
+    let rateLimitWaitMs = 0;
     try {
-      adapterResponse = await browser.tabs.sendMessage(tab.id, {
-        type: "bpa.execute",
-        node: payload.node,
-        pageEpoch
+      const timingPolicy = payload.timing_policy as TimingPolicy | undefined;
+      const origin = new URL(currentUrl).origin;
+      const rateScope = timingPolicy?.rateLimit?.scope ?? "tab";
+      const input =
+        payload.input && typeof payload.input === "object"
+          ? (payload.input as Record<string, unknown>)
+          : {};
+      const shopId = String(input.shop_id ?? input.shopId ?? "");
+      const rateKey =
+        rateScope === "domain"
+          ? `domain:${origin}`
+          : rateScope === "shop"
+            ? `shop:${origin}:${shopId || "unresolved"}`
+            : `tab:${origin}:${tab.id}`;
+      const rateStorageKey = `bpaPacing:${rateKey}`;
+      const storedPacing =
+        await browser.storage.local.get(rateStorageKey);
+      const persistedLastExecutedAt = Number(
+        storedPacing[rateStorageKey] ?? 0
+      );
+      const reservation = reserveRateLimit({
+        now: Date.now(),
+        lastExecutedAt: Math.max(
+          persistedLastExecutedAt,
+          pacingReservations.get(rateKey) ?? 0
+        ),
+        deadline: Date.parse(payload.deadline),
+        policy: timingPolicy
       });
+      if (!reservation.accepted) {
+        throw new Error(reservation.reason);
+      }
+      pacingReservations.set(rateKey, reservation.executeAt);
+      rateLimitWaitMs = reservation.waitMs;
+      if (reservation.waitMs > 0) {
+        await updateStatus({
+          currentTask: payload.node_execution_id,
+          pacingWaitMs: reservation.waitMs
+        });
+        await new Promise((resolve) =>
+          setTimeout(resolve, reservation.waitMs)
+        );
+      }
+      if (cancelledCommands.delete(commandId)) {
+        activeCommands.delete(commandId);
+        sendCancelled();
+        return;
+      }
+      if (Date.now() >= Date.parse(payload.deadline)) {
+        throw new Error("DEADLINE_EXCEEDED");
+      }
+      const [currentTab] = await browser.tabs.query({
+        active: true,
+        currentWindow: true
+      });
+      if (
+        currentTab?.id !== tab.id ||
+        currentTab.url !== currentUrl
+      ) {
+        adapterResponse = {
+          ok: false,
+          error: {
+            code: "PAGE_CONTEXT_CHANGED",
+            message: "The active page changed while the command was paced.",
+            retryable: false
+          },
+          riskSignals: [
+            {
+              code: "PAGE_CONTEXT_CHANGED",
+              category: "page_context",
+              severity: "blocking",
+              source: "bridge",
+              detected_at: new Date().toISOString(),
+              detail: "节奏等待期间活动标签页或 URL 已发生变化。"
+            }
+          ]
+        };
+      } else if (
+        /login|passport|signin|authorize/i.test(
+          new URL(currentUrl).pathname
+        )
+      ) {
+        adapterResponse = {
+          ok: false,
+          error: {
+            code: "SESSION_EXPIRED",
+            message: "The active page requires login or authorization.",
+            retryable: false
+          },
+          riskSignals: [
+            {
+              code: "SESSION_EXPIRED",
+              category: "session",
+              severity: "blocking",
+              source: "bridge",
+              detected_at: new Date().toISOString(),
+              detail: "当前标签页处于登录或授权流程，需要人工恢复会话。"
+            }
+          ]
+        };
+      } else {
+        await browser.storage.local.set({
+          [rateStorageKey]: Date.now()
+        });
+        adapterResponse = await browser.tabs.sendMessage(tab.id, {
+          type: "bpa.execute",
+          node: payload.node,
+          pageEpoch,
+          timingPolicy,
+          deadline: payload.deadline
+        });
+        const [completedTab] = await browser.tabs.query({
+          active: true,
+          currentWindow: true
+        });
+        if (
+          completedTab?.id !== tab.id ||
+          completedTab.url !== currentUrl
+        ) {
+          adapterResponse = {
+            ok: false,
+            error: {
+              code: "PAGE_CONTEXT_CHANGED",
+              message: "The active page changed before result validation.",
+              retryable: false
+            },
+            riskSignals: [
+              {
+                code: "PAGE_CONTEXT_CHANGED",
+                category: "page_context",
+                severity: "blocking",
+                source: "bridge",
+                detected_at: new Date().toISOString(),
+                detail: "节点返回后、Result 验证前活动页面发生了变化。"
+              }
+            ]
+          };
+        }
+      }
     } catch (error) {
+      const code = error instanceof Error ? error.message : String(error);
+      const rateLimited =
+        code === "RATE_LIMIT_QUEUE_EXCEEDED" ||
+        code === "DEADLINE_EXCEEDED";
       adapterResponse = {
         ok: false,
         error: {
-          code: "CONTENT_SCRIPT_UNAVAILABLE",
-          message: error instanceof Error ? error.message : String(error),
-          retryable: true
-        }
+          code: rateLimited ? code : "CONTENT_SCRIPT_UNAVAILABLE",
+          message: code,
+          retryable: !rateLimited
+        },
+        ...(rateLimited
+          ? {
+              riskSignals: [
+                {
+                  code: "RATE_LIMITED",
+                  category: "throttle",
+                  severity: "blocking",
+                  source: "bridge",
+                  detected_at: new Date().toISOString(),
+                  detail: "本地节奏策略拒绝了超出排队或 Deadline 的执行。"
+                }
+              ] satisfies RiskSignal[]
+            }
+          : {})
       };
     }
-    activeCommands.delete(String(payload.command_id));
-    if (cancelledCommands.delete(String(payload.command_id))) return;
+    if (cancelledCommands.delete(commandId)) {
+      activeCommands.delete(commandId);
+      sendCancelled();
+      return;
+    }
     const resultPayload = {
         command_seq: payload.command_seq,
         command_id: payload.command_id,
         node_execution_id: payload.node_execution_id,
         idempotency_key: payload.idempotency_key,
         fencing_token: payload.fencing_token,
-        status: adapterResponse.ok ? "succeeded" : "failed",
+        status: adapterResponse.ok
+          ? "succeeded"
+          : firstBlockingRiskSignal(adapterResponse.riskSignals ?? [])
+            ? "rejected"
+            : "failed",
         ...(adapterResponse.output
           ? {
               output: {
@@ -213,22 +411,33 @@ export default defineBackground(() => {
             }
           : {}),
         ...(adapterResponse.error ? { error: adapterResponse.error } : {}),
+        ...(adapterResponse.riskSignals?.length
+          ? { risk_signals: adapterResponse.riskSignals }
+          : {}),
+        timing_observation: {
+          rate_limit_wait_ms: rateLimitWaitMs,
+          ...adapterResponse.timingObservation
+        },
         evidence_refs: [],
         page_epoch: pageEpoch
       };
-    await savePendingResult({
-      commandId: String(payload.command_id),
-      commandSeq: Number(payload.command_seq),
-      traceId: String(message.trace_id),
-      payload: resultPayload
-    });
-    send(
-      envelope(
-        "command.result",
-        resultPayload,
-        String(message.trace_id)
-      )
-    );
+    try {
+      await savePendingResult({
+        commandId,
+        commandSeq: Number(payload.command_seq),
+        traceId: String(message.trace_id),
+        payload: resultPayload
+      });
+      send(
+        envelope(
+          "command.result",
+          resultPayload,
+          String(message.trace_id)
+        )
+      );
+    } finally {
+      activeCommands.delete(commandId);
+    }
     await updateStatus({
       currentTask: payload.node_execution_id,
       lastError: adapterResponse.error?.message
@@ -284,7 +493,7 @@ export default defineBackground(() => {
           core: "connected",
           protocol: PROTOCOL,
           sessionId: session.sessionId,
-          permissions: capability.permissions,
+          permissions: capabilityBase.permissions,
           lastError: undefined
         });
         sendCapabilities();
@@ -319,19 +528,21 @@ export default defineBackground(() => {
         );
         if (!pending) {
           cancelledCommands.add(commandId);
-          send(
-            envelope(
-              "cancel.effective",
-              {
-                command_id: commandId,
-                node_execution_id: message.payload.node_execution_id,
-                fencing_token: message.payload.fencing_token,
-                status: "cancelled",
-                safe_stop: true
-              },
-              message.trace_id
-            )
-          );
+          if (!actionStarted) {
+            send(
+              envelope(
+                "cancel.effective",
+                {
+                  command_id: commandId,
+                  node_execution_id: message.payload.node_execution_id,
+                  fencing_token: message.payload.fencing_token,
+                  status: "cancelled",
+                  safe_stop: true
+                },
+                message.trace_id
+              )
+            );
+          }
         }
         break;
       }

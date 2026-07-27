@@ -374,6 +374,9 @@
             "input": {},
             "permission_grant": { "$ref": "#/$defs/permissionGrant" },
             "deadline": { "$ref": "#/$defs/timestamp" },
+            "timing_policy": {
+              "$ref": "https://bpa.local/schemas/timing-policy/v1"
+            },
             "tab_ref": { "$ref": "#/$defs/tabRef" },
             "page_epoch": { "$ref": "#/$defs/id" },
             "approval_token_ref": { "$ref": "#/$defs/id" }
@@ -476,7 +479,36 @@
               "uniqueItems": true,
               "items": { "$ref": "#/$defs/id" }
             },
-            "page_epoch": { "$ref": "#/$defs/id" }
+            "page_epoch": { "$ref": "#/$defs/id" },
+            "risk_signals": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "$ref": "https://bpa.local/schemas/risk-signal/v1"
+              }
+            },
+            "timing_observation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["rate_limit_wait_ms"],
+              "properties": {
+                "rate_limit_wait_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 120000
+                },
+                "readiness_wait_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 120000
+                },
+                "stable_for_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                }
+              }
+            }
           }
         }
       }

@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { contentDigest, type CompiledNode, type CompiledWorkflow } from "@bpa/compiler";
+import {
+  computeDispatchDelayMs,
+  computeRetryDelayMs
+} from "@bpa/node-runtime";
 import type {
   ExecutionEventRecord,
   NodeExecutionRecord,
@@ -8,6 +12,7 @@ import type {
   RunRecord,
   RunStatus
 } from "@bpa/persistence";
+import type { RiskSignal } from "@bpa/schemas";
 
 export interface BrowserNodeResult {
   status: Extract<
@@ -16,6 +21,12 @@ export interface BrowserNodeResult {
   >;
   output?: unknown;
   error?: NodeExecutionRecord["error"];
+  riskSignals?: RiskSignal[];
+  timingObservation?: {
+    rate_limit_wait_ms: number;
+    readiness_wait_ms?: number;
+    stable_for_ms?: number;
+  };
   fencingToken: number;
 }
 
@@ -94,7 +105,13 @@ export class LocalWorkflowEngine {
         `NODE_${result.status.toUpperCase()}`,
         {
           fencingToken: result.fencingToken,
-          ...(result.error ? { error: result.error } : {})
+          ...(result.error ? { error: result.error } : {}),
+          ...(result.riskSignals?.length
+            ? { riskSignals: result.riskSignals }
+            : {}),
+          ...(result.timingObservation
+            ? { timingObservation: result.timingObservation }
+            : {})
         },
         nodeExecutionId
       ),
@@ -119,14 +136,20 @@ export class LocalWorkflowEngine {
                 result.error.code
               )))));
     if (retryable) {
+      const nextAttempt = nodeExecution.attempt + 1;
       return this.#schedule(
         workflow,
         this.persistence.getRun(run.id)!,
         nodeExecution.nodeKey,
         sequence,
         result.output,
-        nodeExecution.attempt + 1,
-        compiledNode.retry.backoffMs
+        nextAttempt,
+        computeRetryDelayMs({
+          policy: compiledNode.timing,
+          nextAttempt,
+          seed: `${run.id}:${nodeExecution.nodeKey}:retry:${nextAttempt}`,
+          fallbackBaseMs: compiledNode.retry.backoffMs
+        })
       );
     }
     let target: string | undefined;
@@ -207,12 +230,20 @@ export class LocalWorkflowEngine {
     initialSequence: number,
     previousOutput: unknown,
     attempt = 1,
-    delayMs = 0
+    delayMs?: number
   ): RunRecord {
     let run = currentRun;
     let sequence = initialSequence;
     const compiledNode = workflow.nodes[nodeKey];
     if (!compiledNode) throw new Error(`Compiled node not found: ${nodeKey}`);
+    const scheduledDelayMs =
+      compiledNode.runtime === "browser"
+        ? delayMs ??
+          computeDispatchDelayMs(
+            compiledNode.timing,
+            `${currentRun.id}:${nodeKey}:dispatch:${attempt}`
+          )
+        : 0;
     const createdAt = new Date().toISOString();
     const nodeExecution: NodeExecutionRecord = {
       id: randomUUID(),
@@ -244,7 +275,8 @@ export class LocalWorkflowEngine {
           nodeId: compiledNode.nodeId,
           nodeVersion: compiledNode.nodeVersion,
           attempt,
-          delayMs
+          delayMs: scheduledDelayMs,
+          timingPolicy: compiledNode.timing
         },
         nodeExecution.id
       )
@@ -288,7 +320,7 @@ export class LocalWorkflowEngine {
             nodeExecution,
             compiledNode
           ),
-          createdAt: new Date(Date.now() + delayMs).toISOString()
+          createdAt: new Date(Date.now() + scheduledDelayMs).toISOString()
         }
       });
       return this.persistence.commitRunTransition({
@@ -407,7 +439,8 @@ export class LocalWorkflowEngine {
       attempt: execution.attempt,
       node: { id: node.nodeId, version: node.nodeVersion },
       input: execution.input,
-      timeout_ms: node.timeoutMs
+      timeout_ms: node.timeoutMs,
+      ...(node.timing ? { timing_policy: node.timing } : {})
     };
   }
 

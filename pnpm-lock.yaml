@@ -58,7 +58,11 @@ importers:
         specifier: ^4.0.18
         version: 4.1.10(@types/node@24.13.3)(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
 
-  adapters/doudian: {}
+  adapters/doudian:
+    dependencies:
+      '@bpa/schemas':
+        specifier: workspace:*
+        version: link:../../packages/schemas
 
   apps/cli:
     dependencies:
@@ -80,6 +84,9 @@ importers:
       '@bpa/browser-bridge':
         specifier: workspace:*
         version: link:../../packages/browser-bridge
+      '@bpa/node-runtime':
+        specifier: workspace:*
+        version: link:../../packages/node-runtime
       '@bpa/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
@@ -139,6 +146,10 @@ importers:
         version: link:../../packages/gateway-core
 
   packages/browser-bridge:
+    dependencies:
+      '@bpa/schemas':
+        specifier: workspace:*
+        version: link:../schemas
     devDependencies:
       '@bpa/gateway-core':
         specifier: workspace:*
@@ -146,6 +157,9 @@ importers:
 
   packages/compiler:
     dependencies:
+      '@bpa/node-runtime':
+        specifier: workspace:*
+        version: link:../node-runtime
       '@bpa/schemas':
         specifier: workspace:*
         version: link:../schemas
@@ -158,9 +172,15 @@ importers:
       '@bpa/compiler':
         specifier: workspace:*
         version: link:../compiler
+      '@bpa/node-runtime':
+        specifier: workspace:*
+        version: link:../node-runtime
       '@bpa/persistence':
         specifier: workspace:*
         version: link:../persistence
+      '@bpa/schemas':
+        specifier: workspace:*
+        version: link:../schemas
 
   packages/gateway-core:
     dependencies:
@@ -168,7 +188,11 @@ importers:
         specifier: workspace:*
         version: link:../schemas
 
-  packages/node-runtime: {}
+  packages/node-runtime:
+    dependencies:
+      '@bpa/schemas':
+        specifier: workspace:*
+        version: link:../schemas
 
   packages/persistence: {}
 

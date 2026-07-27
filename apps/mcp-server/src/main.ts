@@ -9,7 +9,7 @@ import type { NodeDefinition, RiskLevel, WorkflowDefinition } from "@bpa/schemas
 
 const server = new McpServer({
   name: "bpa-local",
-  version: "0.1.0"
+  version: "0.2.1"
 });
 const socket = resolveBpaPaths().socket;
 

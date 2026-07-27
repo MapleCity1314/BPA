@@ -20,6 +20,8 @@ export const nodeSchema = loadSchema("node.schema.json");
 export const eventSchema = loadSchema("event.schema.json");
 export const permissionSchema = loadSchema("permission.schema.json");
 export const evidenceSchema = loadSchema("evidence.schema.json");
+export const timingPolicySchema = loadSchema("timing-policy.schema.json");
+export const riskSignalSchema = loadSchema("risk-signal.schema.json");
 export const browserProtocolV1Schema = loadSchema(
   "browser-protocol-v1.schema.json"
 );
@@ -42,6 +44,8 @@ const ajv = new Ajv2020({
 });
 addFormats(ajv);
 ajv.addSchema(permissionSchema);
+ajv.addSchema(timingPolicySchema);
+ajv.addSchema(riskSignalSchema);
 
 export const validateWorkflow = ajv.compile(
   workflowSchema
@@ -52,6 +56,8 @@ export const validateNode = ajv.compile(
 export const validateEvent = ajv.compile(eventSchema);
 export const validatePermission = ajv.compile(permissionSchema);
 export const validateEvidence = ajv.compile(evidenceSchema);
+export const validateTimingPolicy = ajv.compile(timingPolicySchema);
+export const validateRiskSignal = ajv.compile(riskSignalSchema);
 export const validateBrowserProtocolMessage = ajv.compile(
   browserProtocolV1Schema
 ) as ValidateFunction<BrowserProtocolMessage>;

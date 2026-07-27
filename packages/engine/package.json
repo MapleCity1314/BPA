@@ -8,6 +8,8 @@
   },
   "dependencies": {
     "@bpa/compiler": "workspace:*",
-    "@bpa/persistence": "workspace:*"
+    "@bpa/node-runtime": "workspace:*",
+    "@bpa/persistence": "workspace:*",
+    "@bpa/schemas": "workspace:*"
   }
 }

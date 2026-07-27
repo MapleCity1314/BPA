@@ -4,6 +4,7 @@
 
 - [BPA 通用技术方案 v1.0](docs/BPA通用技术方案-v1.0.md)：当前权威架构基线；包含原链路、目标架构、能力、兜底、安全、版本升级、技术选型、目录结构与演进路线。
 - [BPA Browser Protocol v1](docs/protocols/browser-protocol-v1.md)：已确认的 Native Messaging 协议 Schema、状态机、签名权限和消息样例。
+- [TimingPolicy 与 RiskSignal v1](docs/timing-and-risk-policy-v1.md)：自适应就绪、有界节奏、持久化延迟与平台风险阻断边界。
 - [本地 v1 运行与验收](docs/local-v1-operations.md)：开发、发布、Chrome 联调、MCP、安装、回滚和故障判定。
 - [BPA 技术架构草案 v0.1](docs/architecture-v0.1.md)：历史讨论稿，仅用于追溯早期设计过程，不作为实现依据。
 - [重点项检查插件抽象复盘 v0.1](docs/重点项检查插件抽象复盘-v0.1.md)：首个真实场景复盘、节点提取，以及 `workflow_gen` 与 `node_gen` 的职责划分。
@@ -37,6 +38,7 @@ AI 可以理解自然语言、选择流程、补齐参数，并在允许的范�
 - `com.bpa.browser` Native Host、Origin 白名单和大小端安全 framing。
 - WXT 通用扩展、IndexedDB Pending Result、状态页和 Doudian 只读 Adapter。
 - Engine 线性执行、受限条件、有限重试、超时、人工暂停、Cancel 和 `uncertain`。
+- TimingPolicy 确定性抖动、指数退避、页面稳定性探测、Tab 级限速与 RiskSignal 阻断。
 - MCP `workflow_gen` / `node_gen` 等 Candidate-only 创作工具。
 - macOS arm64 安装、Migration 前置验证、原子切换、回滚和保留数据卸载脚本。
 

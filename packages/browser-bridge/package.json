@@ -6,6 +6,9 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "dependencies": {
+    "@bpa/schemas": "workspace:*"
+  },
   "devDependencies": {
     "@bpa/gateway-core": "workspace:*"
   }

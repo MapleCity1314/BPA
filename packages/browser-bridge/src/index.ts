@@ -29,6 +29,7 @@ export interface BrowserCommandPayload {
   node: { id: string; version: string };
   permission_grant: SignedGrant;
   deadline: string;
+  timing_policy?: TimingPolicy;
 }
 
 export function createPageEpoch(
@@ -161,3 +162,4 @@ export async function verifyCommandAuthorization(input: {
     return { valid: false, reason: "AUTHORIZATION_TAG_INVALID" };
   }
 }
+import type { TimingPolicy } from "@bpa/schemas";

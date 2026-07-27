@@ -2,6 +2,8 @@ import type {
   BPABrowserProtocolV1Message
 } from "./generated/browser_protocol_v1.js";
 import type { BPANodeDefinition } from "./generated/node.js";
+import type { BPARiskSignalV1 } from "./generated/risk_signal.js";
+import type { BPATimingPolicyV1 } from "./generated/timing_policy.js";
 import type { BPASignedPermissionGrant } from "./generated/permission.js";
 import type {
   BPAWorkflow,
@@ -14,6 +16,7 @@ export type {
   BPASignedPermissionGrant,
   BPAWorkflow
 };
+export type { BPARiskSignalV1, BPATimingPolicyV1 };
 
 /**
  * Stable public aliases. Their shapes are generated from the canonical JSON
@@ -26,3 +29,5 @@ export type NodeDefinition = BPANodeDefinition;
 export type BrowserProtocolMessage = BPABrowserProtocolV1Message;
 export type SignedPermissionGrant = BPASignedPermissionGrant;
 export type RiskLevel = BPAWorkflow["spec"]["riskLevel"];
+export type TimingPolicy = BPATimingPolicyV1;
+export type RiskSignal = BPARiskSignalV1;

@@ -39,7 +39,7 @@ export interface SessionHello {
     /**
      * @minItems 1
      */
-    supported_protocols: ["bpa.browser/1", ..."bpa.browser/1"[]];
+    supported_protocols: "bpa.browser/1"[];
     last_acked_command_seq: number;
     resume_token?: Id;
   };
@@ -104,7 +104,7 @@ export interface Capability {
   /**
    * @minItems 1
    */
-  versions: [Id, ...Id[]];
+  versions: Id[];
   risk_level: "R0" | "R1" | "R2" | "R3" | "R4";
   permissions: Id[];
   adapter_id?: Id;
@@ -136,6 +136,7 @@ export interface Command {
     input: unknown;
     permission_grant: BPASignedPermissionGrant;
     deadline: Timestamp;
+    timing_policy?: BPATimingPolicyV1;
     tab_ref?: TabRef;
     page_epoch?: Id;
     approval_token_ref?: Id;
@@ -156,6 +157,29 @@ export interface BPASignedPermissionGrant {
   key_id: Id;
   grant_digest: string;
   authorization_tag: string;
+}
+export interface BPATimingPolicyV1 {
+  readiness?: {
+    timeoutMs: number;
+    stableForMs: number;
+    pollIntervalMs: number;
+  };
+  dispatchJitter?: {
+    minMs: number;
+    maxMs: number;
+    distribution: "uniform";
+  };
+  retryBackoff?: {
+    strategy: "fixed" | "exponential";
+    baseMs: number;
+    maxMs: number;
+    jitterRatio: number;
+  };
+  rateLimit?: {
+    scope: "domain" | "shop" | "tab";
+    minIntervalMs: number;
+    maxQueueMs: number;
+  };
 }
 export interface TabRef {
   browser_instance_id: Id;
@@ -205,7 +229,26 @@ export interface CommandResult {
     };
     evidence_refs?: Id[];
     page_epoch?: Id;
+    /**
+     * @maxItems 20
+     */
+    risk_signals?: BPARiskSignalV1[];
+    timing_observation?: {
+      rate_limit_wait_ms: number;
+      readiness_wait_ms?: number;
+      stable_for_ms?: number;
+    };
   };
+}
+export interface BPARiskSignalV1 {
+  code:
+    "CAPTCHA_REQUIRED" | "RATE_LIMITED" | "RISK_CONTROL" | "SESSION_EXPIRED" | "AUTH_REQUIRED" | "PAGE_CONTEXT_CHANGED";
+  category: "challenge" | "throttle" | "session" | "page_context";
+  severity: "warning" | "blocking";
+  source: "page" | "adapter" | "bridge";
+  detected_at: string;
+  retry_after_ms?: number;
+  detail?: string;
 }
 export interface ResultAck {
   protocol: "bpa.browser/1";

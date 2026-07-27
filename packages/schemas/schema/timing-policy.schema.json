@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/timing-policy/v1",
+  "title": "BPA Timing Policy v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeoutMs", "stableForMs", "pollIntervalMs"],
+      "properties": {
+        "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 120000 },
+        "stableForMs": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "pollIntervalMs": { "type": "integer", "minimum": 25, "maximum": 5000 }
+      }
+    },
+    "dispatchJitter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minMs", "maxMs", "distribution"],
+      "properties": {
+        "minMs": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "maxMs": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "distribution": { "const": "uniform" }
+      }
+    },
+    "retryBackoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strategy", "baseMs", "maxMs", "jitterRatio"],
+      "properties": {
+        "strategy": { "enum": ["fixed", "exponential"] },
+        "baseMs": { "type": "integer", "minimum": 0, "maximum": 60000 },
+        "maxMs": { "type": "integer", "minimum": 0, "maximum": 120000 },
+        "jitterRatio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.5
+        }
+      }
+    },
+    "rateLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "minIntervalMs", "maxQueueMs"],
+      "properties": {
+        "scope": { "enum": ["domain", "shop", "tab"] },
+        "minIntervalMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60000
+        },
+        "maxQueueMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 120000
+        }
+      }
+    }
+  },
+  "minProperties": 1
+}

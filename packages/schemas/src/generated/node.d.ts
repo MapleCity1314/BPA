@@ -27,13 +27,14 @@ export type BPANodeDefinition = {
     /**
      * @minItems 1
      */
-    domains?: [string, ...string[]];
+    domains?: string[];
   };
   execution: {
     timeoutDefault: string;
     idempotency: "pure" | "repeatable_read" | "verified_write" | "non_repeatable";
     retryableErrors?: string[];
     cancellable?: boolean;
+    timingPolicy?: BPATimingPolicyV1;
   };
   errors: string[];
   evidence?: {
@@ -44,6 +45,30 @@ export type BPANodeDefinition = {
     /**
      * @minItems 1
      */
-    versions: [string, ...string[]];
+    versions: string[];
   };
 };
+
+export interface BPATimingPolicyV1 {
+  readiness?: {
+    timeoutMs: number;
+    stableForMs: number;
+    pollIntervalMs: number;
+  };
+  dispatchJitter?: {
+    minMs: number;
+    maxMs: number;
+    distribution: "uniform";
+  };
+  retryBackoff?: {
+    strategy: "fixed" | "exponential";
+    baseMs: number;
+    maxMs: number;
+    jitterRatio: number;
+  };
+  rateLimit?: {
+    scope: "domain" | "shop" | "tab";
+    minIntervalMs: number;
+    maxQueueMs: number;
+  };
+}

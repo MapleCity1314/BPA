@@ -14,6 +14,8 @@ const schemas = [
   "event.schema.json",
   "permission.schema.json",
   "evidence.schema.json",
+  "timing-policy.schema.json",
+  "risk-signal.schema.json",
   "browser-protocol-v1.schema.json"
 ];
 const check = process.argv.includes("--check");
@@ -24,6 +26,28 @@ for (const filename of schemas) {
   let schema = JSON.parse(
     await readFile(join(schemaDirectory, filename), "utf8")
   );
+  if (
+    filename === "node.schema.json" ||
+    filename === "workflow.schema.json" ||
+    filename === "browser-protocol-v1.schema.json"
+  ) {
+    const timingPolicySchema = JSON.parse(
+      await readFile(
+        join(schemaDirectory, "timing-policy.schema.json"),
+        "utf8"
+      )
+    );
+    schema = structuredClone(schema);
+    schema.$defs = {
+      ...(schema.$defs ?? {}),
+      timingPolicy: timingPolicySchema
+    };
+    const serialized = JSON.stringify(schema).replaceAll(
+      '"https://bpa.local/schemas/timing-policy/v1"',
+      '"#/$defs/timingPolicy"'
+    );
+    schema = JSON.parse(serialized);
+  }
   if (filename === "browser-protocol-v1.schema.json") {
     const permissionSchema = JSON.parse(
       await readFile(
@@ -31,8 +55,20 @@ for (const filename of schemas) {
         "utf8"
       )
     );
-    schema = structuredClone(schema);
     schema.$defs.permissionGrant = permissionSchema;
+    const riskSignalSchema = JSON.parse(
+      await readFile(
+        join(schemaDirectory, "risk-signal.schema.json"),
+        "utf8"
+      )
+    );
+    schema.$defs.riskSignal = riskSignalSchema;
+    schema = JSON.parse(
+      JSON.stringify(schema).replaceAll(
+        '"https://bpa.local/schemas/risk-signal/v1"',
+        '"#/$defs/riskSignal"'
+      )
+    );
   }
   const outputName = `${basename(filename, ".schema.json")
     .replaceAll("-", "_")}.d.ts`;
@@ -40,6 +76,7 @@ for (const filename of schemas) {
     bannerComment:
       "/* Generated from canonical JSON Schema. Do not edit manually. */",
     cwd: schemaDirectory,
+    ignoreMinAndMaxItems: true,
     style: {
       singleQuote: false,
       semi: true,
@@ -65,6 +102,12 @@ const browserProtocolSchema = JSON.parse(
     "utf8"
   )
 );
+const timingPolicySchema = JSON.parse(
+  await readFile(join(schemaDirectory, "timing-policy.schema.json"), "utf8")
+);
+const riskSignalSchema = JSON.parse(
+  await readFile(join(schemaDirectory, "risk-signal.schema.json"), "utf8")
+);
 const ajv = new Ajv2020({
   allErrors: true,
   strict: true,
@@ -72,6 +115,8 @@ const ajv = new Ajv2020({
 });
 addFormats(ajv);
 ajv.addSchema(permissionSchema);
+ajv.addSchema(timingPolicySchema);
+ajv.addSchema(riskSignalSchema);
 const browserProtocolValidator = ajv.compile(browserProtocolSchema);
 const validatorSource = [
   "/* Generated from canonical JSON Schema. Do not edit manually. */",

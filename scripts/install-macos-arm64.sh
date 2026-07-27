@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="${0:A:h:h}"
-VERSION="${BPA_INSTALL_VERSION:-0.1.0}"
+VERSION="${BPA_INSTALL_VERSION:-0.2.1}"
 USER_HOME="$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory | awk '{print $2}')"
 BPA_ROOT="$USER_HOME/Library/Application Support/BPA"
 RUNTIME_ROOT="$BPA_ROOT/runtime"
@@ -37,6 +37,7 @@ mkdir -p "$RUNTIME_ROOT" "$DATA_ROOT" "$LOG_ROOT" "${LAUNCH_AGENT:h}" "$HOST_ROO
 chmod 700 "$BPA_ROOT" "$DATA_ROOT" "$LOG_ROOT"
 STAGING_ROOT="$(mktemp -d "$BPA_ROOT/.install.XXXXXX")"
 OLD_AGENT_WAS_RUNNING=false
+OLD_CORE_PID=""
 INSTALL_MOVED=false
 RUNTIME_SWITCHED=false
 OLD_CURRENT=""
@@ -66,6 +67,7 @@ mkdir -p "$STAGING_ROOT/workspace" "$STAGING_ROOT/node/bin" "$STAGING_ROOT/bin"
 rsync -a \
   --exclude '.git' \
   --exclude '/dist' \
+  --exclude '/apps/docs' \
   --exclude '/apps/extension/.wxt' \
   "$PROJECT_ROOT/" "$STAGING_ROOT/workspace/"
 cp "$BUNDLED_NODE" "$STAGING_ROOT/node/bin/node"
@@ -88,9 +90,34 @@ exec "$VERSION_ROOT/node/bin/node" --import tsx apps/native-host/src/main.ts "\$
 EOF
 chmod 755 "$STAGING_ROOT/bin/"*
 
+# Validate the packaged native ABI before stopping the currently healthy Core.
+# Import alone is insufficient because better-sqlite3 loads its native binding
+# when the first Database instance is constructed.
+(
+  cd "$STAGING_ROOT/workspace"
+  "$STAGING_ROOT/node/bin/node" -e \
+    'import("better-sqlite3").then(({default: Database}) => new Database(":memory:").close())'
+)
+
 if launchctl print "gui/$(id -u)/com.bpa.core" >/dev/null 2>&1; then
   OLD_AGENT_WAS_RUNNING=true
+  OLD_CORE_PID="$(
+    launchctl print "gui/$(id -u)/com.bpa.core" |
+      awk '/pid =/{print $3; exit}'
+  )"
   launchctl bootout "gui/$(id -u)/com.bpa.core"
+  if [[ -n "$OLD_CORE_PID" ]]; then
+    for _attempt in {1..100}; do
+      if ! kill -0 "$OLD_CORE_PID" 2>/dev/null; then
+        break
+      fi
+      sleep 0.1
+    done
+    if kill -0 "$OLD_CORE_PID" 2>/dev/null; then
+      print -u2 "Previous BPA Core PID $OLD_CORE_PID did not stop in time."
+      exit 1
+    fi
+  fi
 fi
 
 (

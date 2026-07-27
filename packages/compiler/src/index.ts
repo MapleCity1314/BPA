@@ -5,6 +5,12 @@ import {
   type NodeDefinition,
   type WorkflowDefinition
 } from "@bpa/schemas";
+import {
+  mergeTimingPolicy,
+  timingOverrideIssues,
+  timingPolicyIssues,
+  type EffectiveTimingPolicy
+} from "@bpa/node-runtime";
 import { parse } from "yaml";
 
 export interface CatalogLookup {
@@ -27,6 +33,7 @@ export interface CompiledNode {
     backoffMs: number;
     retryableErrors: string[];
   };
+  timing?: EffectiveTimingPolicy;
 }
 
 export interface CompiledWorkflow {
@@ -149,6 +156,37 @@ export function compileWorkflow(
         issues.push(`/spec/nodes/${key} references missing node ${target}`);
       }
     }
+    const baseTiming = mergeTimingPolicy(
+      definition.execution.timingPolicy,
+      undefined
+    );
+    const timing = mergeTimingPolicy(
+      definition.execution.timingPolicy,
+      node.timing
+    );
+    const timeoutMs = parseDuration(
+      node.timeout,
+      parseDuration(definition.execution.timeoutDefault, 30_000)
+    );
+    issues.push(
+      ...timingPolicyIssues(
+        timing,
+        `/spec/nodes/${key}/timing`
+      ),
+      ...timingOverrideIssues(
+        baseTiming,
+        timing,
+        `/spec/nodes/${key}/timing`
+      )
+    );
+    const maximumBrowserWaitMs =
+      (timing?.readiness?.timeoutMs ?? 0) +
+      (timing?.rateLimit?.maxQueueMs ?? 0);
+    if (maximumBrowserWaitMs > timeoutMs) {
+      issues.push(
+        `/spec/nodes/${key}/timing worst-case readiness and rate-limit wait (${maximumBrowserWaitMs}ms) exceeds node timeout (${timeoutMs}ms)`
+      );
+    }
     compiledNodes[key] = {
       key,
       nodeId,
@@ -159,10 +197,7 @@ export function compileWorkflow(
       ...(node.condition ? { condition: node.condition } : {}),
       ...(node.next ? { next: node.next } : {}),
       on: node.on ?? {},
-      timeoutMs: parseDuration(
-        node.timeout,
-        parseDuration(definition.execution.timeoutDefault, 30_000)
-      ),
+      timeoutMs,
       retry: {
         maxAttempts: node.retry?.maxAttempts ?? 1,
         backoffMs: parseDuration(node.retry?.backoff, 0),
@@ -170,7 +205,8 @@ export function compileWorkflow(
           node.retry?.retryableErrors ??
           definition.execution.retryableErrors ??
           []
-      }
+      },
+      ...(timing ? { timing } : {})
     };
   }
 

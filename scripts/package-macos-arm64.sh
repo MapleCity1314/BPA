@@ -3,7 +3,7 @@ set -euo pipefail
 
 PROJECT_ROOT="${0:A:h:h}"
 BUNDLED_NODE="${BPA_BUNDLED_NODE:-}"
-OUTPUT="${BPA_PACKAGE_OUTPUT:-$PROJECT_ROOT/artifacts/bpa-local-v0.1.0-macos-arm64.tar.gz}"
+OUTPUT="${BPA_PACKAGE_OUTPUT:-$PROJECT_ROOT/artifacts/bpa-local-v0.2.1-macos-arm64.tar.gz}"
 
 if [[ -z "$BUNDLED_NODE" || ! -x "$BUNDLED_NODE" ]]; then
   print -u2 "Set BPA_BUNDLED_NODE to a Node.js 24 macOS arm64 executable."
@@ -24,6 +24,7 @@ mkdir -p "$PACKAGE_ROOT/bpa/bundle/node/bin" "${OUTPUT:h}"
 rsync -a \
   --exclude '.git' \
   --exclude 'artifacts' \
+  --exclude 'apps/docs' \
   "$PROJECT_ROOT/" "$PACKAGE_ROOT/bpa/"
 cp "$BUNDLED_NODE" "$PACKAGE_ROOT/bpa/bundle/node/bin/node"
 chmod 755 "$PACKAGE_ROOT/bpa/bundle/node/bin/node"

@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import {
   ArtifactConflictError,
   RevisionConflictError,
@@ -172,5 +175,61 @@ describe("sqlite persistence", () => {
       })
     ).toBe("duplicate");
     store.close();
+  });
+
+  it("keeps a future delayed outbox durable across a process restart", () => {
+    vi.useFakeTimers();
+    const directory = mkdtempSync(join(tmpdir(), "bpa-pacing-test-"));
+    const databasePath = join(directory, "bpa.sqlite3");
+    try {
+      vi.setSystemTime(new Date(timestamp));
+      let store = new SqlitePersistence({ path: databasePath });
+      const run = createRun(store);
+      const node: NodeExecutionRecord = {
+        id: randomUUID(),
+        runId: run.id,
+        nodeKey: "observe",
+        nodeId: "browser.observe",
+        nodeVersion: "1.0.0",
+        status: "scheduled",
+        revision: 0,
+        attempt: 1,
+        idempotencyKey: "delayed-idem",
+        fencingToken: 1,
+        input: {},
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+      store.createNodeExecution(
+        node,
+        event(run.id, 2, "NODE_SCHEDULED", node.id)
+      );
+      store.commitNodeTransition({
+        nodeExecutionId: node.id,
+        expectedRevision: 0,
+        nextStatus: "dispatched",
+        event: event(run.id, 3, "NODE_DISPATCHED", node.id),
+        outbox: {
+          id: "delayed-outbox",
+          topic: "browser.command.requested",
+          aggregateId: node.id,
+          payload: {},
+          createdAt: "2026-07-27T00:00:01.000Z"
+        }
+      });
+      expect(store.listPendingEngineOutbox()).toEqual([]);
+      store.close();
+
+      store = new SqlitePersistence({ path: databasePath });
+      expect(store.listPendingEngineOutbox()).toEqual([]);
+      vi.setSystemTime(new Date("2026-07-27T00:00:01.000Z"));
+      expect(store.listPendingEngineOutbox()).toMatchObject([
+        { id: "delayed-outbox", aggregateId: node.id }
+      ]);
+      store.close();
+    } finally {
+      vi.useRealTimers();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

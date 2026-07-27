@@ -103,6 +103,9 @@
         "on": { "$ref": "#/$defs/transitionMap" },
         "timeout": { "$ref": "#/$defs/duration" },
         "retry": { "$ref": "#/$defs/retry" },
+        "timing": {
+          "$ref": "https://bpa.local/schemas/timing-policy/v1"
+        },
         "condition": { "type": "string", "minLength": 1, "maxLength": 1000 },
         "description": { "type": "string", "maxLength": 1000 }
       }

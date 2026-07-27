@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/risk-signal/v1",
+  "title": "BPA Risk Signal v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "category", "severity", "source", "detected_at"],
+  "properties": {
+    "code": {
+      "enum": [
+        "CAPTCHA_REQUIRED",
+        "RATE_LIMITED",
+        "RISK_CONTROL",
+        "SESSION_EXPIRED",
+        "AUTH_REQUIRED",
+        "PAGE_CONTEXT_CHANGED"
+      ]
+    },
+    "category": {
+      "enum": ["challenge", "throttle", "session", "page_context"]
+    },
+    "severity": { "enum": ["warning", "blocking"] },
+    "source": { "enum": ["page", "adapter", "bridge"] },
+    "detected_at": { "type": "string", "format": "date-time" },
+    "retry_after_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3600000
+    },
+    "detail": { "type": "string", "maxLength": 1000 }
+  }
+}

@@ -41,11 +41,19 @@ describe("local browser gateway", () => {
       "nodes/core/control.succeed.node.yaml",
       "nodes/core/doudian.shop.context.read.node.yaml"
     ]) {
+      const content = fixture(path) as Record<string, any>;
+      if (path.includes("doudian.shop.context.read")) {
+        content.execution.timingPolicy.dispatchJitter = {
+          minMs: 0,
+          maxMs: 0,
+          distribution: "uniform"
+        };
+      }
       expect(
         service.handle({
           id: path,
           method: "asset.publish",
-          params: { assetType: "node", content: fixture(path), actor: "test" }
+          params: { assetType: "node", content, actor: "test" }
         }).ok
       ).toBe(true);
     }
@@ -67,7 +75,7 @@ describe("local browser gateway", () => {
       method: "run.create",
       params: {
         workflowId: "doudian.shop-context-observe",
-        workflowVersion: "1.0.0",
+        workflowVersion: "1.1.0",
         input: {}
       }
     });
@@ -92,7 +100,7 @@ describe("local browser gateway", () => {
       payload: {
         browser_instance_id: "browser-test",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
-        extension_version: "0.1.0",
+        extension_version: "0.2.1",
         supported_protocols: ["bpa.browser/1"],
         last_acked_command_seq: 0
       }
@@ -113,11 +121,11 @@ describe("local browser gateway", () => {
         capabilities: [
           {
             node_id: "doudian.shop.context.read",
-            versions: ["1.0.0"],
+            versions: ["1.0.0", "1.1.0"],
             risk_level: "R0",
             permissions: ["browser.dom.read", "browser.tabs.read"],
             adapter_id: "doudian",
-            adapter_version: "1.0.0"
+            adapter_version: "1.1.0"
           }
         ],
         manifest_digest:
@@ -128,6 +136,10 @@ describe("local browser gateway", () => {
       (message) => message.type === "command.dispatch"
     )!;
     expect(command).toBeTruthy();
+    expect(command.payload.timing_policy).toMatchObject({
+      readiness: { timeoutMs: 8000, stableForMs: 300 },
+      rateLimit: { scope: "tab", minIntervalMs: 350 }
+    });
     expect(
       verifyPermissionGrant(
         command.payload.permission_grant as SignedPermissionGrant,
@@ -193,6 +205,83 @@ describe("local browser gateway", () => {
         .listEvents(runId)
         .filter((event) => event.type === "RUN_SUCCEEDED")
     ).toHaveLength(1);
+
+    const riskRun = service.handle({
+      id: "risk-run",
+      method: "run.create",
+      params: {
+        workflowId: "doudian.shop-context-observe",
+        workflowVersion: "1.1.0",
+        input: {}
+      }
+    });
+    const riskRunId = (riskRun.result as { id: string }).id;
+    const riskCommand = outgoing
+      .filter((message) => message.type === "command.dispatch")
+      .at(-1)!;
+    gateway.handle({
+      protocol: "bpa.browser/1",
+      version: "1.0.0",
+      message_id: "risk-command-ack",
+      session_id: sessionId,
+      seq: 4,
+      sent_at: new Date().toISOString(),
+      type: "command.ack",
+      trace_id: riskCommand.trace_id,
+      payload: {
+        command_seq: riskCommand.payload.command_seq,
+        command_id: riskCommand.payload.command_id,
+        node_execution_id: riskCommand.payload.node_execution_id,
+        accepted: true,
+        fencing_token: 1
+      }
+    });
+    gateway.handle({
+      protocol: "bpa.browser/1",
+      version: "1.0.0",
+      message_id: "risk-result",
+      session_id: sessionId,
+      seq: 5,
+      sent_at: new Date().toISOString(),
+      type: "command.result",
+      trace_id: riskCommand.trace_id,
+      payload: {
+        command_seq: riskCommand.payload.command_seq,
+        command_id: riskCommand.payload.command_id,
+        node_execution_id: riskCommand.payload.node_execution_id,
+        idempotency_key: riskCommand.payload.idempotency_key,
+        fencing_token: 1,
+        status: "rejected",
+        error: {
+          code: "CAPTCHA_REQUIRED",
+          message: "Human verification required.",
+          retryable: false
+        },
+        risk_signals: [
+          {
+            code: "CAPTCHA_REQUIRED",
+            category: "challenge",
+            severity: "blocking",
+            source: "page",
+            detected_at: "2026-07-27T00:00:00.000Z"
+          }
+        ],
+        timing_observation: {
+          rate_limit_wait_ms: 350,
+          readiness_wait_ms: 420,
+          stable_for_ms: 300
+        },
+        evidence_refs: []
+      }
+    });
+    expect(persistence.getRun(riskRunId)?.status).toBe("failed");
+    expect(
+      persistence
+        .listEvents(riskRunId)
+        .find((event) => event.type === "NODE_REJECTED")?.payload
+    ).toMatchObject({
+      riskSignals: [{ code: "CAPTCHA_REQUIRED", severity: "blocking" }]
+    });
     persistence.close();
   });
 });

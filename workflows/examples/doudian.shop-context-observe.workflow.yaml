@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha1
 kind: Workflow
 metadata:
   id: doudian.shop-context-observe
-  version: 1.0.0
+  version: 1.1.0
   title: 读取当前抖店店铺上下文
   description: 只读验证 BPA Engine 到真实浏览器 DOM 的纵向链路。
 spec:
@@ -23,8 +23,8 @@ spec:
       use: control.start@1.0.0
       next: observe_shop
     observe_shop:
-      use: doudian.shop.context.read@1.0.0
-      timeout: 10s
+      use: doudian.shop.context.read@1.1.0
+      timeout: 15s
       retry:
         maxAttempts: 2
         backoff: 1s

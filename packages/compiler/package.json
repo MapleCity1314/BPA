@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@bpa/node-runtime": "workspace:*",
     "@bpa/schemas": "workspace:*",
     "yaml": "^2.8.1"
   }

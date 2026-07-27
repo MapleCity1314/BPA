@@ -9,9 +9,9 @@
     "type": "session.hello",
     "trace_id": "trace-session",
     "payload": {
-      "browser_instance_id": "browser-macbook-01",
+      "browser_instance_id": "browser-example-01",
       "extension_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "extension_version": "0.1.0",
+      "extension_version": "0.2.1",
       "supported_protocols": ["bpa.browser/1"],
       "last_acked_command_seq": 0
     }
@@ -50,12 +50,12 @@
     "payload": {
       "capabilities": [
         {
-          "node_id": "doudian.shop.context.read",
-          "versions": ["1.0.0"],
+          "node_id": "browser.page.context.read",
+          "versions": ["1.0.0", "1.1.0"],
           "risk_level": "R0",
           "permissions": ["browser.dom.read", "browser.tabs.read"],
-          "adapter_id": "doudian",
-          "adapter_version": "1.0.0"
+          "adapter_id": "example",
+          "adapter_version": "1.1.0"
         }
       ],
       "manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -73,28 +73,51 @@
     "payload": {
       "command_seq": 1,
       "run_id": "run-01",
-      "workflow_id": "doudian.shop-context-observe",
-      "workflow_version": "1.0.0",
+      "workflow_id": "example.page-context-observe",
+      "workflow_version": "1.1.0",
       "node_execution_id": "node-execution-01",
       "command_id": "command-01",
       "idempotency_key": "idempotency-01",
       "fencing_token": 1,
       "attempt": 1,
       "node": {
-        "id": "doudian.shop.context.read",
-        "version": "1.0.0"
+        "id": "browser.page.context.read",
+        "version": "1.1.0"
       },
       "input": {},
+      "timing_policy": {
+        "readiness": {
+          "timeoutMs": 8000,
+          "stableForMs": 300,
+          "pollIntervalMs": 200
+        },
+        "dispatchJitter": {
+          "minMs": 100,
+          "maxMs": 500,
+          "distribution": "uniform"
+        },
+        "retryBackoff": {
+          "strategy": "exponential",
+          "baseMs": 1000,
+          "maxMs": 5000,
+          "jitterRatio": 0.2
+        },
+        "rateLimit": {
+          "scope": "tab",
+          "minIntervalMs": 350,
+          "maxQueueMs": 3000
+        }
+      },
       "permission_grant": {
         "grant_id": "grant-01",
         "permissions": ["browser.dom.read", "browser.tabs.read"],
-        "domains": ["https://fxg.jinritemai.com"],
+        "domains": ["https://example.com"],
         "risk_level": "R0",
         "expires_at": "2026-07-27T06:05:00.000Z",
         "run_id": "run-01",
         "node_execution_id": "node-execution-01",
-        "node_id": "doudian.shop.context.read",
-        "node_version": "1.0.0",
+        "node_id": "browser.page.context.read",
+        "node_version": "1.1.0",
         "fencing_token": 1,
         "key_id": "core-key-01",
         "grant_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -138,19 +161,25 @@
       "status": "succeeded",
       "output": {
         "supported": true,
-        "shop": {
-          "id": "shop-01",
-          "name": "示例店铺"
+        "page": {
+          "id": "page-01",
+          "title": "Example Console"
         },
         "tab_ref": {
-          "browser_instance_id": "browser-macbook-01",
+          "browser_instance_id": "browser-example-01",
           "tab_id": 100,
-          "origin": "https://fxg.jinritemai.com"
+          "origin": "https://example.com"
         },
         "page_epoch": "page-epoch-01"
       },
       "evidence_refs": [],
-      "page_epoch": "page-epoch-01"
+      "page_epoch": "page-epoch-01",
+      "risk_signals": [],
+      "timing_observation": {
+        "rate_limit_wait_ms": 0,
+        "readiness_wait_ms": 420,
+        "stable_for_ms": 300
+      }
     }
   },
   {

@@ -115,6 +115,19 @@ describe("local workflow engine", () => {
             maxAttempts: 2,
             backoffMs: 0,
             retryableErrors: ["PAGE_LOADING"]
+          },
+          timing: {
+            dispatchJitter: {
+              minMs: 0,
+              maxMs: 0,
+              distribution: "uniform"
+            },
+            retryBackoff: {
+              strategy: "exponential",
+              baseMs: 1000,
+              maxMs: 5000,
+              jitterRatio: 0
+            }
           }
         }
       }
@@ -139,12 +152,68 @@ describe("local workflow engine", () => {
     expect(dispatched).toHaveLength(2);
     const second = dispatched[1]!.nodeExecutionId!;
     expect(persistence.getNodeExecution(second)?.attempt).toBe(2);
+    expect(
+      persistence
+        .listEvents(waiting.id)
+        .filter((event) => event.type === "NODE_SCHEDULED")
+        .at(-1)?.payload
+    ).toMatchObject({ attempt: 2, delayMs: 1000 });
     const completed = engine.acceptBrowserResult(retryWorkflow, second, {
       status: "succeeded",
       output: { supported: true },
       fencingToken: 1
     });
     expect(completed.status).toBe("succeeded");
+    persistence.close();
+  });
+
+  it("records blocking risk signals without retrying the rejected action", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const engine = new LocalWorkflowEngine(persistence);
+    const waiting = engine.start(workflow, {});
+    const nodeExecutionId = persistence
+      .listEvents(waiting.id)
+      .find((event) => event.type === "NODE_DISPATCHED")!.nodeExecutionId!;
+    const completed = engine.acceptBrowserResult(workflow, nodeExecutionId, {
+      status: "rejected",
+      error: {
+        code: "CAPTCHA_REQUIRED",
+        message: "Human verification required.",
+        retryable: false
+      },
+      riskSignals: [
+        {
+          code: "CAPTCHA_REQUIRED",
+          category: "challenge",
+          severity: "blocking",
+          source: "page",
+          detected_at: "2026-07-27T00:00:00.000Z"
+        }
+      ],
+      timingObservation: {
+        rate_limit_wait_ms: 350,
+        readiness_wait_ms: 420,
+        stable_for_ms: 300
+      },
+      fencingToken: 1
+    });
+    expect(completed.status).toBe("failed");
+    expect(
+      persistence
+        .listEvents(completed.id)
+        .find((event) => event.type === "NODE_REJECTED")?.payload
+    ).toMatchObject({
+      riskSignals: [{ code: "CAPTCHA_REQUIRED", severity: "blocking" }],
+      timingObservation: {
+        rate_limit_wait_ms: 350,
+        readiness_wait_ms: 420
+      }
+    });
+    expect(
+      persistence
+        .listEvents(completed.id)
+        .filter((event) => event.type === "NODE_SCHEDULED")
+    ).toHaveLength(2);
     persistence.close();
   });
 

@@ -42,6 +42,15 @@ payload        按 type 严格校验
 - Session、Extension ID、协议版本或 Fencing Token 不匹配时拒绝。
 - 普通 Result 不允许内嵌完整 DOM、截图或文件。
 
+### 2.1 Timing 与 Risk 扩展
+
+- `command.dispatch.payload.timing_policy` 携带已由 Compiler 解析的有界 TimingPolicy。
+- `command.result.payload.risk_signals` 携带 Bridge/Adapter 检测到的结构化风险。
+- `command.result.payload.timing_observation` 携带实际限速与页面稳定等待，供 Event 审计。
+- TimingPolicy 不授权任何新动作，也不能扩大 Permission Grant。
+- Blocking RiskSignal 必须停止当前动作并返回 `rejected`；不得尝试绕过验证码、登录或平台风控。
+- 详细语义见 [`timing-and-risk-policy-v1.md`](../timing-and-risk-policy-v1.md)。
+
 ## 3. Session 状态机
 
 ```text
@@ -99,6 +108,8 @@ EXECUTING
 ```
 
 `command.ack` 只表示接收。Bridge 必须先持久化 Result，再发送；收到 `result.ack(accepted=true)` 后才能删除正文。
+
+Command 在执行前还必须经过 Deadline、限速预约、活动 Tab/URL 复核和页面稳定性检查。等待会越过 Deadline 或页面上下文变化时，不得继续执行。
 
 ## 6. Cancel 与 Fencing
 

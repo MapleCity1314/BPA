@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { readDoudianShopContext } from "./index.js";
+import {
+  detectDoudianRiskSignals,
+  readDoudianShopContext
+} from "./index.js";
 
 function documentFixture(): Document {
   const element = {
@@ -96,5 +99,39 @@ describe("doudian adapter", () => {
       }
     } as unknown as Document;
     expect(readDoudianShopContext(doc).shop.name).toBe("榆园儿食品专营店");
+  });
+
+  it("reports challenge, throttling and expired-session signals without bypassing them", () => {
+    const challenge = {
+      body: {
+        innerText: "操作过于频繁，请稍后再试。请完成安全验证。"
+      },
+      defaultView: {
+        location: {
+          href: "https://fxg.jinritemai.com/ffa/g/list"
+        }
+      }
+    } as unknown as Document;
+    expect(
+      detectDoudianRiskSignals(
+        challenge,
+        undefined,
+        new Date("2026-07-27T00:00:00.000Z")
+      )
+    ).toMatchObject([
+      { code: "CAPTCHA_REQUIRED", severity: "blocking" },
+      {
+        code: "RATE_LIMITED",
+        severity: "blocking",
+        retry_after_ms: 30000
+      }
+    ]);
+    expect(
+      detectDoudianRiskSignals(
+        challenge,
+        "https://fxg.jinritemai.com/login",
+        new Date("2026-07-27T00:00:00.000Z")
+      )
+    ).toMatchObject([{ code: "SESSION_EXPIRED", severity: "blocking" }]);
   });
 });
