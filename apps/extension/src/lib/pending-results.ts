@@ -9,6 +9,27 @@ export interface PendingResult {
   payload: Record<string, unknown>;
 }
 
+const PROTOCOL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
+
+export function normalizePendingResultForReplay(
+  pending: PendingResult
+): PendingResult {
+  const pageEpoch = pending.payload.page_epoch;
+  if (
+    typeof pageEpoch === "string" &&
+    PROTOCOL_ID_PATTERN.test(pageEpoch)
+  ) {
+    return pending;
+  }
+  return {
+    ...pending,
+    payload: {
+      ...pending.payload,
+      page_epoch: `replay-${pending.commandSeq}:${pending.commandId}`
+    }
+  };
+}
+
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, 2);

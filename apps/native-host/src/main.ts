@@ -41,6 +41,7 @@ const socketPath = join(root, "run", "core.sock");
 const socket = createConnection(socketPath);
 const attachId = randomUUID();
 let attached = false;
+let chromeInputEnded = false;
 const pending: unknown[] = [];
 
 const forwardToCore = (message: unknown): void => {
@@ -95,4 +96,11 @@ socket.once("connect", () => {
   );
 });
 socket.once("error", (error) => fail(error));
-process.stdin.once("end", () => socket.end());
+socket.once("close", () => {
+  if (chromeInputEnded) process.exit(0);
+  fail(new Error("Local Core connection closed"));
+});
+process.stdin.once("end", () => {
+  chromeInputEnded = true;
+  socket.end();
+});

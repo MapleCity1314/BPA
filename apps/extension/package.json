@@ -13,8 +13,6 @@
     "@bpa/adapter-doudian": "workspace:*",
     "@bpa/browser-bridge": "workspace:*",
     "@bpa/schemas": "workspace:*",
-    "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1",
     "wxt": "0.21.1"
   }
 }

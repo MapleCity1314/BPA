@@ -66,6 +66,46 @@ function extractStableShopId(element: Element | undefined): string | undefined {
   return undefined;
 }
 
+const SHOP_NAME_PATTERN =
+  /^.{2,60}(?:旗舰店|专营店|专卖店|企业店|个体店|商店|小店)$/u;
+
+function findFallbackShopElement(doc: Document): Element | undefined {
+  return Array.from(doc.querySelectorAll("body *"))
+    .map((element) => {
+      const name = normalizeShopName(element.textContent);
+      const rect =
+        typeof element.getBoundingClientRect === "function"
+          ? element.getBoundingClientRect()
+          : undefined;
+      return { element, name, rect };
+    })
+    .filter(
+      ({ name, rect }) =>
+        name.length <= 80 &&
+        SHOP_NAME_PATTERN.test(name) &&
+        (!rect ||
+          (rect.width > 0 &&
+            rect.height > 0 &&
+            rect.top >= 0 &&
+            rect.top <= 240))
+    )
+    .sort(
+      (left, right) =>
+        (left.rect?.top ?? 0) - (right.rect?.top ?? 0) ||
+        left.name.length - right.name.length
+    )[0]?.element;
+}
+
+function findFallbackShopName(doc: Document): string | undefined {
+  return (doc.body?.innerText ?? "")
+    .split(/\r?\n/u)
+    .map(normalizeShopName)
+    .find(
+      (candidate) =>
+        candidate.length <= 80 && SHOP_NAME_PATTERN.test(candidate)
+    );
+}
+
 export function readDoudianShopContext(
   doc: Document,
   pageUrl = doc.defaultView?.location.href ?? ""
@@ -80,8 +120,9 @@ export function readDoudianShopContext(
   const fallback = Array.from(
     doc.querySelectorAll("[class*='headerShopName']")
   ).find((element) => normalizeText(element.textContent));
-  const element = precise ?? fallback;
-  const rawName = normalizeShopName(element?.textContent);
+  const element = precise ?? fallback ?? findFallbackShopElement(doc);
+  const rawName =
+    normalizeShopName(element?.textContent) || findFallbackShopName(doc) || "";
   const prefixName = rawName.match(
     /^(.{2,60}?(?:旗舰店|专营店|专卖店|企业店|个体店|商店|小店))/
   )?.[1];

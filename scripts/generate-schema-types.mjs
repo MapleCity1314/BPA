@@ -1,5 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
+import Ajv2020 from "ajv/dist/2020.js";
+import addFormats from "ajv-formats";
+import standaloneCode from "ajv/dist/standalone/index.js";
 import { compile } from "json-schema-to-typescript";
 
 const root = resolve(import.meta.dirname, "..");
@@ -51,6 +54,38 @@ for (const filename of schemas) {
   } else {
     await writeFile(outputPath, generated);
   }
+}
+
+const permissionSchema = JSON.parse(
+  await readFile(join(schemaDirectory, "permission.schema.json"), "utf8")
+);
+const browserProtocolSchema = JSON.parse(
+  await readFile(
+    join(schemaDirectory, "browser-protocol-v1.schema.json"),
+    "utf8"
+  )
+);
+const ajv = new Ajv2020({
+  allErrors: true,
+  strict: true,
+  code: { source: true, esm: true }
+});
+addFormats(ajv);
+ajv.addSchema(permissionSchema);
+const browserProtocolValidator = ajv.compile(browserProtocolSchema);
+const validatorSource = [
+  "/* Generated from canonical JSON Schema. Do not edit manually. */",
+  "// @ts-nocheck",
+  standaloneCode(ajv, browserProtocolValidator),
+  ""
+].join("\n");
+const validatorName = "browser_protocol_v1.validator.ts";
+const validatorPath = join(outputDirectory, validatorName);
+if (check) {
+  const current = await readFile(validatorPath, "utf8").catch(() => "");
+  if (current !== validatorSource) mismatches.push(validatorName);
+} else {
+  await writeFile(validatorPath, validatorSource);
 }
 
 if (mismatches.length > 0) {

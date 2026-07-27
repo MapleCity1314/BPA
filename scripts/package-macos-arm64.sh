@@ -35,8 +35,8 @@ PNPM_CLI="$(command -v pnpm)"
     "$PNPM_CLI" rebuild better-sqlite3
   BPA_HOME="$PACKAGE_ROOT/verify-data" \
     "$PACKAGE_ROOT/bpa/bundle/node/bin/node" \
-    "$PACKAGE_ROOT/bpa/node_modules/tsx/dist/cli.mjs" \
-    "$PACKAGE_ROOT/bpa/apps/local-core/src/main.ts" \
+    --import tsx \
+    apps/local-core/src/main.ts \
     --migrate-only
 )
 rm -rf "$PACKAGE_ROOT/verify-data"

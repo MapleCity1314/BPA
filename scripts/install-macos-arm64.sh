@@ -73,15 +73,18 @@ chmod 755 "$STAGING_ROOT/node/bin/node"
 
 cat > "$STAGING_ROOT/bin/bpa-core" <<EOF
 #!/bin/zsh
-exec "$VERSION_ROOT/node/bin/node" "$VERSION_ROOT/workspace/node_modules/tsx/dist/cli.mjs" "$VERSION_ROOT/workspace/apps/local-core/src/main.ts" "\$@"
+cd "$VERSION_ROOT/workspace"
+exec "$VERSION_ROOT/node/bin/node" --import tsx apps/local-core/src/main.ts "\$@"
 EOF
 cat > "$STAGING_ROOT/bin/bpa" <<EOF
 #!/bin/zsh
-exec "$VERSION_ROOT/node/bin/node" "$VERSION_ROOT/workspace/node_modules/tsx/dist/cli.mjs" "$VERSION_ROOT/workspace/apps/cli/src/main.ts" "\$@"
+cd "$VERSION_ROOT/workspace"
+exec "$VERSION_ROOT/node/bin/node" --import tsx apps/cli/src/main.ts "\$@"
 EOF
 cat > "$STAGING_ROOT/bin/bpa-native-host" <<EOF
 #!/bin/zsh
-exec "$VERSION_ROOT/node/bin/node" "$VERSION_ROOT/workspace/node_modules/tsx/dist/cli.mjs" "$VERSION_ROOT/workspace/apps/native-host/src/main.ts" "\$@"
+cd "$VERSION_ROOT/workspace"
+exec "$VERSION_ROOT/node/bin/node" --import tsx apps/native-host/src/main.ts "\$@"
 EOF
 chmod 755 "$STAGING_ROOT/bin/"*
 
@@ -90,11 +93,14 @@ if launchctl print "gui/$(id -u)/com.bpa.core" >/dev/null 2>&1; then
   launchctl bootout "gui/$(id -u)/com.bpa.core"
 fi
 
-BPA_HOME="$BPA_ROOT" \
-  "$STAGING_ROOT/node/bin/node" \
-  "$STAGING_ROOT/workspace/node_modules/tsx/dist/cli.mjs" \
-  "$STAGING_ROOT/workspace/apps/local-core/src/main.ts" \
-  --migrate-only
+(
+  cd "$STAGING_ROOT/workspace"
+  BPA_HOME="$BPA_ROOT" \
+    "$STAGING_ROOT/node/bin/node" \
+    --import tsx \
+    apps/local-core/src/main.ts \
+    --migrate-only
+)
 
 mv "$STAGING_ROOT" "$VERSION_ROOT"
 INSTALL_MOVED=true

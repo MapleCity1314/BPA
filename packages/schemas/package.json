@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./browser-protocol-v1.schema.json": "./schema/browser-protocol-v1.schema.json",
+    "./browser-protocol-v1.validator": "./src/generated/browser_protocol_v1.validator.ts",
     "./permission.schema.json": "./schema/permission.schema.json"
   }
 }

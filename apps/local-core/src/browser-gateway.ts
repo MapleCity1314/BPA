@@ -369,6 +369,7 @@ export class LocalBrowserGateway {
     });
     session.capabilities = capabilities;
     session.ready = true;
+    this.#lastError = undefined;
     this.dispatchPending();
   }
 
@@ -410,6 +411,7 @@ export class LocalBrowserGateway {
 
   #handleResult(message: Message): void {
     const outcome = this.#commitResult(message.message_id, message.payload);
+    if (outcome !== "stale") this.#lastError = undefined;
     if (outcome !== "stale") {
       const command = this.persistence.getGatewayCommand(
         String(message.payload.command_id)

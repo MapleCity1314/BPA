@@ -31,6 +31,14 @@ export interface BrowserCommandPayload {
   deadline: string;
 }
 
+export function createPageEpoch(
+  tabId: number,
+  at = Date.now(),
+  nonce = globalThis.crypto.randomUUID()
+): string {
+  return `tab-${tabId}:${at}:${nonce}`;
+}
+
 function normalizeJson(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normalizeJson);
   if (value && typeof value === "object") {

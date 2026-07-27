@@ -1,14 +1,13 @@
-import Ajv2020 from "ajv/dist/2020.js";
-import addFormats from "ajv-formats";
 import {
+  createPageEpoch,
   verifyCommandAuthorization,
   type BridgeCapability,
   type BrowserCommandPayload
 } from "@bpa/browser-bridge";
-import protocolSchema from "@bpa/schemas/browser-protocol-v1.schema.json";
-import permissionSchema from "@bpa/schemas/permission.schema.json";
+import validateMessage from "@bpa/schemas/browser-protocol-v1.validator";
 import {
   listPendingResults,
+  normalizePendingResultForReplay,
   removePendingResult,
   savePendingResult
 } from "../lib/pending-results";
@@ -22,11 +21,6 @@ const capability: BridgeCapability = {
   riskLevel: "R0",
   permissions: ["browser.dom.read", "browser.tabs.read"]
 };
-const ajv = new Ajv2020({ allErrors: true, strict: true });
-addFormats(ajv);
-ajv.addSchema(permissionSchema);
-const validateMessage = ajv.compile(protocolSchema);
-
 interface SessionState {
   sessionId?: string;
   incomingSeq: number;
@@ -107,7 +101,8 @@ export default defineBackground(() => {
   };
 
   const sendPending = async (): Promise<void> => {
-    for (const pending of await listPendingResults()) {
+    for (const storedPending of await listPendingResults()) {
+      const pending = normalizePendingResultForReplay(storedPending);
       const message = envelope(
         "command.result",
         pending.payload,
@@ -157,7 +152,7 @@ export default defineBackground(() => {
       );
       return;
     }
-    const pageEpoch = `${tab.id}:${tab.url}:${Date.now()}`;
+    const pageEpoch = createPageEpoch(tab.id);
     send(
       envelope(
         "command.ack",
@@ -242,8 +237,20 @@ export default defineBackground(() => {
 
   const handleMessage = async (message: Record<string, any>): Promise<void> => {
     if (!validateMessage(message)) {
+      const validationErrors = (
+        validateMessage as typeof validateMessage & {
+          errors?: Array<{ instancePath?: string; message?: string }>;
+        }
+      ).errors;
+      const details = (validationErrors ?? [])
+        .slice(0, 5)
+        .map(
+          (error) =>
+            `${error.instancePath || "/"} ${error.message ?? "is invalid"}`
+        )
+        .join("; ");
       await updateStatus({
-        lastError: `协议消息校验失败: ${ajv.errorsText(validateMessage.errors)}`
+        lastError: `协议消息校验失败: ${details}`
       });
       return;
     }

@@ -4,9 +4,25 @@ import {
   exportPublicKeySpkiBase64,
   signPermissionGrant
 } from "@bpa/gateway-core";
-import { verifyCommandAuthorization } from "./index.js";
+import {
+  createPageEpoch,
+  verifyCommandAuthorization
+} from "./index.js";
 
 describe("browser bridge authorization", () => {
+  it("creates an opaque protocol-safe page epoch without embedding a URL", () => {
+    const epoch = createPageEpoch(
+      42,
+      1_722_000_000_000,
+      "123e4567-e89b-12d3-a456-426614174000"
+    );
+    expect(epoch).toBe(
+      "tab-42:1722000000000:123e4567-e89b-12d3-a456-426614174000"
+    );
+    expect(epoch).toMatch(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+    expect(epoch).not.toContain("https://");
+  });
+
   it("verifies the Core signature and every command binding", async () => {
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");
     const grant = signPermissionGrant(
