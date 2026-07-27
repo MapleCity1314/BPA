@@ -1,0 +1,23 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: control.condition
+  version: 1.0.0
+  title: 安全条件分支
+  description: 使用受限比较 DSL 分支，不执行任意 JavaScript。
+runtime: engine_builtin
+inputSchema:
+  type: object
+outputSchema:
+  type: object
+  required:
+    - matched
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 1s
+  idempotency: pure
+  cancellable: true
+errors:
+  - CONDITION_INVALID

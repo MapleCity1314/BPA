@@ -67,4 +67,24 @@ describe("workflow compiler", () => {
     ]);
     expect(() => compileWorkflow(candidate, catalog)).toThrow(/unreachable/);
   });
+
+  it("rejects arbitrary condition code and incomplete branches", () => {
+    const candidate = structuredClone(workflow);
+    candidate.spec.nodes.start = {
+      use: "control.condition@1.0.0",
+      condition: "globalThis.process.exit()",
+      next: "finish"
+    };
+    const catalog = new MemoryNodeCatalog([
+      node("control.condition"),
+      node("control.succeed")
+    ]);
+    expect(() => compileWorkflow(candidate, catalog)).toThrow(
+      /unsupported expression syntax/
+    );
+    candidate.spec.nodes.start.condition = 'input.ready == true';
+    expect(() => compileWorkflow(candidate, catalog)).toThrow(
+      /requires a true target/
+    );
+  });
 });

@@ -18,9 +18,19 @@ const check = process.argv.includes("--check");
 await mkdir(outputDirectory, { recursive: true });
 const mismatches = [];
 for (const filename of schemas) {
-  const schema = JSON.parse(
+  let schema = JSON.parse(
     await readFile(join(schemaDirectory, filename), "utf8")
   );
+  if (filename === "browser-protocol-v1.schema.json") {
+    const permissionSchema = JSON.parse(
+      await readFile(
+        join(schemaDirectory, "permission.schema.json"),
+        "utf8"
+      )
+    );
+    schema = structuredClone(schema);
+    schema.$defs.permissionGrant = permissionSchema;
+  }
   const outputName = `${basename(filename, ".schema.json")
     .replaceAll("-", "_")}.d.ts`;
   const generated = await compile(schema, schema.title, {

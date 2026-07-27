@@ -7,6 +7,7 @@ import {
   RevisionConflictError,
   type ArtifactRecord,
   type ArtifactType,
+  type AuditRecord,
   type BrowserCapabilityRecord,
   type BrowserSessionRecord,
   type CreateRunInput,
@@ -429,14 +430,26 @@ export class SqlitePersistence implements Persistence {
         .get(input.inboxMessageId);
       if (inbox) return "duplicate" as const;
       const command = this.#db
-        .prepare("SELECT fencing_token FROM gateway_commands WHERE id = ?")
-        .get(input.commandId) as { fencing_token: number } | undefined;
+        .prepare(
+          "SELECT fencing_token, state FROM gateway_commands WHERE id = ?"
+        )
+        .get(input.commandId) as
+        | { fencing_token: number; state: string }
+        | undefined;
       if (!command || command.fencing_token !== input.fencingToken) {
         this.#insertAudit("gateway.result.stale", "gateway", input.commandId, {
           receivedFencingToken: input.fencingToken,
           currentFencingToken: command?.fencing_token
         });
         return "stale" as const;
+      }
+      if (command.state === "terminal") {
+        this.#db
+          .prepare(
+            "INSERT INTO gateway_inbox(message_id, command_id, received_at) VALUES (?, ?, ?)"
+          )
+          .run(input.inboxMessageId, input.commandId, input.receivedAt);
+        return "duplicate" as const;
       }
       this.#db
         .prepare(
@@ -455,6 +468,13 @@ export class SqlitePersistence implements Persistence {
           input.commandId,
           input.fencingToken
         );
+      this.#db
+        .prepare(
+          `UPDATE gateway_outbox
+           SET acknowledged_at = COALESCE(acknowledged_at, ?)
+           WHERE aggregate_id = ?`
+        )
+        .run(input.receivedAt, input.commandId);
       return "accepted" as const;
     })();
   }
@@ -463,10 +483,10 @@ export class SqlitePersistence implements Persistence {
     const rows = this.#db
       .prepare(
         `SELECT * FROM engine_outbox
-         WHERE acknowledged_at IS NULL
+         WHERE acknowledged_at IS NULL AND created_at <= ?
          ORDER BY created_at, id`
       )
-      .all() as SqlRow[];
+      .all(now()) as SqlRow[];
     return rows.map((row) => this.#readOutbox(row));
   }
 
@@ -478,6 +498,39 @@ export class SqlitePersistence implements Persistence {
          ORDER BY command_seq`
       )
       .all(afterCommandSeq) as SqlRow[];
+    return rows.map((row) => this.#readGatewayCommand(row));
+  }
+
+  listGatewayCommandsForRun(runId: string): GatewayCommandRecord[] {
+    const rows = this.#db
+      .prepare(
+        `SELECT gateway_commands.*
+         FROM gateway_commands
+         INNER JOIN node_executions
+           ON node_executions.id = gateway_commands.node_execution_id
+         WHERE node_executions.run_id = ?
+         ORDER BY gateway_commands.command_seq`
+      )
+      .all(runId) as SqlRow[];
+    return rows.map((row) => this.#readGatewayCommand(row));
+  }
+
+  listGatewayCommandsNeedingApplication(): GatewayCommandRecord[] {
+    const rows = this.#db
+      .prepare(
+        `SELECT gateway_commands.*
+         FROM gateway_commands
+         INNER JOIN node_executions
+           ON node_executions.id = gateway_commands.node_execution_id
+         WHERE gateway_commands.state = 'terminal'
+           AND gateway_commands.result_json IS NOT NULL
+           AND node_executions.status NOT IN (
+             'succeeded', 'rejected', 'failed', 'timed_out',
+             'cancelled', 'uncertain'
+           )
+         ORDER BY gateway_commands.command_seq`
+      )
+      .all() as SqlRow[];
     return rows.map((row) => this.#readGatewayCommand(row));
   }
 
@@ -493,16 +546,27 @@ export class SqlitePersistence implements Persistence {
     state: GatewayCommandRecord["state"],
     updatedAt: string
   ): GatewayCommandRecord {
-    const result = this.#db
-      .prepare(
-        `UPDATE gateway_commands SET state = ?, updated_at = ?
-         WHERE id = ? AND state != 'terminal'`
-      )
-      .run(state, updatedAt, id);
-    if (result.changes === 0 && !this.getGatewayCommand(id)) {
-      throw new Error(`Gateway command not found: ${id}`);
-    }
-    return this.getGatewayCommand(id)!;
+    return this.#db.transaction(() => {
+      const result = this.#db
+        .prepare(
+          `UPDATE gateway_commands SET state = ?, updated_at = ?
+           WHERE id = ? AND state != 'terminal'`
+        )
+        .run(state, updatedAt, id);
+      if (result.changes === 0 && !this.getGatewayCommand(id)) {
+        throw new Error(`Gateway command not found: ${id}`);
+      }
+      if (state === "accepted" || state === "terminal") {
+        this.#db
+          .prepare(
+            `UPDATE gateway_outbox
+             SET acknowledged_at = COALESCE(acknowledged_at, ?)
+             WHERE aggregate_id = ?`
+          )
+          .run(updatedAt, id);
+      }
+      return this.getGatewayCommand(id)!;
+    })();
   }
 
   nextGatewayCommandSequence(): number {
@@ -647,6 +711,30 @@ export class SqlitePersistence implements Persistence {
       nodeVersion: String(row.node_version),
       riskLevel: String(row.risk_level),
       permissions: parseJson(row.permissions_json) as string[]
+    }));
+  }
+
+  listAudit(target?: string): AuditRecord[] {
+    const rows = (target
+      ? this.#db
+          .prepare(
+            `SELECT * FROM audit_records
+             WHERE target = ?
+             ORDER BY occurred_at, id`
+          )
+          .all(target)
+      : this.#db
+          .prepare(
+            "SELECT * FROM audit_records ORDER BY occurred_at, id"
+          )
+          .all()) as SqlRow[];
+    return rows.map((row) => ({
+      id: String(row.id),
+      action: String(row.action),
+      actor: String(row.actor),
+      target: String(row.target),
+      detail: parseJson(row.detail_json),
+      occurredAt: String(row.occurred_at)
     }));
   }
 

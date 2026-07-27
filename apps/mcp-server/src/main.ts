@@ -180,6 +180,13 @@ server.registerTool(
     permissions,
     domains
   }) => {
+    if (runtime === "browser" && domains.length === 0) {
+      return result({
+        status: "rejected",
+        errors: ["browser nodes must declare at least one allowed domain"]
+      });
+    }
+    const browserDomains = domains as [string, ...string[]];
     const node: NodeDefinition = {
       apiVersion: "bpa/v1alpha1",
       kind: "Node",
@@ -190,7 +197,7 @@ server.registerTool(
       risk: {
         level: risk_level as RiskLevel,
         permissions,
-        ...(runtime === "browser" ? { domains } : {})
+        ...(runtime === "browser" ? { domains: browserDomains } : {})
       },
       execution: {
         timeoutDefault: "30s",
@@ -287,13 +294,18 @@ server.registerTool(
     let key: string | undefined = compiled.start;
     while (key && !seen.has(key)) {
       seen.add(key);
-      const node = compiled.nodes[key]!;
+      const compiledNode: {
+        nodeId: string;
+        nodeVersion: string;
+        next?: string;
+        on: unknown;
+      } = compiled.nodes[key]!;
       order.push({
         key,
-        node: `${node.nodeId}@${node.nodeVersion}`,
-        on: node.on
+        node: `${compiledNode.nodeId}@${compiledNode.nodeVersion}`,
+        on: compiledNode.on
       });
-      key = node.next;
+      key = compiledNode.next;
     }
     return result({ valid: true, mode: "static-no-side-effects", order });
   }

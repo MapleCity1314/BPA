@@ -18,6 +18,7 @@ export interface CompiledNode {
   definitionDigest: string;
   runtime: NodeDefinition["runtime"];
   input: unknown;
+  condition?: string;
   next?: string;
   on: NonNullable<WorkflowDefinition["spec"]["nodes"][string]["on"]>;
   timeoutMs: number;
@@ -121,6 +122,24 @@ export function compileWorkflow(
         `/spec/nodes/${key}/condition is only valid for control.condition`
       );
     }
+    if (
+      node.condition &&
+      !/^(?:input|previous)(?:\.[A-Za-z_][A-Za-z0-9_]*)*\s*(?:==|!=)\s*(?:true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?|"(?:[^"\\]|\\.)*")$/.test(
+        node.condition
+      )
+    ) {
+      issues.push(
+        `/spec/nodes/${key}/condition uses unsupported expression syntax`
+      );
+    }
+    if (
+      node.condition &&
+      (!(node.next ?? node.on?.success) || !node.on?.failure)
+    ) {
+      issues.push(
+        `/spec/nodes/${key}/condition requires a true target (next or on.success) and on.failure`
+      );
+    }
     const targets = [node.next, ...Object.values(node.on ?? {})].filter(
       (target): target is string => Boolean(target)
     );
@@ -137,6 +156,7 @@ export function compileWorkflow(
       definitionDigest: contentDigest(definition),
       runtime: definition.runtime,
       input: node.with ?? {},
+      ...(node.condition ? { condition: node.condition } : {}),
       ...(node.next ? { next: node.next } : {}),
       on: node.on ?? {},
       timeoutMs: parseDuration(

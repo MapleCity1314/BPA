@@ -222,6 +222,7 @@
     "payload": {
       "command_id": "command-02",
       "node_execution_id": "node-execution-02",
+      "fencing_token": 2,
       "acknowledged": true,
       "action_started": true
     }
@@ -238,6 +239,7 @@
     "payload": {
       "command_id": "command-02",
       "node_execution_id": "node-execution-02",
+      "fencing_token": 2,
       "status": "uncertain",
       "safe_stop": false
     }

@@ -8,6 +8,7 @@ export interface BpaPaths {
   socket: string;
   database: string;
   signingKey: string;
+  lock: string;
 }
 
 export function resolveBpaPaths(
@@ -22,6 +23,7 @@ export function resolveBpaPaths(
     logs: join(homedir(), "Library", "Logs", "BPA"),
     socket: join(root, "run", "core.sock"),
     database: join(data, "bpa.sqlite"),
-    signingKey: join(data, "core-signing-key.pem")
+    signingKey: join(data, "core-signing-key.pem"),
+    lock: join(root, "run", "core.lock")
   };
 }

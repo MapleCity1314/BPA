@@ -45,6 +45,7 @@ interface ActiveSession {
   incoming: ProtocolSessionGuard;
   incomingSeq: number;
   outgoingSeq: number;
+  lastAckedCommandSeq: number;
   ready: boolean;
   capabilities: BrowserCapabilityRecord[];
 }
@@ -135,7 +136,9 @@ export class LocalBrowserGateway {
         case "heartbeat.pong":
           break;
         case "cancel.ack":
+          break;
         case "cancel.effective":
+          this.#handleCancelEffective(candidate);
           break;
         case "evidence.begin":
         case "evidence.chunk":
@@ -165,7 +168,7 @@ export class LocalBrowserGateway {
     this.#promoteEngineMessages();
     let dispatched = 0;
     for (const command of this.persistence.listPendingGatewayCommands(
-      0
+      session.lastAckedCommandSeq
     )) {
       if (!this.#supports(command)) continue;
       this.#sendMessage(
@@ -181,6 +184,92 @@ export class LocalBrowserGateway {
       dispatched += 1;
     }
     return dispatched;
+  }
+
+  tick(at = new Date()): { timedOut: number; dispatched: number } {
+    this.recoverTerminalResults();
+    let timedOut = 0;
+    for (const command of this.persistence.listPendingGatewayCommands()) {
+      const payload = command.payload as Record<string, unknown>;
+      if (Date.parse(String(payload.deadline)) > at.getTime()) continue;
+      this.#commitResult(`timeout-${command.id}-${at.getTime()}`, {
+        command_seq: command.commandSeq,
+        command_id: command.id,
+        node_execution_id: command.nodeExecutionId,
+        idempotency_key: command.idempotencyKey,
+        fencing_token: command.fencingToken,
+        status: "timed_out",
+        error: {
+          code: "NODE_TIMEOUT",
+          message: "Browser command deadline elapsed.",
+          retryable: true
+        }
+      });
+      timedOut += 1;
+    }
+    return { timedOut, dispatched: this.dispatchPending() };
+  }
+
+  recoverTerminalResults(): number {
+    let recovered = 0;
+    for (const command of this.persistence.listGatewayCommandsNeedingApplication()) {
+      this.#commitResult(`recovery-${command.id}-${randomUUID()}`, {
+        ...(command.result as Record<string, unknown>),
+        command_id: command.id,
+        node_execution_id: command.nodeExecutionId,
+        idempotency_key: command.idempotencyKey,
+        fencing_token: command.fencingToken,
+        command_seq: command.commandSeq
+      });
+      recovered += 1;
+    }
+    return recovered;
+  }
+
+  requestCancel(runId: string, reasonCode = "USER_REQUESTED"): number {
+    let requested = 0;
+    for (const command of this.persistence
+      .listGatewayCommandsForRun(runId)
+      .filter((candidate) => candidate.state !== "terminal")) {
+      if (command.state === "queued") {
+        this.#commitResult(`cancel-local-${command.id}`, {
+          command_seq: command.commandSeq,
+          command_id: command.id,
+          node_execution_id: command.nodeExecutionId,
+          idempotency_key: command.idempotencyKey,
+          fencing_token: command.fencingToken,
+          status: "cancelled"
+        });
+      } else if (this.#session?.ready) {
+        this.#sendMessage(
+          "cancel.request",
+          {
+            command_id: command.id,
+            node_execution_id: command.nodeExecutionId,
+            fencing_token: command.fencingToken,
+            reason_code: reasonCode
+          },
+          `trace-${command.nodeExecutionId}`
+        );
+      } else {
+        this.#commitResult(`cancel-uncertain-${command.id}`, {
+          command_seq: command.commandSeq,
+          command_id: command.id,
+          node_execution_id: command.nodeExecutionId,
+          idempotency_key: command.idempotencyKey,
+          fencing_token: command.fencingToken,
+          status: "uncertain",
+          error: {
+            code: "CANCEL_DELIVERY_UNCERTAIN",
+            message:
+              "The browser disconnected after delivery; cancellation could not be confirmed.",
+            retryable: false
+          }
+        });
+      }
+      requested += 1;
+    }
+    return requested;
   }
 
   #handleHello(message: Message): void {
@@ -224,6 +313,7 @@ export class LocalBrowserGateway {
       incoming: guard,
       incomingSeq: 0,
       outgoingSeq: 0,
+      lastAckedCommandSeq: opened.session.lastAckedCommandSeq,
       ready: false,
       capabilities: []
     };
@@ -300,10 +390,6 @@ export class LocalBrowserGateway {
         "accepted",
         new Date().toISOString()
       );
-      this.persistence.updateBrowserSession({
-        id: this.#session!.id,
-        lastAckedCommandSeq: command.commandSeq
-      });
       return;
     }
     const synthetic = {
@@ -324,6 +410,21 @@ export class LocalBrowserGateway {
 
   #handleResult(message: Message): void {
     const outcome = this.#commitResult(message.message_id, message.payload);
+    if (outcome !== "stale") {
+      const command = this.persistence.getGatewayCommand(
+        String(message.payload.command_id)
+      );
+      if (command) {
+        this.#session!.lastAckedCommandSeq = Math.max(
+          this.#session!.lastAckedCommandSeq,
+          command.commandSeq
+        );
+        this.persistence.updateBrowserSession({
+          id: this.#session!.id,
+          lastAckedCommandSeq: this.#session!.lastAckedCommandSeq
+        });
+      }
+    }
     this.#sendMessage(
       "result.ack",
       {
@@ -334,6 +435,28 @@ export class LocalBrowserGateway {
       },
       message.trace_id
     );
+  }
+
+  #handleCancelEffective(message: Message): void {
+    const command = this.persistence.getGatewayCommand(
+      String(message.payload.command_id)
+    );
+    if (
+      !command ||
+      command.nodeExecutionId !==
+        String(message.payload.node_execution_id) ||
+      command.fencingToken !== Number(message.payload.fencing_token)
+    ) {
+      throw new Error("Cancel Effective does not match an active command");
+    }
+    this.#commitResult(message.message_id, {
+      command_seq: command.commandSeq,
+      command_id: command.id,
+      node_execution_id: command.nodeExecutionId,
+      idempotency_key: command.idempotencyKey,
+      fencing_token: command.fencingToken,
+      status: message.payload.status
+    });
   }
 
   #commitResult(

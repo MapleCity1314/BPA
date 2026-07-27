@@ -4,8 +4,8 @@ import { userInfo } from "node:os";
 import { extname } from "node:path";
 import { Command } from "commander";
 import { parse } from "yaml";
-import { sendControlRequest } from "../../local-core/src/control.js";
-import { resolveBpaPaths } from "../../local-core/src/paths.js";
+import { sendControlRequest } from "@bpa/local-core/control";
+import { resolveBpaPaths } from "@bpa/local-core/paths";
 
 const program = new Command();
 const paths = resolveBpaPaths();
@@ -77,6 +77,17 @@ program
   });
 
 program
+  .command("audit")
+  .option("--target <target>", "filter by exact audit target")
+  .action(async (options) => {
+    output(
+      await sendControlRequest(paths.socket, "audit.list", {
+        ...(options.target ? { target: options.target } : {})
+      })
+    );
+  });
+
+program
   .command("run")
   .argument("<workflow>", "workflow id")
   .requiredOption("--version <version>", "published workflow version")
@@ -118,5 +129,24 @@ program
       })
     )
   );
+
+program
+  .command("resume-human")
+  .argument("<node-execution-id>")
+  .option("--approve", "approve the human step")
+  .option("--reject", "reject the human step")
+  .option("--output <json>", "human review output JSON", "{}")
+  .action(async (nodeExecutionId, options) => {
+    if (Boolean(options.approve) === Boolean(options.reject)) {
+      throw new Error("Choose exactly one of --approve or --reject");
+    }
+    output(
+      await sendControlRequest(paths.socket, "run.human.complete", {
+        nodeExecutionId,
+        approved: Boolean(options.approve),
+        output: JSON.parse(options.output)
+      })
+    );
+  });
 
 await program.parseAsync();

@@ -109,6 +109,26 @@ export class LocalWorkflowEngine {
     if (!compiledNode) {
       throw new Error(`Compiled node not found: ${nodeExecution.nodeKey}`);
     }
+    const retryable =
+      nodeExecution.attempt < compiledNode.retry.maxAttempts &&
+      (result.status === "timed_out" ||
+        (result.status === "failed" &&
+          (result.error?.retryable === true ||
+            (result.error?.code != null &&
+              compiledNode.retry.retryableErrors.includes(
+                result.error.code
+              )))));
+    if (retryable) {
+      return this.#schedule(
+        workflow,
+        this.persistence.getRun(run.id)!,
+        nodeExecution.nodeKey,
+        sequence,
+        result.output,
+        nodeExecution.attempt + 1,
+        compiledNode.retry.backoffMs
+      );
+    }
     let target: string | undefined;
     if (result.status === "succeeded") {
       target = compiledNode.next ?? compiledNode.on.success;
@@ -154,12 +174,40 @@ export class LocalWorkflowEngine {
     });
   }
 
+  acceptHumanResult(
+    workflow: CompiledWorkflow,
+    nodeExecutionId: string,
+    approved: boolean,
+    output?: unknown
+  ): RunRecord {
+    const execution = this.persistence.getNodeExecution(nodeExecutionId);
+    if (!execution) {
+      throw new Error(`Node execution not found: ${nodeExecutionId}`);
+    }
+    return this.acceptBrowserResult(workflow, nodeExecutionId, {
+      status: approved ? "succeeded" : "rejected",
+      ...(output === undefined ? {} : { output }),
+      ...(!approved
+        ? {
+            error: {
+              code: "HUMAN_REJECTED",
+              message: "A human reviewer rejected this step.",
+              retryable: false
+            }
+          }
+        : {}),
+      fencingToken: execution.fencingToken
+    });
+  }
+
   #schedule(
     workflow: CompiledWorkflow,
     currentRun: RunRecord,
     nodeKey: string,
     initialSequence: number,
-    previousOutput: unknown
+    previousOutput: unknown,
+    attempt = 1,
+    delayMs = 0
   ): RunRecord {
     let run = currentRun;
     let sequence = initialSequence;
@@ -174,11 +222,11 @@ export class LocalWorkflowEngine {
       nodeVersion: compiledNode.nodeVersion,
       status: "scheduled",
       revision: 0,
-      attempt: 1,
+      attempt,
       idempotencyKey: contentDigest({
         runId: run.id,
         nodeKey,
-        attempt: 1
+        attempt
       }),
       fencingToken: 1,
       input: compiledNode.input,
@@ -194,7 +242,9 @@ export class LocalWorkflowEngine {
         {
           nodeKey,
           nodeId: compiledNode.nodeId,
-          nodeVersion: compiledNode.nodeVersion
+          nodeVersion: compiledNode.nodeVersion,
+          attempt,
+          delayMs
         },
         nodeExecution.id
       )
@@ -238,7 +288,7 @@ export class LocalWorkflowEngine {
             nodeExecution,
             compiledNode
           ),
-          createdAt: new Date().toISOString()
+          createdAt: new Date(Date.now() + delayMs).toISOString()
         }
       });
       return this.persistence.commitRunTransition({
@@ -247,6 +297,29 @@ export class LocalWorkflowEngine {
         nextStatus: "waiting_browser",
         currentNodeKey: nodeKey,
         event: this.#event(run.id, sequence, "RUN_WAITING_BROWSER", {
+          nodeExecutionId: nodeExecution.id
+        })
+      });
+    }
+    if (compiledNode.runtime === "human") {
+      this.persistence.commitNodeTransition({
+        nodeExecutionId: nodeExecution.id,
+        expectedRevision: nodeExecution.revision,
+        nextStatus: "accepted",
+        event: this.#event(
+          run.id,
+          sequence++,
+          "NODE_WAITING_HUMAN",
+          { nodeKey, input: nodeExecution.input },
+          nodeExecution.id
+        )
+      });
+      return this.persistence.commitRunTransition({
+        runId: run.id,
+        expectedRevision: run.revision,
+        nextStatus: "waiting_human",
+        currentNodeKey: nodeKey,
+        event: this.#event(run.id, sequence, "RUN_WAITING_HUMAN", {
           nodeExecutionId: nodeExecution.id
         })
       });
@@ -264,11 +337,27 @@ export class LocalWorkflowEngine {
     sequence: number,
     previousOutput: unknown
   ): RunRecord {
-    if (!["control.start", "control.succeed"].includes(node.nodeId)) {
+    if (
+      !["control.start", "control.succeed", "control.condition"].includes(
+        node.nodeId
+      )
+    ) {
       throw new Error(`Unknown builtin node: ${node.nodeId}`);
     }
+    const conditionResult =
+      node.nodeId === "control.condition"
+        ? this.#evaluateCondition(
+            node.condition,
+            this.persistence.getRun(run.id)?.input,
+            previousOutput
+          )
+        : undefined;
     const output =
-      node.nodeId === "control.succeed" ? previousOutput ?? {} : {};
+      node.nodeId === "control.succeed"
+        ? previousOutput ?? {}
+        : node.nodeId === "control.condition"
+          ? { matched: conditionResult }
+          : {};
     this.persistence.commitNodeTransition({
       nodeExecutionId: nodeExecution.id,
       expectedRevision: nodeExecution.revision,
@@ -287,7 +376,10 @@ export class LocalWorkflowEngine {
         result: output
       }
     });
-    const target = node.next ?? node.on.success;
+    const target =
+      node.nodeId === "control.condition" && conditionResult === false
+        ? node.on.failure
+        : node.next ?? node.on.success;
     if (target) {
       return this.#schedule(workflow, run, target, sequence, output);
     }
@@ -317,6 +409,35 @@ export class LocalWorkflowEngine {
       input: execution.input,
       timeout_ms: node.timeoutMs
     };
+  }
+
+  #evaluateCondition(
+    expression: string | undefined,
+    input: unknown,
+    previous: unknown
+  ): boolean {
+    if (!expression) {
+      throw new Error("control.condition requires a condition expression");
+    }
+    const match =
+      /^(input|previous)((?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*(==|!=)\s*(.+)$/.exec(
+        expression
+      );
+    if (!match) throw new Error(`Unsupported condition: ${expression}`);
+    const root = match[1] === "input" ? input : previous;
+    const path = (match[2] ?? "")
+      .split(".")
+      .filter(Boolean);
+    let actual = root;
+    for (const part of path) {
+      actual =
+        actual && typeof actual === "object"
+          ? (actual as Record<string, unknown>)[part]
+          : undefined;
+    }
+    const expected = JSON.parse(match[4]!);
+    const equal = JSON.stringify(actual) === JSON.stringify(expected);
+    return match[3] === "==" ? equal : !equal;
   }
 
   #nextSequence(runId: string): number {

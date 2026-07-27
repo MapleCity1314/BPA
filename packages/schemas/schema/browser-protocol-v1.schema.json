@@ -98,52 +98,7 @@
       }
     },
     "permissionGrant": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "grant_id",
-        "permissions",
-        "domains",
-        "risk_level",
-        "expires_at",
-        "run_id",
-        "node_execution_id",
-        "node_id",
-        "node_version",
-        "fencing_token",
-        "key_id",
-        "grant_digest",
-        "authorization_tag"
-      ],
-      "properties": {
-        "grant_id": { "$ref": "#/$defs/id" },
-        "permissions": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": { "$ref": "#/$defs/id" }
-        },
-        "domains": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": { "type": "string", "format": "uri" }
-        },
-        "risk_level": { "enum": ["R0", "R1", "R2", "R3", "R4"] },
-        "expires_at": { "$ref": "#/$defs/timestamp" },
-        "run_id": { "$ref": "#/$defs/id" },
-        "node_execution_id": { "$ref": "#/$defs/id" },
-        "node_id": { "$ref": "#/$defs/id" },
-        "node_version": { "$ref": "#/$defs/id" },
-        "fencing_token": { "type": "integer", "minimum": 1 },
-        "approval_ref": { "$ref": "#/$defs/id" },
-        "key_id": { "$ref": "#/$defs/id" },
-        "grant_digest": { "$ref": "#/$defs/digest" },
-        "authorization_tag": {
-          "type": "string",
-          "minLength": 80,
-          "maxLength": 128,
-          "pattern": "^[A-Za-z0-9+/]+={0,2}$"
-        }
-      }
+      "$ref": "https://bpa.local/schemas/permission/v1"
     },
     "coreSigningKey": {
       "type": "object",
@@ -624,10 +579,16 @@
         "payload": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["command_id", "node_execution_id", "acknowledged"],
+          "required": [
+            "command_id",
+            "node_execution_id",
+            "fencing_token",
+            "acknowledged"
+          ],
           "properties": {
             "command_id": { "$ref": "#/$defs/id" },
             "node_execution_id": { "$ref": "#/$defs/id" },
+            "fencing_token": { "type": "integer", "minimum": 1 },
             "acknowledged": { "type": "boolean" },
             "action_started": { "type": "boolean" },
             "reason_code": { "$ref": "#/$defs/id" }
@@ -661,10 +622,16 @@
         "payload": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["command_id", "node_execution_id", "status"],
+          "required": [
+            "command_id",
+            "node_execution_id",
+            "fencing_token",
+            "status"
+          ],
           "properties": {
             "command_id": { "$ref": "#/$defs/id" },
             "node_execution_id": { "$ref": "#/$defs/id" },
+            "fencing_token": { "type": "integer", "minimum": 1 },
             "status": { "enum": ["cancelled", "uncertain"] },
             "safe_stop": { "type": "boolean" }
           }

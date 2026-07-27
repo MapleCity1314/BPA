@@ -238,6 +238,8 @@ export interface Persistence
   listPendingGatewayCommands(
     afterCommandSeq?: number
   ): GatewayCommandRecord[];
+  listGatewayCommandsForRun(runId: string): GatewayCommandRecord[];
+  listGatewayCommandsNeedingApplication(): GatewayCommandRecord[];
   getGatewayCommand(id: string): GatewayCommandRecord | undefined;
   markGatewayCommandState(
     id: string,
@@ -262,6 +264,7 @@ export interface Persistence
     capabilities: BrowserCapabilityRecord[]
   ): void;
   listBrowserCapabilities(sessionId: string): BrowserCapabilityRecord[];
+  listAudit(target?: string): AuditRecord[];
   close(): void;
 }
 

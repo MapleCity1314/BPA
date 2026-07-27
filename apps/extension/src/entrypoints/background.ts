@@ -6,6 +6,7 @@ import {
   type BrowserCommandPayload
 } from "@bpa/browser-bridge";
 import protocolSchema from "@bpa/schemas/browser-protocol-v1.schema.json";
+import permissionSchema from "@bpa/schemas/permission.schema.json";
 import {
   listPendingResults,
   removePendingResult,
@@ -23,6 +24,7 @@ const capability: BridgeCapability = {
 };
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 addFormats(ajv);
+ajv.addSchema(permissionSchema);
 const validateMessage = ajv.compile(protocolSchema);
 
 interface SessionState {
@@ -37,6 +39,8 @@ export default defineBackground(() => {
   const session: SessionState = { incomingSeq: 0, outgoingSeq: 0 };
   let port: Browser.runtime.Port | undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  const activeCommands = new Set<string>();
+  const cancelledCommands = new Set<string>();
 
   const updateStatus = async (
     patch: Record<string, unknown>
@@ -104,7 +108,13 @@ export default defineBackground(() => {
 
   const sendPending = async (): Promise<void> => {
     for (const pending of await listPendingResults()) {
-      send(pending.message);
+      const message = envelope(
+        "command.result",
+        pending.payload,
+        pending.traceId
+      );
+      await savePendingResult(pending);
+      send(message);
     }
   };
 
@@ -161,6 +171,7 @@ export default defineBackground(() => {
         String(message.trace_id)
       )
     );
+    activeCommands.add(String(payload.command_id));
     let adapterResponse: {
       ok: boolean;
       output?: Record<string, unknown>;
@@ -182,9 +193,9 @@ export default defineBackground(() => {
         }
       };
     }
-    const result = envelope(
-      "command.result",
-      {
+    activeCommands.delete(String(payload.command_id));
+    if (cancelledCommands.delete(String(payload.command_id))) return;
+    const resultPayload = {
         command_seq: payload.command_seq,
         command_id: payload.command_id,
         node_execution_id: payload.node_execution_id,
@@ -209,14 +220,20 @@ export default defineBackground(() => {
         ...(adapterResponse.error ? { error: adapterResponse.error } : {}),
         evidence_refs: [],
         page_epoch: pageEpoch
-      },
-      String(message.trace_id)
-    );
+      };
     await savePendingResult({
       commandId: String(payload.command_id),
-      message: result
+      commandSeq: Number(payload.command_seq),
+      traceId: String(message.trace_id),
+      payload: resultPayload
     });
-    send(result);
+    send(
+      envelope(
+        "command.result",
+        resultPayload,
+        String(message.trace_id)
+      )
+    );
     await updateStatus({
       currentTask: payload.node_execution_id,
       lastError: adapterResponse.error?.message
@@ -273,9 +290,62 @@ export default defineBackground(() => {
       case "command.dispatch":
         await handleCommand(message);
         break;
+      case "cancel.request": {
+        const commandId = String(message.payload.command_id);
+        const pending = (await listPendingResults()).some(
+          (entry) => entry.commandId === commandId
+        );
+        const actionStarted = activeCommands.has(commandId);
+        send(
+          envelope(
+            "cancel.ack",
+            {
+              command_id: commandId,
+              node_execution_id: message.payload.node_execution_id,
+              fencing_token: message.payload.fencing_token,
+              acknowledged: !pending,
+              action_started: actionStarted,
+              ...(pending ? { reason_code: "RESULT_ALREADY_PRODUCED" } : {})
+            },
+            message.trace_id
+          )
+        );
+        if (!pending) {
+          cancelledCommands.add(commandId);
+          send(
+            envelope(
+              "cancel.effective",
+              {
+                command_id: commandId,
+                node_execution_id: message.payload.node_execution_id,
+                fencing_token: message.payload.fencing_token,
+                status: "cancelled",
+                safe_stop: true
+              },
+              message.trace_id
+            )
+          );
+        }
+        break;
+      }
       case "result.ack":
         if (message.payload.accepted) {
-          await removePendingResult(String(message.payload.command_id));
+          const commandId = String(message.payload.command_id);
+          const pending = (await listPendingResults()).find(
+            (entry) => entry.commandId === commandId
+          );
+          if (pending) {
+            const stored = await browser.storage.local.get(
+              "lastAckedCommandSeq"
+            );
+            await browser.storage.local.set({
+              lastAckedCommandSeq: Math.max(
+                Number(stored.lastAckedCommandSeq ?? 0),
+                pending.commandSeq
+              )
+            });
+          }
+          await removePendingResult(commandId);
         }
         break;
       case "heartbeat.ping":
@@ -299,7 +369,8 @@ export default defineBackground(() => {
       port = browser.runtime.connectNative(NATIVE_HOST);
       const stored = await browser.storage.local.get([
         "browserInstanceId",
-        "resumeToken"
+        "resumeToken",
+        "lastAckedCommandSeq"
       ]);
       const browserInstanceId =
         stored.browserInstanceId ?? crypto.randomUUID();
@@ -329,7 +400,9 @@ export default defineBackground(() => {
             extension_id: browser.runtime.id,
             extension_version: browser.runtime.getManifest().version,
             supported_protocols: [PROTOCOL],
-            last_acked_command_seq: 0,
+            last_acked_command_seq: Number(
+              stored.lastAckedCommandSeq ?? 0
+            ),
             ...(stored.resumeToken
               ? { resume_token: stored.resumeToken }
               : {})

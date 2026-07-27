@@ -1,19 +1,30 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://bpa.local/schemas/permission/v1",
-  "title": "BPA Permission Grant",
+  "title": "BPA Signed Permission Grant",
   "type": "object",
   "additionalProperties": false,
-  "required": ["grant_id", "subject", "workflow", "node", "permissions", "issued_at", "expires_at"],
+  "required": [
+    "grant_id",
+    "permissions",
+    "domains",
+    "risk_level",
+    "expires_at",
+    "run_id",
+    "node_execution_id",
+    "node_id",
+    "node_version",
+    "fencing_token",
+    "key_id",
+    "grant_digest",
+    "authorization_tag"
+  ],
   "properties": {
-    "grant_id": { "type": "string", "minLength": 1, "maxLength": 200 },
-    "subject": { "type": "string", "minLength": 1, "maxLength": 200 },
-    "workflow": { "type": "string", "minLength": 1, "maxLength": 200 },
-    "node": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "grant_id": { "$ref": "#/$defs/id" },
     "permissions": {
       "type": "array",
       "uniqueItems": true,
-      "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+      "items": { "$ref": "#/$defs/id" }
     },
     "domains": {
       "type": "array",
@@ -21,8 +32,31 @@
       "items": { "type": "string", "format": "uri" }
     },
     "risk_level": { "enum": ["R0", "R1", "R2", "R3", "R4"] },
-    "issued_at": { "type": "string", "format": "date-time" },
     "expires_at": { "type": "string", "format": "date-time" },
-    "approval_ref": { "type": "string", "minLength": 1, "maxLength": 300 }
+    "run_id": { "$ref": "#/$defs/id" },
+    "node_execution_id": { "$ref": "#/$defs/id" },
+    "node_id": { "$ref": "#/$defs/id" },
+    "node_version": { "$ref": "#/$defs/id" },
+    "fencing_token": { "type": "integer", "minimum": 1 },
+    "approval_ref": { "$ref": "#/$defs/id" },
+    "key_id": { "$ref": "#/$defs/id" },
+    "grant_digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "authorization_tag": {
+      "type": "string",
+      "minLength": 80,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    }
   }
 }

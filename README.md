@@ -4,6 +4,7 @@
 
 - [BPA 通用技术方案 v1.0](docs/BPA通用技术方案-v1.0.md)：当前权威架构基线；包含原链路、目标架构、能力、兜底、安全、版本升级、技术选型、目录结构与演进路线。
 - [BPA Browser Protocol v1](docs/protocols/browser-protocol-v1.md)：已确认的 Native Messaging 协议 Schema、状态机、签名权限和消息样例。
+- [本地 v1 运行与验收](docs/local-v1-operations.md)：开发、发布、Chrome 联调、MCP、安装、回滚和故障判定。
 - [BPA 技术架构草案 v0.1](docs/architecture-v0.1.md)：历史讨论稿，仅用于追溯早期设计过程，不作为实现依据。
 - [重点项检查插件抽象复盘 v0.1](docs/重点项检查插件抽象复盘-v0.1.md)：首个真实场景复盘、节点提取，以及 `workflow_gen` 与 `node_gen` 的职责划分。
 - [Bridge / Gateway 实验报告 v0.1](docs/bridge-gateway实验报告-v0.1.md)：真实扩展链路、ACK、去重、断线恢复、Gateway 重启和只读抖店节点实验。
@@ -24,7 +25,7 @@ AI 可以理解自然语言、选择流程、补齐参数，并在允许的范�
 
 ## 当前实现状态
 
-本地 v1 正在实施，已完成协议确认门之前的第一段：
+本地 v1 已形成可运行纵向闭环：
 
 - pnpm monorepo 与 Node.js 24 LTS 约束。
 - Workflow、Node、Event、Permission、Evidence 与 Browser Protocol JSON Schema。
@@ -32,9 +33,12 @@ AI 可以理解自然语言、选择流程、补齐参数，并在允许的范�
 - SQLite Registry、Execution/Event、Inbox/Outbox、幂等和 Fencing 数据模型。
 - `ExecutionUnitOfWork`、`GatewayDeliveryUnitOfWork` 与 CAS。
 - Local Core、`0600` Unix Socket Control API 和 CLI。
-- Browser Protocol v1 会话守卫、状态机和规范消息样例。
-
-Native Host 与通用扩展将在 Browser Protocol v1 确认后开始联调。
+- 已确认的 Browser Protocol v1、双向独立序列、24 小时轮换 Resume Token 和 Ed25519 Permission Grant。
+- `com.bpa.browser` Native Host、Origin 白名单和大小端安全 framing。
+- WXT 通用扩展、IndexedDB Pending Result、状态页和 Doudian 只读 Adapter。
+- Engine 线性执行、受限条件、有限重试、超时、人工暂停、Cancel 和 `uncertain`。
+- MCP `workflow_gen` / `node_gen` 等 Candidate-only 创作工具。
+- macOS arm64 安装、Migration 前置验证、原子切换、回滚和保留数据卸载脚本。
 
 开发验证：
 
@@ -51,6 +55,8 @@ pnpm test
 pnpm core
 pnpm bpa doctor
 ```
+
+完整发布和浏览器验收步骤见[本地 v1 运行与验收](docs/local-v1-operations.md)。
 
 ## BPA 为什么存在
 

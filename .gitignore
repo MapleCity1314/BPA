@@ -18,3 +18,5 @@ coverage/
 *.sqlite-wal
 .bpa/
 runtime/
+artifacts/
+bundle/

@@ -134,19 +134,19 @@ export interface Command {
       version: Id;
     };
     input: unknown;
-    permission_grant: PermissionGrant;
+    permission_grant: BPASignedPermissionGrant;
     deadline: Timestamp;
     tab_ref?: TabRef;
     page_epoch?: Id;
     approval_token_ref?: Id;
   };
 }
-export interface PermissionGrant {
+export interface BPASignedPermissionGrant {
   grant_id: Id;
   permissions: Id[];
   domains: string[];
   risk_level: "R0" | "R1" | "R2" | "R3" | "R4";
-  expires_at: Timestamp;
+  expires_at: string;
   run_id: Id;
   node_execution_id: Id;
   node_id: Id;
@@ -154,7 +154,7 @@ export interface PermissionGrant {
   fencing_token: number;
   approval_ref?: Id;
   key_id: Id;
-  grant_digest: Digest;
+  grant_digest: string;
   authorization_tag: string;
 }
 export interface TabRef {
@@ -251,6 +251,7 @@ export interface CancelAck {
   payload: {
     command_id: Id;
     node_execution_id: Id;
+    fencing_token: number;
     acknowledged: boolean;
     action_started?: boolean;
     reason_code?: Id;
@@ -268,6 +269,7 @@ export interface CancelEffective {
   payload: {
     command_id: Id;
     node_execution_id: Id;
+    fencing_token: number;
     status: "cancelled" | "uncertain";
     safe_stop?: boolean;
   };

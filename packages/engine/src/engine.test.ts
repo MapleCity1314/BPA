@@ -101,4 +101,89 @@ describe("local workflow engine", () => {
     ).toThrow(/Stale fencing token/);
     persistence.close();
   });
+
+  it("retries only up to the compiled finite attempt limit", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const engine = new LocalWorkflowEngine(persistence);
+    const retryWorkflow: CompiledWorkflow = {
+      ...workflow,
+      nodes: {
+        ...workflow.nodes,
+        observe: {
+          ...workflow.nodes.observe!,
+          retry: {
+            maxAttempts: 2,
+            backoffMs: 0,
+            retryableErrors: ["PAGE_LOADING"]
+          }
+        }
+      }
+    };
+    const waiting = engine.start(retryWorkflow, {});
+    const first = persistence
+      .listEvents(waiting.id)
+      .find((event) => event.type === "NODE_DISPATCHED")!.nodeExecutionId!;
+    const retrying = engine.acceptBrowserResult(retryWorkflow, first, {
+      status: "failed",
+      error: {
+        code: "PAGE_LOADING",
+        message: "Loading",
+        retryable: true
+      },
+      fencingToken: 1
+    });
+    expect(retrying.status).toBe("waiting_browser");
+    const dispatched = persistence
+      .listEvents(waiting.id)
+      .filter((event) => event.type === "NODE_DISPATCHED");
+    expect(dispatched).toHaveLength(2);
+    const second = dispatched[1]!.nodeExecutionId!;
+    expect(persistence.getNodeExecution(second)?.attempt).toBe(2);
+    const completed = engine.acceptBrowserResult(retryWorkflow, second, {
+      status: "succeeded",
+      output: { supported: true },
+      fencingToken: 1
+    });
+    expect(completed.status).toBe("succeeded");
+    persistence.close();
+  });
+
+  it("pauses and resumes a human node", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const engine = new LocalWorkflowEngine(persistence);
+    const humanWorkflow: CompiledWorkflow = {
+      ...workflow,
+      nodes: {
+        ...workflow.nodes,
+        start: { ...workflow.nodes.start!, next: "review" },
+        review: {
+          key: "review",
+          nodeId: "control.human-approval",
+          nodeVersion: "1.0.0",
+          definitionDigest: "sha256:human",
+          runtime: "human",
+          input: { prompt: "确认" },
+          next: "finish",
+          on: { rejected: "finish" },
+          timeoutMs: 60_000,
+          retry: { maxAttempts: 1, backoffMs: 0, retryableErrors: [] }
+        }
+      }
+    };
+    const waiting = engine.start(humanWorkflow, {});
+    expect(waiting.status).toBe("waiting_human");
+    const executionId = persistence
+      .listEvents(waiting.id)
+      .find((event) => event.type === "NODE_WAITING_HUMAN")!
+      .nodeExecutionId!;
+    const completed = engine.acceptHumanResult(
+      humanWorkflow,
+      executionId,
+      true,
+      { reviewer: "test" }
+    );
+    expect(completed.status).toBe("succeeded");
+    expect(completed.output).toEqual({ reviewer: "test" });
+    persistence.close();
+  });
 });

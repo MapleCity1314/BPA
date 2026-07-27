@@ -27,6 +27,7 @@ export const browserProtocolV1Schema = loadSchema(
 const require = createRequire(import.meta.url);
 interface AjvLike {
   compile<T = unknown>(schema: object): ValidateFunction<T>;
+  addSchema(schema: object): AjvLike;
 }
 type AjvConstructor = new (options: Record<string, unknown>) => AjvLike;
 const Ajv2020 = require("ajv/dist/2020").default as AjvConstructor;
@@ -40,6 +41,7 @@ const ajv = new Ajv2020({
   strictRequired: true
 });
 addFormats(ajv);
+ajv.addSchema(permissionSchema);
 
 export const validateWorkflow = ajv.compile(
   workflowSchema

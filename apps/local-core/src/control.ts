@@ -75,6 +75,10 @@ export class LocalCoreService {
         return this.persistence.listPublished(
           params.assetType as ArtifactType | undefined
         );
+      case "audit.list":
+        return this.persistence.listAudit(
+          params.target == null ? undefined : String(params.target)
+        );
       case "asset.validate":
         return this.#validateAsset(
           String(params.assetType),
@@ -106,11 +110,22 @@ export class LocalCoreService {
       }
       case "run.events":
         return this.persistence.listEvents(String(params.runId));
-      case "run.cancel":
-        return this.persistence.requestCancel(
-          String(params.runId),
-          String(params.actor || userInfo().username)
+      case "run.human.complete":
+        return this.#completeHumanStep(
+          String(params.nodeExecutionId),
+          params.approved === true,
+          params.output
         );
+      case "run.cancel":
+        {
+          const runId = String(params.runId);
+          const run = this.persistence.requestCancel(
+            runId,
+            String(params.actor || userInfo().username)
+          );
+          this.browserGateway?.requestCancel(runId);
+          return this.persistence.getRun(runId) ?? run;
+        }
       default:
         throw new Error(`Unknown control method: ${method}`);
     }
@@ -249,6 +264,38 @@ export class LocalCoreService {
     const run = this.engine.start(compiled, input);
     this.browserGateway?.dispatchPending();
     return run;
+  }
+
+  #completeHumanStep(
+    nodeExecutionId: string,
+    approved: boolean,
+    output: unknown
+  ): unknown {
+    const execution = this.persistence.getNodeExecution(nodeExecutionId);
+    if (!execution) {
+      throw new Error(`Node execution not found: ${nodeExecutionId}`);
+    }
+    const run = this.persistence.getRun(execution.runId);
+    if (!run) throw new Error(`Run not found: ${execution.runId}`);
+    if (run.status !== "waiting_human" || execution.status !== "accepted") {
+      throw new Error("Human step is not waiting for a decision");
+    }
+    const artifact = this.persistence.getPublished(
+      "workflow",
+      run.workflowId,
+      run.workflowVersion
+    );
+    if (!artifact) {
+      throw new Error(
+        `Published workflow not found: ${run.workflowId}@${run.workflowVersion}`
+      );
+    }
+    return this.engine.acceptHumanResult(
+      compileWorkflow(artifact.content, this.#nodeCatalog()),
+      nodeExecutionId,
+      approved,
+      output
+    );
   }
 
   #nodeCatalog(): MemoryNodeCatalog {
