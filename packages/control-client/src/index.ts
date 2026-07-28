@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createConnection } from "node:net";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   CONTROL_MAX_MESSAGE_BYTES,
   CONTROL_PROTOCOL_VERSION,
@@ -21,6 +23,9 @@ export interface ControlClientOptions {
   now?: () => number;
   requestId?: () => string;
   timeoutMs?: number;
+  maxRememberedRequestIds?: number;
+  schedule?: (callback: () => void, delayMs: number) => unknown;
+  cancelScheduled?: (handle: unknown) => void;
 }
 
 export class ControlClientError extends Error {
@@ -44,13 +49,30 @@ export class ControlClient {
   readonly #now: () => number;
   readonly #requestId: () => string;
   readonly #timeoutMs: number;
-  readonly #usedRequestIds = new Set<string>();
+  readonly #maxRememberedRequestIds: number;
+  readonly #schedule: (callback: () => void, delayMs: number) => unknown;
+  readonly #cancelScheduled: (handle: unknown) => void;
+  readonly #activeRequestIds = new Set<string>();
+  readonly #completedRequestIds = new Set<string>();
+  readonly #requestIdOrder: string[] = [];
 
   constructor(transport: ControlTransport, options: ControlClientOptions = {}) {
     this.#transport = transport;
     this.#now = options.now ?? Date.now;
     this.#requestId = options.requestId ?? randomUUID;
     this.#timeoutMs = options.timeoutMs ?? 30_000;
+    this.#maxRememberedRequestIds = options.maxRememberedRequestIds ?? 4096;
+    this.#schedule =
+      options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+    this.#cancelScheduled =
+      options.cancelScheduled ??
+      ((handle) => clearTimeout(handle as NodeJS.Timeout));
+    if (
+      !Number.isSafeInteger(this.#maxRememberedRequestIds) ||
+      this.#maxRememberedRequestIds < 1
+    ) {
+      throw new Error("maxRememberedRequestIds must be a positive integer");
+    }
   }
 
   async request<TResult>(
@@ -59,13 +81,16 @@ export class ControlClient {
     options: { requestId?: string; timeoutMs?: number } = {}
   ): Promise<TResult> {
     const requestId = options.requestId ?? this.#requestId();
-    if (this.#usedRequestIds.has(requestId)) {
+    if (
+      this.#activeRequestIds.has(requestId) ||
+      this.#completedRequestIds.has(requestId)
+    ) {
       throw new ControlClientError(
         "DUPLICATE_REQUEST",
         `Control request id was already used: ${requestId}`
       );
     }
-    this.#usedRequestIds.add(requestId);
+    this.#activeRequestIds.add(requestId);
     const timeoutMs = options.timeoutMs ?? this.#timeoutMs;
     const startedAt = this.#now();
     const request: ControlRequestEnvelope = {
@@ -77,7 +102,7 @@ export class ControlClient {
       params
     };
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = this.#schedule(() => controller.abort(), timeoutMs);
     let raw: unknown;
     try {
       raw = await this.#transport.send(request, controller.signal);
@@ -93,7 +118,14 @@ export class ControlClient {
         error instanceof Error ? error.message : String(error)
       );
     } finally {
-      clearTimeout(timer);
+      this.#cancelScheduled(timer);
+      this.#activeRequestIds.delete(requestId);
+      this.#completedRequestIds.add(requestId);
+      this.#requestIdOrder.push(requestId);
+      if (this.#requestIdOrder.length > this.#maxRememberedRequestIds) {
+        const expired = this.#requestIdOrder.shift();
+        if (expired) this.#completedRequestIds.delete(expired);
+      }
     }
     if (controller.signal.aborted || this.#now() >= startedAt + timeoutMs) {
       throw new ControlClientError(
@@ -125,6 +157,14 @@ export class ControlClient {
     }
     return response.result;
   }
+}
+
+export function resolveControlSocketPath(
+  root =
+    process.env.BPA_HOME ??
+    join(homedir(), "Library", "Application Support", "BPA")
+): string {
+  return join(root, "run", "core.sock");
 }
 
 export class UnixSocketControlTransport implements ControlTransport {

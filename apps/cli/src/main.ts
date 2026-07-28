@@ -4,11 +4,16 @@ import { userInfo } from "node:os";
 import { extname } from "node:path";
 import { Command } from "commander";
 import { parse } from "yaml";
-import { sendControlRequest } from "@bpa/local-core/control";
-import { resolveBpaPaths } from "@bpa/local-core/paths";
+import {
+  ControlClient,
+  resolveControlSocketPath,
+  UnixSocketControlTransport
+} from "@bpa/control-client";
 
 const program = new Command();
-const paths = resolveBpaPaths();
+const client = new ControlClient(
+  new UnixSocketControlTransport(resolveControlSocketPath())
+);
 
 program
   .name("bpa")
@@ -35,7 +40,7 @@ async function readAsset(path: string): Promise<unknown> {
 program
   .command("doctor")
   .description("check Local Core and persistence")
-  .action(async () => output(await sendControlRequest(paths.socket, "doctor")));
+  .action(async () => output(await client.request("doctor")));
 
 program
   .command("validate")
@@ -43,7 +48,7 @@ program
   .argument("<path>", "YAML or JSON asset")
   .action(async (assetType, path) => {
     output(
-      await sendControlRequest(paths.socket, "asset.validate", {
+      await client.request("asset.validate", {
         assetType,
         content: await readAsset(path)
       })
@@ -57,7 +62,7 @@ program
   .requiredOption("--yes", "confirm human publication")
   .action(async (assetType, path) => {
     output(
-      await sendControlRequest(paths.socket, "asset.publish", {
+      await client.request("asset.publish", {
         assetType,
         content: await readAsset(path),
         actor: userInfo().username
@@ -70,7 +75,7 @@ program
   .option("--type <asset-type>", "filter by asset type")
   .action(async (options) => {
     output(
-      await sendControlRequest(paths.socket, "catalog.list", {
+      await client.request("catalog.list", {
         ...(options.type ? { assetType: options.type } : {})
       })
     );
@@ -81,7 +86,7 @@ program
   .option("--target <target>", "filter by exact audit target")
   .action(async (options) => {
     output(
-      await sendControlRequest(paths.socket, "audit.list", {
+      await client.request("audit.list", {
         ...(options.target ? { target: options.target } : {})
       })
     );
@@ -94,7 +99,7 @@ program
   .option("--input <json>", "workflow input JSON", "{}")
   .action(async (workflow, options) => {
     output(
-      await sendControlRequest(paths.socket, "run.create", {
+      await client.request("run.create", {
         workflowId: workflow,
         workflowVersion: options.version,
         input: JSON.parse(options.input)
@@ -107,7 +112,7 @@ program
   .argument("<run-id>")
   .action(async (runId) =>
     output(
-      await sendControlRequest(paths.socket, "run.inspect", { runId })
+      await client.request("run.inspect", { runId })
     )
   );
 
@@ -115,7 +120,7 @@ program
   .command("events")
   .argument("<run-id>")
   .action(async (runId) =>
-    output(await sendControlRequest(paths.socket, "run.events", { runId }))
+    output(await client.request("run.events", { runId }))
   );
 
 program
@@ -123,7 +128,7 @@ program
   .argument("<run-id>")
   .action(async (runId) =>
     output(
-      await sendControlRequest(paths.socket, "run.cancel", {
+      await client.request("run.cancel", {
         runId,
         actor: userInfo().username
       })
@@ -141,7 +146,7 @@ program
       throw new Error("Choose exactly one of --approve or --reject");
     }
     output(
-      await sendControlRequest(paths.socket, "run.human.complete", {
+      await client.request("run.human.complete", {
         nodeExecutionId,
         approved: Boolean(options.approve),
         output: JSON.parse(options.output)

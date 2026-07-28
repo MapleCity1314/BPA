@@ -13,6 +13,7 @@ import {
 import {
   ControlClient,
   ControlClientError,
+  resolveControlSocketPath,
   UnixSocketControlTransport,
   type ControlTransport
 } from "./index.js";
@@ -142,6 +143,71 @@ describe("injectable ControlClient", () => {
     await expect(client.request("doctor")).rejects.toMatchObject({
       code: "DEADLINE_EXCEEDED"
     });
+  });
+
+  it("bounds remembered request ids and exposes deterministic scheduling", async () => {
+    const requests: string[] = [];
+    const transport: ControlTransport = {
+      send: async (request) => {
+        requests.push(request.requestId);
+        return {
+          version: CONTROL_PROTOCOL_VERSION,
+          kind: "result",
+          requestId: request.requestId,
+          result: true
+        };
+      }
+    };
+    const client = new ControlClient(transport, {
+      maxRememberedRequestIds: 1
+    });
+    await client.request("doctor", {}, { requestId: "request-a" });
+    await client.request("doctor", {}, { requestId: "request-b" });
+    await client.request("doctor", {}, { requestId: "request-a" });
+    expect(requests).toEqual(["request-a", "request-b", "request-a"]);
+
+    let scheduled: (() => void) | undefined;
+    let cancelled = false;
+    const timed = new ControlClient(
+      {
+        send: (_request, signal) =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => reject(new Error("aborted")),
+              { once: true }
+            );
+          })
+      },
+      {
+        requestId: () => "scheduled-request",
+        schedule: (callback) => {
+          scheduled = callback;
+          return "timer";
+        },
+        cancelScheduled: (handle) => {
+          expect(handle).toBe("timer");
+          cancelled = true;
+        }
+      }
+    );
+    const pending = timed.request("doctor");
+    scheduled?.();
+    await expect(pending).rejects.toMatchObject({ code: "DEADLINE_EXCEEDED" });
+    expect(cancelled).toBe(true);
+  });
+
+  it("resolves the standard control socket independently of Local Core", () => {
+    expect(resolveControlSocketPath("/tmp/bpa-test")).toBe(
+      "/tmp/bpa-test/run/core.sock"
+    );
+    expect(
+      () =>
+        new ControlClient(
+          { send: async () => undefined },
+          { maxRememberedRequestIds: 0 }
+        )
+    ).toThrow(/positive integer/);
   });
 });
 

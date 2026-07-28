@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@bpa/local-core": "workspace:*",
+    "@bpa/control-client": "workspace:*",
     "commander": "^14.0.2",
     "yaml": "^2.8.1"
   }
