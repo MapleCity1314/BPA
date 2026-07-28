@@ -1,0 +1,15 @@
+{
+  "name": "@bpa/packaging-dataset",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@bpa/dataset-core": "workspace:*",
+    "@bpa/packaging-domain": "workspace:*",
+    "fast-xml-parser": "^5.2.5",
+    "fflate": "^0.8.2"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
