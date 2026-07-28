@@ -122,8 +122,62 @@ if ! "$NODE" --input-type=module -e '
   tail -50 "$VERIFY_ROOT/core.stderr.log" >&2
   exit 1
 fi
+TEAM_NODE="$RUNTIME_ROOT/assets/nodes/packaging.products.normalize.node.yaml"
+if [[ ! -f "$TEAM_NODE" ]]; then
+  print -u2 "Packaged Team Node asset is missing."
+  exit 1
+fi
+BPA_HOME="$ISOLATED_HOME" \
+  "$NODE" "$RUNTIME_ROOT/bin/bpa.js" publish node "$TEAM_NODE" --yes \
+  >"$VERIFY_ROOT/team-publish.json"
+BPA_HOME="$ISOLATED_HOME" \
+  "$NODE" "$RUNTIME_ROOT/bin/bpa.js" run-node packaging.products.normalize \
+  --version 1.0.0 \
+  --input '{"shopId":"shop-package-test","products":[{"id":"10001","title":"Package Worker Test","editorUrl":"https://fxg.jinritemai.com/ffa/g/create?product_id=10001"}]}' \
+  >"$VERIFY_ROOT/team-run.json"
+TEAM_RUN_ID="$(
+  "$NODE" --input-type=module -e '
+    import { readFileSync } from "node:fs";
+    const response = JSON.parse(readFileSync(process.argv[1], "utf8"));
+    if (
+      response.preview?.riskLevel !== "R0" ||
+      response.preview?.requiresConfirmation !== false ||
+      typeof response.run?.id !== "string"
+    ) process.exit(1);
+    process.stdout.write(response.run.id);
+  ' "$VERIFY_ROOT/team-run.json"
+)"
+for _attempt in {1..50}; do
+  BPA_HOME="$ISOLATED_HOME" \
+    "$NODE" "$RUNTIME_ROOT/bin/bpa.js" inspect "$TEAM_RUN_ID" \
+    >"$VERIFY_ROOT/team-inspect.json"
+  TEAM_STATUS="$(
+    "$NODE" --input-type=module -e '
+      import { readFileSync } from "node:fs";
+      const run = JSON.parse(readFileSync(process.argv[1], "utf8"));
+      process.stdout.write(String(run.status));
+    ' "$VERIFY_ROOT/team-inspect.json"
+  )"
+  [[ "$TEAM_STATUS" == "succeeded" ]] && break
+  [[ "$TEAM_STATUS" == "failed" || "$TEAM_STATUS" == "uncertain" ]] && break
+  sleep 0.1
+done
+if ! "$NODE" --input-type=module -e '
+  import { readFileSync } from "node:fs";
+  const run = JSON.parse(readFileSync(process.argv[1], "utf8"));
+  const product = run.output?.products?.[0];
+  if (
+    run.status !== "succeeded" ||
+    product?.shopId !== "shop-package-test" ||
+    product?.productId !== "10001"
+  ) process.exit(1);
+' "$VERIFY_ROOT/team-inspect.json"; then
+  print -u2 "Packaged Team Worker invocation failed."
+  tail -50 "$VERIFY_ROOT/core.stderr.log" >&2
+  exit 1
+fi
 kill "$CORE_PID"
 wait "$CORE_PID"
 CORE_PID=""
 
-print "Verified packaged BPA runtime, migration, socket, CLI, and Extension closure."
+print "Verified packaged BPA runtime, migration, socket, CLI, Team Worker, and Extension closure."
