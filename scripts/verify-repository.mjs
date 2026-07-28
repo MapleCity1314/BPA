@@ -1,6 +1,6 @@
 import { access, readdir, readFile, stat } from "node:fs/promises";
 import { constants } from "node:fs";
-import { dirname, extname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { parse } from "yaml";
 
 const root = resolve(import.meta.dirname, "..");
@@ -96,6 +96,7 @@ async function verifyAssets() {
     .filter((name) => name.endsWith(".node.yaml"))
     .sort();
   const nodeRefs = new Set();
+  const nodesByRef = new Map();
   for (const filename of nodeFiles) {
     const path = join(nodeDirectory, filename);
     const node = parse(await readFile(path, "utf8"));
@@ -114,6 +115,7 @@ async function verifyAssets() {
       issues.push(`Duplicate Node source identity: ${reference}`);
     }
     nodeRefs.add(reference);
+    nodesByRef.set(reference, node);
   }
 
   const requiredDefaults = [
@@ -135,6 +137,34 @@ async function verifyAssets() {
     .filter((name) => name.endsWith(".workflow.yaml"))
     .sort();
   const workflowRefs = new Set();
+  function verifyStructuredBlock(reference, block, path) {
+    for (const step of block?.steps ?? []) {
+      const stepPath = `${path}.${String(step?.key ?? "?")}`;
+      if (step?.kind === "call") {
+        if (typeof step.use !== "string" || !nodeRefs.has(step.use)) {
+          issues.push(
+            `${reference} step ${stepPath} references missing source Node ${String(
+              step?.use
+            )}`
+          );
+        }
+      }
+      if (step?.kind === "decision") {
+        verifyStructuredBlock(reference, step.then, `${stepPath}.then`);
+        verifyStructuredBlock(reference, step.else, `${stepPath}.else`);
+      }
+      if (step?.kind === "foreach") {
+        verifyStructuredBlock(reference, step.body, `${stepPath}.body`);
+      }
+      for (const [outcome, handler] of Object.entries(step?.handlers ?? {})) {
+        verifyStructuredBlock(
+          reference,
+          handler,
+          `${stepPath}.handlers.${outcome}`
+        );
+      }
+    }
+  }
   for (const filename of workflowFiles) {
     const path = join(workflowDirectory, filename);
     const workflow = parse(await readFile(path, "utf8"));
@@ -157,17 +187,100 @@ async function verifyAssets() {
       issues.push(`Duplicate Workflow source identity: ${reference}`);
     }
     workflowRefs.add(reference);
-    for (const [key, step] of Object.entries(workflow.spec?.nodes ?? {})) {
-      if (typeof step?.use !== "string" || !nodeRefs.has(step.use)) {
-        issues.push(
-          `${reference} step ${key} references missing source Node ${String(
-            step?.use
-          )}`
-        );
+    if (workflow.apiVersion === "bpa/v1alpha2") {
+      verifyStructuredBlock(reference, workflow.spec?.root, "root");
+    } else {
+      for (const [key, step] of Object.entries(workflow.spec?.nodes ?? {})) {
+        if (typeof step?.use !== "string" || !nodeRefs.has(step.use)) {
+          issues.push(
+            `${reference} step ${key} references missing source Node ${String(
+              step?.use
+            )}`
+          );
+        }
       }
     }
   }
-  return { nodeCount: nodeRefs.size, workflowCount: workflowRefs.size };
+
+  const adapterDirectory = join(root, "adapters");
+  const adapterFiles = [];
+  for (const entry of await readdir(adapterDirectory, {
+    withFileTypes: true
+  })) {
+    if (!entry.isDirectory()) continue;
+    const directory = join(adapterDirectory, entry.name);
+    for (const filename of await readdir(directory)) {
+      if (filename.endsWith(".adapter.yaml")) {
+        adapterFiles.push(join(directory, filename));
+      }
+    }
+  }
+  const adapterRefs = new Set();
+  for (const path of adapterFiles.sort()) {
+    const adapter = parse(await readFile(path, "utf8"));
+    const reference = `${String(adapter?.metadata?.id)}@${String(
+      adapter?.metadata?.version
+    )}`;
+    const expectedFilename = `${adapter?.metadata?.id}.adapter.yaml`;
+    if (
+      adapter?.kind !== "Adapter" ||
+      !adapter?.metadata?.id ||
+      !adapter?.metadata?.version
+    ) {
+      issues.push(`Malformed Adapter asset: ${relative(root, path)}`);
+      continue;
+    }
+    if (basename(path) !== expectedFilename) {
+      issues.push(
+        `Adapter filename ${basename(path)} must match identity ${expectedFilename}`
+      );
+    }
+    if (adapterRefs.has(reference)) {
+      issues.push(`Duplicate Adapter source identity: ${reference}`);
+    }
+    adapterRefs.add(reference);
+    const origins = new Set(adapter.origins ?? []);
+    for (const capability of adapter.capabilities ?? []) {
+      for (const version of capability.nodeVersions ?? []) {
+        const nodeReference = `${capability.nodeId}@${version}`;
+        const node = nodesByRef.get(nodeReference);
+        if (!node || node.runtime !== "browser") {
+          issues.push(
+            `${reference} references missing Browser Node ${nodeReference}`
+          );
+          continue;
+        }
+        if (
+          node.adapter?.id !== adapter.metadata.id ||
+          !node.adapter?.versions?.includes(adapter.metadata.version)
+        ) {
+          issues.push(
+            `${nodeReference} does not pin source Adapter ${reference}`
+          );
+        }
+        if (
+          JSON.stringify([...(node.risk?.permissions ?? [])].sort()) !==
+          JSON.stringify([...(capability.permissions ?? [])].sort())
+        ) {
+          issues.push(
+            `${reference} capability permissions differ from ${nodeReference}`
+          );
+        }
+        for (const origin of node.risk?.domains ?? []) {
+          if (!origins.has(origin)) {
+            issues.push(
+              `${reference} origin allowlist is missing ${origin} for ${nodeReference}`
+            );
+          }
+        }
+      }
+    }
+  }
+  return {
+    nodeCount: nodeRefs.size,
+    workflowCount: workflowRefs.size,
+    adapterCount: adapterRefs.size
+  };
 }
 
 async function verifySkills() {
@@ -366,6 +479,6 @@ if (issues.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    `Repository verified: Runtime ${runtimeVersion}, ${assets.nodeCount} Nodes, ${assets.workflowCount} Workflows, ${skillCount} Skills, ${shellScriptCount} shell scripts, ${sourceFileCount} dependency-checked source files.\n`
+    `Repository verified: Runtime ${runtimeVersion}, ${assets.nodeCount} Nodes, ${assets.workflowCount} Workflows, ${assets.adapterCount} Adapters, ${skillCount} Skills, ${shellScriptCount} shell scripts, ${sourceFileCount} dependency-checked source files.\n`
   );
 }

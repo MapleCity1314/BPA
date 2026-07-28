@@ -1,0 +1,50 @@
+apiVersion: bpa.adapter/v1alpha1
+kind: Adapter
+metadata:
+  id: doudian
+  version: 1.1.0
+  title: 抖店只读重点项检查 Adapter
+  description: 固定通用扩展内四项已审核只读能力及其精确权限、Origin 和实现摘要。
+platform: doudian
+origins:
+  - https://fxg.jinritemai.com
+extension:
+  minimumVersion: 0.3.0
+capabilities:
+  - nodeId: doudian.shop.context.read
+    nodeVersions:
+      - 1.2.0
+    handlerId: doudian.shop.context.read
+    handlerVersion: 1.1.0
+    implementationDigest: sha256:46b9dd94f854528a4c28b5709c68e614d959c65057120a48cc35c6bd3e9519b3
+    permissions:
+      - browser.dom.read
+      - browser.tabs.read
+  - nodeId: doudian.product.scope.collect
+    nodeVersions:
+      - 1.0.0
+    handlerId: doudian.product.scope.collect
+    handlerVersion: 1.1.0
+    implementationDigest: sha256:46b9dd94f854528a4c28b5709c68e614d959c65057120a48cc35c6bd3e9519b3
+    permissions:
+      - browser.dom.read
+      - browser.tabs.read
+  - nodeId: doudian.product.editor.open
+    nodeVersions:
+      - 1.0.0
+    handlerId: doudian.product.editor.open
+    handlerVersion: 1.1.0
+    implementationDigest: sha256:46b9dd94f854528a4c28b5709c68e614d959c65057120a48cc35c6bd3e9519b3
+    permissions:
+      - browser.dom.read
+      - browser.tabs.read
+      - browser.tabs.navigate
+  - nodeId: doudian.editor.priority-items.inspect
+    nodeVersions:
+      - 1.0.0
+    handlerId: doudian.editor.priority-items.inspect
+    handlerVersion: 1.1.0
+    implementationDigest: sha256:46b9dd94f854528a4c28b5709c68e614d959c65057120a48cc35c6bd3e9519b3
+    permissions:
+      - browser.dom.read
+      - browser.tabs.read
