@@ -294,6 +294,28 @@ export interface SubmitAssistanceAndWakeInput {
   outbox?: OutboxMessage;
 }
 
+export interface AssistanceTaskListFilter {
+  statuses?: ReadonlyArray<AssistanceTaskDefinition["status"]>;
+  modes?: ReadonlyArray<AssistanceTaskDefinition["mode"]>;
+  ownerType?: "ai" | "human";
+  limit?: number;
+}
+
+export interface CommitAssistanceTaskRequestInput {
+  requestId: string;
+  task: AssistanceTaskRecord;
+  expectedRevision: number;
+  expectedFencingCounter: number;
+  recordedAt: string;
+}
+
+export type CommitAssistanceTaskRequestResult =
+  | {
+      status: "accepted" | "duplicate";
+      task: AssistanceTaskRecord;
+    }
+  | { status: "stale" };
+
 /**
  * The two methods below are transactional boundaries, not convenience
  * sequences. Implementations must apply task/run/event/inbox/outbox changes
@@ -316,7 +338,16 @@ export interface AssistanceUnitOfWork {
     expectedRevision: number;
     expectedFencingCounter: number;
   }): { status: "accepted"; task: AssistanceTaskRecord } | { status: "stale" };
+  commitAssistanceTaskRequest(
+    input: CommitAssistanceTaskRequestInput
+  ): CommitAssistanceTaskRequestResult;
   getAssistanceTask(taskId: string): AssistanceTaskRecord | undefined;
+  listAssistanceTasks(
+    filter: AssistanceTaskListFilter
+  ): AssistanceTaskRecord[];
+  getAssistanceRequestResult(
+    requestId: string
+  ): AssistanceTaskRecord | undefined;
   getInboxMessage(messageId: string): InboxMessageRecord | undefined;
 }
 

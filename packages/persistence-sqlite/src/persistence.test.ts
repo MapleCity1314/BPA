@@ -103,13 +103,21 @@ function canonicalTask(
   runId: string,
   status: AssistanceTaskRecord["task"]["status"] = "queued",
   revision = 0,
-  fencingToken?: number
+  fencingToken?: number,
+  options: {
+    taskId?: string;
+    mode?: AssistanceTaskRecord["task"]["mode"];
+    ownerType?: "ai" | "human";
+    createdAt?: string;
+  } = {}
 ): AssistanceTaskRecord {
   const leaseBearing = status === "claimed" || status === "processing";
+  const taskId = options.taskId ?? "task-1";
+  const createdAt = options.createdAt ?? timestamp;
   return {
     task: {
       apiVersion: "bpa.assistance/v1alpha1",
-      taskId: "task-1",
+      taskId,
       runId,
       stepInstanceId: "step-1",
       profile: {
@@ -117,7 +125,7 @@ function canonicalTask(
         version: "1.0.0",
         digest: "sha256:profile"
       },
-      mode: "ai_review",
+      mode: options.mode ?? "ai_review",
       riskLevel: "R1",
       status,
       revision,
@@ -150,7 +158,7 @@ function canonicalTask(
           }
         : {}),
       deadline: "2026-07-28T00:00:00.000Z",
-      createdAt: timestamp,
+      createdAt,
       updatedAt: timestamp
     },
     fencingCounter: fencingToken ?? 0,
@@ -161,7 +169,7 @@ function canonicalTask(
             leaseId: "lease-1",
             claimedAt: timestamp,
             heartbeatAt: timestamp,
-            ownerType: "ai",
+            ownerType: options.ownerType ?? "ai",
             fencingCounter: fencingToken
           }
   };
@@ -571,6 +579,327 @@ describe("assistance unit of work", () => {
     store.close();
   });
 
+  it("persists the exact first request result for duplicate claims and heartbeats", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    const run = createRun(store);
+    const queued = canonicalTask(run.id);
+    store.createBlockingTaskAndPauseRun({
+      task: queued,
+      runId: run.id,
+      expectedRunRevision: 0,
+      waitingEvent: event(run.id, 2, "ASSISTANCE_WAITING"),
+      outbox: {
+        id: "outbox-task-request-dedup",
+        topic: "assistance.requested",
+        aggregateId: queued.task.taskId,
+        payload: {},
+        createdAt: timestamp
+      }
+    });
+
+    const claim = canonicalTask(run.id, "claimed", 1, 1);
+    expect(
+      store.commitAssistanceTaskRequest({
+        requestId: "claim-request-1",
+        task: claim,
+        expectedRevision: 0,
+        expectedFencingCounter: 0,
+        recordedAt: timestamp
+      })
+    ).toEqual({ status: "accepted", task: claim });
+
+    const alteredDuplicate = {
+      ...claim,
+      task: {
+        ...claim.task,
+        revision: 99,
+        updatedAt: "2026-07-27T00:00:05.000Z"
+      },
+      privateState: {
+        ...claim.privateState,
+        leaseId: "must-not-replace-the-first-result"
+      }
+    };
+    expect(
+      store.commitAssistanceTaskRequest({
+        requestId: "claim-request-1",
+        task: alteredDuplicate,
+        expectedRevision: 98,
+        expectedFencingCounter: 1,
+        recordedAt: "2026-07-27T00:00:05.000Z"
+      })
+    ).toEqual({ status: "duplicate", task: claim });
+    expect(store.getAssistanceRequestResult("claim-request-1")).toEqual(claim);
+
+    const heartbeat = canonicalTask(run.id, "processing", 2, 1);
+    expect(
+      store.commitAssistanceTaskRequest({
+        requestId: "heartbeat-request-1",
+        task: heartbeat,
+        expectedRevision: 1,
+        expectedFencingCounter: 1,
+        recordedAt: "2026-07-27T00:00:10.000Z"
+      })
+    ).toEqual({ status: "accepted", task: heartbeat });
+    expect(
+      store.commitAssistanceTaskRequest({
+        requestId: "heartbeat-request-1",
+        task: {
+          ...heartbeat,
+          privateState: {
+            ...heartbeat.privateState,
+            heartbeatAt: "2026-07-27T00:00:20.000Z"
+          }
+        },
+        expectedRevision: 1,
+        expectedFencingCounter: 1,
+        recordedAt: "2026-07-27T00:00:20.000Z"
+      })
+    ).toEqual({ status: "duplicate", task: heartbeat });
+    expect(
+      store.commitAssistanceTaskRequest({
+        requestId: "heartbeat-request-2",
+        task: heartbeat,
+        expectedRevision: 1,
+        expectedFencingCounter: 1,
+        recordedAt: "2026-07-27T00:00:20.000Z"
+      })
+    ).toEqual({ status: "stale" });
+    expect(
+      store.commitAssistanceTaskRequest({
+        requestId: "stale-fencing-request",
+        task: canonicalTask(run.id, "processing", 3, 0),
+        expectedRevision: 2,
+        expectedFencingCounter: 0,
+        recordedAt: "2026-07-27T00:00:30.000Z"
+      })
+    ).toEqual({ status: "stale" });
+    expect(store.getAssistanceTask(queued.task.taskId)).toEqual(heartbeat);
+    store.close();
+  });
+
+  it("rejects concurrent request CAS writers and replays the durable winner", () => {
+    const directory = mkdtempSync(join(tmpdir(), "bpa-assistance-request-cas-"));
+    const databasePath = join(directory, "bpa.sqlite3");
+    try {
+      const first = new SqlitePersistence({ path: databasePath });
+      const run = createRun(first);
+      const queued = canonicalTask(run.id);
+      first.createBlockingTaskAndPauseRun({
+        task: queued,
+        runId: run.id,
+        expectedRunRevision: 0,
+        waitingEvent: event(run.id, 2, "ASSISTANCE_WAITING"),
+        outbox: {
+          id: "outbox-task-request-cas",
+          topic: "assistance.requested",
+          aggregateId: queued.task.taskId,
+          payload: {},
+          createdAt: timestamp
+        }
+      });
+      const second = new SqlitePersistence({ path: databasePath });
+      const winner = canonicalTask(run.id, "claimed", 1, 1);
+      const loser = {
+        ...winner,
+        privateState: {
+          ...winner.privateState,
+          leaseId: "losing-lease"
+        }
+      };
+
+      expect(
+        first.commitAssistanceTaskRequest({
+          requestId: "concurrent-claim-winner",
+          task: winner,
+          expectedRevision: 0,
+          expectedFencingCounter: 0,
+          recordedAt: timestamp
+        })
+      ).toEqual({ status: "accepted", task: winner });
+      expect(
+        second.commitAssistanceTaskRequest({
+          requestId: "concurrent-claim-loser",
+          task: loser,
+          expectedRevision: 0,
+          expectedFencingCounter: 0,
+          recordedAt: timestamp
+        })
+      ).toEqual({ status: "stale" });
+      expect(
+        second.commitAssistanceTaskRequest({
+          requestId: "concurrent-claim-winner",
+          task: loser,
+          expectedRevision: 0,
+          expectedFencingCounter: 0,
+          recordedAt: timestamp
+        })
+      ).toEqual({ status: "duplicate", task: winner });
+      expect(
+        second.getAssistanceRequestResult("concurrent-claim-winner")
+      ).toEqual(winner);
+      expect(second.getAssistanceTask(queued.task.taskId)).toEqual(winner);
+      first.close();
+      second.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    "assistance_request.after_task",
+    "assistance_request.after_result"
+  ] as const)(
+    "rolls back the task update and request result after a crash at %s",
+    (failurePoint) => {
+      let crash = false;
+      const store = new SqlitePersistence({
+        path: ":memory:",
+        failureInjector(point) {
+          if (crash && point === failurePoint) {
+            throw new Error("crash");
+          }
+        }
+      });
+      const run = createRun(store);
+      const queued = canonicalTask(run.id);
+      store.createBlockingTaskAndPauseRun({
+        task: queued,
+        runId: run.id,
+        expectedRunRevision: 0,
+        waitingEvent: event(run.id, 2, "ASSISTANCE_WAITING"),
+        outbox: {
+          id: "outbox-task-request-crash",
+          topic: "assistance.requested",
+          aggregateId: queued.task.taskId,
+          payload: {},
+          createdAt: timestamp
+        }
+      });
+      const claim = canonicalTask(run.id, "claimed", 1, 1);
+      crash = true;
+      expect(() =>
+        store.commitAssistanceTaskRequest({
+          requestId: "claim-crash-request",
+          task: claim,
+          expectedRevision: 0,
+          expectedFencingCounter: 0,
+          recordedAt: timestamp
+        })
+      ).toThrow("crash");
+      expect(store.getAssistanceTask(queued.task.taskId)).toEqual(queued);
+      expect(
+        store.getAssistanceRequestResult("claim-crash-request")
+      ).toBeUndefined();
+
+      crash = false;
+      expect(
+        store.commitAssistanceTaskRequest({
+          requestId: "claim-crash-request",
+          task: claim,
+          expectedRevision: 0,
+          expectedFencingCounter: 0,
+          recordedAt: timestamp
+        })
+      ).toEqual({ status: "accepted", task: claim });
+      store.close();
+    }
+  );
+
+  it("filters assistance tasks by status, mode and lease owner type", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    const definitions = [
+      {
+        taskId: "task-a",
+        mode: "ai_review" as const,
+        ownerType: undefined
+      },
+      {
+        taskId: "task-b",
+        mode: "ai_review" as const,
+        ownerType: "ai" as const
+      },
+      {
+        taskId: "task-c",
+        mode: "human_confirm" as const,
+        ownerType: "human" as const
+      }
+    ];
+
+    for (const definition of definitions) {
+      const run = createRun(store);
+      const queued = canonicalTask(run.id, "queued", 0, undefined, {
+        taskId: definition.taskId,
+        mode: definition.mode
+      });
+      store.createBlockingTaskAndPauseRun({
+        task: queued,
+        runId: run.id,
+        expectedRunRevision: 0,
+        waitingEvent: event(run.id, 2, "ASSISTANCE_WAITING"),
+        outbox: {
+          id: `outbox-${definition.taskId}`,
+          topic: "assistance.requested",
+          aggregateId: definition.taskId,
+          payload: {},
+          createdAt: timestamp
+        }
+      });
+      if (definition.ownerType) {
+        const claimed = canonicalTask(run.id, "claimed", 1, 1, {
+          taskId: definition.taskId,
+          mode: definition.mode,
+          ownerType: definition.ownerType
+        });
+        expect(
+          store.commitAssistanceTaskRequest({
+            requestId: `claim-${definition.taskId}`,
+            task: claimed,
+            expectedRevision: 0,
+            expectedFencingCounter: 0,
+            recordedAt: timestamp
+          }).status
+        ).toBe("accepted");
+      }
+    }
+
+    expect(store.listAssistanceTasks({ limit: 2 }).map(({ task }) => task.taskId))
+      .toEqual(["task-a", "task-b"]);
+    expect(
+      store
+        .listAssistanceTasks({ statuses: ["claimed"], limit: 10 })
+        .map(({ task }) => task.taskId)
+    ).toEqual(["task-b", "task-c"]);
+    expect(
+      store
+        .listAssistanceTasks({ modes: ["human_confirm"], limit: 10 })
+        .map(({ task }) => task.taskId)
+    ).toEqual(["task-c"]);
+    expect(
+      store
+        .listAssistanceTasks({ ownerType: "ai", limit: 10 })
+        .map(({ task }) => task.taskId)
+    ).toEqual(["task-b"]);
+    expect(
+      store
+        .listAssistanceTasks({
+          statuses: ["claimed"],
+          modes: ["ai_review"],
+          ownerType: "ai",
+          limit: 10
+        })
+        .map(({ task }) => task.taskId)
+    ).toEqual(["task-b"]);
+    expect(store.listAssistanceTasks({ statuses: [], limit: 10 })).toEqual([]);
+    expect(store.listAssistanceTasks({}).map(({ task }) => task.taskId)).toEqual(
+      ["task-a", "task-b", "task-c"]
+    );
+    expect(() => store.listAssistanceTasks({ limit: 0 })).toThrow(
+      /between 1 and 1000/
+    );
+    store.close();
+  });
+
   it("rejects a concurrent CAS writer and recovers the winning lease", () => {
     const directory = mkdtempSync(join(tmpdir(), "bpa-assistance-cas-"));
     const databasePath = join(directory, "bpa.sqlite3");
@@ -946,7 +1275,73 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(3);
+      expect(store.health().schemaVersion).toBe(4);
+      store.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("upgrades an existing v3 database without changing assistance tasks", () => {
+    const directory = mkdtempSync(join(tmpdir(), "bpa-migration-v3-upgrade-"));
+    const databasePath = join(directory, "bpa.sqlite3");
+    try {
+      const seeded = new SqlitePersistence({ path: databasePath });
+      const run = createRun(seeded);
+      const task = canonicalTask(run.id);
+      seeded.createBlockingTaskAndPauseRun({
+        task,
+        runId: run.id,
+        expectedRunRevision: 0,
+        waitingEvent: event(run.id, 2, "ASSISTANCE_WAITING"),
+        outbox: {
+          id: "outbox-v3-upgrade",
+          topic: "assistance.requested",
+          aggregateId: task.task.taskId,
+          payload: {},
+          createdAt: timestamp
+        }
+      });
+      seeded.close();
+
+      const legacy = new Database(databasePath);
+      legacy.exec(`
+        DROP INDEX assistance_tasks_owner_type_created;
+        DROP INDEX assistance_tasks_status_mode_created;
+        DROP INDEX assistance_task_request_results_task;
+        DROP TABLE assistance_task_request_results;
+        DELETE FROM schema_migrations WHERE version = 4;
+      `);
+      legacy.close();
+
+      const upgraded = new SqlitePersistence({ path: databasePath });
+      expect(upgraded.health().schemaVersion).toBe(4);
+      expect(upgraded.getAssistanceTask(task.task.taskId)).toEqual(task);
+      expect(
+        upgraded.getAssistanceRequestResult("not-recorded")
+      ).toBeUndefined();
+      upgraded.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers cleanly when migration v4 is interrupted", () => {
+    const directory = mkdtempSync(join(tmpdir(), "bpa-migration-v4-crash-"));
+    const databasePath = join(directory, "bpa.sqlite3");
+    try {
+      expect(
+        () =>
+          new SqlitePersistence({
+            path: databasePath,
+            failureInjector(point) {
+              if (point === "migration.4.after_sql") throw new Error("crash");
+            }
+          })
+      ).toThrow("crash");
+      const store = new SqlitePersistence({ path: databasePath });
+      expect(store.health().schemaVersion).toBe(4);
+      expect(store.getAssistanceRequestResult("not-recorded")).toBeUndefined();
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -958,7 +1353,7 @@ describe("append-only migrations", () => {
     const databasePath = join(directory, "bpa.sqlite3");
     try {
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(3);
+      expect(store.health().schemaVersion).toBe(4);
       store.close();
       const raw = new Database(databasePath);
       raw

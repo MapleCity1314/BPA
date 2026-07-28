@@ -316,5 +316,38 @@ export const migrations: Migration[] = [
         ON decision_records(decision_type, scope_digest, preconditions_digest)
         WHERE status = 'active';
     `
+  },
+  {
+    version: 4,
+    sql: `
+      CREATE TABLE assistance_task_request_results (
+        request_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL
+          REFERENCES assistance_tasks(task_id) ON DELETE RESTRICT,
+        expected_revision INTEGER NOT NULL CHECK (expected_revision >= 0),
+        expected_fencing_counter INTEGER NOT NULL
+          CHECK (expected_fencing_counter >= 0),
+        result_json TEXT NOT NULL,
+        recorded_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE INDEX assistance_task_request_results_task
+        ON assistance_task_request_results(task_id, recorded_at);
+
+      CREATE INDEX assistance_tasks_status_mode_created
+        ON assistance_tasks(
+          status,
+          json_extract(canonical_json, '$.mode'),
+          created_at,
+          task_id
+        );
+
+      CREATE INDEX assistance_tasks_owner_type_created
+        ON assistance_tasks(
+          json_extract(private_state_json, '$.ownerType'),
+          created_at,
+          task_id
+        );
+    `
   }
 ];

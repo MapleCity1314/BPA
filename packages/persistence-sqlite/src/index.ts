@@ -9,11 +9,14 @@ import {
   type ArtifactRecord,
   type ArtifactType,
   type AssistanceTaskRecord,
+  type AssistanceTaskListFilter,
   type AuditRecord,
   type BrowserCapabilityRecord,
   type BrowserSessionRecord,
   type CreateRunInput,
   type CreateBlockingAssistanceInput,
+  type CommitAssistanceTaskRequestInput,
+  type CommitAssistanceTaskRequestResult,
   type DatasetStagingRecord,
   type DatasetVersionDefinition,
   type DecisionRecordDefinition,
@@ -740,6 +743,78 @@ export class SqlitePersistence implements Persistence {
     })();
   }
 
+  commitAssistanceTaskRequest(
+    input: CommitAssistanceTaskRequestInput
+  ): CommitAssistanceTaskRequestResult {
+    return this.#db.transaction(() => {
+      if (
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input.requestId) ||
+        !Number.isSafeInteger(input.expectedRevision) ||
+        input.expectedRevision < 0 ||
+        !Number.isSafeInteger(input.expectedFencingCounter) ||
+        input.expectedFencingCounter < 0 ||
+        !Number.isFinite(Date.parse(input.recordedAt))
+      ) {
+        return { status: "stale" as const };
+      }
+      const duplicate = this.getAssistanceRequestResult(input.requestId);
+      if (duplicate) {
+        return {
+          status: "duplicate" as const,
+          task: duplicate
+        };
+      }
+      if (
+        input.task.task.revision !== input.expectedRevision + 1 ||
+        input.task.fencingCounter < input.expectedFencingCounter ||
+        input.task.fencingCounter > input.expectedFencingCounter + 1 ||
+        !assistanceFencingConsistent(input.task)
+      ) {
+        return { status: "stale" as const };
+      }
+      const update = this.#db
+        .prepare(
+          `UPDATE assistance_tasks
+           SET status = ?, revision = ?, fencing_counter = ?,
+               canonical_json = ?, private_state_json = ?, updated_at = ?
+           WHERE task_id = ? AND revision = ? AND fencing_counter = ?`
+        )
+        .run(
+          input.task.task.status,
+          input.task.task.revision,
+          input.task.fencingCounter,
+          json(input.task.task),
+          json(input.task.privateState),
+          input.task.task.updatedAt,
+          input.task.task.taskId,
+          input.expectedRevision,
+          input.expectedFencingCounter
+        );
+      if (update.changes !== 1) return { status: "stale" as const };
+      this.#inject("assistance_request.after_task");
+      this.#db
+        .prepare(
+          `INSERT INTO assistance_task_request_results(
+            request_id, task_id, expected_revision, expected_fencing_counter,
+            result_json, recorded_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          input.requestId,
+          input.task.task.taskId,
+          input.expectedRevision,
+          input.expectedFencingCounter,
+          json(input.task),
+          input.recordedAt
+        );
+      this.#inject("assistance_request.after_result");
+      return {
+        status: "accepted" as const,
+        task: input.task
+      };
+    }).immediate();
+  }
+
   submitTaskAndWakeRun(
     input: SubmitAssistanceAndWakeInput
   ):
@@ -832,6 +907,66 @@ export class SqlitePersistence implements Persistence {
       .prepare("SELECT * FROM assistance_tasks WHERE task_id = ?")
       .get(taskId) as SqlRow | undefined;
     return row ? this.#readAssistanceTask(row) : undefined;
+  }
+
+  listAssistanceTasks(
+    filter: AssistanceTaskListFilter
+  ): AssistanceTaskRecord[] {
+    const limit = filter.limit ?? 100;
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 1000
+    ) {
+      throw new Error("Assistance task list limit must be between 1 and 1000");
+    }
+    const conditions: string[] = [];
+    const parameters: unknown[] = [];
+    if (filter.statuses) {
+      if (filter.statuses.length === 0) return [];
+      conditions.push(
+        `status IN (${filter.statuses.map(() => "?").join(", ")})`
+      );
+      parameters.push(...filter.statuses);
+    }
+    if (filter.modes) {
+      if (filter.modes.length === 0) return [];
+      conditions.push(
+        `json_extract(canonical_json, '$.mode')
+          IN (${filter.modes.map(() => "?").join(", ")})`
+      );
+      parameters.push(...filter.modes);
+    }
+    if (filter.ownerType) {
+      conditions.push(
+        "json_extract(private_state_json, '$.ownerType') = ?"
+      );
+      parameters.push(filter.ownerType);
+    }
+    const rows = this.#db
+      .prepare(
+        `SELECT * FROM assistance_tasks
+         ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""}
+         ORDER BY created_at, task_id
+         LIMIT ?`
+      )
+      .all(...parameters, limit) as SqlRow[];
+    return rows.map((row) => this.#readAssistanceTask(row));
+  }
+
+  getAssistanceRequestResult(
+    requestId: string
+  ): AssistanceTaskRecord | undefined {
+    const row = this.#db
+      .prepare(
+        `SELECT result_json
+         FROM assistance_task_request_results
+         WHERE request_id = ?`
+      )
+      .get(requestId) as { result_json: string } | undefined;
+    return row
+      ? (parseJson(row.result_json) as AssistanceTaskRecord)
+      : undefined;
   }
 
   getInboxMessage(messageId: string): InboxMessageRecord | undefined {
