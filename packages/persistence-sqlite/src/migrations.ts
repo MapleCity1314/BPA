@@ -188,5 +188,133 @@ export const migrations: Migration[] = [
         ON browser_sessions(resume_token_digest)
         WHERE resume_token_digest IS NOT NULL;
     `
+  },
+  {
+    version: 3,
+    sql: `
+      ALTER TABLE schema_migrations ADD COLUMN checksum TEXT;
+      ALTER TABLE engine_inbox ADD COLUMN aggregate_id TEXT NOT NULL DEFAULT '';
+
+      CREATE TABLE run_plan_snapshots (
+        run_id TEXT PRIMARY KEY REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        ir_version TEXT NOT NULL,
+        plan_digest TEXT NOT NULL,
+        workflow_source_digest TEXT NOT NULL,
+        artifact_closure_digest TEXT NOT NULL,
+        plan_json TEXT NOT NULL,
+        risk_snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE execution_scopes (
+        scope_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        scope_path TEXT NOT NULL,
+        parent_scope_id TEXT REFERENCES execution_scopes(scope_id) ON DELETE RESTRICT,
+        scope_kind TEXT NOT NULL CHECK (scope_kind IN ('root', 'call', 'foreach')),
+        created_at TEXT NOT NULL,
+        UNIQUE(run_id, scope_path)
+      ) STRICT;
+
+      CREATE TABLE iteration_instances (
+        iteration_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        scope_id TEXT NOT NULL REFERENCES execution_scopes(scope_id) ON DELETE RESTRICT,
+        iteration_key TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        status TEXT NOT NULL,
+        input_json TEXT NOT NULL,
+        output_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(scope_id, iteration_key)
+      ) STRICT;
+
+      CREATE TABLE step_instances (
+        step_instance_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        scope_id TEXT NOT NULL REFERENCES execution_scopes(scope_id) ON DELETE RESTRICT,
+        iteration_id TEXT REFERENCES iteration_instances(iteration_id) ON DELETE RESTRICT,
+        step_key TEXT NOT NULL,
+        attempt INTEGER NOT NULL CHECK (attempt >= 1),
+        execution_identity TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        input_json TEXT NOT NULL,
+        output_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE assistance_tasks (
+        task_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        step_instance_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        fencing_counter INTEGER NOT NULL CHECK (fencing_counter >= 0),
+        canonical_json TEXT NOT NULL,
+        private_state_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE INDEX assistance_tasks_run_status
+        ON assistance_tasks(run_id, status);
+
+      CREATE TABLE dataset_staging (
+        staging_id TEXT PRIMARY KEY,
+        profile_id TEXT NOT NULL,
+        profile_version TEXT NOT NULL,
+        source_digest TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (
+          state IN ('staged', 'validated', 'rejected', 'published')
+        ),
+        validation_report_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE dataset_versions (
+        dataset_id TEXT NOT NULL,
+        version TEXT NOT NULL,
+        records_digest TEXT NOT NULL,
+        canonical_json TEXT NOT NULL,
+        staging_id TEXT NOT NULL UNIQUE
+          REFERENCES dataset_staging(staging_id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(dataset_id, version)
+      ) STRICT;
+
+      CREATE TABLE dataset_record_index (
+        dataset_id TEXT NOT NULL,
+        version TEXT NOT NULL,
+        record_key TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        record_digest TEXT NOT NULL,
+        record_json TEXT NOT NULL,
+        PRIMARY KEY(dataset_id, version, record_key),
+        UNIQUE(dataset_id, version, ordinal),
+        FOREIGN KEY(dataset_id, version)
+          REFERENCES dataset_versions(dataset_id, version) ON DELETE RESTRICT
+      ) STRICT;
+
+      CREATE TABLE decision_records (
+        decision_id TEXT PRIMARY KEY,
+        decision_type TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (
+          status IN ('active', 'superseded', 'revoked')
+        ),
+        scope_digest TEXT NOT NULL,
+        preconditions_digest TEXT NOT NULL,
+        canonical_json TEXT NOT NULL,
+        confirmed_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE UNIQUE INDEX decision_records_active_identity
+        ON decision_records(decision_type, scope_digest, preconditions_digest)
+        WHERE status = 'active';
+    `
   }
 ];

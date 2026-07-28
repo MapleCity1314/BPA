@@ -3,7 +3,18 @@ import type {
   DatasetVersionDefinition,
   DecisionRecordDefinition
 } from "@bpa/schemas";
-import type { ExecutionPlan, JsonValue } from "@bpa/workflow-ir";
+import type {
+  ExecutionPlan,
+  JsonValue,
+  ScopePath
+} from "@bpa/workflow-ir";
+
+export type {
+  AssistanceTaskDefinition,
+  DatasetVersionDefinition,
+  DecisionRecordDefinition
+} from "@bpa/schemas";
+export type { ExecutionPlan, JsonValue, ScopePath } from "@bpa/workflow-ir";
 
 export type ArtifactType =
   | "workflow"
@@ -105,6 +116,58 @@ export interface RunPlanSnapshotRecord {
   createdAt: string;
 }
 
+export interface ExecutionScopeRecord {
+  scopeId: string;
+  runId: string;
+  scopePath: ScopePath;
+  parentScopeId?: string;
+  scopeKind: "root" | "call" | "foreach";
+  createdAt: string;
+}
+
+export interface IterationInstanceRecord {
+  iterationId: string;
+  runId: string;
+  scopeId: string;
+  iterationKey: string;
+  ordinal: number;
+  status: string;
+  input: JsonValue;
+  output?: JsonValue;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StepInstanceRecord {
+  stepInstanceId: string;
+  runId: string;
+  scopeId: string;
+  iterationId?: string;
+  stepKey: string;
+  attempt: number;
+  executionIdentity: string;
+  status: string;
+  revision: number;
+  input: JsonValue;
+  output?: JsonValue;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecoveryStateStore {
+  getRunPlanSnapshot(runId: string): RunPlanSnapshotRecord | undefined;
+  putExecutionScope(scope: ExecutionScopeRecord): ExecutionScopeRecord;
+  putIterationInstance(
+    iteration: IterationInstanceRecord
+  ): IterationInstanceRecord;
+  putStepInstance(step: StepInstanceRecord): StepInstanceRecord;
+  getExecutionScope(scopeId: string): ExecutionScopeRecord | undefined;
+  getIterationInstance(
+    iterationId: string
+  ): IterationInstanceRecord | undefined;
+  getStepInstance(stepInstanceId: string): StepInstanceRecord | undefined;
+}
+
 export interface NodeExecutionRecord {
   id: string;
   runId: string;
@@ -144,6 +207,10 @@ export interface OutboxMessage {
 export interface CreateRunInput {
   run: RunRecord;
   event: ExecutionEventRecord;
+  /**
+   * Optional only for Runtime 0.3 compatibility. New resumable callers use
+   * createRecoverableRun, which requires the snapshot.
+   */
   planSnapshot?: RunPlanSnapshotRecord;
 }
 
@@ -173,6 +240,9 @@ export interface RunTransitionInput {
 
 export interface ExecutionUnitOfWork {
   createRun(input: CreateRunInput): RunRecord;
+  createRecoverableRun(
+    input: CreateRunInput & { planSnapshot: RunPlanSnapshotRecord }
+  ): RunRecord;
   commitRunTransition(input: RunTransitionInput): RunRecord;
   createNodeExecution(
     node: NodeExecutionRecord,
@@ -190,9 +260,20 @@ export interface InboxMessageRecord {
   appliedAt?: string;
 }
 
+export interface AssistanceTaskPrivateStateRecord {
+  leaseId?: string;
+  claimedAt?: string;
+  heartbeatAt?: string;
+  ownerType?: "ai" | "human";
+  fencingCounter: number;
+  terminalReason?: string;
+}
+
 export interface AssistanceTaskRecord {
   task: AssistanceTaskDefinition;
+  /** Compatibility mirror used in SQL CAS predicates. */
   fencingCounter: number;
+  privateState: AssistanceTaskPrivateStateRecord;
 }
 
 export interface CreateBlockingAssistanceInput {
@@ -206,6 +287,7 @@ export interface CreateBlockingAssistanceInput {
 export interface SubmitAssistanceAndWakeInput {
   task: AssistanceTaskRecord;
   expectedTaskRevision: number;
+  expectedFencingToken: number;
   expectedRunRevision: number;
   inbox: InboxMessageRecord;
   wakeEvent: ExecutionEventRecord;
@@ -229,6 +311,13 @@ export interface AssistanceUnitOfWork {
   ):
     | { status: "accepted"; task: AssistanceTaskRecord; run: RunRecord }
     | { status: "duplicate" | "stale" };
+  commitAssistanceTask(input: {
+    task: AssistanceTaskRecord;
+    expectedRevision: number;
+    expectedFencingCounter: number;
+  }): { status: "accepted"; task: AssistanceTaskRecord } | { status: "stale" };
+  getAssistanceTask(taskId: string): AssistanceTaskRecord | undefined;
+  getInboxMessage(messageId: string): InboxMessageRecord | undefined;
 }
 
 export interface DatasetStagingRecord {
@@ -243,6 +332,15 @@ export interface DatasetStagingRecord {
 }
 
 export interface DatasetPublicationUnitOfWork {
+  stageDataset(record: DatasetStagingRecord): DatasetStagingRecord;
+  transitionDatasetStaging(input: {
+    stagingId: string;
+    expectedState: DatasetStagingRecord["state"];
+    nextState: DatasetStagingRecord["state"];
+    validationReport: JsonValue;
+    updatedAt: string;
+  }): DatasetStagingRecord;
+  getDatasetStaging(stagingId: string): DatasetStagingRecord | undefined;
   publishDataset(input: {
     stagingId: string;
     expectedState: "validated";
@@ -275,6 +373,14 @@ export interface DecisionRecordStore {
     revokedBy: string;
     revokedAt: string;
   }): DecisionRecordDefinition;
+  supersedeDecision(input: {
+    decisionId: string;
+    expectedStatus: "active";
+    replacement: DecisionRecordDefinition;
+  }): {
+    superseded: DecisionRecordDefinition;
+    replacement: DecisionRecordDefinition;
+  };
 }
 
 export interface GatewayCommandRecord {
@@ -355,6 +461,10 @@ export interface AuditRecord {
 export interface Persistence
   extends RegistryStore,
     ExecutionUnitOfWork,
+    RecoveryStateStore,
+    AssistanceUnitOfWork,
+    DatasetPublicationUnitOfWork,
+    DecisionRecordStore,
     GatewayDeliveryUnitOfWork,
     ExecutionStore {
   health(): {

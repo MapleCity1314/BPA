@@ -1,18 +1,28 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import {
   ArtifactConflictError,
   RevisionConflictError,
+  StaleFencingTokenError,
   type ArtifactRecord,
   type ArtifactType,
+  type AssistanceTaskRecord,
   type AuditRecord,
   type BrowserCapabilityRecord,
   type BrowserSessionRecord,
   type CreateRunInput,
+  type CreateBlockingAssistanceInput,
+  type DatasetStagingRecord,
+  type DatasetVersionDefinition,
+  type DecisionRecordDefinition,
+  type ExecutionScopeRecord,
   type ExecutionEventRecord,
   type GatewayCommandRecord,
+  type InboxMessageRecord,
+  type IterationInstanceRecord,
+  type JsonValue,
   type NodeExecutionRecord,
   type OpenBrowserSessionInput,
   type NodeTransitionInput,
@@ -20,9 +30,12 @@ import {
   type Persistence,
   type PublishArtifactInput,
   type RunRecord,
-  type RunTransitionInput
+  type RunPlanSnapshotRecord,
+  type RunTransitionInput,
+  type StepInstanceRecord,
+  type SubmitAssistanceAndWakeInput
 } from "@bpa/persistence";
-import { migrations } from "./migrations.js";
+import { migrations, type Migration } from "./migrations.js";
 
 type SqlRow = Record<string, unknown>;
 
@@ -34,6 +47,58 @@ function parseJson(value: unknown): unknown {
   return value == null ? undefined : JSON.parse(String(value));
 }
 
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map(
+      (key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`
+    )
+    .join(",")}}`;
+}
+
+function digest(value: unknown): string {
+  return `sha256:${createHash("sha256").update(canonicalJson(value)).digest("hex")}`;
+}
+
+function assistanceFencingConsistent(
+  record: AssistanceTaskRecord
+): boolean {
+  if (record.privateState.fencingCounter !== record.fencingCounter) {
+    return false;
+  }
+  if (
+    record.task.status === "claimed" ||
+    record.task.status === "processing"
+  ) {
+    return (
+      record.task.lease?.fencingToken === record.fencingCounter &&
+      record.privateState.ownerType !== undefined
+    );
+  }
+  return record.task.lease === undefined;
+}
+
+export function migrationChecksum(migration: Migration): string {
+  return createHash("sha256").update(migration.sql).digest("hex");
+}
+
+function assertMigrationSequence(items: readonly Migration[]): void {
+  for (let index = 0; index < items.length; index += 1) {
+    if (items[index]?.version !== index + 1) {
+      throw new Error(
+        "Migrations must be append-only and contiguous from version 1"
+      );
+    }
+  }
+}
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -41,10 +106,12 @@ function now(): string {
 export interface SqlitePersistenceOptions {
   path: string;
   readonly?: boolean;
+  failureInjector?: (point: string) => void;
 }
 
 export class SqlitePersistence implements Persistence {
   readonly #db: Database.Database;
+  readonly #failureInjector: ((point: string) => void) | undefined;
 
   constructor(options: SqlitePersistenceOptions) {
     if (options.path !== ":memory:") {
@@ -55,15 +122,22 @@ export class SqlitePersistence implements Persistence {
       fileMustExist: options.readonly ?? false,
       timeout: 5_000
     });
-    this.#db.pragma("foreign_keys = ON");
-    this.#db.pragma("busy_timeout = 5000");
-    if (!(options.readonly ?? false)) {
-      this.#db.pragma("journal_mode = WAL");
-      this.#migrate();
+    this.#failureInjector = options.failureInjector;
+    try {
+      this.#db.pragma("foreign_keys = ON");
+      this.#db.pragma("busy_timeout = 5000");
+      if (!(options.readonly ?? false)) {
+        this.#db.pragma("journal_mode = WAL");
+        this.#migrate();
+      }
+    } catch (error) {
+      this.#db.close();
+      throw error;
     }
   }
 
   #migrate(): void {
+    assertMigrationSequence(migrations);
     const hasMigrations = this.#db
       .prepare(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
@@ -71,23 +145,80 @@ export class SqlitePersistence implements Persistence {
       .get();
     let current = 0;
     if (hasMigrations) {
-      const row = this.#db
-        .prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations")
-        .get() as { version: number };
-      current = row.version;
+      const columns = this.#db
+        .prepare("PRAGMA table_info(schema_migrations)")
+        .all() as Array<{ name: string }>;
+      const hasChecksum = columns.some((column) => column.name === "checksum");
+      const rows = this.#db
+        .prepare(
+          hasChecksum
+            ? "SELECT version, checksum FROM schema_migrations ORDER BY version"
+            : "SELECT version, NULL AS checksum FROM schema_migrations ORDER BY version"
+        )
+        .all() as Array<{ version: number; checksum: string | null }>;
+      for (const [index, row] of rows.entries()) {
+        if (row.version !== index + 1) {
+          throw new Error("Applied migrations are not contiguous");
+        }
+        const migration = migrations.find(
+          (candidate) => candidate.version === row.version
+        );
+        if (!migration) {
+          throw new Error(`Unknown applied migration version ${row.version}`);
+        }
+        if (hasChecksum && row.checksum === null) {
+          throw new Error(
+            `Migration checksum missing at version ${row.version}`
+          );
+        }
+        if (
+          row.checksum !== null &&
+          row.checksum !== migrationChecksum(migration)
+        ) {
+          throw new Error(
+            `Migration checksum mismatch at version ${row.version}`
+          );
+        }
+      }
+      current = rows.at(-1)?.version ?? 0;
     }
     for (const migration of migrations.filter(
       (candidate) => candidate.version > current
     )) {
       this.#db.transaction(() => {
         this.#db.exec(migration.sql);
+        this.#inject(`migration.${migration.version}.after_sql`);
+        const checksumColumn = this.#db
+          .prepare("PRAGMA table_info(schema_migrations)")
+          .all()
+          .some((column) => (column as { name: string }).name === "checksum");
         this.#db
           .prepare(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)"
+            checksumColumn
+              ? "INSERT INTO schema_migrations(version, applied_at, checksum) VALUES (?, ?, ?)"
+              : "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)"
           )
-          .run(migration.version, now());
+          .run(
+            ...(checksumColumn
+              ? [migration.version, now(), migrationChecksum(migration)]
+              : [migration.version, now()])
+          );
+        if (checksumColumn) {
+          const update = this.#db.prepare(
+            "UPDATE schema_migrations SET checksum = ? WHERE version = ? AND checksum IS NULL"
+          );
+          for (const applied of migrations.filter(
+            (candidate) => candidate.version <= migration.version
+          )) {
+            update.run(migrationChecksum(applied), applied.version);
+          }
+        }
       })();
     }
+  }
+
+  #inject(point: string): void {
+    this.#failureInjector?.(point);
   }
 
   health(): { adapter: string; schemaVersion: number; writable: boolean } {
@@ -228,6 +359,12 @@ export class SqlitePersistence implements Persistence {
   createRun(input: CreateRunInput): RunRecord {
     return this.#db.transaction(() => {
       const run = input.run;
+      if (
+        input.event.runId !== run.id ||
+        (input.planSnapshot && input.planSnapshot.runId !== run.id)
+      ) {
+        throw new Error("Run, plan snapshot and initial event identities differ");
+      }
       this.#db
         .prepare(
           `INSERT INTO workflow_runs(
@@ -248,9 +385,20 @@ export class SqlitePersistence implements Persistence {
           run.createdAt,
           run.updatedAt
         );
+      this.#inject("create_run.after_run");
+      if (input.planSnapshot) {
+        this.#insertPlanSnapshot(input.planSnapshot);
+      }
       this.#insertEvent(input.event);
+      this.#inject("create_run.after_event");
       return run;
     })();
+  }
+
+  createRecoverableRun(
+    input: CreateRunInput & { planSnapshot: RunPlanSnapshotRecord }
+  ): RunRecord {
+    return this.createRun(input);
   }
 
   createNodeExecution(
@@ -358,6 +506,632 @@ export class SqlitePersistence implements Persistence {
       }
       if (input.outbox) this.#insertOutbox("engine_outbox", input.outbox);
       return this.getNodeExecution(input.nodeExecutionId)!;
+    })();
+  }
+
+  getRunPlanSnapshot(runId: string): RunPlanSnapshotRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM run_plan_snapshots WHERE run_id = ?")
+      .get(runId) as SqlRow | undefined;
+    return row ? this.#readPlanSnapshot(row) : undefined;
+  }
+
+  putExecutionScope(scope: ExecutionScopeRecord): ExecutionScopeRecord {
+    this.#db
+      .prepare(
+        `INSERT INTO execution_scopes(
+          scope_id, run_id, scope_path, parent_scope_id, scope_kind, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        scope.scopeId,
+        scope.runId,
+        json(scope.scopePath),
+        scope.parentScopeId ?? null,
+        scope.scopeKind,
+        scope.createdAt
+      );
+    return scope;
+  }
+
+  putIterationInstance(
+    iteration: IterationInstanceRecord
+  ): IterationInstanceRecord {
+    this.#db
+      .prepare(
+        `INSERT INTO iteration_instances(
+          iteration_id, run_id, scope_id, iteration_key, ordinal, status,
+          input_json, output_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        iteration.iterationId,
+        iteration.runId,
+        iteration.scopeId,
+        iteration.iterationKey,
+        iteration.ordinal,
+        iteration.status,
+        json(iteration.input),
+        iteration.output === undefined ? null : json(iteration.output),
+        iteration.createdAt,
+        iteration.updatedAt
+      );
+    return iteration;
+  }
+
+  putStepInstance(step: StepInstanceRecord): StepInstanceRecord {
+    this.#db
+      .prepare(
+        `INSERT INTO step_instances(
+          step_instance_id, run_id, scope_id, iteration_id, step_key, attempt,
+          execution_identity, status, revision, input_json, output_json,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        step.stepInstanceId,
+        step.runId,
+        step.scopeId,
+        step.iterationId ?? null,
+        step.stepKey,
+        step.attempt,
+        step.executionIdentity,
+        step.status,
+        step.revision,
+        json(step.input),
+        step.output === undefined ? null : json(step.output),
+        step.createdAt,
+        step.updatedAt
+      );
+    return step;
+  }
+
+  getExecutionScope(scopeId: string): ExecutionScopeRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM execution_scopes WHERE scope_id = ?")
+      .get(scopeId) as SqlRow | undefined;
+    if (!row) return undefined;
+    return {
+      scopeId: String(row.scope_id),
+      runId: String(row.run_id),
+      scopePath: parseJson(
+        row.scope_path
+      ) as ExecutionScopeRecord["scopePath"],
+      ...(row.parent_scope_id == null
+        ? {}
+        : { parentScopeId: String(row.parent_scope_id) }),
+      scopeKind: row.scope_kind as ExecutionScopeRecord["scopeKind"],
+      createdAt: String(row.created_at)
+    };
+  }
+
+  getIterationInstance(
+    iterationId: string
+  ): IterationInstanceRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM iteration_instances WHERE iteration_id = ?")
+      .get(iterationId) as SqlRow | undefined;
+    if (!row) return undefined;
+    return {
+      iterationId: String(row.iteration_id),
+      runId: String(row.run_id),
+      scopeId: String(row.scope_id),
+      iterationKey: String(row.iteration_key),
+      ordinal: Number(row.ordinal),
+      status: String(row.status),
+      input: parseJson(row.input_json) as JsonValue,
+      ...(row.output_json == null
+        ? {}
+        : { output: parseJson(row.output_json) as JsonValue }),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at)
+    };
+  }
+
+  getStepInstance(stepInstanceId: string): StepInstanceRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM step_instances WHERE step_instance_id = ?")
+      .get(stepInstanceId) as SqlRow | undefined;
+    if (!row) return undefined;
+    return {
+      stepInstanceId: String(row.step_instance_id),
+      runId: String(row.run_id),
+      scopeId: String(row.scope_id),
+      ...(row.iteration_id == null
+        ? {}
+        : { iterationId: String(row.iteration_id) }),
+      stepKey: String(row.step_key),
+      attempt: Number(row.attempt),
+      executionIdentity: String(row.execution_identity),
+      status: String(row.status),
+      revision: Number(row.revision),
+      input: parseJson(row.input_json) as JsonValue,
+      ...(row.output_json == null
+        ? {}
+        : { output: parseJson(row.output_json) as JsonValue }),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at)
+    };
+  }
+
+  createBlockingTaskAndPauseRun(
+    input: CreateBlockingAssistanceInput
+  ): { task: AssistanceTaskRecord; run: RunRecord } {
+    return this.#db.transaction(() => {
+      if (
+        input.task.task.runId !== input.runId ||
+        input.waitingEvent.runId !== input.runId ||
+        input.task.task.revision !== 0 ||
+        input.task.fencingCounter !== 0 ||
+        input.task.task.status !== "queued"
+      ) {
+        throw new Error(
+          "Blocking assistance aggregate identity or state is invalid"
+        );
+      }
+      this.#insertAssistanceTask(input.task);
+      this.#inject("blocking_task.after_task");
+      const nextStatus =
+        input.task.task.mode === "ai_review"
+          ? "waiting_assistance"
+          : "waiting_human";
+      const update = this.#db
+        .prepare(
+          `UPDATE workflow_runs
+           SET status = ?, revision = revision + 1, updated_at = ?
+           WHERE id = ? AND revision = ?`
+        )
+        .run(
+          nextStatus,
+          input.task.task.updatedAt,
+          input.runId,
+          input.expectedRunRevision
+        );
+      if (update.changes !== 1) {
+        throw new RevisionConflictError(
+          `Run ${input.runId} revision is not ${input.expectedRunRevision}`
+        );
+      }
+      this.#insertEvent(input.waitingEvent);
+      this.#insertOutbox("engine_outbox", input.outbox);
+      this.#inject("blocking_task.after_outbox");
+      return {
+        task: input.task,
+        run: this.getRun(input.runId)!
+      };
+    })();
+  }
+
+  commitAssistanceTask(input: {
+    task: AssistanceTaskRecord;
+    expectedRevision: number;
+    expectedFencingCounter: number;
+  }): { status: "accepted"; task: AssistanceTaskRecord } | { status: "stale" } {
+    return this.#db.transaction(() => {
+      if (
+        input.task.task.revision !== input.expectedRevision + 1 ||
+        input.task.fencingCounter < input.expectedFencingCounter ||
+        input.task.fencingCounter > input.expectedFencingCounter + 1 ||
+        !assistanceFencingConsistent(input.task)
+      ) {
+        return { status: "stale" as const };
+      }
+      const update = this.#db
+        .prepare(
+          `UPDATE assistance_tasks
+           SET status = ?, revision = ?, fencing_counter = ?,
+               canonical_json = ?, private_state_json = ?, updated_at = ?
+           WHERE task_id = ? AND revision = ? AND fencing_counter = ?`
+        )
+        .run(
+          input.task.task.status,
+          input.task.task.revision,
+          input.task.fencingCounter,
+          json(input.task.task),
+          json(input.task.privateState),
+          input.task.task.updatedAt,
+          input.task.task.taskId,
+          input.expectedRevision,
+          input.expectedFencingCounter
+        );
+      return update.changes === 1
+        ? { status: "accepted" as const, task: input.task }
+        : { status: "stale" as const };
+    })();
+  }
+
+  submitTaskAndWakeRun(
+    input: SubmitAssistanceAndWakeInput
+  ):
+    | { status: "accepted"; task: AssistanceTaskRecord; run: RunRecord }
+    | { status: "duplicate" | "stale" } {
+    return this.#db.transaction(() => {
+      if (
+        input.inbox.aggregateId !== input.task.task.taskId ||
+        input.wakeEvent.runId !== input.task.task.runId
+      ) {
+        return { status: "stale" as const };
+      }
+      if (
+        this.#db
+          .prepare("SELECT 1 FROM engine_inbox WHERE message_id = ?")
+          .get(input.inbox.id)
+      ) {
+        return { status: "duplicate" as const };
+      }
+      const currentTask = this.getAssistanceTask(input.task.task.taskId);
+      const currentRun = this.getRun(input.task.task.runId);
+      if (
+        !currentTask ||
+        !currentRun ||
+        currentTask.task.revision !== input.expectedTaskRevision ||
+        currentTask.fencingCounter !== input.expectedFencingToken ||
+        input.task.fencingCounter !== input.expectedFencingToken ||
+        input.task.task.revision !== input.expectedTaskRevision + 1 ||
+        input.task.task.status !== "completed" ||
+        !assistanceFencingConsistent(currentTask) ||
+        !assistanceFencingConsistent(input.task) ||
+        currentRun.revision !== input.expectedRunRevision ||
+        !["waiting_assistance", "waiting_human"].includes(currentRun.status)
+      ) {
+        return { status: "stale" as const };
+      }
+      this.#insertInbox(input.inbox);
+      this.#inject("submit_task.after_inbox");
+      const taskUpdate = this.#db
+        .prepare(
+          `UPDATE assistance_tasks
+           SET status = ?, revision = ?, fencing_counter = ?,
+               canonical_json = ?, private_state_json = ?, updated_at = ?
+           WHERE task_id = ? AND revision = ? AND fencing_counter = ?`
+        )
+        .run(
+          input.task.task.status,
+          input.task.task.revision,
+          input.task.fencingCounter,
+          json(input.task.task),
+          json(input.task.privateState),
+          input.task.task.updatedAt,
+          input.task.task.taskId,
+          input.expectedTaskRevision,
+          input.expectedFencingToken
+        );
+      const runUpdate = this.#db
+        .prepare(
+          `UPDATE workflow_runs
+           SET status = 'running', revision = revision + 1, updated_at = ?
+           WHERE id = ? AND revision = ?
+             AND status IN ('waiting_assistance', 'waiting_human')`
+        )
+        .run(
+          input.wakeEvent.occurredAt,
+          input.task.task.runId,
+          input.expectedRunRevision
+        );
+      if (taskUpdate.changes !== 1 || runUpdate.changes !== 1) {
+        throw new RevisionConflictError("Assistance wake CAS failed");
+      }
+      this.#insertEvent(input.wakeEvent);
+      if (input.outbox) this.#insertOutbox("engine_outbox", input.outbox);
+      this.#db
+        .prepare(
+          "UPDATE engine_inbox SET consumed_at = ? WHERE message_id = ?"
+        )
+        .run(input.inbox.appliedAt ?? input.wakeEvent.occurredAt, input.inbox.id);
+      this.#inject("submit_task.after_wake");
+      return {
+        status: "accepted" as const,
+        task: input.task,
+        run: this.getRun(input.task.task.runId)!
+      };
+    })();
+  }
+
+  getAssistanceTask(taskId: string): AssistanceTaskRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM assistance_tasks WHERE task_id = ?")
+      .get(taskId) as SqlRow | undefined;
+    return row ? this.#readAssistanceTask(row) : undefined;
+  }
+
+  getInboxMessage(messageId: string): InboxMessageRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM engine_inbox WHERE message_id = ?")
+      .get(messageId) as SqlRow | undefined;
+    if (!row) return undefined;
+    return {
+      id: String(row.message_id),
+      topic: String(row.topic),
+      aggregateId: String(row.aggregate_id),
+      payload: parseJson(row.payload_json),
+      receivedAt: String(row.received_at),
+      ...(row.consumed_at == null
+        ? {}
+        : { appliedAt: String(row.consumed_at) })
+    };
+  }
+
+  stageDataset(record: DatasetStagingRecord): DatasetStagingRecord {
+    this.#db
+      .prepare(
+        `INSERT INTO dataset_staging(
+          staging_id, profile_id, profile_version, source_digest, state,
+          validation_report_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        record.stagingId,
+        record.profileId,
+        record.profileVersion,
+        record.sourceDigest,
+        record.state,
+        json(record.validationReport),
+        record.createdAt,
+        record.updatedAt
+      );
+    return record;
+  }
+
+  transitionDatasetStaging(input: {
+    stagingId: string;
+    expectedState: DatasetStagingRecord["state"];
+    nextState: DatasetStagingRecord["state"];
+    validationReport: JsonValue;
+    updatedAt: string;
+  }): DatasetStagingRecord {
+    const result = this.#db
+      .prepare(
+        `UPDATE dataset_staging
+         SET state = ?, validation_report_json = ?, updated_at = ?
+         WHERE staging_id = ? AND state = ?`
+      )
+      .run(
+        input.nextState,
+        json(input.validationReport),
+        input.updatedAt,
+        input.stagingId,
+        input.expectedState
+      );
+    if (result.changes !== 1) {
+      throw new RevisionConflictError(
+        `Dataset staging ${input.stagingId} is not ${input.expectedState}`
+      );
+    }
+    return this.getDatasetStaging(input.stagingId)!;
+  }
+
+  getDatasetStaging(stagingId: string): DatasetStagingRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM dataset_staging WHERE staging_id = ?")
+      .get(stagingId) as SqlRow | undefined;
+    return row ? this.#readDatasetStaging(row) : undefined;
+  }
+
+  publishDataset(input: {
+    stagingId: string;
+    expectedState: "validated";
+    dataset: DatasetVersionDefinition;
+    normalizedRecords: readonly JsonValue[];
+    event: ExecutionEventRecord;
+  }): DatasetVersionDefinition {
+    return this.#db.transaction(() => {
+      if (input.dataset.recordCount !== input.normalizedRecords.length) {
+        throw new Error(
+          "Dataset record count does not match normalized records"
+        );
+      }
+      const staging = this.getDatasetStaging(input.stagingId);
+      if (!staging || staging.state !== input.expectedState) {
+        throw new RevisionConflictError(
+          `Dataset staging ${input.stagingId} is not validated`
+        );
+      }
+      this.#db
+        .prepare(
+          `INSERT INTO dataset_versions(
+            dataset_id, version, records_digest, canonical_json, staging_id,
+            created_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          input.dataset.metadata.id,
+          input.dataset.metadata.version,
+          input.dataset.recordsDigest,
+          json(input.dataset),
+          input.stagingId,
+          input.event.occurredAt
+        );
+      this.#inject("publish_dataset.after_version");
+      const insertRecord = this.#db.prepare(
+        `INSERT INTO dataset_record_index(
+          dataset_id, version, record_key, ordinal, record_digest, record_json
+        ) VALUES (?, ?, ?, ?, ?, ?)`
+      );
+      input.normalizedRecords.forEach((record, ordinal) => {
+        insertRecord.run(
+          input.dataset.metadata.id,
+          input.dataset.metadata.version,
+          String(ordinal).padStart(12, "0"),
+          ordinal,
+          digest(record),
+          json(record)
+        );
+      });
+      const update = this.#db
+        .prepare(
+          `UPDATE dataset_staging
+           SET state = 'published', updated_at = ?
+           WHERE staging_id = ? AND state = ?`
+        )
+        .run(input.event.occurredAt, input.stagingId, input.expectedState);
+      if (update.changes !== 1) {
+        throw new RevisionConflictError("Dataset staging changed concurrently");
+      }
+      this.#insertEvent(input.event);
+      this.#inject("publish_dataset.after_event");
+      return input.dataset;
+    })();
+  }
+
+  getDataset(
+    id: string,
+    version: string
+  ): DatasetVersionDefinition | undefined {
+    const row = this.#db
+      .prepare(
+        "SELECT canonical_json FROM dataset_versions WHERE dataset_id = ? AND version = ?"
+      )
+      .get(id, version) as { canonical_json: string } | undefined;
+    return row
+      ? (parseJson(row.canonical_json) as DatasetVersionDefinition)
+      : undefined;
+  }
+
+  readDatasetRecords(input: {
+    id: string;
+    version: string;
+    afterRecordKey?: string;
+    limit: number;
+  }): { records: readonly JsonValue[]; nextRecordKey?: string } {
+    if (
+      !Number.isSafeInteger(input.limit) ||
+      input.limit < 1 ||
+      input.limit > 1000
+    ) {
+      throw new Error("Dataset record page limit must be between 1 and 1000");
+    }
+    const rows = this.#db
+      .prepare(
+        `SELECT record_key, record_json
+         FROM dataset_record_index
+         WHERE dataset_id = ? AND version = ? AND record_key > ?
+         ORDER BY record_key
+         LIMIT ?`
+      )
+      .all(
+        input.id,
+        input.version,
+        input.afterRecordKey ?? "",
+        input.limit + 1
+      ) as Array<{ record_key: string; record_json: string }>;
+    const page = rows.slice(0, input.limit);
+    return {
+      records: page.map((row) => parseJson(row.record_json) as JsonValue),
+      ...(rows.length > input.limit && page.length > 0
+        ? { nextRecordKey: page.at(-1)!.record_key }
+        : {})
+    };
+  }
+
+  putDecision(record: DecisionRecordDefinition): DecisionRecordDefinition {
+    const existing = this.#db
+      .prepare("SELECT canonical_json FROM decision_records WHERE decision_id = ?")
+      .get(record.decisionId) as { canonical_json: string } | undefined;
+    if (existing) {
+      if (
+        canonicalJson(parseJson(existing.canonical_json)) !==
+        canonicalJson(record)
+      ) {
+        throw new ArtifactConflictError(
+          `Decision ${record.decisionId} already exists with different content`
+        );
+      }
+      return parseJson(existing.canonical_json) as DecisionRecordDefinition;
+    }
+    this.#insertDecision(record);
+    return record;
+  }
+
+  getActiveDecision(
+    decisionType: string,
+    scope: Readonly<Record<string, string>>,
+    preconditions: Readonly<Record<string, string>>
+  ): DecisionRecordDefinition | undefined {
+    const row = this.#db
+      .prepare(
+        `SELECT canonical_json FROM decision_records
+         WHERE decision_type = ? AND scope_digest = ?
+           AND preconditions_digest = ? AND status = 'active'`
+      )
+      .get(decisionType, digest(scope), digest(preconditions)) as
+      | { canonical_json: string }
+      | undefined;
+    return row
+      ? (parseJson(row.canonical_json) as DecisionRecordDefinition)
+      : undefined;
+  }
+
+  revokeDecision(input: {
+    decisionId: string;
+    expectedStatus: "active";
+    revokedBy: string;
+    revokedAt: string;
+  }): DecisionRecordDefinition {
+    return this.#db.transaction(() => {
+      const current = this.#getDecision(input.decisionId);
+      if (!current || current.status !== input.expectedStatus) {
+        throw new RevisionConflictError(
+          `Decision ${input.decisionId} is not active`
+        );
+      }
+      const revoked: DecisionRecordDefinition = {
+        ...current,
+        status: "revoked",
+        revokedBy: input.revokedBy,
+        revokedAt: input.revokedAt
+      };
+      const result = this.#db
+        .prepare(
+          `UPDATE decision_records
+           SET status = 'revoked', canonical_json = ?, updated_at = ?
+           WHERE decision_id = ? AND status = 'active'`
+        )
+        .run(json(revoked), input.revokedAt, input.decisionId);
+      if (result.changes !== 1) {
+        throw new RevisionConflictError("Decision changed concurrently");
+      }
+      return revoked;
+    })();
+  }
+
+  supersedeDecision(input: {
+    decisionId: string;
+    expectedStatus: "active";
+    replacement: DecisionRecordDefinition;
+  }): {
+    superseded: DecisionRecordDefinition;
+    replacement: DecisionRecordDefinition;
+  } {
+    return this.#db.transaction(() => {
+      const current = this.#getDecision(input.decisionId);
+      if (
+        !current ||
+        current.status !== input.expectedStatus ||
+        input.replacement.status !== "active" ||
+        input.replacement.supersedes !== input.decisionId
+      ) {
+        throw new RevisionConflictError("Decision supersede precondition failed");
+      }
+      const superseded: DecisionRecordDefinition = {
+        ...current,
+        status: "superseded"
+      };
+      const update = this.#db
+        .prepare(
+          `UPDATE decision_records
+           SET status = 'superseded', canonical_json = ?, updated_at = ?
+           WHERE decision_id = ? AND status = 'active'`
+        )
+        .run(
+          json(superseded),
+          input.replacement.confirmedAt,
+          input.decisionId
+        );
+      if (update.changes !== 1) {
+        throw new RevisionConflictError("Decision changed concurrently");
+      }
+      this.#insertDecision(input.replacement);
+      return { superseded, replacement: input.replacement };
     })();
   }
 
@@ -832,6 +1606,70 @@ export class SqlitePersistence implements Persistence {
     return row.next;
   }
 
+  #insertPlanSnapshot(snapshot: RunPlanSnapshotRecord): void {
+    this.#db
+      .prepare(
+        `INSERT INTO run_plan_snapshots(
+          run_id, ir_version, plan_digest, workflow_source_digest,
+          artifact_closure_digest, plan_json, risk_snapshot_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        snapshot.runId,
+        snapshot.irVersion,
+        snapshot.planDigest,
+        snapshot.workflowSourceDigest,
+        snapshot.artifactClosureDigest,
+        json(snapshot.planJson),
+        json(snapshot.riskSnapshot),
+        snapshot.createdAt
+      );
+  }
+
+  #insertAssistanceTask(record: AssistanceTaskRecord): void {
+    if (!assistanceFencingConsistent(record)) {
+      throw new StaleFencingTokenError(
+        `Assistance task ${record.task.taskId} has inconsistent fencing state`
+      );
+    }
+    this.#db
+      .prepare(
+        `INSERT INTO assistance_tasks(
+          task_id, run_id, step_instance_id, status, revision, fencing_counter,
+          canonical_json, private_state_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        record.task.taskId,
+        record.task.runId,
+        record.task.stepInstanceId,
+        record.task.status,
+        record.task.revision,
+        record.fencingCounter,
+        json(record.task),
+        json(record.privateState),
+        record.task.createdAt,
+        record.task.updatedAt
+      );
+  }
+
+  #insertInbox(record: InboxMessageRecord): void {
+    this.#db
+      .prepare(
+        `INSERT INTO engine_inbox(
+          message_id, topic, aggregate_id, payload_json, received_at, consumed_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        record.id,
+        record.topic,
+        record.aggregateId,
+        json(record.payload),
+        record.receivedAt,
+        record.appliedAt ?? null
+      );
+  }
+
   #insertEvent(event: ExecutionEventRecord): void {
     this.#db
       .prepare(
@@ -880,6 +1718,37 @@ export class SqlitePersistence implements Persistence {
       .run(randomUUID(), action, actor, target, json(detail), now());
   }
 
+  #insertDecision(record: DecisionRecordDefinition): void {
+    this.#db
+      .prepare(
+        `INSERT INTO decision_records(
+          decision_id, decision_type, status, scope_digest,
+          preconditions_digest, canonical_json, confirmed_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        record.decisionId,
+        record.decisionType,
+        record.status,
+        digest(record.scope),
+        digest(record.preconditions),
+        json(record),
+        record.confirmedAt,
+        record.revokedAt ?? record.confirmedAt
+      );
+  }
+
+  #getDecision(decisionId: string): DecisionRecordDefinition | undefined {
+    const row = this.#db
+      .prepare(
+        "SELECT canonical_json FROM decision_records WHERE decision_id = ?"
+      )
+      .get(decisionId) as { canonical_json: string } | undefined;
+    return row
+      ? (parseJson(row.canonical_json) as DecisionRecordDefinition)
+      : undefined;
+  }
+
   #readArtifact(row: SqlRow): ArtifactRecord {
     return {
       recordId: String(row.record_id),
@@ -909,6 +1778,46 @@ export class SqlitePersistence implements Persistence {
       ...(row.current_node_key == null
         ? {}
         : { currentNodeKey: String(row.current_node_key) }),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at)
+    };
+  }
+
+  #readPlanSnapshot(row: SqlRow): RunPlanSnapshotRecord {
+    return {
+      runId: String(row.run_id),
+      irVersion: String(row.ir_version) as RunPlanSnapshotRecord["irVersion"],
+      planDigest: String(row.plan_digest),
+      workflowSourceDigest: String(row.workflow_source_digest),
+      artifactClosureDigest: String(row.artifact_closure_digest),
+      planJson: parseJson(
+        row.plan_json
+      ) as RunPlanSnapshotRecord["planJson"],
+      riskSnapshot: parseJson(row.risk_snapshot_json) as JsonValue,
+      createdAt: String(row.created_at)
+    };
+  }
+
+  #readAssistanceTask(row: SqlRow): AssistanceTaskRecord {
+    return {
+      task: parseJson(
+        row.canonical_json
+      ) as AssistanceTaskRecord["task"],
+      fencingCounter: Number(row.fencing_counter),
+      privateState: parseJson(
+        row.private_state_json
+      ) as AssistanceTaskRecord["privateState"]
+    };
+  }
+
+  #readDatasetStaging(row: SqlRow): DatasetStagingRecord {
+    return {
+      stagingId: String(row.staging_id),
+      profileId: String(row.profile_id),
+      profileVersion: String(row.profile_version),
+      sourceDigest: String(row.source_digest),
+      state: row.state as DatasetStagingRecord["state"],
+      validationReport: parseJson(row.validation_report_json) as JsonValue,
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at)
     };
