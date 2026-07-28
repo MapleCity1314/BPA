@@ -130,12 +130,12 @@ importers:
       '@bpa/control-protocol':
         specifier: workspace:*
         version: link:../../packages/control-protocol
-      '@bpa/engine':
-        specifier: workspace:*
-        version: link:../../packages/engine
       '@bpa/gateway-core':
         specifier: workspace:*
         version: link:../../packages/gateway-core
+      '@bpa/node-runtime':
+        specifier: workspace:*
+        version: link:../../packages/node-runtime
       '@bpa/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence

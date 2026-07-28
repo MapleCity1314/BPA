@@ -1,9 +1,8 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   ControlClient,
+  resolveControlSocketPath,
   UnixSocketControlTransport
 } from "@bpa/control-client";
 import { z } from "zod";
@@ -21,11 +20,8 @@ const server = new McpServer({
   name: "bpa-local",
   version: "0.3.0"
 });
-const bpaRoot =
-  process.env.BPA_HOME ??
-  join(homedir(), "Library", "Application Support", "BPA");
 const socket =
-  process.env.BPA_CONTROL_SOCKET ?? join(bpaRoot, "run", "core.sock");
+  process.env.BPA_CONTROL_SOCKET ?? resolveControlSocketPath();
 const control = new ControlClient(new UnixSocketControlTransport(socket), {
   timeoutMs: 10_000
 });
