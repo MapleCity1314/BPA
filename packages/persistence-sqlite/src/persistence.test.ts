@@ -1442,7 +1442,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(5);
+      expect(store.health().schemaVersion).toBe(6);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1473,17 +1473,24 @@ describe("append-only migrations", () => {
 
       const legacy = new Database(databasePath);
       legacy.exec(`
+        DROP TRIGGER workflow_candidates_no_delete;
+        DROP TRIGGER workflow_candidates_no_update;
+        DROP TRIGGER workflow_draft_revisions_no_delete;
+        DROP TRIGGER workflow_draft_revisions_no_update;
+        DROP TABLE workflow_candidates;
+        DROP TABLE workflow_draft_revisions;
+        DROP TABLE workflow_drafts;
         DROP TABLE engine_checkpoints;
         DROP INDEX assistance_tasks_owner_type_created;
         DROP INDEX assistance_tasks_status_mode_created;
         DROP INDEX assistance_task_request_results_task;
         DROP TABLE assistance_task_request_results;
-        DELETE FROM schema_migrations WHERE version IN (4, 5);
+        DELETE FROM schema_migrations WHERE version IN (4, 5, 6);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(5);
+      expect(upgraded.health().schemaVersion).toBe(6);
       expect(upgraded.getAssistanceTask(task.task.taskId)).toEqual(task);
       expect(
         upgraded.getAssistanceRequestResult("not-recorded")
@@ -1508,7 +1515,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(5);
+      expect(store.health().schemaVersion).toBe(6);
       expect(store.getAssistanceRequestResult("not-recorded")).toBeUndefined();
       store.close();
     } finally {
@@ -1530,7 +1537,76 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(5);
+      expect(store.health().schemaVersion).toBe(6);
+      store.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("upgrades an existing v5 database with the exact v6 checksum", () => {
+    const directory = mkdtempSync(join(tmpdir(), "bpa-migration-v5-upgrade-"));
+    const databasePath = join(directory, "bpa.sqlite3");
+    try {
+      const seeded = new SqlitePersistence({ path: databasePath });
+      seeded.close();
+      const legacy = new Database(databasePath);
+      legacy.exec(`
+        DROP TRIGGER workflow_candidates_no_delete;
+        DROP TRIGGER workflow_candidates_no_update;
+        DROP TRIGGER workflow_draft_revisions_no_delete;
+        DROP TRIGGER workflow_draft_revisions_no_update;
+        DROP TABLE workflow_candidates;
+        DROP TABLE workflow_draft_revisions;
+        DROP TABLE workflow_drafts;
+        DELETE FROM schema_migrations WHERE version = 6;
+      `);
+      legacy.close();
+
+      const upgraded = new SqlitePersistence({ path: databasePath });
+      expect(upgraded.health().schemaVersion).toBe(6);
+      expect(
+        upgraded.createWorkflowDraft({
+          draftId: "v5-upgraded-draft",
+          revision: 0,
+          content: { revision: 0 },
+          createdAt: timestamp,
+          updatedAt: timestamp
+        })
+      ).toMatchObject({
+        draftId: "v5-upgraded-draft",
+        revision: 0
+      });
+      upgraded.close();
+      const inspected = new Database(databasePath, { readonly: true });
+      const applied = inspected
+        .prepare(
+          "SELECT checksum FROM schema_migrations WHERE version = 6"
+        )
+        .get() as { checksum: string };
+      expect(applied.checksum).toBe(migrationChecksum(migrations[5]!));
+      inspected.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers cleanly when migration v6 is interrupted", () => {
+    const directory = mkdtempSync(join(tmpdir(), "bpa-migration-v6-crash-"));
+    const databasePath = join(directory, "bpa.sqlite3");
+    try {
+      expect(
+        () =>
+          new SqlitePersistence({
+            path: databasePath,
+            failureInjector(point) {
+              if (point === "migration.6.after_sql") throw new Error("crash");
+            }
+          })
+      ).toThrow("crash");
+      const store = new SqlitePersistence({ path: databasePath });
+      expect(store.health().schemaVersion).toBe(6);
+      expect(store.getWorkflowDraft("not-created")).toBeUndefined();
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1542,7 +1618,7 @@ describe("append-only migrations", () => {
     const databasePath = join(directory, "bpa.sqlite3");
     try {
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(5);
+      expect(store.health().schemaVersion).toBe(6);
       store.close();
       const raw = new Database(databasePath);
       raw

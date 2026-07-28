@@ -6,6 +6,11 @@ import {
   ArtifactConflictError,
   RevisionConflictError,
   StaleFencingTokenError,
+  WorkflowCandidateConflictError,
+  WorkflowDraftConflictError,
+  WorkflowOperationConflictError,
+  type ApplyWorkflowDraftRevisionInput,
+  type ApplyWorkflowDraftRevisionResult,
   type ArtifactRecord,
   type ArtifactType,
   type AssistanceTaskRecord,
@@ -37,7 +42,10 @@ import {
   type RunPlanSnapshotRecord,
   type RunTransitionInput,
   type StepInstanceRecord,
-  type SubmitAssistanceAndWakeInput
+  type SubmitAssistanceAndWakeInput,
+  type WorkflowCandidateRecord,
+  type WorkflowDraftRecord,
+  type WorkflowDraftRevisionRecord
 } from "@bpa/persistence";
 import { migrations, type Migration } from "./migrations.js";
 
@@ -69,6 +77,70 @@ function canonicalJson(value: unknown): string {
 
 function digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(canonicalJson(value)).digest("hex")}`;
+}
+
+function assertJsonCompatible(
+  value: unknown,
+  label: string,
+  seen = new Set<object>()
+): void {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(`${label} must contain finite JSON numbers`);
+    }
+    return;
+  }
+  if (typeof value !== "object") {
+    throw new Error(`${label} must be JSON serializable`);
+  }
+  if (seen.has(value)) {
+    throw new Error(`${label} must not contain cycles`);
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((child, index) =>
+      assertJsonCompatible(child, `${label}[${index}]`, seen)
+    );
+  } else {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error(`${label} must contain only plain JSON objects`);
+    }
+    for (const [key, child] of Object.entries(value)) {
+      assertJsonCompatible(child, `${label}.${key}`, seen);
+    }
+  }
+  seen.delete(value);
+}
+
+function authoringJson(value: unknown): string {
+  assertJsonCompatible(value, "authoring content");
+  return JSON.stringify(value);
+}
+
+function assertAuthoringId(value: string, label: string): void {
+  if (!value.trim() || value.length > 200) {
+    throw new Error(`${label} must be a 1-200 character identifier`);
+  }
+}
+
+function assertRevision(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative safe integer`);
+  }
+}
+
+function assertTimestamp(value: string, label: string): void {
+  if (!Number.isFinite(Date.parse(value))) {
+    throw new Error(`${label} must be a timestamp`);
+  }
 }
 
 function assistanceFencingConsistent(
@@ -238,6 +310,241 @@ export class SqlitePersistence implements Persistence {
 
   close(): void {
     this.#db.close();
+  }
+
+  createWorkflowDraft(record: WorkflowDraftRecord): WorkflowDraftRecord {
+    assertAuthoringId(record.draftId, "draftId");
+    if (record.revision !== 0) {
+      throw new Error("A new Workflow Draft must start at revision 0");
+    }
+    assertTimestamp(record.createdAt, "createdAt");
+    assertTimestamp(record.updatedAt, "updatedAt");
+    const contentJson = authoringJson(record.content);
+    this.#db.transaction(() => {
+      if (this.getWorkflowDraft(record.draftId)) {
+        throw new WorkflowDraftConflictError(
+          `Workflow Draft already exists: ${record.draftId}`
+        );
+      }
+      this.#db
+        .prepare(
+          `INSERT INTO workflow_drafts(
+            draft_id, revision, content_json, created_at, updated_at
+          ) VALUES (?, 0, ?, ?, ?)`
+        )
+        .run(
+          record.draftId,
+          contentJson,
+          record.createdAt,
+          record.updatedAt
+        );
+      this.#inject("authoring.create.after_current");
+      this.#db
+        .prepare(
+          `INSERT INTO workflow_draft_revisions(
+            draft_id, revision, operation_id, operation_digest,
+            content_json, created_at
+          ) VALUES (?, 0, NULL, NULL, ?, ?)`
+        )
+        .run(record.draftId, contentJson, record.createdAt);
+      this.#inject("authoring.create.after_history");
+    }).immediate();
+    return this.getWorkflowDraft(record.draftId)!;
+  }
+
+  getWorkflowDraft(draftId: string): WorkflowDraftRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM workflow_drafts WHERE draft_id = ?")
+      .get(draftId) as SqlRow | undefined;
+    return row ? this.#readWorkflowDraft(row) : undefined;
+  }
+
+  getWorkflowDraftRevision(
+    draftId: string,
+    revision: number
+  ): WorkflowDraftRevisionRecord | undefined {
+    const row = this.#db
+      .prepare(
+        `SELECT * FROM workflow_draft_revisions
+         WHERE draft_id = ? AND revision = ?`
+      )
+      .get(draftId, revision) as SqlRow | undefined;
+    return row ? this.#readWorkflowDraftRevision(row) : undefined;
+  }
+
+  applyWorkflowDraftRevision(
+    input: ApplyWorkflowDraftRevisionInput
+  ): ApplyWorkflowDraftRevisionResult {
+    assertAuthoringId(input.draftId, "draftId");
+    assertAuthoringId(input.operationId, "operationId");
+    assertRevision(input.expectedRevision, "expectedRevision");
+    if (input.expectedRevision === Number.MAX_SAFE_INTEGER) {
+      throw new Error("expectedRevision cannot advance beyond a safe integer");
+    }
+    assertTimestamp(input.updatedAt, "updatedAt");
+    const contentJson = authoringJson(input.content);
+    const operationDigest = digest({
+      expectedRevision: input.expectedRevision,
+      content: parseJson(contentJson),
+      updatedAt: input.updatedAt
+    });
+
+    return this.#db.transaction((): ApplyWorkflowDraftRevisionResult => {
+      const replay = this.#db
+        .prepare(
+          `SELECT * FROM workflow_draft_revisions
+           WHERE draft_id = ? AND operation_id = ?`
+        )
+        .get(input.draftId, input.operationId) as SqlRow | undefined;
+      if (replay) {
+        if (String(replay.operation_digest) !== operationDigest) {
+          throw new WorkflowOperationConflictError(
+            `Workflow operation payload changed: ${input.operationId}`
+          );
+        }
+        const revision = this.#readWorkflowDraftRevision(replay);
+        const latest = this.getWorkflowDraft(input.draftId)!;
+        return {
+          status: "duplicate",
+          current: {
+            draftId: revision.draftId,
+            revision: revision.revision,
+            content: revision.content,
+            createdAt: latest.createdAt,
+            updatedAt: revision.createdAt
+          },
+          revision
+        };
+      }
+
+      const current = this.getWorkflowDraft(input.draftId);
+      if (!current) {
+        throw new WorkflowDraftConflictError(
+          `Workflow Draft does not exist: ${input.draftId}`
+        );
+      }
+      if (current.revision !== input.expectedRevision) {
+        return {
+          status: "stale",
+          actualRevision: current.revision
+        };
+      }
+      const nextRevision = input.expectedRevision + 1;
+      const updated = this.#db
+        .prepare(
+          `UPDATE workflow_drafts
+           SET revision = ?, content_json = ?, updated_at = ?
+           WHERE draft_id = ? AND revision = ?`
+        )
+        .run(
+          nextRevision,
+          contentJson,
+          input.updatedAt,
+          input.draftId,
+          input.expectedRevision
+        );
+      if (updated.changes !== 1) {
+        const actual = this.getWorkflowDraft(input.draftId);
+        return {
+          status: "stale",
+          actualRevision: actual?.revision ?? input.expectedRevision
+        };
+      }
+      this.#inject("authoring.apply.after_current");
+      this.#db
+        .prepare(
+          `INSERT INTO workflow_draft_revisions(
+            draft_id, revision, operation_id, operation_digest,
+            content_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          input.draftId,
+          nextRevision,
+          input.operationId,
+          operationDigest,
+          contentJson,
+          input.updatedAt
+        );
+      this.#inject("authoring.apply.after_history");
+      return {
+        status: "accepted",
+        current: this.getWorkflowDraft(input.draftId)!,
+        revision: this.getWorkflowDraftRevision(
+          input.draftId,
+          nextRevision
+        )!
+      };
+    }).immediate();
+  }
+
+  saveWorkflowCandidate(
+    candidate: WorkflowCandidateRecord
+  ): WorkflowCandidateRecord {
+    assertAuthoringId(candidate.candidateId, "candidateId");
+    assertAuthoringId(candidate.draftId, "draftId");
+    assertRevision(candidate.sourceRevision, "sourceRevision");
+    assertTimestamp(candidate.createdAt, "createdAt");
+    const contentJson = authoringJson(candidate.content);
+    const recordDigest = digest({
+      candidateId: candidate.candidateId,
+      draftId: candidate.draftId,
+      sourceRevision: candidate.sourceRevision,
+      content: parseJson(contentJson),
+      createdAt: candidate.createdAt
+    });
+
+    return this.#db.transaction(() => {
+      const existing = this.#db
+        .prepare(
+          "SELECT * FROM workflow_candidates WHERE candidate_id = ?"
+        )
+        .get(candidate.candidateId) as SqlRow | undefined;
+      if (existing) {
+        if (String(existing.record_digest) !== recordDigest) {
+          throw new WorkflowCandidateConflictError(
+            `Workflow Candidate is immutable: ${candidate.candidateId}`
+          );
+        }
+        return this.#readWorkflowCandidate(existing);
+      }
+      if (
+        !this.getWorkflowDraftRevision(
+          candidate.draftId,
+          candidate.sourceRevision
+        )
+      ) {
+        throw new WorkflowDraftConflictError(
+          `Workflow Candidate source revision does not exist: ${candidate.draftId}@${candidate.sourceRevision}`
+        );
+      }
+      this.#db
+        .prepare(
+          `INSERT INTO workflow_candidates(
+            candidate_id, draft_id, source_revision, record_digest,
+            content_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          candidate.candidateId,
+          candidate.draftId,
+          candidate.sourceRevision,
+          recordDigest,
+          contentJson,
+          candidate.createdAt
+        );
+      this.#inject("authoring.candidate.after_insert");
+      return this.getWorkflowCandidate(candidate.candidateId)!;
+    }).immediate();
+  }
+
+  getWorkflowCandidate(
+    candidateId: string
+  ): WorkflowCandidateRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM workflow_candidates WHERE candidate_id = ?")
+      .get(candidateId) as SqlRow | undefined;
+    return row ? this.#readWorkflowCandidate(row) : undefined;
   }
 
   saveCandidate(input: PublishArtifactInput): ArtifactRecord {
@@ -2210,6 +2517,40 @@ export class SqlitePersistence implements Persistence {
       validationReport: parseJson(row.validation_report_json) as JsonValue,
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at)
+    };
+  }
+
+  #readWorkflowDraft(row: SqlRow): WorkflowDraftRecord {
+    return {
+      draftId: String(row.draft_id),
+      revision: Number(row.revision),
+      content: parseJson(row.content_json),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at)
+    };
+  }
+
+  #readWorkflowDraftRevision(
+    row: SqlRow
+  ): WorkflowDraftRevisionRecord {
+    return {
+      draftId: String(row.draft_id),
+      revision: Number(row.revision),
+      ...(row.operation_id == null
+        ? {}
+        : { operationId: String(row.operation_id) }),
+      content: parseJson(row.content_json),
+      createdAt: String(row.created_at)
+    };
+  }
+
+  #readWorkflowCandidate(row: SqlRow): WorkflowCandidateRecord {
+    return {
+      candidateId: String(row.candidate_id),
+      draftId: String(row.draft_id),
+      sourceRevision: Number(row.source_revision),
+      content: parseJson(row.content_json),
+      createdAt: String(row.created_at)
     };
   }
 

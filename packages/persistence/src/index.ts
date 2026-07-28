@@ -521,6 +521,71 @@ export interface AuditRecord {
   occurredAt: string;
 }
 
+export interface WorkflowDraftRecord {
+  draftId: string;
+  revision: number;
+  content: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowDraftRevisionRecord {
+  draftId: string;
+  revision: number;
+  operationId?: string;
+  content: unknown;
+  createdAt: string;
+}
+
+export interface ApplyWorkflowDraftRevisionInput {
+  draftId: string;
+  expectedRevision: number;
+  operationId: string;
+  content: unknown;
+  updatedAt: string;
+}
+
+export type ApplyWorkflowDraftRevisionResult =
+  | {
+      status: "accepted" | "duplicate";
+      current: WorkflowDraftRecord;
+      revision: WorkflowDraftRevisionRecord;
+    }
+  | {
+      status: "stale";
+      actualRevision: number;
+    };
+
+export interface WorkflowCandidateRecord {
+  candidateId: string;
+  draftId: string;
+  sourceRevision: number;
+  content: unknown;
+  createdAt: string;
+}
+
+/**
+ * Generic persistence boundary for incremental authoring. Content deliberately
+ * remains unknown so Persistence never depends on authoring-core.
+ */
+export interface WorkflowAuthoringStore {
+  createWorkflowDraft(record: WorkflowDraftRecord): WorkflowDraftRecord;
+  getWorkflowDraft(draftId: string): WorkflowDraftRecord | undefined;
+  getWorkflowDraftRevision(
+    draftId: string,
+    revision: number
+  ): WorkflowDraftRevisionRecord | undefined;
+  applyWorkflowDraftRevision(
+    input: ApplyWorkflowDraftRevisionInput
+  ): ApplyWorkflowDraftRevisionResult;
+  saveWorkflowCandidate(
+    candidate: WorkflowCandidateRecord
+  ): WorkflowCandidateRecord;
+  getWorkflowCandidate(
+    candidateId: string
+  ): WorkflowCandidateRecord | undefined;
+}
+
 export interface Persistence
   extends RegistryStore,
     ExecutionUnitOfWork,
@@ -529,7 +594,8 @@ export interface Persistence
     DatasetPublicationUnitOfWork,
     DecisionRecordStore,
     GatewayDeliveryUnitOfWork,
-    ExecutionStore {
+    ExecutionStore,
+    WorkflowAuthoringStore {
   health(): {
     adapter: string;
     schemaVersion: number;
@@ -572,3 +638,6 @@ export interface Persistence
 export class RevisionConflictError extends Error {}
 export class ArtifactConflictError extends Error {}
 export class StaleFencingTokenError extends Error {}
+export class WorkflowDraftConflictError extends Error {}
+export class WorkflowOperationConflictError extends Error {}
+export class WorkflowCandidateConflictError extends Error {}

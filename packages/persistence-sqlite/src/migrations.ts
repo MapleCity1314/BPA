@@ -362,5 +362,73 @@ export const migrations: Migration[] = [
         updated_at TEXT NOT NULL
       ) STRICT;
     `
+  },
+  {
+    version: 6,
+    sql: `
+      CREATE TABLE workflow_drafts (
+        draft_id TEXT PRIMARY KEY,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        content_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE workflow_draft_revisions (
+        draft_id TEXT NOT NULL
+          REFERENCES workflow_drafts(draft_id) ON DELETE RESTRICT,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        operation_id TEXT,
+        operation_digest TEXT,
+        content_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(draft_id, revision),
+        UNIQUE(draft_id, operation_id),
+        CHECK (
+          (revision = 0 AND operation_id IS NULL AND operation_digest IS NULL)
+          OR
+          (revision > 0 AND operation_id IS NOT NULL AND operation_digest IS NOT NULL)
+        )
+      ) STRICT;
+
+      CREATE TABLE workflow_candidates (
+        candidate_id TEXT PRIMARY KEY,
+        draft_id TEXT NOT NULL,
+        source_revision INTEGER NOT NULL CHECK (source_revision >= 0),
+        record_digest TEXT NOT NULL,
+        content_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(draft_id, source_revision)
+          REFERENCES workflow_draft_revisions(draft_id, revision)
+          ON DELETE RESTRICT
+      ) STRICT;
+
+      CREATE INDEX workflow_candidates_draft_revision
+        ON workflow_candidates(draft_id, source_revision, created_at);
+
+      CREATE TRIGGER workflow_draft_revisions_no_update
+      BEFORE UPDATE ON workflow_draft_revisions
+      BEGIN
+        SELECT RAISE(ABORT, 'workflow draft revisions are append-only');
+      END;
+
+      CREATE TRIGGER workflow_draft_revisions_no_delete
+      BEFORE DELETE ON workflow_draft_revisions
+      BEGIN
+        SELECT RAISE(ABORT, 'workflow draft revisions are append-only');
+      END;
+
+      CREATE TRIGGER workflow_candidates_no_update
+      BEFORE UPDATE ON workflow_candidates
+      BEGIN
+        SELECT RAISE(ABORT, 'workflow candidates are immutable');
+      END;
+
+      CREATE TRIGGER workflow_candidates_no_delete
+      BEFORE DELETE ON workflow_candidates
+      BEGIN
+        SELECT RAISE(ABORT, 'workflow candidates are immutable');
+      END;
+    `
   }
 ];
