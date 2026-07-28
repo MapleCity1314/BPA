@@ -252,4 +252,108 @@ describe("Local Core IR2 control integration", () => {
     });
     persistence.close();
   });
+
+  it("requires confirmation for R1 and refuses R2+ standalone Nodes", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const r1Node: NodeDefinition = {
+      ...constantNode,
+      metadata: {
+        ...constantNode.metadata,
+        id: "data.constant-r1",
+        title: "Confirmed constant"
+      },
+      risk: {
+        level: "R1",
+        permissions: ["dataset.read"]
+      }
+    };
+    const r2Node: NodeDefinition = {
+      ...constantNode,
+      metadata: {
+        ...constantNode.metadata,
+        id: "data.constant-r2",
+        title: "Approved constant"
+      },
+      risk: {
+        level: "R2",
+        permissions: ["business.binding.persist"]
+      }
+    };
+    for (const definition of [r1Node, r2Node]) {
+      persistence.publish({
+        assetType: "node",
+        assetId: definition.metadata.id,
+        version: definition.metadata.version,
+        digest: contentDigest(definition),
+        content: definition,
+        actor: "test"
+      });
+    }
+    const service = new LocalCoreService(persistence);
+    const preview = service.handle({
+      id: "r1-preview",
+      method: "run.node.preview",
+      params: {
+        nodeId: r1Node.metadata.id,
+        nodeVersion: r1Node.metadata.version,
+        input: { value: "confirmed" }
+      }
+    });
+    expect(preview).toMatchObject({
+      ok: true,
+      result: {
+        riskLevel: "R1",
+        permissions: ["dataset.read"],
+        requiresConfirmation: true
+      }
+    });
+    const expectedPreviewDigest = (
+      preview.result as { previewDigest: string }
+    ).previewDigest;
+    expect(
+      service.handle({
+        id: "r1-unconfirmed",
+        method: "run.node.create",
+        params: {
+          nodeId: r1Node.metadata.id,
+          nodeVersion: r1Node.metadata.version,
+          input: { value: "confirmed" },
+          expectedPreviewDigest,
+          actor: "test"
+        }
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("explicit human confirmation") }
+    });
+    expect(
+      service.handle({
+        id: "r1-confirmed",
+        method: "run.node.create",
+        params: {
+          nodeId: r1Node.metadata.id,
+          nodeVersion: r1Node.metadata.version,
+          input: { value: "confirmed" },
+          expectedPreviewDigest,
+          confirmed: true,
+          actor: "test"
+        }
+      })
+    ).toMatchObject({ ok: true, result: { status: "running" } });
+    expect(
+      service.handle({
+        id: "r2-preview",
+        method: "run.node.preview",
+        params: {
+          nodeId: r2Node.metadata.id,
+          nodeVersion: r2Node.metadata.version,
+          input: { value: "blocked" }
+        }
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("limited to R0/R1") }
+    });
+    persistence.close();
+  });
 });
