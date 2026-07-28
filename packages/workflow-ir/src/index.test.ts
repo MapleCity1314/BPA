@@ -72,6 +72,12 @@ function callStep(
     kind: "call",
     key,
     node,
+    providerId: "browser",
+    permissionSnapshot: {
+      riskLevel: "R0",
+      permissions: ["browser.dom.read"],
+      domains: ["https://fxg.jinritemai.com"]
+    },
     dependencies: {
       adapters: [adapter],
       policies: [policy],

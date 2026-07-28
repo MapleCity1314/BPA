@@ -176,6 +176,23 @@ function normalizeStep(step: ExecutionStep): ExecutionStep {
         key: step.key.trim(),
         node: normalizeArtifactClosure({ entries: [step.node] })
           .entries[0]! as typeof step.node,
+        providerId: step.providerId.trim(),
+        permissionSnapshot: {
+          riskLevel: step.permissionSnapshot.riskLevel,
+          permissions: [...step.permissionSnapshot.permissions]
+            .map((permission) => permission.trim())
+            .sort(),
+          domains: [...step.permissionSnapshot.domains]
+            .map((domain) => domain.trim())
+            .sort(),
+          ...(step.permissionSnapshot.grantDigest === undefined
+            ? {}
+            : {
+                grantDigest: step.permissionSnapshot.grantDigest
+                  .trim()
+                  .toLowerCase()
+              })
+        },
         dependencies: {
           adapters: normalizeArtifactRefs(step.dependencies.adapters),
           policies: normalizeArtifactRefs(step.dependencies.policies),
@@ -878,6 +895,68 @@ function blockIssues(
             `${stepPath}/routes`
           )
         );
+        if (!KEY_PATTERN.test(step.providerId)) {
+          issues.push(
+            issue(
+              "INVALID_VALUE",
+              `${stepPath}/providerId`,
+              "providerId must be a non-empty stable identifier"
+            )
+          );
+        }
+        if (
+          new Set(step.permissionSnapshot.permissions).size !==
+            step.permissionSnapshot.permissions.length ||
+          step.permissionSnapshot.permissions.some(
+            (permission) => !KEY_PATTERN.test(permission)
+          )
+        ) {
+          issues.push(
+            issue(
+              "INVALID_VALUE",
+              `${stepPath}/permissionSnapshot/permissions`,
+              "permissions must contain unique stable identifiers"
+            )
+          );
+        }
+        if (
+          new Set(step.permissionSnapshot.domains).size !==
+            step.permissionSnapshot.domains.length ||
+          step.permissionSnapshot.domains.some((domain) => {
+            try {
+              const parsed = new URL(domain);
+              return (
+                !["https:", "http:"].includes(parsed.protocol) ||
+                parsed.origin !== domain ||
+                parsed.pathname !== "/" ||
+                parsed.search !== "" ||
+                parsed.hash !== ""
+              );
+            } catch {
+              return true;
+            }
+          })
+        ) {
+          issues.push(
+            issue(
+              "INVALID_VALUE",
+              `${stepPath}/permissionSnapshot/domains`,
+              "domains must contain unique exact HTTP(S) origins"
+            )
+          );
+        }
+        if (
+          step.permissionSnapshot.grantDigest !== undefined &&
+          !DIGEST_PATTERN.test(step.permissionSnapshot.grantDigest)
+        ) {
+          issues.push(
+            issue(
+              "INVALID_VALUE",
+              `${stepPath}/permissionSnapshot/grantDigest`,
+              "grantDigest must be a SHA-256 digest"
+            )
+          );
+        }
         if (!isPositiveSafeInteger(step.timeoutMs)) {
           issues.push(
             issue(

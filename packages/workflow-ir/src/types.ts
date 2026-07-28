@@ -202,9 +202,19 @@ export interface CallRoutes {
   readonly uncertain: StepKey;
 }
 
+export interface PermissionSnapshot {
+  readonly riskLevel: "R0" | "R1" | "R2" | "R3" | "R4";
+  readonly permissions: readonly string[];
+  readonly domains: readonly string[];
+  /** Digest of an optional user-approved grant captured at Run creation. */
+  readonly grantDigest?: string;
+}
+
 export interface CallStep extends StepBase {
   readonly kind: "call";
   readonly node: ArtifactRef & { readonly kind: "node" };
+  readonly providerId: string;
+  readonly permissionSnapshot: PermissionSnapshot;
   readonly dependencies: CallDependencies;
   readonly timeoutMs: number;
   readonly retry: ResolvedRetryPolicy;

@@ -2,7 +2,8 @@ import type { RiskSignal, TimingPolicy } from "@bpa/schemas";
 import type {
   ArtifactRef,
   ExecutionIdentity,
-  JsonValue
+  JsonValue,
+  PermissionSnapshot
 } from "@bpa/workflow-ir";
 
 /**
@@ -15,7 +16,7 @@ export interface RuntimeInvocation {
   readonly node: ArtifactRef & { readonly kind: "node" };
   readonly providerId: string;
   readonly input: JsonValue;
-  readonly permissionSnapshot: JsonValue;
+  readonly permissionSnapshot: PermissionSnapshot;
   readonly deadlineAt: number;
   readonly idempotencyKey: string;
   readonly fencingToken: number;
