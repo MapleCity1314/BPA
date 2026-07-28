@@ -175,6 +175,8 @@ importers:
 
   packages/assistance-core: {}
 
+  packages/authoring-core: {}
+
   packages/browser-bridge:
     dependencies:
       '@bpa/schemas':
@@ -228,6 +230,12 @@ importers:
       '@bpa/workflow-ir':
         specifier: workspace:*
         version: link:../workflow-ir
+
+  packages/page-model:
+    dependencies:
+      '@bpa/schemas':
+        specifier: workspace:*
+        version: link:../schemas
 
   packages/persistence:
     dependencies:

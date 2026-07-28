@@ -1,3 +1,8 @@
+import type {
+  ElementContractDefinition,
+  PageModelDefinition
+} from "@bpa/schemas";
+
 export const LOCATOR_STRATEGIES = [
   "business-id",
   "role-name",
@@ -14,71 +19,9 @@ export type LocatorStrategy = (typeof LOCATOR_STRATEGIES)[number];
  * bpa.page/v1alpha1 JSON Schemas. Domain-only evidence and Candidate state are
  * separate types below, so persisted assets never acquire an alternate shape.
  */
-export type LocatorCandidate =
-  | { strategy: "business-id"; value: string }
-  | { strategy: "role-name"; role: string; name: string }
-  | { strategy: "label"; label: string }
-  | { strategy: "attribute"; name: string; value: string }
-  | { strategy: "relative-anchor"; anchor: string; role: string; name: string }
-  | { strategy: "css-diagnostic"; selector: string };
-
-export interface ElementContract {
-  apiVersion: "bpa.page/v1alpha1";
-  kind: "ElementContract";
-  metadata: {
-    id: string;
-    version: string;
-    title: string;
-    description?: string;
-  };
-  intent: string;
-  scope: {
-    origins: string[];
-    pathPattern: string;
-    pageState: string;
-    frame: "top" | "same-origin-child";
-  };
-  expectedCount: {
-    minimum: number;
-    maximum: number;
-  };
-  candidates: LocatorCandidate[];
-  preconditions: string[];
-  postconditions: string[];
-  volatility: "low" | "medium" | "high";
-  validatedSnapshots: string[];
-}
-
-export interface PageModel {
-  apiVersion: "bpa.page/v1alpha1";
-  kind: "PageModel";
-  metadata: {
-    id: string;
-    version: string;
-    title: string;
-    description?: string;
-  };
-  adapter: {
-    id: string;
-    version: string;
-    digest: string;
-  };
-  origins: string[];
-  states: Array<{
-    id: string;
-    pathPattern: string;
-    fingerprint: string;
-  }>;
-  elements: Array<{
-    id: string;
-    contract: {
-      id: string;
-      version: string;
-      digest: string;
-    };
-  }>;
-  fixtureDigests: string[];
-}
+export type ElementContract = ElementContractDefinition;
+export type PageModel = PageModelDefinition;
+export type LocatorCandidate = ElementContract["candidates"][number];
 
 export interface RedactionCoverage {
   passwords: true;
