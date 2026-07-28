@@ -7,6 +7,7 @@ export type JsonValue =
 
 export type StepKey = string;
 export type IterationKey = string;
+export const WORKFLOW_IR_VERSION = "bpa.workflow-ir/2" as const;
 
 export interface ScopeSegment {
   readonly foreachStepKey: StepKey;
@@ -23,12 +24,15 @@ export interface ExecutionIdentity {
   readonly attempt: number;
 }
 
-export type ArtifactKind =
-  | "node"
-  | "adapter"
-  | "policy"
-  | "assistance_profile"
-  | "dataset_profile";
+export const ARTIFACT_KINDS = [
+  "node",
+  "adapter",
+  "policy",
+  "assistance_profile",
+  "dataset_profile"
+] as const;
+
+export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 
 export interface ArtifactRef {
   readonly kind: ArtifactKind;
@@ -58,6 +62,7 @@ export interface ExecutionLimits {
 
 export interface ForeachLimits extends ExecutionLimits {
   readonly maxItems: number;
+  readonly maxDurationMs: number;
 }
 
 export interface RiskSnapshotEntry {
@@ -141,12 +146,71 @@ export interface StepBase {
   readonly key: StepKey;
 }
 
+export interface ResolvedRetryPolicy {
+  /** Includes the first attempt. */
+  readonly maxAttempts: number;
+  readonly retryableOutcomes: readonly (
+    | "failed"
+    | "timed_out"
+    | "rejected"
+  )[];
+  readonly retryableErrorCodes: readonly string[];
+  readonly backoff: {
+    readonly strategy: "fixed" | "exponential";
+    readonly baseDelayMs: number;
+    readonly maxDelayMs: number;
+    readonly jitterRatio: number;
+  };
+}
+
+export interface ResolvedTimingPolicy {
+  readonly readiness?: {
+    readonly timeoutMs: number;
+    readonly stableForMs: number;
+    readonly pollIntervalMs: number;
+  };
+  readonly dispatchJitter?: {
+    readonly minMs: number;
+    readonly maxMs: number;
+    readonly distribution: "uniform";
+  };
+  readonly rateLimit?: {
+    readonly scope: "domain" | "shop" | "tab";
+    readonly minIntervalMs: number;
+    readonly maxQueueMs: number;
+  };
+}
+
+export interface CallDependencies {
+  readonly adapters: readonly (ArtifactRef & {
+    readonly kind: "adapter";
+  })[];
+  readonly policies: readonly (ArtifactRef & {
+    readonly kind: "policy";
+  })[];
+  readonly datasetProfiles: readonly (ArtifactRef & {
+    readonly kind: "dataset_profile";
+  })[];
+}
+
+export interface CallRoutes {
+  readonly succeeded: StepKey;
+  readonly failed: StepKey;
+  readonly timed_out: StepKey;
+  readonly rejected: StepKey;
+  readonly cancelled: StepKey;
+  readonly uncertain: StepKey;
+}
+
 export interface CallStep extends StepBase {
   readonly kind: "call";
   readonly node: ArtifactRef & { readonly kind: "node" };
+  readonly dependencies: CallDependencies;
+  readonly timeoutMs: number;
+  readonly retry: ResolvedRetryPolicy;
+  readonly timing: ResolvedTimingPolicy;
   readonly input?: BindingValue;
-  readonly next?: StepKey;
-  readonly onError?: StepKey;
+  readonly routes: CallRoutes;
 }
 
 export interface DecisionBranch {
@@ -172,9 +236,44 @@ export interface ItemKeySpec {
 }
 
 export interface ForeachAggregation {
-  readonly mode: "collect";
+  readonly mode: "outcome_summary";
   readonly outputKey: string;
-  readonly include: "succeeded" | "all";
+}
+
+export interface ForeachOutcomeItem<TOutput extends JsonValue = JsonValue> {
+  readonly itemKey: IterationKey;
+  readonly output?: TOutput;
+  readonly error?: {
+    readonly code: string;
+    readonly message: string;
+  };
+}
+
+export interface ForeachOutcomeBucket<
+  TOutput extends JsonValue = JsonValue
+> {
+  readonly count: number;
+  readonly items: readonly ForeachOutcomeItem<TOutput>[];
+}
+
+/**
+ * The aggregation shape is fixed so downstream bindings never confuse
+ * unresolved assistance with a product failure.
+ */
+export interface ForeachAggregationResult<
+  TOutput extends JsonValue = JsonValue
+> {
+  readonly total: number;
+  readonly succeeded: ForeachOutcomeBucket<TOutput>;
+  readonly failed: ForeachOutcomeBucket<TOutput>;
+  readonly unresolved: ForeachOutcomeBucket<TOutput>;
+}
+
+export interface ForeachRoutes {
+  readonly completed: StepKey;
+  readonly stopped: StepKey;
+  /** Must target an `uncertain` terminal directly. */
+  readonly uncertain: StepKey;
 }
 
 export interface ExecutionBlock {
@@ -187,10 +286,10 @@ export interface ForeachStep extends StepBase {
   readonly items: BindingValue;
   readonly itemKey: ItemKeySpec;
   readonly limits: ForeachLimits;
+  readonly onItemError: "stop" | "collect";
   readonly body: ExecutionBlock;
   readonly aggregation: ForeachAggregation;
-  readonly next?: StepKey;
-  readonly onError?: StepKey;
+  readonly routes: ForeachRoutes;
 }
 
 export type AssistanceTaskKind =
@@ -198,19 +297,56 @@ export type AssistanceTaskKind =
   | "human_confirm"
   | "human_action";
 
-export interface WaitAssistanceStep extends StepBase {
+export type AssistanceUnavailableAction =
+  | "continue_unresolved"
+  | "human_action"
+  | "fail";
+
+export interface AssistanceStepBase extends StepBase {
   readonly kind: "wait.assistance";
   readonly taskKind: AssistanceTaskKind;
   readonly profile: ArtifactRef & { readonly kind: "assistance_profile" };
+  /** Relative duration from task creation; no wall clock is generated by IR. */
+  readonly deadlineMs: number;
+  readonly onUnavailable: AssistanceUnavailableAction;
   readonly input?: BindingValue;
-  readonly onResolved: StepKey;
-  readonly onEscalated?: StepKey;
-  readonly onExpired?: StepKey;
 }
+
+export interface BlockingAssistanceStep extends AssistanceStepBase {
+  readonly blocking: true;
+  readonly routes: {
+    readonly resolved: StepKey;
+    readonly escalated: StepKey;
+    readonly expired: StepKey;
+    readonly unavailable: StepKey;
+  };
+}
+
+export interface DetachedAssistanceStep extends AssistanceStepBase {
+  readonly blocking: false;
+  /**
+   * Detached tasks never pause or route a Run based on task completion.
+   * The Run advances to `next` immediately after durable task creation.
+   */
+  readonly next: StepKey;
+}
+
+export type WaitAssistanceStep =
+  | BlockingAssistanceStep
+  | DetachedAssistanceStep;
 
 export interface TerminalStep extends StepBase {
   readonly kind: "terminal";
-  readonly status: "succeeded" | "failed" | "cancelled" | "uncertain";
+  /**
+   * At plan scope this is a Run outcome (`unresolved` is invalid). Within a
+   * foreach body it is an item outcome (`cancelled` is invalid).
+   */
+  readonly status:
+    | "succeeded"
+    | "failed"
+    | "unresolved"
+    | "cancelled"
+    | "uncertain";
   readonly output?: BindingValue;
   readonly errorCode?: string;
 }
@@ -223,7 +359,7 @@ export type ExecutionStep =
   | TerminalStep;
 
 export interface ExecutionPlan {
-  readonly irVersion: "2.0";
+  readonly irVersion: typeof WORKFLOW_IR_VERSION;
   readonly workflow: WorkflowRef;
   readonly artifactClosure: ArtifactClosure;
   readonly riskSnapshot: readonly RiskSnapshotEntry[];

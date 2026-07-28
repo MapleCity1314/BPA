@@ -1,16 +1,20 @@
-import type {
-  ArtifactClosure,
-  ArtifactRef,
-  BindingValue,
-  Condition,
-  ExecutionBlock,
-  ExecutionLimits,
-  ExecutionPlan,
-  ExecutionStep,
-  ForeachStep,
-  JsonValue,
-  ValidationIssue,
-  ValueReference
+import {
+  ARTIFACT_KINDS,
+  WORKFLOW_IR_VERSION,
+  type ArtifactClosure,
+  type ArtifactRef,
+  type BindingValue,
+  type Condition,
+  type ExecutionBlock,
+  type ExecutionLimits,
+  type ExecutionPlan,
+  type ExecutionStep,
+  type ForeachStep,
+  type JsonValue,
+  type ResolvedRetryPolicy,
+  type ResolvedTimingPolicy,
+  type ValidationIssue,
+  type ValueReference
 } from "./types.js";
 
 const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
@@ -131,6 +135,39 @@ function normalizeCondition(condition: Condition): Condition {
   }
 }
 
+function normalizeArtifactRefs<T extends ArtifactRef>(
+  refs: readonly T[]
+): readonly T[] {
+  return normalizeArtifactClosure({ entries: refs }).entries as readonly T[];
+}
+
+function normalizeRetryPolicy(
+  retry: ResolvedRetryPolicy
+): ResolvedRetryPolicy {
+  return {
+    maxAttempts: retry.maxAttempts,
+    retryableOutcomes: [...retry.retryableOutcomes].sort(),
+    retryableErrorCodes: [...retry.retryableErrorCodes]
+      .map((code) => code.trim())
+      .sort(),
+    backoff: { ...retry.backoff }
+  };
+}
+
+function normalizeTimingPolicy(
+  timing: ResolvedTimingPolicy
+): ResolvedTimingPolicy {
+  return {
+    ...(timing.readiness
+      ? { readiness: { ...timing.readiness } }
+      : {}),
+    ...(timing.dispatchJitter
+      ? { dispatchJitter: { ...timing.dispatchJitter } }
+      : {}),
+    ...(timing.rateLimit ? { rateLimit: { ...timing.rateLimit } } : {})
+  };
+}
+
 function normalizeStep(step: ExecutionStep): ExecutionStep {
   switch (step.kind) {
     case "call":
@@ -139,13 +176,27 @@ function normalizeStep(step: ExecutionStep): ExecutionStep {
         key: step.key.trim(),
         node: normalizeArtifactClosure({ entries: [step.node] })
           .entries[0]! as typeof step.node,
+        dependencies: {
+          adapters: normalizeArtifactRefs(step.dependencies.adapters),
+          policies: normalizeArtifactRefs(step.dependencies.policies),
+          datasetProfiles: normalizeArtifactRefs(
+            step.dependencies.datasetProfiles
+          )
+        },
+        timeoutMs: step.timeoutMs,
+        retry: normalizeRetryPolicy(step.retry),
+        timing: normalizeTimingPolicy(step.timing),
         ...(step.input === undefined
           ? {}
           : { input: normalizeBinding(step.input) }),
-        ...(step.next === undefined ? {} : { next: step.next.trim() }),
-        ...(step.onError === undefined
-          ? {}
-          : { onError: step.onError.trim() })
+        routes: {
+          succeeded: step.routes.succeeded.trim(),
+          failed: step.routes.failed.trim(),
+          timed_out: step.routes.timed_out.trim(),
+          rejected: step.routes.rejected.trim(),
+          cancelled: step.routes.cancelled.trim(),
+          uncertain: step.routes.uncertain.trim()
+        }
       };
     case "decision":
       return {
@@ -168,34 +219,53 @@ function normalizeStep(step: ExecutionStep): ExecutionStep {
           valueType: step.itemKey.valueType
         },
         limits: { ...step.limits },
+        onItemError: step.onItemError,
         body: normalizeBlock(step.body),
         aggregation: {
           ...step.aggregation,
           outputKey: step.aggregation.outputKey.trim()
         },
-        ...(step.next === undefined ? {} : { next: step.next.trim() }),
-        ...(step.onError === undefined
-          ? {}
-          : { onError: step.onError.trim() })
+        routes: {
+          completed: step.routes.completed.trim(),
+          stopped: step.routes.stopped.trim(),
+          uncertain: step.routes.uncertain.trim()
+        }
       };
     case "wait.assistance":
-      return {
-        kind: "wait.assistance",
-        key: step.key.trim(),
-        taskKind: step.taskKind,
-        profile: normalizeArtifactClosure({ entries: [step.profile] })
-          .entries[0]! as typeof step.profile,
-        ...(step.input === undefined
-          ? {}
-          : { input: normalizeBinding(step.input) }),
-        onResolved: step.onResolved.trim(),
-        ...(step.onEscalated === undefined
-          ? {}
-          : { onEscalated: step.onEscalated.trim() }),
-        ...(step.onExpired === undefined
-          ? {}
-          : { onExpired: step.onExpired.trim() })
-      };
+      return step.blocking
+        ? {
+            kind: "wait.assistance",
+            key: step.key.trim(),
+            taskKind: step.taskKind,
+            profile: normalizeArtifactClosure({ entries: [step.profile] })
+              .entries[0]! as typeof step.profile,
+            deadlineMs: step.deadlineMs,
+            onUnavailable: step.onUnavailable,
+            ...(step.input === undefined
+              ? {}
+              : { input: normalizeBinding(step.input) }),
+            blocking: true,
+            routes: {
+              resolved: step.routes.resolved.trim(),
+              escalated: step.routes.escalated.trim(),
+              expired: step.routes.expired.trim(),
+              unavailable: step.routes.unavailable.trim()
+            }
+          }
+        : {
+            kind: "wait.assistance",
+            key: step.key.trim(),
+            taskKind: step.taskKind,
+            profile: normalizeArtifactClosure({ entries: [step.profile] })
+              .entries[0]! as typeof step.profile,
+            deadlineMs: step.deadlineMs,
+            onUnavailable: step.onUnavailable,
+            ...(step.input === undefined
+              ? {}
+              : { input: normalizeBinding(step.input) }),
+            blocking: false,
+            next: step.next.trim()
+          };
     case "terminal":
       return {
         kind: "terminal",
@@ -228,7 +298,7 @@ export function normalizeExecutionPlan(plan: ExecutionPlan): ExecutionPlan {
     steps: plan.steps
   });
   return {
-    irVersion: "2.0",
+    irVersion: plan.irVersion,
     workflow: {
       id: plan.workflow.id.trim(),
       version: plan.workflow.version.trim(),
@@ -378,21 +448,13 @@ function conditionIssues(condition: Condition, path: string): ValidationIssue[] 
 function stepTargets(step: ExecutionStep): readonly string[] {
   switch (step.kind) {
     case "call":
-      return [step.next, step.onError].filter(
-        (target): target is string => target !== undefined
-      );
+      return Object.values(step.routes);
     case "decision":
       return [...step.branches.map((branch) => branch.target), step.defaultTarget];
     case "foreach":
-      return [step.next, step.onError].filter(
-        (target): target is string => target !== undefined
-      );
+      return Object.values(step.routes);
     case "wait.assistance":
-      return [
-        step.onResolved,
-        step.onEscalated,
-        step.onExpired
-      ].filter((target): target is string => target !== undefined);
+      return step.blocking ? Object.values(step.routes) : [step.next];
     case "terminal":
       return [];
     default:
@@ -424,6 +486,237 @@ function validateLimits(
     );
   }
   return issues;
+}
+
+function retryPolicyIssues(
+  retry: ResolvedRetryPolicy,
+  path: string
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  if (!isPositiveSafeInteger(retry.maxAttempts)) {
+    issues.push(
+      issue(
+        "INVALID_VALUE",
+        `${path}/maxAttempts`,
+        "maxAttempts must be a positive safe integer"
+      )
+    );
+  }
+  const allowedOutcomes = new Set(["failed", "timed_out", "rejected"]);
+  const seenOutcomes = new Set<string>();
+  retry.retryableOutcomes.forEach((outcome, index) => {
+    if (!allowedOutcomes.has(outcome) || seenOutcomes.has(outcome)) {
+      issues.push(
+        issue(
+          "INVALID_VALUE",
+          `${path}/retryableOutcomes/${index}`,
+          "retryable outcomes must be unique failed, timed_out or rejected values"
+        )
+      );
+    }
+    seenOutcomes.add(outcome);
+  });
+  const seenCodes = new Set<string>();
+  retry.retryableErrorCodes.forEach((code, index) => {
+    if (!code || seenCodes.has(code)) {
+      issues.push(
+        issue(
+          "INVALID_VALUE",
+          `${path}/retryableErrorCodes/${index}`,
+          "retryable error codes must be non-empty and unique"
+        )
+      );
+    }
+    seenCodes.add(code);
+  });
+  const { backoff } = retry;
+  if (backoff.strategy !== "fixed" && backoff.strategy !== "exponential") {
+    issues.push(
+      issue(
+        "INVALID_VALUE",
+        `${path}/backoff/strategy`,
+        "backoff strategy must be fixed or exponential"
+      )
+    );
+  }
+  if (
+    !Number.isSafeInteger(backoff.baseDelayMs) ||
+    backoff.baseDelayMs < 0
+  ) {
+    issues.push(
+      issue(
+        "INVALID_VALUE",
+        `${path}/backoff/baseDelayMs`,
+        "baseDelayMs must be a non-negative safe integer"
+      )
+    );
+  }
+  if (
+    !Number.isSafeInteger(backoff.maxDelayMs) ||
+    backoff.maxDelayMs < backoff.baseDelayMs
+  ) {
+    issues.push(
+      issue(
+        "INVALID_VALUE",
+        `${path}/backoff/maxDelayMs`,
+        "maxDelayMs must be a safe integer at least baseDelayMs"
+      )
+    );
+  }
+  if (
+    !Number.isFinite(backoff.jitterRatio) ||
+    backoff.jitterRatio < 0 ||
+    backoff.jitterRatio > 1
+  ) {
+    issues.push(
+      issue(
+        "INVALID_VALUE",
+        `${path}/backoff/jitterRatio`,
+        "jitterRatio must be between 0 and 1"
+      )
+    );
+  }
+  return issues;
+}
+
+function timingPolicyIssues(
+  timing: ResolvedTimingPolicy,
+  path: string
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  if (timing.readiness) {
+    const { timeoutMs, stableForMs, pollIntervalMs } = timing.readiness;
+    if (
+      !isPositiveSafeInteger(timeoutMs) ||
+      !isNonNegativeSafeInteger(stableForMs) ||
+      !isPositiveSafeInteger(pollIntervalMs) ||
+      stableForMs > timeoutMs
+    ) {
+      issues.push(
+        issue(
+          "INVALID_VALUE",
+          `${path}/readiness`,
+          "readiness requires positive timeout/poll interval and stableForMs between 0 and timeoutMs"
+        )
+      );
+    }
+  }
+  if (timing.dispatchJitter) {
+    const { minMs, maxMs } = timing.dispatchJitter;
+    if (
+      !isNonNegativeSafeInteger(minMs) ||
+      !isNonNegativeSafeInteger(maxMs) ||
+      minMs > maxMs
+    ) {
+      issues.push(
+        issue(
+          "INVALID_VALUE",
+          `${path}/dispatchJitter`,
+          "dispatch jitter requires non-negative safe integers with minMs <= maxMs"
+        )
+      );
+    }
+    if (timing.dispatchJitter.distribution !== "uniform") {
+      issues.push(
+        issue(
+          "INVALID_VALUE",
+          `${path}/dispatchJitter/distribution`,
+          "dispatch jitter distribution must be uniform"
+        )
+      );
+    }
+  }
+  if (timing.rateLimit) {
+    const { minIntervalMs, maxQueueMs } = timing.rateLimit;
+    if (
+      !isNonNegativeSafeInteger(minIntervalMs) ||
+      !isNonNegativeSafeInteger(maxQueueMs)
+    ) {
+      issues.push(
+        issue(
+          "INVALID_VALUE",
+          `${path}/rateLimit`,
+          "rate-limit durations must be non-negative safe integers"
+        )
+      );
+    }
+    if (!["domain", "shop", "tab"].includes(timing.rateLimit.scope)) {
+      issues.push(
+        issue(
+          "INVALID_VALUE",
+          `${path}/rateLimit/scope`,
+          "rate-limit scope must be domain, shop or tab"
+        )
+      );
+    }
+  }
+  return issues;
+}
+
+function artifactDependencyIssues(
+  refs: readonly ArtifactRef[],
+  expectedKind: ArtifactRef["kind"],
+  path: string,
+  closure: ReadonlySet<string>,
+  closureIdentities: ReadonlyMap<string, string>
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const seen = new Set<string>();
+  refs.forEach((ref, index) => {
+    const refPath = `${path}/${index}`;
+    if (ref.kind !== expectedKind) {
+      issues.push(
+        issue(
+          "INVALID_VALUE",
+          `${refPath}/kind`,
+          `dependency must have kind "${expectedKind}"`
+        )
+      );
+    }
+    const key = artifactKey(ref);
+    if (seen.has(key)) {
+      issues.push(
+        issue(
+          "DUPLICATE_ARTIFACT",
+          refPath,
+          "call dependency is duplicated"
+        )
+      );
+    }
+    seen.add(key);
+    if (!closure.has(key)) {
+      const closedDigest = closureIdentities.get(artifactIdentity(ref));
+      issues.push(
+        issue(
+          "ARTIFACT_NOT_CLOSED",
+          refPath,
+          closedDigest
+            ? `dependency digest does not match closed digest "${closedDigest}"`
+            : "dependency is absent from the artifact closure"
+        )
+      );
+    }
+  });
+  return issues;
+}
+
+function requiredRouteIssues(
+  routes: object,
+  names: readonly string[],
+  path: string
+): ValidationIssue[] {
+  const record = routes as Readonly<Record<string, unknown>>;
+  return names.flatMap((name) =>
+    typeof record[name] === "string" && record[name] !== ""
+      ? []
+      : [
+          issue(
+            "INVALID_STEP",
+            `${path}/${name}`,
+            `route "${name}" requires a non-empty target`
+          )
+        ]
+  );
 }
 
 function executionCost(block: ExecutionBlock): bigint {
@@ -463,7 +756,8 @@ function blockIssues(
   path: string,
   closure: ReadonlySet<string>,
   closureIdentities: ReadonlyMap<string, string>,
-  ancestorStepKeys: ReadonlySet<string>
+  ancestorStepKeys: ReadonlySet<string>,
+  blockScope: "plan" | "foreach"
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const entries = Object.entries(block.steps);
@@ -497,7 +791,7 @@ function blockIssues(
         issue(
           "UNSUPPORTED_STEP_KIND",
           `${stepPath}/kind`,
-          `step kind "${rawKind}" is not supported by IR 2.0`
+          `step kind "${rawKind}" is not supported by ${WORKFLOW_IR_VERSION}`
         )
       );
       continue;
@@ -547,8 +841,52 @@ function blockIssues(
         issues.push(
           ...(step.input
             ? bindingIssues(step.input, `${stepPath}/input`)
-            : [])
+            : []),
+          ...retryPolicyIssues(step.retry, `${stepPath}/retry`),
+          ...timingPolicyIssues(step.timing, `${stepPath}/timing`),
+          ...artifactDependencyIssues(
+            step.dependencies.adapters,
+            "adapter",
+            `${stepPath}/dependencies/adapters`,
+            closure,
+            closureIdentities
+          ),
+          ...artifactDependencyIssues(
+            step.dependencies.policies,
+            "policy",
+            `${stepPath}/dependencies/policies`,
+            closure,
+            closureIdentities
+          ),
+          ...artifactDependencyIssues(
+            step.dependencies.datasetProfiles,
+            "dataset_profile",
+            `${stepPath}/dependencies/datasetProfiles`,
+            closure,
+            closureIdentities
+          ),
+          ...requiredRouteIssues(
+            step.routes,
+            [
+              "succeeded",
+              "failed",
+              "timed_out",
+              "rejected",
+              "cancelled",
+              "uncertain"
+            ],
+            `${stepPath}/routes`
+          )
         );
+        if (!isPositiveSafeInteger(step.timeoutMs)) {
+          issues.push(
+            issue(
+              "INVALID_VALUE",
+              `${stepPath}/timeoutMs`,
+              "timeoutMs must be a positive safe integer"
+            )
+          );
+        }
         if (!closure.has(artifactKey(step.node))) {
           const closedDigest = closureIdentities.get(artifactIdentity(step.node));
           issues.push(
@@ -558,6 +896,19 @@ function blockIssues(
               closedDigest
                 ? `node digest does not match closed digest "${closedDigest}"`
                 : "node is absent from the artifact closure"
+            )
+          );
+        }
+        const uncertainTarget = block.steps[step.routes.uncertain];
+        if (
+          uncertainTarget?.kind !== "terminal" ||
+          uncertainTarget.status !== "uncertain"
+        ) {
+          issues.push(
+            issue(
+              "INVALID_STEP",
+              `${stepPath}/routes/uncertain`,
+              "call uncertain must directly target an uncertain terminal"
             )
           );
         }
@@ -596,7 +947,12 @@ function blockIssues(
       case "foreach": {
         issues.push(
           ...bindingIssues(step.items, `${stepPath}/items`),
-          ...validateLimits(step.limits, `${stepPath}/limits`)
+          ...validateLimits(step.limits, `${stepPath}/limits`),
+          ...requiredRouteIssues(
+            step.routes,
+            ["completed", "stopped", "uncertain"],
+            `${stepPath}/routes`
+          )
         );
         if (!isPositiveSafeInteger(step.limits.maxItems)) {
           issues.push(
@@ -604,6 +960,36 @@ function blockIssues(
               "INVALID_VALUE",
               `${stepPath}/limits/maxItems`,
               "maxItems must be a positive safe integer"
+            )
+          );
+        }
+        if (!isPositiveSafeInteger(step.limits.maxDurationMs)) {
+          issues.push(
+            issue(
+              "INVALID_VALUE",
+              `${stepPath}/limits/maxDurationMs`,
+              "maxDurationMs must be a positive safe integer"
+            )
+          );
+        }
+        if (
+          step.onItemError !== "stop" &&
+          step.onItemError !== "collect"
+        ) {
+          issues.push(
+            issue(
+              "INVALID_VALUE",
+              `${stepPath}/onItemError`,
+              'onItemError must be "stop" or "collect"'
+            )
+          );
+        }
+        if (step.aggregation.mode !== "outcome_summary") {
+          issues.push(
+            issue(
+              "INVALID_VALUE",
+              `${stepPath}/aggregation/mode`,
+              'aggregation mode must be "outcome_summary"'
             )
           );
         }
@@ -658,13 +1044,27 @@ function blockIssues(
             )
           );
         }
+        const uncertainTarget = block.steps[step.routes.uncertain];
+        if (
+          uncertainTarget?.kind !== "terminal" ||
+          uncertainTarget.status !== "uncertain"
+        ) {
+          issues.push(
+            issue(
+              "INVALID_STEP",
+              `${stepPath}/routes/uncertain`,
+              "foreach uncertain must directly target an uncertain terminal"
+            )
+          );
+        }
         issues.push(
           ...blockIssues(
             step.body,
             `${stepPath}/body`,
             closure,
             closureIdentities,
-            new Set([...ancestorStepKeys, ...keys])
+            new Set([...ancestorStepKeys, ...keys]),
+            "foreach"
           )
         );
         break;
@@ -675,6 +1075,78 @@ function blockIssues(
             ? bindingIssues(step.input, `${stepPath}/input`)
             : [])
         );
+        const rawAssistanceStep = step as unknown as Readonly<
+          Record<string, unknown>
+        >;
+        if (step.blocking) {
+          issues.push(
+            ...requiredRouteIssues(
+              step.routes,
+              ["resolved", "escalated", "expired", "unavailable"],
+              `${stepPath}/routes`
+            )
+          );
+          if ("next" in rawAssistanceStep) {
+            issues.push(
+              issue(
+                "INVALID_STEP",
+                `${stepPath}/next`,
+                "blocking assistance uses completion routes, not next"
+              )
+            );
+          }
+        } else {
+          issues.push(
+            ...requiredRouteIssues(
+              { next: step.next },
+              ["next"],
+              stepPath
+            )
+          );
+          if ("routes" in rawAssistanceStep) {
+            issues.push(
+              issue(
+                "INVALID_STEP",
+                `${stepPath}/routes`,
+                "detached assistance cannot route the Run on task completion"
+              )
+            );
+          }
+        }
+        if (!isPositiveSafeInteger(step.deadlineMs)) {
+          issues.push(
+            issue(
+              "INVALID_VALUE",
+              `${stepPath}/deadlineMs`,
+              "deadlineMs must be a positive safe integer"
+            )
+          );
+        }
+        if (
+          !["continue_unresolved", "human_action", "fail"].includes(
+            step.onUnavailable
+          )
+        ) {
+          issues.push(
+            issue(
+              "INVALID_VALUE",
+              `${stepPath}/onUnavailable`,
+              "onUnavailable is not supported"
+            )
+          );
+        }
+        if (
+          step.taskKind === "human_action" &&
+          step.onUnavailable === "human_action"
+        ) {
+          issues.push(
+            issue(
+              "INVALID_STEP",
+              `${stepPath}/onUnavailable`,
+              "a human_action task cannot escalate unavailability to itself"
+            )
+          );
+        }
         if (!closure.has(artifactKey(step.profile))) {
           issues.push(
             issue(
@@ -700,11 +1172,29 @@ function blockIssues(
             )
           );
         }
+        if (blockScope === "plan" && step.status === "unresolved") {
+          issues.push(
+            issue(
+              "INVALID_STEP",
+              `${stepPath}/status`,
+              "unresolved is only an item outcome inside foreach"
+            )
+          );
+        }
+        if (blockScope === "foreach" && step.status === "cancelled") {
+          issues.push(
+            issue(
+              "INVALID_STEP",
+              `${stepPath}/status`,
+              "cancelled is only a Run outcome outside foreach"
+            )
+          );
+        }
         break;
     }
   }
 
-  // IR 2.0 deliberately accepts DAGs only. Any cycle is a forbidden back edge.
+  // IR2 deliberately accepts DAGs only. Any cycle is a forbidden back edge.
   const visiting = new Set<string>();
   const visited = new Set<string>();
   const reachable = new Set<string>();
@@ -716,7 +1206,7 @@ function blockIssues(
         issue(
           "BACK_EDGE",
           `${path}/steps/${key}`,
-          `back edge to "${key}" is not supported by IR 2.0`
+          `back edge to "${key}" is not supported by ${WORKFLOW_IR_VERSION}`
         )
       );
       return;
@@ -748,9 +1238,13 @@ function blockIssues(
 
 export function executionPlanIssues(plan: ExecutionPlan): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  if (plan.irVersion !== "2.0") {
+  if (plan.irVersion !== WORKFLOW_IR_VERSION) {
     issues.push(
-      issue("INVALID_VALUE", "/irVersion", 'irVersion must be "2.0"')
+      issue(
+        "INVALID_VALUE",
+        "/irVersion",
+        `irVersion must be "${WORKFLOW_IR_VERSION}"`
+      )
     );
   }
   for (const [path, value] of [
@@ -777,6 +1271,15 @@ export function executionPlanIssues(plan: ExecutionPlan): ValidationIssue[] {
   const closedIdentities = new Map<string, string>();
   closure.entries.forEach((entry, index) => {
     const path = `/artifactClosure/entries/${index}`;
+    if (!ARTIFACT_KINDS.includes(entry.kind)) {
+      issues.push(
+        issue(
+          "INVALID_VALUE",
+          `${path}/kind`,
+          "artifact kind is not supported"
+        )
+      );
+    }
     if (!entry.id || !entry.version || !DIGEST_PATTERN.test(entry.digest)) {
       issues.push(
         issue(
@@ -830,24 +1333,10 @@ export function executionPlanIssues(plan: ExecutionPlan): ValidationIssue[] {
       "",
       closedKeys,
       closedIdentities,
-      new Set()
+      new Set(),
+      "plan"
     )
   );
-
-  for (const [key, step] of Object.entries(plan.steps)) {
-    const lacksSuccessTarget =
-      (step.kind === "call" || step.kind === "foreach") &&
-      step.next === undefined;
-    if (lacksSuccessTarget) {
-      issues.push(
-        issue(
-          "INVALID_STEP",
-          `/steps/${key}`,
-          "a top-level call or foreach success path must target an explicit terminal flow"
-        )
-      );
-    }
-  }
 
   const depth = estimateMaxDepth(plan);
   if (

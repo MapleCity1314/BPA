@@ -14,4 +14,5 @@ export {
   normalizeArtifactClosure,
   normalizeExecutionPlan
 } from "./plan.js";
+export { ARTIFACT_KINDS, WORKFLOW_IR_VERSION } from "./types.js";
 export type * from "./types.js";
