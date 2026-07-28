@@ -38,6 +38,7 @@ export type LeaseBearingStatus = "claimed" | "processing";
 export interface AssistanceLease {
   readonly leaseId: string;
   readonly ownerId: string;
+  readonly ownerType: "ai" | "human";
   readonly fencingToken: number;
   readonly claimedAt: string;
   readonly heartbeatAt: string;
@@ -138,6 +139,7 @@ export type AssistanceTransitionError =
   | "TASK_NOT_CLAIMED"
   | "LEASE_ID_MISMATCH"
   | "OWNER_MISMATCH"
+  | "CLAIMANT_NOT_AUTHORIZED"
   | "FENCING_TOKEN_MISMATCH"
   | "LEASE_EXPIRED";
 
@@ -153,6 +155,7 @@ export interface AssistanceTaskPrivateState {
   readonly leaseId?: string;
   readonly claimedAt?: string;
   readonly heartbeatAt?: string;
+  readonly ownerType?: "ai" | "human";
   readonly fencingCounter: number;
   readonly terminalReason?: string;
 }
@@ -281,6 +284,7 @@ export function claimAssistanceTask<TInput, TResult>(
   input: {
     readonly leaseId: string;
     readonly ownerId: string;
+    readonly ownerType: "ai" | "human";
     readonly now: string;
     readonly leaseDurationMs: number;
   }
@@ -294,6 +298,14 @@ export function claimAssistanceTask<TInput, TResult>(
     input.leaseDurationMs <= 0
   ) {
     return { ok: false, error: "INVALID_INPUT" };
+  }
+  if (
+    input.ownerType === "ai" &&
+    (task.status === "awaiting_human" ||
+      task.mode === "human_confirm" ||
+      task.mode === "human_action")
+  ) {
+    return { ok: false, error: "CLAIMANT_NOT_AUTHORIZED" };
   }
   if (terminal(task)) return { ok: false, error: "TASK_TERMINAL" };
   if (
@@ -320,6 +332,7 @@ export function claimAssistanceTask<TInput, TResult>(
       lease: {
         leaseId: input.leaseId,
         ownerId: input.ownerId,
+        ownerType: input.ownerType,
         fencingToken,
         claimedAt: input.now,
         heartbeatAt: input.now,
@@ -459,6 +472,10 @@ export function submitAssistanceTask<TInput, TResult>(
   if (error) return { ok: false, error };
   if (
     !nonEmpty(input.resolverId) ||
+    input.resolverId !== input.ownerId ||
+    ((task.status === "claimed" || task.status === "processing") &&
+      ((task.lease.ownerType === "ai" && input.resolverType !== "ai") ||
+        (task.lease.ownerType === "human" && input.resolverType === "ai"))) ||
     (input.confidence !== undefined &&
       (!Number.isFinite(input.confidence) ||
         input.confidence < 0 ||
@@ -586,7 +603,8 @@ export function toAssistanceTaskPersistenceAggregate(
         ? {
             leaseId: task.lease.leaseId,
             claimedAt: task.lease.claimedAt,
-            heartbeatAt: task.lease.heartbeatAt
+            heartbeatAt: task.lease.heartbeatAt,
+            ownerType: task.lease.ownerType
           }
         : {}),
       ...(task.terminalReason === undefined
@@ -628,7 +646,8 @@ export function fromAssistanceTaskPersistenceAggregate(
       !dto.lease ||
       !persisted.privateState.leaseId ||
       !persisted.privateState.claimedAt ||
-      !persisted.privateState.heartbeatAt
+      !persisted.privateState.heartbeatAt ||
+      !persisted.privateState.ownerType
     ) {
       throw new Error("Lease-bearing task is missing private lease state");
     }
@@ -638,6 +657,7 @@ export function fromAssistanceTaskPersistenceAggregate(
       lease: {
         leaseId: persisted.privateState.leaseId,
         ownerId: dto.lease.ownerId,
+        ownerType: persisted.privateState.ownerType,
         fencingToken: dto.lease.fencingToken,
         claimedAt: persisted.privateState.claimedAt,
         heartbeatAt: persisted.privateState.heartbeatAt,

@@ -64,7 +64,7 @@ function queued() {
 
 const proof = {
   leaseId: "private-lease-1",
-  ownerId: "worker-1",
+  ownerId: "codex-1",
   fencingToken: 1
 };
 
@@ -72,6 +72,7 @@ function claimed() {
   const result = claimAssistanceTask(queued(), {
     leaseId: proof.leaseId,
     ownerId: proof.ownerId,
+    ownerType: "ai",
     now: t1,
     leaseDurationMs: 10_000
   });
@@ -148,9 +149,19 @@ describe("canonical assistance aggregate", () => {
       task: { status: "awaiting_human" }
     });
     if (!waiting.ok) throw new Error(waiting.error);
+    expect(
+      claimAssistanceTask(waiting.task, {
+        leaseId: "ai-lease",
+        ownerId: "codex-2",
+        ownerType: "ai",
+        now: "2026-07-28T00:00:04.000Z",
+        leaseDurationMs: 10_000
+      })
+    ).toEqual({ ok: false, error: "CLAIMANT_NOT_AUTHORIZED" });
     const humanClaim = claimAssistanceTask(waiting.task, {
       leaseId: "human-lease",
       ownerId: "human-1",
+      ownerType: "human",
       now: "2026-07-28T00:00:04.000Z",
       leaseDurationMs: 10_000
     });
@@ -166,6 +177,7 @@ describe("canonical assistance aggregate", () => {
       claimAssistanceTask(first, {
         leaseId: "too-early",
         ownerId: "worker-2",
+        ownerType: "ai",
         now: t2,
         leaseDurationMs: 10_000
       })
@@ -173,6 +185,7 @@ describe("canonical assistance aggregate", () => {
     const takeover = claimAssistanceTask(first, {
       leaseId: "private-lease-2",
       ownerId: "worker-2",
+      ownerType: "ai",
       now: "2026-07-28T00:00:11.000Z",
       leaseDurationMs: 10_000
     });
@@ -212,6 +225,24 @@ describe("canonical assistance aggregate", () => {
     expect(definition.resolution).toEqual(completed.task.resolution);
     expect(validateAssistanceTask(definition)).toBe(true);
     expect(
+      submitAssistanceTask(claimed(), {
+        ...proof,
+        now: t2,
+        output: null,
+        resolverType: "human",
+        resolverId: proof.ownerId
+      })
+    ).toEqual({ ok: false, error: "INVALID_INPUT" });
+    expect(
+      submitAssistanceTask(claimed(), {
+        ...proof,
+        now: t2,
+        output: null,
+        resolverType: "ai",
+        resolverId: "another-owner"
+      })
+    ).toEqual({ ok: false, error: "INVALID_INPUT" });
+    expect(
       submitAssistanceTask(completed.task, {
         ...proof,
         now: t3,
@@ -239,6 +270,7 @@ describe("canonical assistance aggregate", () => {
         claimAssistanceTask(result.task, {
           leaseId: "lease",
           ownerId: "worker",
+          ownerType: "ai",
           now: t2,
           leaseDurationMs: 1_000
         })
