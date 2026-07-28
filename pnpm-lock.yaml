@@ -173,7 +173,11 @@ importers:
         specifier: workspace:*
         version: link:../../packages/gateway-core
 
-  packages/assistance-core: {}
+  packages/assistance-core:
+    dependencies:
+      '@bpa/schemas':
+        specifier: workspace:*
+        version: link:../schemas
 
   packages/authoring-core: {}
 
@@ -199,7 +203,11 @@ importers:
         specifier: ^2.8.1
         version: 2.9.0
 
-  packages/dataset-core: {}
+  packages/dataset-core:
+    dependencies:
+      '@bpa/schemas':
+        specifier: workspace:*
+        version: link:../schemas
 
   packages/engine:
     dependencies:

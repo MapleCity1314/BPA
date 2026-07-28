@@ -1,11 +1,8 @@
 /* Generated from canonical JSON Schema. Do not edit manually. */
 
-export type Id = string;
-export type Digest = string;
-export type RiskLevel = "R0" | "R1" | "R2" | "R3" | "R4";
-export type Timestamp = string;
-
-export interface BPAAssistanceTaskV1Alpha1 {
+export type BPAAssistanceTaskV1Alpha1 = {
+  [k: string]: unknown;
+} & {
   apiVersion: "bpa.assistance/v1alpha1";
   taskId: Id;
   runId: Id;
@@ -51,7 +48,12 @@ export interface BPAAssistanceTaskV1Alpha1 {
   deadline: Timestamp;
   createdAt: Timestamp;
   updatedAt: Timestamp;
-}
+};
+export type Id = string;
+export type Digest = string;
+export type RiskLevel = "R0" | "R1" | "R2" | "R3" | "R4";
+export type Timestamp = string;
+
 export interface AssetRef {
   id: Id;
   version: string;

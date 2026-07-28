@@ -108,6 +108,42 @@
     "createdAt": { "$ref": "#/$defs/timestamp" },
     "updatedAt": { "$ref": "#/$defs/timestamp" }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": { "enum": ["claimed", "processing"] }
+        },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": { "lease": true },
+        "required": ["lease"]
+      },
+      "else": {
+        "not": {
+          "properties": { "lease": true },
+          "required": ["lease"]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "completed" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": { "resolution": true },
+        "required": ["resolution"]
+      },
+      "else": {
+        "not": {
+          "properties": { "resolution": true },
+          "required": ["resolution"]
+        }
+      }
+    }
+  ],
   "$defs": {
     "id": {
       "type": "string",

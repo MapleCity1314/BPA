@@ -177,11 +177,22 @@ describe("strong iteration contract schemas", () => {
   });
 
   it("accepts AssistanceTask and Dataset examples", () => {
-    expect(
-      validateAssistanceTask(
-        protocolExample("assistance-task-v1alpha1.example.json")
-      )
-    ).toBe(true);
+    const assistance = protocolExample(
+      "assistance-task-v1alpha1.example.json"
+    ) as Record<string, any>;
+    expect(validateAssistanceTask(assistance)).toBe(true);
+    const missingLease = structuredClone(assistance);
+    missingLease.status = "processing";
+    delete missingLease.lease;
+    expect(validateAssistanceTask(missingLease)).toBe(false);
+    const prematureResolution = structuredClone(assistance);
+    prematureResolution.resolution = {
+      resolverType: "ai",
+      resolverId: "codex:local",
+      output: {},
+      submittedAt: "2026-07-28T09:00:00.000Z"
+    };
+    expect(validateAssistanceTask(prematureResolution)).toBe(false);
     expect(
       validateDataset(protocolExample("dataset-v1alpha1.example.json"))
     ).toBe(true);
