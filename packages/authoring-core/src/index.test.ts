@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   DraftRevisionConflictError,
   InvalidDraftOperationError,
+  MemoryWorkflowDraftStore,
   applyDraftOperation,
   applyDraftOperations,
   createWorkflowCandidate,
   createWorkflowDraft,
+  diffWorkflowDrafts,
   recipeIssues,
   scoreCatalogEntry,
   searchCatalog,
+  validateWorkflowCandidateDraft,
   workflowDraftIssues,
   type CapabilityGap,
   type CatalogEntry,
@@ -602,6 +605,232 @@ describe("incremental Workflow Draft", () => {
   });
 });
 
+describe("typed incremental Draft authoring", () => {
+  it("upserts a step, sets one binding, and freezes exception policy by CAS", () => {
+    const base = createWorkflowDraft({
+      draftId: "typed-edits",
+      title: "Typed edits",
+      description: "Small authoring operations",
+      now
+    });
+    const added = applyDraftOperation(
+      base,
+      0,
+      {
+        operationId: "upsert-inspect",
+        type: "step.add-or-replace",
+        step: {
+          key: "inspect",
+          nodeRef: "doudian.editor.priority-items.inspect@1.0.0",
+          config: {},
+          inputBindings: {}
+        }
+      },
+      now
+    );
+    const replaced = applyDraftOperation(
+      added,
+      1,
+      {
+        operationId: "replace-inspect",
+        type: "step.add-or-replace",
+        step: {
+          key: "inspect",
+          nodeRef: "doudian.editor.priority-items.inspect@1.1.0",
+          config: { platformFillCheck: false },
+          inputBindings: {}
+        }
+      },
+      now
+    );
+    const bound = applyDraftOperation(
+      replaced,
+      2,
+      {
+        operationId: "bind-product",
+        type: "binding.set",
+        stepKey: "inspect",
+        bindingKey: "product",
+        value: "${item}"
+      },
+      now
+    );
+    const policy = applyDraftOperation(
+      bound,
+      3,
+      {
+        operationId: "set-exception-policy",
+        type: "exception-policy.set",
+        stepKey: "inspect",
+        policy: {
+          failure: "collect",
+          timeout: "collect",
+          rejected: "fail",
+          cancelled: "fail",
+          uncertain: "stop_uncertain"
+        }
+      },
+      now
+    );
+
+    expect(base.steps).toEqual({});
+    expect(policy).toMatchObject({
+      revision: 4,
+      steps: {
+        inspect: {
+          nodeRef: "doudian.editor.priority-items.inspect@1.1.0",
+          inputBindings: { product: "${item}" },
+          exceptionPolicy: {
+            failure: "collect",
+            uncertain: "stop_uncertain"
+          }
+        }
+      }
+    });
+  });
+
+  it("validates candidates and produces bounded semantic Draft diffs", () => {
+    const before = createWorkflowDraft({
+      draftId: "candidate-diff",
+      title: "Candidate diff",
+      description: "Diff small edits",
+      now
+    });
+    const after = applyDraftOperation(
+      before,
+      0,
+      stepAdd(
+        "add-inspect-for-diff",
+        "inspect",
+        "doudian.editor.priority-items.inspect@1.0.0"
+      ),
+      now
+    );
+    expect(validateWorkflowCandidateDraft(after, 1)).toEqual({
+      draftId: "candidate-diff",
+      revision: 1,
+      valid: false,
+      issues: ["Draft must contain at least one test"]
+    });
+    const diff = diffWorkflowDrafts(before, after);
+    expect(diff).toMatchObject({
+      draftId: "candidate-diff",
+      fromRevision: 0,
+      toRevision: 1,
+      truncated: false
+    });
+    expect(diff.changes).toEqual([
+      expect.objectContaining({
+        path: "/steps/inspect",
+        kind: "added"
+      })
+    ]);
+    expect(diffWorkflowDrafts(before, after, 1).truncated).toBe(false);
+    expect(() =>
+      diffWorkflowDrafts(
+        before,
+        { ...after, draftId: "another-draft" },
+        200
+      )
+    ).toThrow(/same draftId/);
+  });
+
+  it("provides clone-safe create/get/apply semantics in the reference CAS store", () => {
+    const store = new MemoryWorkflowDraftStore();
+    const created = store.create({
+      draftId: "stored-draft",
+      title: "Stored",
+      description: "Reference CAS store",
+      now
+    });
+    created.title = "caller mutation";
+    expect(store.get("stored-draft")?.title).toBe("Stored");
+    const changed = store.apply(
+      "stored-draft",
+      0,
+      stepAdd(
+        "store-add-step",
+        "inspect",
+        "doudian.editor.priority-items.inspect@1.0.0"
+      ),
+      now
+    );
+    expect(changed.revision).toBe(1);
+    expect(() =>
+      store.apply(
+        "stored-draft",
+        0,
+        stepAdd(
+          "stale-store-step",
+          "collect",
+          "doudian.product.scope.collect@1.0.0"
+        ),
+        now
+      )
+    ).toThrow(DraftRevisionConflictError);
+    expect(() =>
+      store.create({
+        draftId: "stored-draft",
+        title: "Duplicate",
+        description: "Duplicate",
+        now
+      })
+    ).toThrow(/already exists/);
+    expect(store.get("missing-draft")).toBeUndefined();
+  });
+
+  it("rejects unsafe bindings and malformed exception policies", () => {
+    const withStep = applyDraftOperation(
+      createWorkflowDraft({
+        draftId: "typed-errors",
+        title: "Typed errors",
+        description: "Reject malformed typed edits",
+        now
+      }),
+      0,
+      stepAdd(
+        "typed-errors-step",
+        "inspect",
+        "doudian.editor.priority-items.inspect@1.0.0"
+      ),
+      now
+    );
+    expect(() =>
+      applyDraftOperation(
+        withStep,
+        1,
+        {
+          operationId: "unsafe-binding",
+          type: "binding.set",
+          stepKey: "inspect",
+          bindingKey: "target",
+          value: { selector: "#save" } as never
+        },
+        now
+      )
+    ).toThrow(/locator or executable/);
+    expect(() =>
+      applyDraftOperation(
+        withStep,
+        1,
+        {
+          operationId: "invalid-exception-policy",
+          type: "exception-policy.set",
+          stepKey: "inspect",
+          policy: {
+            failure: "collect",
+            timeout: "collect",
+            rejected: "fail",
+            cancelled: "fail",
+            uncertain: "fail"
+          } as never
+        },
+        now
+      )
+    ).toThrow(/Invalid exception policy/);
+  });
+});
+
 const inspectEntry: CatalogEntry = {
   kind: "node",
   id: "doudian.editor.priority-items.inspect",
@@ -680,6 +909,12 @@ describe("Catalog v2 domain scoring", () => {
       "doudian.editor.alternate-inspect",
       "doudian.editor.priority-items.inspect"
     ]);
+    expect(
+      searchCatalog(
+        { ...query, capabilityIds: ["capability.does-not-exist"] },
+        [inspectEntry]
+      )
+    ).toEqual([]);
   });
 
   it("explains runtime, platform and IO incompatibilities", () => {

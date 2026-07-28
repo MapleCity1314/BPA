@@ -100,6 +100,21 @@ export interface DraftStep {
   nodeRef: string;
   config: JsonObject;
   inputBindings: JsonObject;
+  exceptionPolicy?: DraftExceptionPolicy;
+}
+
+export type DraftExceptionAction =
+  | "fail"
+  | "collect"
+  | "request_assistance"
+  | "stop_uncertain";
+
+export interface DraftExceptionPolicy {
+  failure: Exclude<DraftExceptionAction, "stop_uncertain">;
+  timeout: Exclude<DraftExceptionAction, "stop_uncertain">;
+  rejected: Exclude<DraftExceptionAction, "stop_uncertain">;
+  cancelled: Exclude<DraftExceptionAction, "stop_uncertain">;
+  uncertain: "request_assistance" | "stop_uncertain";
 }
 
 export interface DraftEdge {
@@ -157,9 +172,24 @@ export type DraftOperation =
       step: DraftStep;
     })
   | (DraftOperationBase & {
+      type: "step.add-or-replace";
+      step: DraftStep;
+    })
+  | (DraftOperationBase & {
       type: "step.configure";
       stepKey: string;
       patch: { config?: JsonObject; inputBindings?: JsonObject };
+    })
+  | (DraftOperationBase & {
+      type: "binding.set";
+      stepKey: string;
+      bindingKey: string;
+      value: JsonValue;
+    })
+  | (DraftOperationBase & {
+      type: "exception-policy.set";
+      stepKey: string;
+      policy: DraftExceptionPolicy;
     })
   | (DraftOperationBase & {
       type: "step.remove";
@@ -205,6 +235,28 @@ export interface WorkflowCandidate {
     tests: Record<string, DraftTest>;
   };
   createdAt: string;
+}
+
+export interface WorkflowDraftChange {
+  path: string;
+  kind: "added" | "removed" | "changed";
+  before?: JsonValue;
+  after?: JsonValue;
+}
+
+export interface WorkflowDraftDiff {
+  draftId: string;
+  fromRevision: number;
+  toRevision: number;
+  changes: WorkflowDraftChange[];
+  truncated: boolean;
+}
+
+export interface WorkflowCandidateValidation {
+  draftId: string;
+  revision: number;
+  valid: boolean;
+  issues: string[];
 }
 
 const ID_PATTERN = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
@@ -345,6 +397,44 @@ function validateStep(step: DraftStep): void {
     step.inputBindings,
     `/steps/${step.key}/inputBindings`
   );
+  if (step.exceptionPolicy) {
+    validateExceptionPolicy(step.exceptionPolicy);
+  }
+}
+
+function validateExceptionPolicy(policy: DraftExceptionPolicy): void {
+  const expectedOutcomes = [
+    "failure",
+    "timeout",
+    "rejected",
+    "cancelled",
+    "uncertain"
+  ] as const;
+  const actualOutcomes = Object.keys(policy);
+  if (
+    actualOutcomes.length !== expectedOutcomes.length ||
+    expectedOutcomes.some((outcome) => !(outcome in policy))
+  ) {
+    throw new InvalidDraftOperationError(
+      "Exception policy must define exactly failure, timeout, rejected, cancelled, and uncertain"
+    );
+  }
+  const ordinary = new Set<DraftExceptionAction>([
+    "fail",
+    "collect",
+    "request_assistance"
+  ]);
+  for (const [outcome, action] of Object.entries(policy)) {
+    const valid =
+      outcome === "uncertain"
+        ? action === "request_assistance" || action === "stop_uncertain"
+        : ordinary.has(action);
+    if (!valid) {
+      throw new InvalidDraftOperationError(
+        `Invalid exception policy action ${String(action)} for ${outcome}`
+      );
+    }
+  }
 }
 
 function validateGap(gap: CapabilityGap): void {
@@ -413,8 +503,11 @@ function applyUnchecked(
       draft.description = operation.patch.description ?? draft.description;
       break;
     case "step.add":
+    case "step.add-or-replace":
       validateStep(operation.step);
-      assertMissing(draft.steps, operation.step.key, "Step");
+      if (operation.type === "step.add") {
+        assertMissing(draft.steps, operation.step.key, "Step");
+      }
       draft.steps[operation.step.key] = clone(operation.step);
       break;
     case "step.configure": {
@@ -445,6 +538,40 @@ function applyUnchecked(
         ...(operation.patch.inputBindings !== undefined
           ? { inputBindings: clone(operation.patch.inputBindings) }
           : {})
+      };
+      break;
+    }
+    case "binding.set": {
+      const step = assertPresent(draft.steps, operation.stepKey, "Step");
+      requireId(operation.bindingKey, "bindingKey");
+      if (
+        ["__proto__", "prototype", "constructor"].includes(
+          operation.bindingKey
+        )
+      ) {
+        throw new InvalidDraftOperationError(
+          `Binding key is reserved: ${operation.bindingKey}`
+        );
+      }
+      assertWorkflowSafeJson(
+        operation.value,
+        `/steps/${operation.stepKey}/inputBindings/${operation.bindingKey}`
+      );
+      draft.steps[operation.stepKey] = {
+        ...step,
+        inputBindings: {
+          ...step.inputBindings,
+          [operation.bindingKey]: clone(operation.value)
+        }
+      };
+      break;
+    }
+    case "exception-policy.set": {
+      const step = assertPresent(draft.steps, operation.stepKey, "Step");
+      validateExceptionPolicy(operation.policy);
+      draft.steps[operation.stepKey] = {
+        ...step,
+        exceptionPolicy: clone(operation.policy)
       };
       break;
     }
@@ -664,6 +791,182 @@ export function createWorkflowCandidate(
   };
 }
 
+export function validateWorkflowCandidateDraft(
+  draft: WorkflowDraft,
+  expectedRevision: number
+): WorkflowCandidateValidation {
+  if (draft.revision !== expectedRevision) {
+    throw new DraftRevisionConflictError(expectedRevision, draft.revision);
+  }
+  const issues = workflowDraftIssues(draft);
+  return {
+    draftId: draft.draftId,
+    revision: draft.revision,
+    valid: issues.length === 0,
+    issues
+  };
+}
+
+function escapedPointerSegment(value: string): string {
+  return value.replaceAll("~", "~0").replaceAll("/", "~1");
+}
+
+function semanticDraft(draft: WorkflowDraft): JsonObject {
+  return clone({
+    title: draft.title,
+    description: draft.description,
+    steps: draft.steps,
+    edges: draft.edges,
+    tests: draft.tests,
+    gaps: draft.gaps
+  }) as unknown as JsonObject;
+}
+
+function isJsonObject(value: JsonValue): value is JsonObject {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function collectDraftChanges(
+  before: JsonValue | undefined,
+  after: JsonValue | undefined,
+  path: string,
+  changes: WorkflowDraftChange[],
+  limit: number
+): void {
+  if (changes.length >= limit) return;
+  if (before === undefined) {
+    changes.push({ path, kind: "added", after: clone(after!) });
+    return;
+  }
+  if (after === undefined) {
+    changes.push({ path, kind: "removed", before: clone(before) });
+    return;
+  }
+  if (isJsonObject(before) && isJsonObject(after)) {
+    const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+      .sort();
+    for (const key of keys) {
+      collectDraftChanges(
+        before[key],
+        after[key],
+        `${path}/${escapedPointerSegment(key)}`,
+        changes,
+        limit
+      );
+      if (changes.length >= limit) return;
+    }
+    return;
+  }
+  if (JSON.stringify(before) !== JSON.stringify(after)) {
+    changes.push({
+      path,
+      kind: "changed",
+      before: clone(before),
+      after: clone(after)
+    });
+  }
+}
+
+export function diffWorkflowDrafts(
+  before: WorkflowDraft,
+  after: WorkflowDraft,
+  limit = 200
+): WorkflowDraftDiff {
+  if (before.draftId !== after.draftId) {
+    throw new InvalidDraftOperationError(
+      "Workflow Draft diff requires the same draftId"
+    );
+  }
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
+    throw new InvalidDraftOperationError(
+      "Workflow Draft diff limit must be between 1 and 1000"
+    );
+  }
+  const changes: WorkflowDraftChange[] = [];
+  collectDraftChanges(
+    semanticDraft(before),
+    semanticDraft(after),
+    "",
+    changes,
+    limit + 1
+  );
+  const truncated = changes.length > limit;
+  return {
+    draftId: before.draftId,
+    fromRevision: before.revision,
+    toRevision: after.revision,
+    changes: changes.slice(0, limit),
+    truncated
+  };
+}
+
+export interface WorkflowDraftStore {
+  create(input: {
+    draftId: string;
+    title: string;
+    description: string;
+    now: string;
+  }): WorkflowDraft;
+  get(draftId: string): WorkflowDraft | undefined;
+  apply(
+    draftId: string,
+    expectedRevision: number,
+    operation: DraftOperation,
+    now: string
+  ): WorkflowDraft;
+}
+
+/**
+ * Reference CAS store for authoring providers and tests. Production adapters
+ * can implement the same contract over a durable transaction boundary.
+ */
+export class MemoryWorkflowDraftStore implements WorkflowDraftStore {
+  readonly #drafts = new Map<string, WorkflowDraft>();
+
+  create(input: {
+    draftId: string;
+    title: string;
+    description: string;
+    now: string;
+  }): WorkflowDraft {
+    if (this.#drafts.has(input.draftId)) {
+      throw new InvalidDraftOperationError(
+        `Workflow Draft already exists: ${input.draftId}`
+      );
+    }
+    const draft = createWorkflowDraft(input);
+    this.#drafts.set(draft.draftId, draft);
+    return clone(draft);
+  }
+
+  get(draftId: string): WorkflowDraft | undefined {
+    const draft = this.#drafts.get(draftId);
+    return draft ? clone(draft) : undefined;
+  }
+
+  apply(
+    draftId: string,
+    expectedRevision: number,
+    operation: DraftOperation,
+    now: string
+  ): WorkflowDraft {
+    const current = this.#drafts.get(draftId);
+    if (!current) {
+      throw new InvalidDraftOperationError(
+        `Workflow Draft does not exist: ${draftId}`
+      );
+    }
+    const next = applyDraftOperation(
+      current,
+      expectedRevision,
+      operation,
+      now
+    );
+    this.#drafts.set(draftId, next);
+    return clone(next);
+  }
+}
+
 function normalized(values: readonly string[]): Set<string> {
   return new Set(
     values
@@ -760,6 +1063,7 @@ export function scoreCatalogEntry(
     reasons.push("adapter version does not match");
   }
   if (capability === 0 && queryCapabilities.size > 0) {
+    eligible = false;
     reasons.push("no requested capability matched");
   }
 

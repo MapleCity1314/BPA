@@ -14,6 +14,13 @@ import {
   generateWorkflowDraft,
   simulateCompiledWorkflow
 } from "./authoring.js";
+import {
+  addOrReplaceStepOperation,
+  optionalOperationId,
+  parseAdapterRef,
+  setBindingOperation,
+  setExceptionPolicyOperation
+} from "./incremental-authoring.js";
 import { assertMcpControlMethodAllowed } from "./policy.js";
 
 const server = new McpServer({
@@ -55,43 +62,65 @@ server.registerTool(
       query: z.string().default(""),
       asset_type: z.enum(["node", "workflow", "adapter", "policy"]).optional(),
       capability: z.string().optional(),
+      capabilities: z.array(z.string()).default([]),
       platform: z.string().optional(),
       runtime: z
         .enum(["builtin", "browser", "team", "assistance", "composite"])
         .optional(),
+      available_input_types: z.array(z.string()).default([]),
+      required_output_types: z.array(z.string()).default([]),
       maximum_risk: z.enum(["R0", "R1", "R2", "R3", "R4"]).optional(),
       permissions: z.array(z.string()).default([]),
-      adapter_ref: z.string().optional()
+      allowed_permissions: z.array(z.string()).default([]),
+      adapter_ref: z.string().optional(),
+      limit: z.number().int().min(1).max(200).default(50)
     }
   },
   async ({
     query,
     asset_type,
     capability,
+    capabilities,
     platform,
     runtime,
+    available_input_types,
+    required_output_types,
     maximum_risk,
     permissions,
-    adapter_ref
+    allowed_permissions,
+    adapter_ref,
+    limit
   }) => {
+    const requestedCapabilities = [
+      ...(capability ? [capability] : []),
+      ...capabilities
+    ];
+    const permissionBoundary =
+      allowed_permissions.length > 0 ? allowed_permissions : permissions;
+    const adapter = parseAdapterRef(adapter_ref);
     if (
-      capability ||
+      requestedCapabilities.length > 0 ||
       platform ||
       runtime ||
       maximum_risk ||
-      permissions.length > 0 ||
-      adapter_ref
+      permissionBoundary.length > 0 ||
+      adapter_ref ||
+      available_input_types.length > 0 ||
+      required_output_types.length > 0
     ) {
       return result(
         await core("catalog.search.v2", {
           query,
           ...(asset_type ? { assetType: asset_type } : {}),
-          ...(capability ? { capability } : {}),
+          capabilityIds: requestedCapabilities,
           ...(platform ? { platform } : {}),
           ...(runtime ? { runtime } : {}),
-          ...(maximum_risk ? { maximumRisk: maximum_risk } : {}),
-          ...(permissions.length > 0 ? { permissions } : {}),
-          ...(adapter_ref ? { adapterRef: adapter_ref } : {})
+          availableInputTypes: available_input_types,
+          requiredOutputTypes: required_output_types,
+          maximumRisk: maximum_risk ?? "R4",
+          allowedPermissions: permissionBoundary,
+          ...(adapter ? { adapter } : {}),
+          limit
         })
       );
     }
@@ -106,7 +135,7 @@ server.registerTool(
             artifact.content
           )}`.toLowerCase();
         return haystack.includes(needle);
-      })
+      }).slice(0, limit)
     );
   }
 );
@@ -159,6 +188,7 @@ server.registerTool(
       actor_id: z.string(),
       actor_type: z.enum(["ai", "human"]).default("ai"),
       lease_id: z.string(),
+      operation_id: z.string().min(1).optional(),
       lease_duration_ms: z.number().int().min(1000).max(15 * 60 * 1000)
     }
   },
@@ -167,6 +197,7 @@ server.registerTool(
     actor_id,
     actor_type,
     lease_id,
+    operation_id,
     lease_duration_ms
   }) =>
     result(
@@ -175,6 +206,7 @@ server.registerTool(
         actorId: actor_id,
         actorType: actor_type,
         leaseId: lease_id,
+        ...optionalOperationId(operation_id),
         leaseDurationMs: lease_duration_ms
       })
     )
@@ -191,6 +223,7 @@ server.registerTool(
       actor_id: z.string(),
       lease_id: z.string(),
       fencing_token: z.number().int().positive(),
+      operation_id: z.string().min(1).optional(),
       lease_duration_ms: z.number().int().min(1000).max(15 * 60 * 1000)
     }
   },
@@ -199,6 +232,7 @@ server.registerTool(
     actor_id,
     lease_id,
     fencing_token,
+    operation_id,
     lease_duration_ms
   }) =>
     result(
@@ -207,6 +241,7 @@ server.registerTool(
         actorId: actor_id,
         leaseId: lease_id,
         fencingToken: fencing_token,
+        ...optionalOperationId(operation_id),
         leaseDurationMs: lease_duration_ms
       })
     )
@@ -224,6 +259,7 @@ server.registerTool(
       actor_type: z.enum(["ai", "human", "human_ai"]),
       lease_id: z.string(),
       fencing_token: z.number().int().positive(),
+      operation_id: z.string().min(1).optional(),
       output: z.unknown(),
       provider: z.string().optional(),
       model: z.string().optional(),
@@ -236,6 +272,7 @@ server.registerTool(
     actor_type,
     lease_id,
     fencing_token,
+    operation_id,
     output,
     provider,
     model,
@@ -248,6 +285,7 @@ server.registerTool(
         resolverType: actor_type,
         leaseId: lease_id,
         fencingToken: fencing_token,
+        ...optionalOperationId(operation_id),
         output,
         ...(provider ? { provider } : {}),
         ...(model ? { model } : {}),
@@ -311,6 +349,180 @@ server.registerTool(
         expectedRevision: expected_revision,
         operation,
         actor: { type: "ai", id: "codex:mcp" }
+      })
+    )
+);
+
+server.registerTool(
+  "workflow_draft_add_or_replace_step",
+  {
+    title: "Add or replace one Workflow Draft step",
+    description:
+      "CAS-edit exactly one semantic step using an exact Node version. This avoids regenerating the full Workflow JSON.",
+    inputSchema: {
+      draft_id: z.string(),
+      expected_revision: z.number().int().nonnegative(),
+      operation_id: z.string(),
+      step_key: z.string(),
+      node_ref: z.string(),
+      config: z.record(z.unknown()).default({}),
+      input_bindings: z.record(z.unknown()).default({})
+    }
+  },
+  async ({
+    draft_id,
+    expected_revision,
+    operation_id,
+    step_key,
+    node_ref,
+    config,
+    input_bindings
+  }) =>
+    result(
+      await core("authoring.workflow-draft.apply", {
+        draftId: draft_id,
+        expectedRevision: expected_revision,
+        operation: addOrReplaceStepOperation({
+          operationId: operation_id,
+          step: {
+            key: step_key,
+            nodeRef: node_ref,
+            config: config as never,
+            inputBindings: input_bindings as never
+          }
+        }),
+        actor: { type: "ai", id: "codex:mcp" }
+      })
+    )
+);
+
+server.registerTool(
+  "workflow_draft_set_binding",
+  {
+    title: "Set one Workflow Draft binding",
+    description:
+      "CAS-edit one named input binding on one step without replacing unrelated configuration.",
+    inputSchema: {
+      draft_id: z.string(),
+      expected_revision: z.number().int().nonnegative(),
+      operation_id: z.string(),
+      step_key: z.string(),
+      binding_key: z.string(),
+      value: z.unknown()
+    }
+  },
+  async ({
+    draft_id,
+    expected_revision,
+    operation_id,
+    step_key,
+    binding_key,
+    value
+  }) =>
+    result(
+      await core("authoring.workflow-draft.apply", {
+        draftId: draft_id,
+        expectedRevision: expected_revision,
+        operation: setBindingOperation({
+          operationId: operation_id,
+          stepKey: step_key,
+          bindingKey: binding_key,
+          value: value as never
+        }),
+        actor: { type: "ai", id: "codex:mcp" }
+      })
+    )
+);
+
+server.registerTool(
+  "workflow_draft_set_exception_policy",
+  {
+    title: "Set one Workflow Draft exception policy",
+    description:
+      "CAS-edit deterministic failure, timeout, rejection, cancellation, and uncertain handling for one step.",
+    inputSchema: {
+      draft_id: z.string(),
+      expected_revision: z.number().int().nonnegative(),
+      operation_id: z.string(),
+      step_key: z.string(),
+      failure: z.enum(["fail", "collect", "request_assistance"]),
+      timeout: z.enum(["fail", "collect", "request_assistance"]),
+      rejected: z.enum(["fail", "collect", "request_assistance"]),
+      cancelled: z.enum(["fail", "collect", "request_assistance"]),
+      uncertain: z.enum(["request_assistance", "stop_uncertain"])
+    }
+  },
+  async ({
+    draft_id,
+    expected_revision,
+    operation_id,
+    step_key,
+    failure,
+    timeout,
+    rejected,
+    cancelled,
+    uncertain
+  }) =>
+    result(
+      await core("authoring.workflow-draft.apply", {
+        draftId: draft_id,
+        expectedRevision: expected_revision,
+        operation: setExceptionPolicyOperation({
+          operationId: operation_id,
+          stepKey: step_key,
+          policy: {
+            failure,
+            timeout,
+            rejected,
+            cancelled,
+            uncertain
+          }
+        }),
+        actor: { type: "ai", id: "codex:mcp" }
+      })
+    )
+);
+
+server.registerTool(
+  "workflow_draft_diff",
+  {
+    title: "Diff Workflow Draft revisions",
+    description:
+      "Return a bounded semantic diff between two stored revisions without sending or regenerating the full Draft.",
+    inputSchema: {
+      draft_id: z.string(),
+      from_revision: z.number().int().nonnegative(),
+      to_revision: z.number().int().nonnegative(),
+      limit: z.number().int().min(1).max(1000).default(200)
+    }
+  },
+  async ({ draft_id, from_revision, to_revision, limit }) =>
+    result(
+      await core("authoring.workflow-draft.diff", {
+        draftId: draft_id,
+        fromRevision: from_revision,
+        toRevision: to_revision,
+        limit
+      })
+    )
+);
+
+server.registerTool(
+  "workflow_candidate_validate",
+  {
+    title: "Validate Workflow Candidate revision",
+    description:
+      "Validate one stored Draft revision for Candidate creation. This does not save, approve, or publish an asset.",
+    inputSchema: {
+      draft_id: z.string(),
+      expected_revision: z.number().int().nonnegative()
+    }
+  },
+  async ({ draft_id, expected_revision }) =>
+    result(
+      await core("authoring.workflow-draft.validate-candidate", {
+        draftId: draft_id,
+        expectedRevision: expected_revision
       })
     )
 );

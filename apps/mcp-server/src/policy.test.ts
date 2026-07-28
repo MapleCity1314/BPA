@@ -17,6 +17,11 @@ describe("MCP Candidate-only policy", () => {
         "task_submit",
         "workflow_draft_create",
         "workflow_draft_apply",
+        "workflow_draft_add_or_replace_step",
+        "workflow_draft_set_binding",
+        "workflow_draft_set_exception_policy",
+        "workflow_draft_diff",
+        "workflow_candidate_validate",
         "workflow_candidate_save"
       ])
     );
@@ -34,6 +39,9 @@ describe("MCP Candidate-only policy", () => {
     );
     expect(() =>
       assertMcpControlMethodAllowed("workflow_publish_now")
+    ).toThrow(/Candidate-only/);
+    expect(() =>
+      assertMcpControlMethodAllowed("asset.approve")
     ).toThrow(/Candidate-only/);
   });
 });
