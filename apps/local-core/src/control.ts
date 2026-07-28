@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { createServer, createConnection, type Server, type Socket } from "node:net";
 import { userInfo } from "node:os";
 import { resolve } from "node:path";
@@ -94,18 +94,24 @@ export class LocalCoreService {
       providers.register(browserGateway);
     }
     if (!providers.list().includes("team")) {
+      const packagedWorker = resolve(
+        import.meta.dirname,
+        "bpa-team-worker.js"
+      );
+      const workerArgs = existsSync(packagedWorker)
+        ? [packagedWorker]
+        : [
+            "--import",
+            "tsx",
+            resolve(import.meta.dirname, "../../team-worker/src/main.ts")
+          ];
       registerTeamRuntimeProvider(providers, {
         process: {
           command: process.execPath,
-          args: [
-            "--import",
-            "tsx",
-            resolve(
-              import.meta.dirname,
-              "../../team-worker/src/main.ts"
-            )
-          ],
-          cwd: resolve(import.meta.dirname, "../../.."),
+          args: workerArgs,
+          cwd: existsSync(packagedWorker)
+            ? resolve(import.meta.dirname, "..")
+            : resolve(import.meta.dirname, "../../.."),
           env: {}
         },
         expectedCodeDigest: TEAM_WORKER_CODE_DIGEST,

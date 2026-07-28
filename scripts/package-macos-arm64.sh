@@ -18,27 +18,25 @@ cd "$PROJECT_ROOT"
 pnpm verify
 PACKAGE_ROOT="$(mktemp -d)"
 trap 'rm -rf "$PACKAGE_ROOT"' EXIT
-mkdir -p "$PACKAGE_ROOT/bpa/bundle/node/bin" "${OUTPUT:h}"
-rsync -a \
-  --exclude '.git' \
-  --exclude 'artifacts' \
-  --exclude 'apps/docs' \
-  --exclude '/CLAUDE.md' \
-  "$PROJECT_ROOT/" "$PACKAGE_ROOT/bpa/"
-cp "$BUNDLED_NODE" "$PACKAGE_ROOT/bpa/bundle/node/bin/node"
-chmod 755 "$PACKAGE_ROOT/bpa/bundle/node/bin/node"
-PNPM_CLI="$(command -v pnpm)"
+mkdir -p "$PACKAGE_ROOT/bpa/runtime/node/bin" "${OUTPUT:h}"
+"$BUNDLED_NODE" \
+  "$PROJECT_ROOT/scripts/build-runtime-closure.mjs" \
+  "$PACKAGE_ROOT/bpa/runtime"
+cp "$BUNDLED_NODE" "$PACKAGE_ROOT/bpa/runtime/node/bin/node"
+chmod 755 "$PACKAGE_ROOT/bpa/runtime/node/bin/node"
+cp "$PROJECT_ROOT/scripts/install-macos-arm64.sh" "$PACKAGE_ROOT/bpa/install.sh"
+cp "$PROJECT_ROOT/scripts/rollback-macos.sh" "$PACKAGE_ROOT/bpa/rollback.sh"
+cp "$PROJECT_ROOT/scripts/uninstall-macos.sh" "$PACKAGE_ROOT/bpa/uninstall.sh"
+chmod 755 "$PACKAGE_ROOT/bpa/"*.sh
 (
-  cd "$PACKAGE_ROOT/bpa"
-  PATH="$PACKAGE_ROOT/bpa/bundle/node/bin:$PATH" \
-    "$PACKAGE_ROOT/bpa/bundle/node/bin/node" \
-    "$PNPM_CLI" rebuild better-sqlite3
+  cd "$PACKAGE_ROOT/bpa/runtime"
+  "$PACKAGE_ROOT/bpa/runtime/node/bin/node" -e \
+    'import("better-sqlite3").then(({default: Database}) => new Database(":memory:").close())'
   BPA_HOME="$PACKAGE_ROOT/verify-data" \
-    "$PACKAGE_ROOT/bpa/bundle/node/bin/node" \
-    --import tsx \
-    apps/local-core/src/main.ts \
-    --migrate-only
+    "$PACKAGE_ROOT/bpa/runtime/node/bin/node" \
+    "$PACKAGE_ROOT/bpa/runtime/bin/bpa-core.js" --migrate-only
 )
 rm -rf "$PACKAGE_ROOT/verify-data"
 tar -C "$PACKAGE_ROOT" -czf "$OUTPUT" bpa
+shasum -a 256 "$OUTPUT" > "$OUTPUT.sha256"
 print "$OUTPUT"
