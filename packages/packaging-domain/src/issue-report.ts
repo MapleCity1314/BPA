@@ -405,8 +405,7 @@ export function reconcilePriorityInspectionResults(
       affectedProducts: products.filter(
         (product) =>
           product.pageIssues.length > 0 ||
-          product.platformReminders.length > 0 ||
-          product.inspectionAnomalies.length > 0
+          product.platformReminders.length > 0
       ).length,
       pageIssueCount,
       platformReminderCount,
@@ -481,8 +480,7 @@ export function buildDeterministicIssueReport(
   const issueFacts = reconciliation.products.map((product) => ({
     productId: product.productId,
     pageIssues: product.pageIssues,
-    platformReminders: product.platformReminders,
-    inspectionAnomalies: product.inspectionAnomalies
+    platformReminders: product.platformReminders
   }));
   const base: Omit<DeterministicIssueReport, "reportDigest"> = {
     schemaVersion: "bpa.issue-report/1" as const,

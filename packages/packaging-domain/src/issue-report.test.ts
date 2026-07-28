@@ -120,6 +120,24 @@ describe("packaging issue reconciliation", () => {
     });
   });
 
+  it("keeps adapter anomalies out of the business affected-product count", () => {
+    const result = reconcilePriorityInspectionResults({
+      inspections: [
+        inspection("product-1", "matched", {
+          status: "structural_anomaly",
+          baselineInspectionPerformed: false,
+          anomalies: [structureAnomaly]
+        })
+      ]
+    });
+    expect(result.summary).toMatchObject({
+      affectedProducts: 0,
+      pageIssueCount: 0,
+      platformReminderCount: 0,
+      inspectionAnomalyCount: 1
+    });
+  });
+
   it("rejects non-page issue categories and duplicate product identities", () => {
     expect(() =>
       reconcilePriorityInspectionResults({
@@ -265,5 +283,28 @@ describe("deterministic issue report", () => {
       skuId: "sku-1",
       row: 2
     });
+  });
+
+  it("excludes adapter diagnostics from the business issue fingerprint", () => {
+    const clean = reconcilePriorityInspectionResults({
+      inspections: [inspection("product-1", "matched")]
+    });
+    const anomalous = reconcilePriorityInspectionResults({
+      inspections: [
+        inspection("product-1", "matched", {
+          status: "structural_anomaly",
+          baselineInspectionPerformed: false,
+          anomalies: [structureAnomaly]
+        })
+      ]
+    });
+    const cleanReport = buildDeterministicIssueReport({
+      reconciliation: clean
+    });
+    const anomalyReport = buildDeterministicIssueReport({
+      reconciliation: anomalous
+    });
+    expect(anomalyReport.issueFingerprint).toBe(cleanReport.issueFingerprint);
+    expect(anomalyReport.reportDigest).not.toBe(cleanReport.reportDigest);
   });
 });

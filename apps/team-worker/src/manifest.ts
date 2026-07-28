@@ -31,14 +31,14 @@ export const TEAM_WORKER_HANDLER_MANIFEST = [
     ref: "issues.reconcile@1.0.0",
     implementationDigest: implementationDigest(
       "issues.reconcile@1.0.0",
-      "priority-page-findings-only:v1"
+      "priority-page-findings-only:diagnostics-not-business-issues:v2"
     )
   },
   {
     ref: "report.issue.build@1.0.0",
     implementationDigest: implementationDigest(
       "report.issue.build@1.0.0",
-      "deterministic-report:match-metadata-not-issue:v1"
+      "deterministic-report:match-and-diagnostics-not-business-issues:v2"
     )
   }
 ] as const;
