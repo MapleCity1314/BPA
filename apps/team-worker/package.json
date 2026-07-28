@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@bpa/dataset-core": "workspace:*",
+    "@bpa/packaging-dataset": "workspace:*",
     "@bpa/packaging-domain": "workspace:*",
     "@bpa/team-runtime": "workspace:*",
     "@bpa/workflow-ir": "workspace:*"

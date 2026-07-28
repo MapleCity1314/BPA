@@ -1,0 +1,89 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: report.issue.build
+  version: 1.0.0
+  title: 生成确定性重点项报告
+  description: 从归并结果生成稳定 JSON 报告和摘要；保留包装匹配状态，但问题统计和问题指纹不计入未匹配或歧义。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - reconciliation
+  properties:
+    context:
+      type: object
+      additionalProperties: false
+      properties:
+        runId:
+          type: string
+          minLength: 1
+          maxLength: 200
+        shopId:
+          type: string
+          minLength: 1
+          maxLength: 200
+        shopName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        scopeLabel:
+          type: string
+          minLength: 1
+          maxLength: 200
+    reconciliation:
+      type: object
+      additionalProperties: true
+      required:
+        - products
+      properties:
+        products:
+          type: array
+          maxItems: 500
+          items:
+            type: object
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - schemaVersion
+    - reportVersion
+    - summary
+    - products
+    - issueFingerprint
+    - reportDigest
+  properties:
+    schemaVersion:
+      type: string
+      const: bpa.issue-report/1
+    reportVersion:
+      type: string
+      const: 1.0.0
+    context:
+      type: object
+    summary:
+      type: object
+    products:
+      type: array
+      maxItems: 500
+      items:
+        type: object
+    issueFingerprint:
+      type: string
+      pattern: ^sha256:[a-f0-9]{64}$
+    reportDigest:
+      type: string
+      pattern: ^sha256:[a-f0-9]{64}$
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 15s
+  idempotency: pure
+  cancellable: true
+errors:
+  - TEAM_HANDLER_INPUT_INVALID
+  - TEAM_HANDLER_RESULT_LIMIT_EXCEEDED
+  - TEAM_HANDLER_CANCELLED
+  - TEAM_HANDLER_TIMEOUT

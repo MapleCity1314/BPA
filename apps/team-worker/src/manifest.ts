@@ -4,7 +4,7 @@ import {
   teamCodeDigest
 } from "@bpa/team-runtime";
 
-export const TEAM_WORKER_VERSION = "0.1.0";
+export const TEAM_WORKER_VERSION = "0.2.0";
 
 function implementationDigest(ref: string, implementation: string): string {
   return `sha256:${createHash("sha256")
@@ -24,21 +24,21 @@ export const TEAM_WORKER_HANDLER_MANIFEST = [
     ref: "packaging.dataset.parse@1.0.0",
     implementationDigest: implementationDigest(
       "packaging.dataset.parse@1.0.0",
-      "not-implemented"
+      "packaging-master-v1:base64-512k:result-500:v1"
     )
   },
   {
     ref: "issues.reconcile@1.0.0",
     implementationDigest: implementationDigest(
       "issues.reconcile@1.0.0",
-      "not-implemented"
+      "priority-page-findings-only:v1"
     )
   },
   {
     ref: "report.issue.build@1.0.0",
     implementationDigest: implementationDigest(
       "report.issue.build@1.0.0",
-      "not-implemented"
+      "deterministic-report:match-metadata-not-issue:v1"
     )
   }
 ] as const;

@@ -2,11 +2,27 @@ import { describe, expect, it } from "vitest";
 import { createPackagingMasterRecord } from "@bpa/packaging-domain";
 import type { JsonValue } from "@bpa/workflow-ir";
 import {
+  ISSUES_RECONCILE_HANDLER_REF,
   PACKAGING_MATCH_HANDLER_REF,
+  REPORT_ISSUE_BUILD_HANDLER_REF,
   TEAM_WORKER_CODE_DIGEST,
   TEAM_WORKER_HANDLER_REFS,
   teamHandlerRegistry
 } from "./handlers.js";
+
+const workbookBase64 =
+  "UEsDBBQAAAAIADyO/FzjZ0sllQAAALcAAAAPAAAAeGwvd29ya2Jvb2sueG1sNU7JDYMwEGzFcgEs5JEHAvPJhzIcWGIL7EW7ztEAv3SR2iKljFhReM2lGU3TPcKibsjiKba6KkrdmeZOPJ+JZpXDKDW32qW01gAyOAxWClox5mwiDjZlyRegafIDnmi4BowJDmV5BMbFpjwszq+iTSMOMckfVbQBW/1+bp/XptXP68f8QSuufSbcj5UG08Beg/2X+QJQSwMEFAAAAAgAPI78XPE9z0JQAAAAbAAAABoAAAB4bC9fcmVscy93b3JrYm9vay54bWwucmVsc7Oxr8jNUShLLSrOzM+zVTLUM1Cyt7MJSs1JLAEKFGdkFhSjchU8U2yVijxTDJUUQhKL0lNLbJXK84uyizNSU0uK9cGUoR7QTCV9Oxt9VHMAUEsDBBQAAAAIADyO/FxYs4WyzgAAAAoCAAAYAAAAeGwvd29ya3NoZWV0cy9zaGVldDEueG1ss7GvyM1RKEstKs7Mz7NVMtQzULK3synPL8ouzkhNLbGzAVMuiSWJdjZF+eUKRUA1SnY2ySCGo6GSQomtUmZeTmZeanBJEVA8s9jOpsTuya7lTyc3Pp3Q+3z5Bht9oCH6IHH9ZKg+J1z6gJqed/Zg0eGMU0dr98v2Xiw6XHDq6Gl9sbj16d5FzxoaUfXpA/0H96QR3JNGOAx6uWnO86Zpz9unPl81F5sncel7vmTXk33duL2KS5+5Qfrh6WbYvIrTptmTsPlQHylK9RExDQBQSwECFAAUAAAACAA8jvxc42dLJZUAAAC3AAAADwAAAAAAAAAAAAAAAAAAAAAAeGwvd29ya2Jvb2sueG1sUEsBAhQAFAAAAAgAPI78XPE9z0JQAAAAbAAAABoAAAAAAAAAAAAAAAAAwgAAAHhsL19yZWxzL3dvcmtib29rLnhtbC5yZWxzUEsBAhQAFAAAAAgAPI78XFizhbLOAAAACgIAABgAAAAAAAAAAAAAAAAASgEAAHhsL3dvcmtzaGVldHMvc2hlZXQxLnhtbFBLBQYAAAAAAwADAMsAAABOAgAAAAA=";
+
+async function invoke(
+  ref: string,
+  input: JsonValue,
+  signal = new AbortController().signal
+): Promise<JsonValue> {
+  const [id, version] = ref.split("@");
+  return teamHandlerRegistry
+    .get({ id: id!, version: version! })
+    .invoke(input, signal);
+}
 
 describe("trusted Team Worker handlers", () => {
   it("runs packaging.master.match.batch through packaging-domain", async () => {
@@ -31,12 +47,7 @@ describe("trusted Team Worker handlers", () => {
         records: [record]
       })
     ) as JsonValue;
-    const output = await teamHandlerRegistry
-      .get({ id: "packaging.master.match.batch", version: "1.0.0" })
-      .invoke(
-        input,
-        new AbortController().signal
-      );
+    const output = await invoke(PACKAGING_MATCH_HANDLER_REF, input);
     expect(output).toMatchObject({
       matcherVersion: "packaging-smart-v1",
       matched: [{ product: { productId: "product-1" } }],
@@ -49,15 +60,216 @@ describe("trusted Team Worker handlers", () => {
     expect(TEAM_WORKER_CODE_DIGEST).toMatch(/^sha256:[a-f0-9]{64}$/u);
   });
 
-  it("fails explicitly for registered skeleton handlers", async () => {
+  it("rejects malformed and oversized match envelopes", async () => {
     await expect(
-      Promise.resolve().then(() =>
-        teamHandlerRegistry
-          .get({ id: "issues.reconcile", version: "1.0.0" })
-          .invoke({}, new AbortController().signal)
+      invoke(PACKAGING_MATCH_HANDLER_REF, null)
+    ).rejects.toMatchObject({ code: "TEAM_HANDLER_INPUT_INVALID" });
+    await expect(
+      invoke(PACKAGING_MATCH_HANDLER_REF, {
+        products: [],
+        records: [],
+        bindings: []
+      })
+    ).rejects.toMatchObject({ code: "TEAM_HANDLER_INPUT_INVALID" });
+    await expect(
+      invoke(PACKAGING_MATCH_HANDLER_REF, {
+        products: Array.from({ length: 501 }, (_, index) => ({
+          shopId: "shop-1",
+          productId: `product-${index}`,
+          title: "商品"
+        })),
+        records: []
+      })
+    ).rejects.toMatchObject({ code: "TEAM_HANDLER_INPUT_INVALID" });
+  });
+
+  it("parses a bounded base64 Excel payload through packaging-master-v1", async () => {
+    await expect(
+      invoke("packaging.dataset.parse@1.0.0", {
+        contentBase64: workbookBase64,
+        fileName: "包装主数据.xlsx",
+        version: "1.0.0",
+        datasetId: "packaging-master",
+        title: "包装主数据"
+      })
+    ).resolves.toMatchObject({
+      status: "valid",
+      descriptor: {
+        profile: { id: "packaging-master-v1", version: "1.0.0" },
+        recordCount: 1
+      },
+      records: [
+        {
+          productName: "鲜炖燕窝",
+          brand: "示例品牌",
+          weight: "70g×6",
+          packagingShape: "盒"
+        }
+      ],
+      errors: []
+    });
+    await expect(
+      invoke("packaging.dataset.parse@1.0.0", {
+        contentBase64: "not-base64",
+        fileName: "包装主数据.xlsx",
+        version: "1.0.0"
+      })
+    ).rejects.toMatchObject({ code: "TEAM_HANDLER_INPUT_INVALID" });
+    await expect(
+      invoke("packaging.dataset.parse@1.0.0", {
+        contentBase64: "",
+        fileName: "包装主数据.xlsx",
+        version: "1.0.0"
+      })
+    ).rejects.toMatchObject({ code: "TEAM_HANDLER_INPUT_INVALID" });
+    await expect(
+      invoke("packaging.dataset.parse@1.0.0", {
+        contentBase64: Buffer.alloc(512 * 1024 + 1).toString("base64"),
+        fileName: "包装主数据.xlsx",
+        version: "1.0.0"
+      })
+    ).rejects.toMatchObject({ code: "TEAM_HANDLER_INPUT_INVALID" });
+  });
+
+  it("reconciles only real page findings while retaining unmatched state", async () => {
+    const output = await invoke(ISSUES_RECONCILE_HANDLER_REF, {
+      inspections: [
+        {
+          productId: "product-1",
+          status: "complete",
+          packagingMatchStatus: "unmatched",
+          baselineInspectionPerformed: true,
+          issues: [],
+          anomalies: []
+        },
+        {
+          productId: "product-2",
+          status: "complete",
+          packagingMatchStatus: "ambiguous",
+          baselineInspectionPerformed: true,
+          issues: [
+            {
+              category: "required_empty",
+              severity: "error",
+              ruleId: "required.combobox.empty",
+              message: "产地为必填项，但当前为空",
+              evidence: "来自只读字段值观察"
+            },
+            {
+              category: "platform_warning",
+              severity: "warning",
+              ruleId: "platform.fill_check",
+              message: "建议补充商品属性",
+              evidence: "来自抖店填写检查"
+            }
+          ],
+          anomalies: []
+        }
+      ]
+    });
+    expect(output).toMatchObject({
+      summary: {
+        totalProducts: 2,
+        affectedProducts: 1,
+        pageIssueCount: 1,
+        platformReminderCount: 1,
+        matchStatusCounts: { unmatched: 1, ambiguous: 1 }
+      },
+      products: [
+        {
+          productId: "product-1",
+          packagingMatchStatus: "unmatched",
+          pageIssues: [],
+          platformReminders: []
+        },
+        {
+          productId: "product-2",
+          packagingMatchStatus: "ambiguous"
+        }
+      ]
+    });
+  });
+
+  it("maps reconciliation contract violations to stable Handler errors", async () => {
+    await expect(
+      invoke(ISSUES_RECONCILE_HANDLER_REF, {
+        inspections: [
+          {
+            productId: "product-1",
+            status: "complete",
+            packagingMatchStatus: "unmatched",
+            baselineInspectionPerformed: true,
+            issues: [
+              {
+                category: "packaging_unmatched",
+                severity: "warning",
+                ruleId: "matching.failed",
+                message: "未匹配",
+                evidence: "包装匹配"
+              }
+            ],
+            anomalies: []
+          }
+        ]
+      })
+    ).rejects.toMatchObject({
+      code: "TEAM_HANDLER_INPUT_INVALID"
+    });
+  });
+
+  it("builds a deterministic report and recalculates issue statistics", async () => {
+    const reconciliation = await invoke(ISSUES_RECONCILE_HANDLER_REF, {
+      inspections: [
+        {
+          productId: "product-1",
+          status: "complete",
+          packagingMatchStatus: "unmatched",
+          baselineInspectionPerformed: true,
+          issues: [],
+          anomalies: []
+        }
+      ]
+    });
+    const input = {
+      context: { runId: "run-1", shopId: "shop-1" },
+      reconciliation: {
+        ...(reconciliation as Record<string, JsonValue>),
+        summary: {
+          pageIssueCount: 999,
+          platformReminderCount: 999
+        }
+      }
+    } as JsonValue;
+    const first = await invoke(REPORT_ISSUE_BUILD_HANDLER_REF, input);
+    const second = await invoke(REPORT_ISSUE_BUILD_HANDLER_REF, input);
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({
+      schemaVersion: "bpa.issue-report/1",
+      summary: {
+        pageIssueCount: 0,
+        platformReminderCount: 0,
+        matchStatusCounts: { unmatched: 1 }
+      },
+      products: [
+        {
+          productId: "product-1",
+          packagingMatchStatus: "unmatched"
+        }
+      ]
+    });
+  });
+
+  it("honours cancellation before every pure Handler", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      invoke(
+        ISSUES_RECONCILE_HANDLER_REF,
+        { inspections: [] },
+        controller.signal
       )
     ).rejects.toMatchObject({
-      code: "TEAM_HANDLER_NOT_IMPLEMENTED"
+      code: "TEAM_HANDLER_CANCELLED"
     });
   });
 });

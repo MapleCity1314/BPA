@@ -1,0 +1,88 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: packaging.dataset.parse
+  version: 1.0.0
+  title: 解析包装主数据
+  description: 在受信 Team Worker 内按 packaging-master-v1 解析有界 Excel 内容；不接受文件路径或动态模块。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - contentBase64
+    - fileName
+    - version
+  properties:
+    contentBase64:
+      type: string
+      minLength: 4
+      maxLength: 700000
+      pattern: ^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
+    fileName:
+      type: string
+      minLength: 1
+      maxLength: 500
+      pattern: ^[^/\\]+\.xlsx$
+    version:
+      type: string
+      minLength: 1
+      maxLength: 100
+    datasetId:
+      type: string
+      minLength: 1
+      maxLength: 200
+    title:
+      type: string
+      minLength: 1
+      maxLength: 200
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - status
+    - records
+    - errors
+    - warnings
+    - sourceDigest
+  properties:
+    status:
+      enum:
+        - valid
+        - invalid
+    descriptor:
+      type: object
+    records:
+      type: array
+      maxItems: 500
+      items:
+        type: object
+    errors:
+      type: array
+      maxItems: 200
+      items:
+        type: string
+        maxLength: 1000
+    warnings:
+      type: array
+      maxItems: 200
+      items:
+        type: string
+        maxLength: 1000
+    sourceDigest:
+      type: string
+      pattern: ^sha256:[a-f0-9]{64}$
+    selectedSheet:
+      type: string
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 30s
+  idempotency: pure
+  cancellable: true
+errors:
+  - TEAM_HANDLER_INPUT_INVALID
+  - TEAM_HANDLER_RESULT_LIMIT_EXCEEDED
+  - TEAM_HANDLER_CANCELLED
+  - TEAM_HANDLER_TIMEOUT

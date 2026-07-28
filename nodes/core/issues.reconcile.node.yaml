@@ -1,0 +1,163 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: issues.reconcile
+  version: 1.0.0
+  title: 汇总页面真实异常
+  description: 归并只读编辑页检查结果，仅输出页面必填缺项、平台提醒和检查结构异常；匹配失败或歧义只保留为元数据。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - inspections
+  properties:
+    inspections:
+      type: array
+      maxItems: 500
+      items:
+        type: object
+        additionalProperties: true
+        required:
+          - productId
+          - status
+          - packagingMatchStatus
+          - baselineInspectionPerformed
+          - issues
+          - anomalies
+        properties:
+          productId:
+            type: string
+            minLength: 1
+            maxLength: 200
+          status:
+            enum:
+              - complete
+              - retryable
+              - structural_anomaly
+              - blocked
+          packagingMatchStatus:
+            enum:
+              - matched
+              - smart_matched
+              - bound
+              - ambiguous
+              - unmatched
+              - not_provided
+          baselineInspectionPerformed:
+            type: boolean
+          issues:
+            type: array
+            maxItems: 50
+            items:
+              type: object
+              additionalProperties: true
+              required:
+                - category
+                - severity
+                - ruleId
+                - message
+                - evidence
+              properties:
+                category:
+                  enum:
+                    - required_empty
+                    - platform_warning
+                severity:
+                  enum:
+                    - error
+                    - warning
+                ruleId:
+                  type: string
+                message:
+                  type: string
+                  maxLength: 300
+                evidence:
+                  type: string
+                  maxLength: 300
+          anomalies:
+            type: array
+            maxItems: 20
+            items:
+              type: object
+              additionalProperties: false
+              required:
+                - code
+                - classification
+                - retryable
+                - message
+              properties:
+                code:
+                  type: string
+                  maxLength: 200
+                classification:
+                  type: string
+                  maxLength: 100
+                retryable:
+                  type: boolean
+                message:
+                  type: string
+                  maxLength: 300
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - reconciliationVersion
+    - products
+    - summary
+  properties:
+    reconciliationVersion:
+      type: string
+      const: 1.0.0
+    products:
+      type: array
+      maxItems: 500
+      items:
+        type: object
+    summary:
+      type: object
+      additionalProperties: false
+      required:
+        - totalProducts
+        - inspectedProducts
+        - affectedProducts
+        - pageIssueCount
+        - platformReminderCount
+        - inspectionAnomalyCount
+        - matchStatusCounts
+      properties:
+        totalProducts:
+          type: integer
+          minimum: 0
+          maximum: 500
+        inspectedProducts:
+          type: integer
+          minimum: 0
+          maximum: 500
+        affectedProducts:
+          type: integer
+          minimum: 0
+          maximum: 500
+        pageIssueCount:
+          type: integer
+          minimum: 0
+        platformReminderCount:
+          type: integer
+          minimum: 0
+        inspectionAnomalyCount:
+          type: integer
+          minimum: 0
+        matchStatusCounts:
+          type: object
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 15s
+  idempotency: pure
+  cancellable: true
+errors:
+  - TEAM_HANDLER_INPUT_INVALID
+  - TEAM_HANDLER_RESULT_LIMIT_EXCEEDED
+  - TEAM_HANDLER_CANCELLED
+  - TEAM_HANDLER_TIMEOUT

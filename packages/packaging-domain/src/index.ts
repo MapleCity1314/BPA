@@ -523,3 +523,5 @@ export function packagingDecisionReuseContext(input: {
     })
   });
 }
+
+export * from "./issue-report.js";

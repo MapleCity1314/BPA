@@ -1,0 +1,86 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: packaging.master.match.batch
+  version: 1.0.0
+  title: 批量匹配包装主数据
+  description: 使用固定版本包装匹配器批量产生确定性匹配、歧义和未匹配结果；匹配结果不代表商品问题。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - products
+    - records
+  properties:
+    products:
+      type: array
+      maxItems: 500
+      items:
+        type: object
+        additionalProperties: false
+        required:
+          - shopId
+          - productId
+          - title
+        properties:
+          shopId:
+            type: string
+            minLength: 1
+            maxLength: 200
+          productId:
+            type: string
+            minLength: 1
+            maxLength: 200
+          title:
+            type: string
+            minLength: 1
+            maxLength: 1000
+    records:
+      type: array
+      maxItems: 500
+      items:
+        type: object
+    bindings:
+      type: object
+    reuseContexts:
+      type: object
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - matcherVersion
+    - matched
+    - ambiguous
+    - unmatched
+  properties:
+    matcherVersion:
+      type: string
+      const: packaging-smart-v1
+    matched:
+      type: array
+      maxItems: 500
+      items:
+        type: object
+    ambiguous:
+      type: array
+      maxItems: 500
+      items:
+        type: object
+    unmatched:
+      type: array
+      maxItems: 500
+      items:
+        type: object
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 30s
+  idempotency: pure
+  cancellable: true
+errors:
+  - TEAM_HANDLER_INPUT_INVALID
+  - TEAM_HANDLER_RESULT_LIMIT_EXCEEDED
+  - TEAM_HANDLER_CANCELLED
+  - TEAM_HANDLER_TIMEOUT
