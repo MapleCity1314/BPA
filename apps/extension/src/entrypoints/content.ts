@@ -11,6 +11,7 @@ import {
 } from "@bpa/node-runtime";
 import type { RiskSignal, TimingPolicy } from "@bpa/schemas";
 import {
+  ContentActionOutcomeError,
   ContentActionRiskError,
   routeContentAction,
   type ContentActionHandlers,
@@ -200,6 +201,15 @@ const handlers: ContentActionHandlers = {
             waitMs: request.timingPolicy.readiness.pollIntervalMs
           })
     });
+    if (output.status === "retryable") {
+      const anomaly = output.anomalies[0];
+      throw new ContentActionOutcomeError(
+        anomaly?.code ?? "PAGE_NOT_STABLE",
+        anomaly?.message ?? "编辑页只读检查需要有限重试。",
+        { ...output },
+        anomaly?.retryable ?? true
+      );
+    }
     return {
       output: { ...output },
       riskSignals,

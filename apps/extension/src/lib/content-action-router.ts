@@ -62,6 +62,7 @@ export type ContentActionResponse =
         | {
             readonly ok: false;
             readonly pageEpoch?: string;
+            readonly output?: Record<string, unknown>;
             readonly error: {
               readonly code: string;
               readonly message: string;
@@ -70,6 +71,18 @@ export type ContentActionResponse =
             readonly riskSignals?: RiskSignal[];
           };
     };
+
+export class ContentActionOutcomeError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly output: Record<string, unknown>,
+    readonly retryable: boolean
+  ) {
+    super(message);
+    this.name = "ContentActionOutcomeError";
+  }
+}
 
 function failure(
   code: string,
@@ -260,7 +273,12 @@ export async function routeContentAction(input: {
       }
     };
   } catch (error) {
-    const code = error instanceof Error ? error.message : "ADAPTER_FAILED";
+    const code =
+      error instanceof ContentActionOutcomeError
+        ? error.code
+        : error instanceof Error
+          ? error.message
+          : "ADAPTER_FAILED";
     const riskSignals =
       error instanceof ContentActionRiskError ? error.riskSignals : undefined;
     return {
@@ -268,14 +286,19 @@ export async function routeContentAction(input: {
       response: {
         ok: false,
         pageEpoch: request.pageEpoch,
+        ...(error instanceof ContentActionOutcomeError
+          ? { output: error.output }
+          : {}),
         error: {
           code,
           message:
             error instanceof Error ? error.message : "只读页面动作执行失败。",
           retryable:
-            code === "PAGE_LOADING" ||
-            code === "PAGE_NOT_STABLE" ||
-            code === "REQUIRED_EVIDENCE_MISSING"
+            error instanceof ContentActionOutcomeError
+              ? error.retryable
+              : code === "PAGE_LOADING" ||
+                code === "PAGE_NOT_STABLE" ||
+                code === "REQUIRED_EVIDENCE_MISSING"
         },
         ...(riskSignals?.length ? { riskSignals } : {})
       }

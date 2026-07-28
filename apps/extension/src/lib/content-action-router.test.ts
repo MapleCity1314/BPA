@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  ContentActionOutcomeError,
   routeContentAction,
   type ContentActionHandlers,
   type ContentActionRequest
@@ -201,6 +202,49 @@ describe("content action router", () => {
       })
     ).resolves.toMatchObject({
       response: { ok: false, error: { code: "PAGE_CONTEXT_CHANGED" } }
+    });
+  });
+
+  it("preserves retryable inspection diagnostics as a failed action", async () => {
+    const actions: ContentActionHandlers = {
+      ...handlers(),
+      "doudian.editor.priority-items.inspect": vi.fn(async () => {
+        throw new ContentActionOutcomeError(
+          "PAGE_NOT_STABLE",
+          "编辑页仍在加载。",
+          {
+            status: "retryable",
+            baselineInspectionPerformed: false,
+            anomalies: [{ code: "PAGE_NOT_STABLE", retryable: true }]
+          },
+          true
+        );
+      })
+    };
+    const editorUrl =
+      "https://fxg.jinritemai.com/ffa/g/create?product_id=400001";
+    await expect(
+      routeContentAction({
+        request: request("doudian.editor.priority-items.inspect", {
+          product: {
+            id: "400001",
+            title: "脱敏商品",
+            editorUrl
+          }
+        }),
+        currentUrl: editorUrl,
+        handlers: actions,
+        now: Date.parse("2026-07-28T00:00:00.000Z")
+      })
+    ).resolves.toMatchObject({
+      response: {
+        ok: false,
+        output: {
+          status: "retryable",
+          anomalies: [{ code: "PAGE_NOT_STABLE" }]
+        },
+        error: { code: "PAGE_NOT_STABLE", retryable: true }
+      }
     });
   });
 });
