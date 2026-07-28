@@ -1,18 +1,21 @@
 import {
+  collectDoudianProductScope,
   detectDoudianRiskSignals,
-  readDoudianShopContext
+  inspectDoudianPriorityItems,
+  readDoudianShopContext,
+  verifyDoudianEditorOpen
 } from "@bpa/adapter-doudian";
 import {
   AdaptiveReadinessGate,
   firstBlockingRiskSignal
 } from "@bpa/node-runtime";
 import type { RiskSignal, TimingPolicy } from "@bpa/schemas";
-
-class AdapterRiskError extends Error {
-  constructor(readonly riskSignals: RiskSignal[]) {
-    super(firstBlockingRiskSignal(riskSignals)?.code ?? "RISK_CONTROL");
-  }
-}
+import {
+  ContentActionRiskError,
+  routeContentAction,
+  type ContentActionHandlers,
+  type ContentActionRequest
+} from "../lib/content-action-router";
 
 function waitForPageChange(maxWaitMs: number): Promise<void> {
   return new Promise((resolve) => {
@@ -68,16 +71,13 @@ async function readShopContextWhenReady(
   while (true) {
     const signals = detectDoudianRiskSignals(document, location.href);
     if (firstBlockingRiskSignal(signals)) {
-      throw new AdapterRiskError(signals);
+      throw new ContentActionRiskError(signals);
     }
     let context: ReturnType<typeof readDoudianShopContext> | undefined;
     try {
       context = readDoudianShopContext(document, location.href);
     } catch (error) {
-      if (
-        !(error instanceof Error) ||
-        error.message !== "PAGE_LOADING"
-      ) {
+      if (!(error instanceof Error) || error.message !== "PAGE_LOADING") {
         throw error;
       }
     }
@@ -92,7 +92,7 @@ async function readShopContextWhenReady(
     });
     if (state.state === "ready" && context) {
       if (location.href !== startingUrl) {
-        throw new AdapterRiskError([
+        throw new ContentActionRiskError([
           {
             code: "PAGE_CONTEXT_CHANGED",
             category: "page_context",
@@ -112,72 +112,134 @@ async function readShopContextWhenReady(
         }
       };
     }
-    if (state.state === "timed_out") {
-      throw new Error("PAGE_LOADING");
-    }
+    if (state.state === "timed_out") throw new Error("PAGE_LOADING");
     await waitForPageChange(readiness.pollIntervalMs);
   }
 }
 
+const handlers: ContentActionHandlers = {
+  async "doudian.shop.context.read"(_input, request) {
+    const ready = await readShopContextWhenReady(
+      request.timingPolicy,
+      request.deadline
+    );
+    return {
+      output: { ...ready.context },
+      riskSignals: ready.riskSignals,
+      timingObservation: ready.timingObservation
+    };
+  },
+
+  async "doudian.product.scope.collect"(_input, request) {
+    const startedAt = Date.now();
+    const ready = await readShopContextWhenReady(
+      request.timingPolicy,
+      request.deadline
+    );
+    const output = await collectDoudianProductScope(document, {
+      shop: ready.context.shop,
+      deadline: request.deadline!,
+      ...(request.timingPolicy?.readiness?.pollIntervalMs === undefined
+        ? {}
+        : {
+            waitMs: request.timingPolicy.readiness.pollIntervalMs
+          })
+    });
+    const riskSignals = detectDoudianRiskSignals(document, location.href);
+    if (firstBlockingRiskSignal(riskSignals)) {
+      throw new ContentActionRiskError(riskSignals);
+    }
+    return {
+      output: { ...output },
+      riskSignals,
+      timingObservation: {
+        readiness_wait_ms: Date.now() - startedAt,
+        stable_for_ms:
+          request.timingPolicy?.readiness?.stableForMs ??
+          ready.timingObservation.stable_for_ms
+      }
+    };
+  },
+
+  async "doudian.product.editor.open"(input, request) {
+    const startedAt = Date.now();
+    const riskSignals = detectDoudianRiskSignals(document, location.href);
+    if (firstBlockingRiskSignal(riskSignals)) {
+      throw new ContentActionRiskError(riskSignals);
+    }
+    const output = await verifyDoudianEditorOpen(document, input, {
+      deadline: request.deadline!,
+      ...(request.timingPolicy?.readiness?.pollIntervalMs === undefined
+        ? {}
+        : {
+            waitMs: request.timingPolicy.readiness.pollIntervalMs
+          })
+    });
+    return {
+      output: { ...output },
+      riskSignals,
+      timingObservation: {
+        readiness_wait_ms: Date.now() - startedAt,
+        stable_for_ms:
+          request.timingPolicy?.readiness?.stableForMs ?? 250
+      }
+    };
+  },
+
+  async "doudian.editor.priority-items.inspect"(input, request) {
+    const startedAt = Date.now();
+    const riskSignals = detectDoudianRiskSignals(document, location.href);
+    if (firstBlockingRiskSignal(riskSignals)) {
+      throw new ContentActionRiskError(riskSignals);
+    }
+    const output = await inspectDoudianPriorityItems(document, input, {
+      deadline: request.deadline!,
+      ...(request.timingPolicy?.readiness?.pollIntervalMs === undefined
+        ? {}
+        : {
+            waitMs: request.timingPolicy.readiness.pollIntervalMs
+          })
+    });
+    return {
+      output: { ...output },
+      riskSignals,
+      timingObservation: {
+        readiness_wait_ms: Date.now() - startedAt,
+        stable_for_ms:
+          request.timingPolicy?.readiness?.stableForMs ?? 250
+      }
+    };
+  }
+};
+
 export default defineContentScript({
-  matches: ["https://fxg.jinritemai.com/ffa/g/list*"],
+  matches: [
+    "https://fxg.jinritemai.com/ffa/g/list*",
+    "https://fxg.jinritemai.com/ffa/g/create*"
+  ],
   main() {
     browser.runtime.onMessage.addListener(
       (
-        request: {
-          type?: string;
-          node?: { id?: string; version?: string };
-          pageEpoch?: string;
-          timingPolicy?: TimingPolicy;
-          deadline?: string;
-        },
+        request: ContentActionRequest,
         _sender,
         sendResponse
       ) => {
-        if (
-          request.type !== "bpa.execute" ||
-          request.node?.id !== "doudian.shop.context.read" ||
-          !["1.0.0", "1.1.0", "1.2.0"].includes(
-            request.node.version ?? ""
-          )
-        ) {
-          return undefined;
-        }
-        void readShopContextWhenReady(
-          request.timingPolicy,
-          request.deadline
-        )
-          .then(({ context, riskSignals, timingObservation }) => {
-            sendResponse({
-              ok: true,
-              output: {
-                ...context,
-                page_epoch: request.pageEpoch
-              },
-              riskSignals,
-              timingObservation
-            });
-          })
-          .catch((error: unknown) => {
-            const code =
-              error instanceof Error ? error.message : "ADAPTER_FAILED";
-            sendResponse({
-              ok: false,
-              ...(error instanceof AdapterRiskError
-                ? { riskSignals: error.riskSignals }
-                : {}),
-              error: {
-                code,
-                message:
-                  code === "PAGE_LOADING"
-                    ? `店铺信息尚未加载完成（ready=${document.readyState}, headerCandidates=${document.querySelectorAll("[class*='headerShopName']").length}, path=${location.pathname}）。`
-                    : error instanceof AdapterRiskError
-                      ? "平台风险信号或页面上下文变化阻止了自动执行，需要人工检查。"
-                      : "当前页面不是受支持的抖店商品列表页。",
-                retryable: code === "PAGE_LOADING"
-              }
-            });
+        if (request.type === "bpa.risk.preflight") {
+          sendResponse({
+            riskSignals: detectDoudianRiskSignals(document, location.href)
           });
+          return true;
+        }
+        if (request.type !== "bpa.execute") return undefined;
+        const currentUrl = location.href;
+        void routeContentAction({
+          request,
+          currentUrl,
+          readCurrentUrl: () => location.href,
+          handlers
+        }).then((routed) => {
+          if (routed.handled) sendResponse(routed.response);
+        });
         return true;
       }
     );

@@ -1,7 +1,6 @@
 import {
   createPageEpoch,
   verifyCommandAuthorization,
-  type BridgeCapability,
   type BrowserCommandPayload
 } from "@bpa/browser-bridge";
 import validateMessage from "@bpa/schemas/browser-protocol-v1.validator";
@@ -10,33 +9,29 @@ import {
   reserveRateLimit
 } from "@bpa/node-runtime";
 import type { RiskSignal, TimingPolicy } from "@bpa/schemas";
+import { validateDoudianEditorTarget } from "@bpa/adapter-doudian";
 import {
   listPendingResults,
   normalizePendingResultForReplay,
   removePendingResult,
   savePendingResult
 } from "../lib/pending-results";
+import {
+  AssistancePanelRepository,
+  type SafeAssistanceTask
+} from "../lib/assistance-panel";
+import {
+  BROWSER_PROTOCOL,
+  bridgeCapabilityFor,
+  capabilityReport,
+  validPageEpoch,
+  validateCapabilityRoute
+} from "../lib/capability-manifest";
 
 const NATIVE_HOST = "com.bpa.browser";
-const PROTOCOL = "bpa.browser/1";
+const PROTOCOL = BROWSER_PROTOCOL;
 const VERSION = "1.0.0";
-const NODE_VERSIONS = ["1.0.0", "1.1.0", "1.2.0"] as const;
-const capabilityBase = {
-  nodeId: "doudian.shop.context.read",
-  riskLevel: "R0",
-  permissions: ["browser.dom.read", "browser.tabs.read"]
-};
 
-function capabilityForVersion(version: string): BridgeCapability {
-  return {
-    ...capabilityBase,
-    nodeVersion: NODE_VERSIONS.includes(
-      version as (typeof NODE_VERSIONS)[number]
-    )
-      ? version
-      : "unsupported"
-  };
-}
 interface SessionState {
   sessionId?: string;
   incomingSeq: number;
@@ -52,6 +47,25 @@ export default defineBackground(() => {
   const activeCommands = new Set<string>();
   const cancelledCommands = new Set<string>();
   const pacingReservations = new Map<string, number>();
+  const assistancePanel = new AssistancePanelRepository({
+    get: (key) => browser.storage.local.get(key),
+    set: (value) => browser.storage.local.set(value)
+  });
+
+  const waitForTabReady = async (
+    tabId: number,
+    expectedUrl: string,
+    deadline: string
+  ): Promise<boolean> => {
+    while (Date.now() < Date.parse(deadline)) {
+      const current = await browser.tabs.get(tabId);
+      if (current.url === expectedUrl && current.status === "complete") {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return false;
+  };
 
   const updateStatus = async (
     patch: Record<string, unknown>
@@ -98,20 +112,7 @@ export default defineBackground(() => {
     send(
       envelope(
         "capability.report",
-        {
-          capabilities: [
-            {
-              node_id: capabilityBase.nodeId,
-              versions: [...NODE_VERSIONS],
-              risk_level: capabilityBase.riskLevel,
-              permissions: capabilityBase.permissions,
-              adapter_id: "doudian",
-              adapter_version: "1.1.0"
-            }
-          ],
-          manifest_digest:
-            "sha256:24c82765fef8e4b128cef512968bfb4ee1532f31f2aa2b1b23f97d7b770c724d"
-        },
+        capabilityReport(),
         "trace-capabilities"
       )
     );
@@ -130,6 +131,25 @@ export default defineBackground(() => {
     }
   };
 
+  const recordAssistanceAttention = async (input: {
+    taskId: string;
+    deadline?: string;
+    actionRequired: boolean;
+    profileId: "auth_takeover" | "scope_review" | "adapter_anomaly_review";
+    summaryCode: SafeAssistanceTask["summaryCode"];
+  }): Promise<void> => {
+    await assistancePanel.upsert({
+      taskId: input.taskId,
+      mode: input.actionRequired ? "human_action" : "ai_review",
+      status: "queued",
+      profileId: input.profileId,
+      summaryCode: input.summaryCode,
+      updatedAt: new Date().toISOString(),
+      ...(input.actionRequired ? { ownerType: "human" as const } : {}),
+      ...(input.deadline ? { deadline: input.deadline } : {})
+    });
+  };
+
   const handleCommand = async (
     message: Record<string, any>
   ): Promise<void> => {
@@ -140,16 +160,55 @@ export default defineBackground(() => {
       currentWindow: true
     });
     const currentUrl = tab?.url ?? "";
+    let executionUrl = currentUrl;
+    let editorTargetValid = true;
+    if (payload.node.id === "doudian.product.editor.open") {
+      try {
+        const input =
+          payload.input && typeof payload.input === "object"
+            ? (payload.input as Record<string, unknown>)
+            : {};
+        executionUrl = validateDoudianEditorTarget(input).editUrl;
+        const current = new URL(currentUrl);
+        editorTargetValid =
+          current.origin === new URL(executionUrl).origin &&
+          !/login|passport|signin|authorize/i.test(current.pathname);
+      } catch {
+        editorTargetValid = false;
+      }
+    }
+    const grantedPermissions = Array.isArray(
+      payload.permission_grant?.permissions
+    )
+      ? payload.permission_grant.permissions.filter(
+          (permission): permission is string =>
+            typeof permission === "string"
+        )
+      : [];
+    const route = editorTargetValid
+      ? validateCapabilityRoute({
+          nodeId: payload.node.id,
+          nodeVersion: payload.node.version,
+          currentUrl: executionUrl,
+          grantedPermissions
+        })
+      : ({ valid: false, reason: "EDITOR_TARGET_INVALID" } as const);
     const authorization =
-      session.keyId && session.publicKey
+      route.valid && session.keyId && session.publicKey
         ? await verifyCommandAuthorization({
             command: payload,
             publicKeySpkiBase64: session.publicKey,
             keyId: session.keyId,
-            capability: capabilityForVersion(payload.node.version),
-            currentUrl
+            capability: bridgeCapabilityFor(
+              payload.node.id,
+              payload.node.version
+            ),
+            currentUrl: executionUrl
           })
-        : { valid: false as const, reason: "SESSION_KEY_MISSING" };
+        : {
+            valid: false as const,
+            reason: route.valid ? "SESSION_KEY_MISSING" : route.reason
+          };
     if (!authorization.valid || tab?.id == null) {
       send(
         envelope(
@@ -167,9 +226,37 @@ export default defineBackground(() => {
           String(message.trace_id)
         )
       );
+      await recordAssistanceAttention({
+        taskId: String(payload.node_execution_id),
+        ...(typeof payload.deadline === "string"
+          ? { deadline: payload.deadline }
+          : {}),
+        actionRequired:
+          tab?.id == null ||
+          authorization.valid ||
+          [
+            "SESSION_KEY_MISSING",
+            "PAGE_ORIGIN_NOT_GRANTED",
+            "PERMISSION_MISMATCH"
+          ].includes(authorization.reason),
+        profileId:
+          tab?.id == null ||
+          authorization.valid ||
+          authorization.reason === "SESSION_KEY_MISSING"
+            ? "auth_takeover"
+            : payload.node.id === "doudian.product.scope.collect"
+              ? "scope_review"
+              : "adapter_anomaly_review",
+        summaryCode:
+          tab?.id == null ||
+          authorization.valid ||
+          authorization.reason === "SESSION_KEY_MISSING"
+            ? "authorization_required"
+            : "page_attention"
+      });
       return;
     }
-    const pageEpoch = createPageEpoch(tab.id);
+    let pageEpoch = createPageEpoch(tab.id);
     send(
       envelope(
         "command.ack",
@@ -204,16 +291,24 @@ export default defineBackground(() => {
       ok: boolean;
       output?: Record<string, unknown>;
       error?: { code: string; message: string; retryable?: boolean };
+      pageEpoch?: string;
       riskSignals?: RiskSignal[];
       timingObservation?: {
         readiness_wait_ms?: number;
         stable_for_ms?: number;
       };
+    } = {
+      ok: false,
+      error: {
+        code: "ADAPTER_RESPONSE_MISSING",
+        message: "The content action did not produce a result.",
+        retryable: false
+      }
     };
     let rateLimitWaitMs = 0;
     try {
       const timingPolicy = payload.timing_policy as TimingPolicy | undefined;
-      const origin = new URL(currentUrl).origin;
+      const origin = new URL(executionUrl).origin;
       const rateScope = timingPolicy?.rateLimit?.scope ?? "tab";
       const input =
         payload.input && typeof payload.input === "object"
@@ -263,13 +358,68 @@ export default defineBackground(() => {
       if (Date.now() >= Date.parse(payload.deadline)) {
         throw new Error("DEADLINE_EXCEEDED");
       }
-      const [currentTab] = await browser.tabs.query({
+      let [currentTab] = await browser.tabs.query({
         active: true,
         currentWindow: true
       });
+      let navigationReady = true;
+      let navigationBlocked = false;
       if (
+        currentTab?.id === tab.id &&
+        currentTab.url === currentUrl &&
+        payload.node.id === "doudian.product.editor.open" &&
+        executionUrl !== currentUrl
+      ) {
+        const preflight = (await browser.tabs.sendMessage(tab.id, {
+          type: "bpa.risk.preflight"
+        })) as { riskSignals?: RiskSignal[] };
+        const blockingRisk = firstBlockingRiskSignal(
+          preflight.riskSignals ?? []
+        );
+        if (blockingRisk) {
+          navigationBlocked = true;
+          adapterResponse = {
+            ok: false,
+            pageEpoch,
+            error: {
+              code: blockingRisk.code,
+              message: "The current page requires human attention.",
+              retryable: false
+            },
+            ...(preflight.riskSignals?.length
+              ? { riskSignals: preflight.riskSignals }
+              : {})
+          };
+        } else {
+          await browser.tabs.update(tab.id, { url: executionUrl });
+          navigationReady = await waitForTabReady(
+            tab.id,
+            executionUrl,
+            payload.deadline
+          );
+        }
+        [currentTab] = await browser.tabs.query({
+          active: true,
+          currentWindow: true
+        });
+        pageEpoch = createPageEpoch(tab.id);
+      }
+      if (navigationBlocked) {
+        // Preserve the rejected risk response; never navigate through a
+        // challenge, expired session, or platform risk-control page.
+      } else if (!navigationReady) {
+        adapterResponse = {
+          ok: false,
+          pageEpoch,
+          error: {
+            code: "NAVIGATION_UNCERTAIN",
+            message: "The editor page did not become ready before deadline.",
+            retryable: true
+          }
+        };
+      } else if (
         currentTab?.id !== tab.id ||
-        currentTab.url !== currentUrl
+        currentTab.url !== executionUrl
       ) {
         adapterResponse = {
           ok: false,
@@ -291,7 +441,7 @@ export default defineBackground(() => {
         };
       } else if (
         /login|passport|signin|authorize/i.test(
-          new URL(currentUrl).pathname
+          new URL(executionUrl).pathname
         )
       ) {
         adapterResponse = {
@@ -319,7 +469,9 @@ export default defineBackground(() => {
         adapterResponse = await browser.tabs.sendMessage(tab.id, {
           type: "bpa.execute",
           node: payload.node,
+          input,
           pageEpoch,
+          grantedPermissions,
           timingPolicy,
           deadline: payload.deadline
         });
@@ -329,7 +481,7 @@ export default defineBackground(() => {
         });
         if (
           completedTab?.id !== tab.id ||
-          completedTab.url !== currentUrl
+          completedTab.url !== executionUrl
         ) {
           adapterResponse = {
             ok: false,
@@ -346,6 +498,29 @@ export default defineBackground(() => {
                 source: "bridge",
                 detected_at: new Date().toISOString(),
                 detail: "节点返回后、Result 验证前活动页面发生了变化。"
+              }
+            ]
+          };
+        } else if (
+          adapterResponse.pageEpoch !== pageEpoch ||
+          !validPageEpoch(adapterResponse.pageEpoch, tab.id)
+        ) {
+          adapterResponse = {
+            ok: false,
+            pageEpoch,
+            error: {
+              code: "PAGE_EPOCH_MISMATCH",
+              message: "The content action returned a different page epoch.",
+              retryable: false
+            },
+            riskSignals: [
+              {
+                code: "PAGE_CONTEXT_CHANGED",
+                category: "page_context",
+                severity: "blocking",
+                source: "bridge",
+                detected_at: new Date().toISOString(),
+                detail: "Content action 返回的页面执行纪元不匹配。"
               }
             ]
           };
@@ -394,19 +569,29 @@ export default defineBackground(() => {
           ? "succeeded"
           : firstBlockingRiskSignal(adapterResponse.riskSignals ?? [])
             ? "rejected"
+            : adapterResponse.error?.code === "NAVIGATION_UNCERTAIN"
+              ? "uncertain"
             : "failed",
         ...(adapterResponse.output
           ? {
               output: {
                 ...adapterResponse.output,
-                tab_ref: {
-                  browser_instance_id: (
-                    await browser.storage.local.get("browserInstanceId")
-                  ).browserInstanceId,
-                  tab_id: tab.id,
-                  ...(tab.windowId == null ? {} : { window_id: tab.windowId }),
-                  origin: new URL(currentUrl).origin
-                }
+                ...(payload.node.id === "doudian.shop.context.read" ||
+                payload.node.id === "doudian.product.editor.open"
+                  ? {
+                      page_epoch: pageEpoch,
+                      tab_ref: {
+                        browser_instance_id: (
+                          await browser.storage.local.get("browserInstanceId")
+                        ).browserInstanceId,
+                        tab_id: tab.id,
+                        ...(tab.windowId == null
+                          ? {}
+                          : { window_id: tab.windowId }),
+                        origin: new URL(executionUrl).origin
+                      }
+                    }
+                  : {})
               }
             }
           : {}),
@@ -437,6 +622,39 @@ export default defineBackground(() => {
       );
     } finally {
       activeCommands.delete(commandId);
+    }
+    if (adapterResponse.ok) {
+      await assistancePanel.remove(String(payload.node_execution_id));
+    } else {
+      const blockingRisk = firstBlockingRiskSignal(
+        adapterResponse.riskSignals ?? []
+      );
+      const actionRequired = Boolean(
+        blockingRisk &&
+          [
+            "CAPTCHA_REQUIRED",
+            "SESSION_EXPIRED",
+            "RISK_CONTROL"
+          ].includes(blockingRisk.code)
+      );
+      await recordAssistanceAttention({
+        taskId: String(payload.node_execution_id),
+        ...(typeof payload.deadline === "string"
+          ? { deadline: payload.deadline }
+          : {}),
+        actionRequired,
+        profileId: actionRequired
+          ? "auth_takeover"
+          : payload.node.id === "doudian.product.scope.collect"
+            ? "scope_review"
+            : "adapter_anomaly_review",
+        summaryCode: actionRequired
+          ? "authorization_required"
+          : adapterResponse.error?.code === "PAGE_CONTEXT_CHANGED" ||
+              adapterResponse.error?.code === "PAGE_EPOCH_MISMATCH"
+            ? "page_attention"
+            : "adapter_attention"
+      });
     }
     await updateStatus({
       currentTask: payload.node_execution_id,
@@ -493,7 +711,13 @@ export default defineBackground(() => {
           core: "connected",
           protocol: PROTOCOL,
           sessionId: session.sessionId,
-          permissions: capabilityBase.permissions,
+          permissions: [
+            ...new Set(
+              capabilityReport().capabilities.flatMap(
+                (capability) => capability.permissions
+              )
+            )
+          ],
           lastError: undefined
         });
         sendCapabilities();

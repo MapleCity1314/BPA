@@ -1,6 +1,7 @@
 import type { RiskSignal } from "@bpa/schemas";
 
 export * from "./dom-readers.js";
+export * from "./browser-actions.js";
 export * from "./editor-inspector.js";
 export * from "./scope-collector.js";
 

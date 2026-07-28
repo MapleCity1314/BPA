@@ -18,6 +18,73 @@ h1 {
   font-size: 17px;
 }
 
+.assistance {
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid #d8e0da;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.assistance header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.assistance h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+#assistance-state {
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #21613d;
+  background: #dff4e7;
+  font-weight: 600;
+}
+
+#assistance-state[data-state="attention"] {
+  color: #77540b;
+  background: #fff0c7;
+}
+
+#assistance-state[data-state="action_required"] {
+  color: #8c2929;
+  background: #ffe0df;
+}
+
+#assistance-empty {
+  margin: 8px 0 0;
+  color: #66736b;
+}
+
+#assistance-tasks {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+#assistance-tasks li {
+  display: grid;
+  gap: 2px;
+  padding-top: 8px;
+  border-top: 1px solid #edf0ed;
+}
+
+#assistance-tasks strong {
+  font-size: 13px;
+}
+
+#assistance-tasks span {
+  color: #66736b;
+  overflow-wrap: anywhere;
+}
+
 dl {
   display: grid;
   grid-template-columns: 92px 1fr;

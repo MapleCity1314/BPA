@@ -1,0 +1,125 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: doudian.product.editor.open
+  version: 1.0.0
+  title: 打开并确认抖店商品编辑页
+  description: 仅导航到已验证的抖店商品编辑 URL，并以多信号确认商品、页面与执行纪元；不修改表单、不保存、不发布。
+runtime: browser
+inputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - productId
+    - editUrl
+  properties:
+    productId:
+      type: string
+      pattern: ^[0-9]{5,30}$
+    editUrl:
+      type: string
+      format: uri
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - status
+    - productId
+    - url
+    - readiness
+    - tab_ref
+    - page_epoch
+    - domMutations
+  properties:
+    status:
+      const: ready
+    productId:
+      type: string
+      pattern: ^[0-9]{5,30}$
+    url:
+      type: string
+      format: uri
+    readiness:
+      type: object
+      additionalProperties: false
+      required:
+        - stableSamples
+        - visibleControls
+        - knownAnchors
+        - requiredMarkers
+      properties:
+        stableSamples:
+          type: integer
+          const: 3
+        visibleControls:
+          type: integer
+          minimum: 1
+        knownAnchors:
+          type: integer
+          minimum: 0
+        requiredMarkers:
+          type: integer
+          minimum: 0
+    tab_ref:
+      type: object
+      additionalProperties: false
+      required:
+        - browser_instance_id
+        - tab_id
+        - window_id
+        - origin
+      properties:
+        browser_instance_id:
+          type: string
+          minLength: 1
+        tab_id:
+          type: integer
+          minimum: 0
+        window_id:
+          type: integer
+          minimum: 0
+        origin:
+          type: string
+          const: https://fxg.jinritemai.com
+    page_epoch:
+      type: string
+      minLength: 1
+    domMutations:
+      type: integer
+      const: 0
+risk:
+  level: R0
+  permissions:
+    - browser.dom.read
+    - browser.tabs.read
+    - browser.tabs.navigate
+  domains:
+    - https://fxg.jinritemai.com
+execution:
+  timeoutDefault: 30s
+  idempotency: repeatable_read
+  retryableErrors:
+    - PAGE_LOADING
+    - NAVIGATION_UNCERTAIN
+    - BROWSER_DISCONNECTED
+  cancellable: true
+errors:
+  - EDITOR_TARGET_INVALID
+  - EDITOR_URL_MISMATCH
+  - PAGE_LOADING
+  - NAVIGATION_UNCERTAIN
+  - BROWSER_DISCONNECTED
+  - PAGE_CONTEXT_CHANGED
+  - PAGE_EPOCH_MISMATCH
+  - CAPTCHA_REQUIRED
+  - RATE_LIMITED
+  - RISK_CONTROL
+  - SESSION_EXPIRED
+evidence:
+  required:
+    - result
+    - error
+adapter:
+  id: doudian
+  versions:
+    - 1.1.0
