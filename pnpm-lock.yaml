@@ -339,6 +339,8 @@ importers:
 
   packages/schemas: {}
 
+  packages/shadow-run: {}
+
   packages/team-runtime:
     dependencies:
       '@bpa/node-runtime':
