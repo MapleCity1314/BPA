@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { Command, InvalidArgumentError } from "commander";
 import { parse } from "yaml";
+import { compareShadowRuns } from "@bpa/shadow-run";
 
 export interface ControlRequester {
   request<TResult>(
@@ -174,6 +175,22 @@ export function createCliProgram(options: CliProgramOptions): Command {
           workflowId: workflow,
           workflowVersion: commandOptions.version as string,
           input: JSON.parse(commandOptions.input as string)
+        })
+      );
+    });
+
+  program
+    .command("shadow-compare")
+    .description(
+      "compare one legacy-plugin result with one BPA read-only result"
+    )
+    .argument("<legacy-result>", "legacy plugin result JSON or YAML")
+    .argument("<bpa-result>", "BPA result JSON or YAML")
+    .action(async (legacyResult, bpaResult) => {
+      output(
+        compareShadowRuns({
+          legacyPlugin: await readAsset(legacyResult),
+          bpa: await readAsset(bpaResult)
         })
       );
     });
