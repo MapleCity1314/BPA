@@ -78,6 +78,17 @@ export interface ActiveAssistance {
   readonly request: AssistanceRequest;
 }
 
+export interface TimerRequest {
+  readonly timerId: string;
+  readonly identity: ExecutionIdentity;
+  readonly wakeAt: number;
+  readonly fencingToken: number;
+  readonly signal: {
+    readonly kind: "assistance.expired";
+    readonly taskId: string;
+  };
+}
+
 export type ActiveExternal = ActiveCall | ActiveAssistance;
 
 export type EngineStatus =
@@ -121,6 +132,10 @@ export type EngineEffect =
   | {
       readonly kind: "assistance.create";
       readonly request: AssistanceRequest;
+    }
+  | {
+      readonly kind: "timer.schedule";
+      readonly timer: TimerRequest;
     };
 
 export interface EngineTransition {
@@ -395,6 +410,23 @@ function assistanceRequest(
     deadlineAt: deps.clock.now() + step.deadlineMs,
     onUnavailable: step.onUnavailable,
     fencingToken: 1
+  };
+}
+
+export function assistanceDeadlineTimerId(taskId: string): string {
+  return `${taskId}.deadline`;
+}
+
+function assistanceDeadlineTimer(request: AssistanceRequest): TimerRequest {
+  return {
+    timerId: assistanceDeadlineTimerId(request.taskId),
+    identity: request.identity,
+    wakeAt: request.deadlineAt,
+    fencingToken: request.fencingToken,
+    signal: {
+      kind: "assistance.expired",
+      taskId: request.taskId
+    }
   };
 }
 
@@ -809,6 +841,10 @@ function drive(
       const request = assistanceRequest(state, step, deps);
       effects.push({ kind: "assistance.create", request });
       if (step.blocking) {
+        effects.push({
+          kind: "timer.schedule",
+          timer: assistanceDeadlineTimer(request)
+        });
         return {
           state: immutableState(
             {
@@ -1128,6 +1164,38 @@ export class DeterministicWorkflowEngine {
       ),
       this.dependencies
     );
+  }
+
+  acceptTimerFire(input: {
+    state: EngineState;
+    timer: TimerRequest;
+  }): EngineTransition {
+    const state = clone(input.state);
+    const active = state.active;
+    const timer = input.timer;
+    if (
+      timer.wakeAt > this.dependencies.clock.now() ||
+      timer.timerId !== assistanceDeadlineTimerId(timer.signal.taskId) ||
+      active?.kind !== "assistance" ||
+      active.request.taskId !== timer.signal.taskId ||
+      active.request.fencingToken !== timer.fencingToken ||
+      executionIdentityKey(active.request.identity) !==
+        executionIdentityKey(timer.identity)
+    ) {
+      return {
+        state,
+        effects: [],
+        disposition: state.completedExternalIds.includes(timer.signal.taskId)
+          ? "duplicate"
+          : "stale"
+      };
+    }
+    return this.acceptAssistanceOutcome({
+      state,
+      taskId: timer.signal.taskId,
+      fencingToken: timer.fencingToken,
+      outcome: { status: "expired" }
+    });
   }
 }
 

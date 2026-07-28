@@ -1,16 +1,21 @@
 import { randomUUID } from "node:crypto";
 import {
   createAssistanceTask,
+  fromAssistanceTaskPersistenceAggregate,
+  terminateAssistanceTask,
   toAssistanceTaskPersistenceAggregate,
-  type AssistanceRunOutcome
+  type AssistanceRunOutcome,
+  type AssistanceTask
 } from "@bpa/assistance-core";
 import {
+  assistanceDeadlineTimerId,
   DeterministicWorkflowEngine,
   dispatchRuntimeEffect,
   type EngineDependencies,
   type EngineEffect,
   type EngineState,
-  type EngineTransition
+  type EngineTransition,
+  type TimerRequest
 } from "@bpa/engine";
 import { contentDigest } from "@bpa/compiler";
 import {
@@ -72,6 +77,23 @@ function runStatus(state: EngineState): RunStatus {
 
 function currentStep(state: EngineState): string | undefined {
   return state.cursor?.stepKey;
+}
+
+function assistanceRequestOutboxId(taskId: string): string {
+  return `effect:${taskId}`;
+}
+
+function assistanceDeadlineOutboxId(taskId: string): string {
+  return `effect:${assistanceDeadlineTimerId(taskId)}`;
+}
+
+function assistanceTaskRecord(task: AssistanceTask): AssistanceTaskRecord {
+  const aggregate = toAssistanceTaskPersistenceAggregate(task);
+  return {
+    task: aggregate.definition,
+    fencingCounter: aggregate.privateState.fencingCounter,
+    privateState: aggregate.privateState
+  };
 }
 
 export class Ir2WorkflowRuntime {
@@ -170,16 +192,41 @@ export class Ir2WorkflowRuntime {
     const state = checkpoint.state as unknown as EngineState;
     const activeInvocation =
       state.active?.kind === "call" ? state.active.invocation : undefined;
-    const activeExternalId =
-      state.active?.kind === "call"
-        ? state.active.invocation.invocationId
-        : state.active?.kind === "assistance"
-          ? state.active.request.taskId
-          : undefined;
+    const activeAssistance =
+      state.active?.kind === "assistance" ? state.active.request : undefined;
     const transition = this.#engine(plan.planJson).cancel(state);
     if (transition.disposition !== "advanced") {
       return { disposition: transition.disposition, run };
     }
+    if (activeAssistance) {
+      const timestamp = new Date(this.#now()).toISOString();
+      const cancelled = this.#terminateBlockingAssistance({
+        run,
+        checkpoint,
+        transition,
+        taskId: activeAssistance.taskId,
+        terminalStatus: "cancelled",
+        terminalReason: `Run cancelled by ${actor}`,
+        inboxId: `cancel:${run.id}:${run.revision}`,
+        inboxTopic: "assistance.cancelled",
+        inboxPayload: { actor },
+        eventType: "RUN_IR2_CANCELLED",
+        eventPayload: { actor, taskId: activeAssistance.taskId },
+        timestamp
+      });
+      if (cancelled.status !== "accepted") {
+        return {
+          disposition:
+            cancelled.status === "duplicate" ? "duplicate" : "stale",
+          run: this.#persistence.getRun(run.id) ?? run
+        };
+      }
+      return {
+        disposition: "advanced",
+        run: cancelled.run
+      };
+    }
+    const activeExternalId = activeInvocation?.invocationId;
     const cancelledRun = this.#commitTransition({
       run,
       checkpoint,
@@ -187,7 +234,11 @@ export class Ir2WorkflowRuntime {
       eventType: "RUN_IR2_CANCELLED",
       eventPayload: { actor },
       ...(activeExternalId
-        ? { acknowledgeOutboxIds: [`effect:${activeExternalId}`] }
+        ? {
+            acknowledgeOutboxIds: this.#pendingOutboxIds([
+              `effect:${activeExternalId}`
+            ])
+          }
         : {})
     });
     if (activeInvocation) {
@@ -199,6 +250,22 @@ export class Ir2WorkflowRuntime {
   async drainOnce(): Promise<number> {
     let processed = 0;
     for (const message of this.#persistence.listPendingEngineOutbox()) {
+      if (message.topic === "timer.scheduled") {
+        const effect = message.payload as unknown as EngineEffect;
+        if (
+          effect.kind !== "timer.schedule" ||
+          effect.timer.wakeAt > this.#now()
+        ) {
+          continue;
+        }
+        const disposition = this.acceptTimerFire({
+          outboxId: message.id,
+          inboxMessageId: `timer.fire:${effect.timer.timerId}`,
+          timer: effect.timer
+        });
+        if (disposition !== "stale") processed += 1;
+        continue;
+      }
       if (message.topic !== "runtime.invoke") continue;
       const effect = message.payload as unknown as EngineEffect;
       if (effect.kind !== "runtime.invoke" || effect.notBefore > this.#now()) {
@@ -297,6 +364,58 @@ export class Ir2WorkflowRuntime {
       acknowledgeOutboxIds: [input.outboxId]
     });
     return "advanced";
+  }
+
+  acceptTimerFire(input: {
+    outboxId: string;
+    inboxMessageId: string;
+    timer: TimerRequest;
+  }): RuntimeResultDisposition {
+    if (this.#persistence.getInboxMessage(input.inboxMessageId)) {
+      return "duplicate";
+    }
+    if (
+      input.outboxId !==
+      assistanceDeadlineOutboxId(input.timer.signal.taskId)
+    ) {
+      return "stale";
+    }
+    const runId = input.timer.identity.runId;
+    const run = this.#persistence.getRun(runId);
+    const plan = this.#persistence.getRunPlanSnapshot(runId);
+    const checkpoint = this.#persistence.getEngineCheckpoint(runId);
+    if (!run || !plan || !checkpoint) return "stale";
+    const transition = this.#engine(plan.planJson).acceptTimerFire({
+      state: checkpoint.state as unknown as EngineState,
+      timer: input.timer
+    });
+    if (transition.disposition !== "advanced") {
+      return transition.disposition;
+    }
+    const timestamp = new Date(this.#now()).toISOString();
+    const result = this.#terminateBlockingAssistance({
+      run,
+      checkpoint,
+      transition,
+      taskId: input.timer.signal.taskId,
+      terminalStatus: "expired",
+      terminalReason: "Assistance deadline elapsed",
+      inboxId: input.inboxMessageId,
+      inboxTopic: "timer.fire",
+      inboxPayload: jsonValue(input.timer),
+      eventType: "ASSISTANCE_DEADLINE_EXPIRED",
+      eventPayload: {
+        taskId: input.timer.signal.taskId,
+        timerId: input.timer.timerId,
+        stateRevision: transition.state.revision
+      },
+      timestamp
+    });
+    return result.status === "accepted"
+      ? "advanced"
+      : result.status === "duplicate"
+        ? "duplicate"
+        : "stale";
   }
 
   commitAssistanceTask(input: {
@@ -447,7 +566,10 @@ export class Ir2WorkflowRuntime {
         : { output: transition.state.output }),
       assistanceTasks: effects.tasks,
       additionalOutbox: effects.outbox,
-      acknowledgeOutboxIds: [`effect:${input.task.task.taskId}`]
+      acknowledgeOutboxIds: this.#pendingOutboxIds([
+        assistanceRequestOutboxId(input.task.task.taskId),
+        assistanceDeadlineOutboxId(input.task.task.taskId)
+      ])
     });
     return result.status === "accepted"
       ? { status: "accepted", task: result.task }
@@ -530,6 +652,85 @@ export class Ir2WorkflowRuntime {
     }
   }
 
+  #pendingOutboxIds(candidates: readonly string[]): string[] {
+    const pending = new Set(
+      this.#persistence.listPendingEngineOutbox().map((message) => message.id)
+    );
+    return candidates.filter((candidate) => pending.has(candidate));
+  }
+
+  #terminateBlockingAssistance(input: {
+    run: RunRecord;
+    checkpoint: EngineCheckpointRecord;
+    transition: EngineTransition;
+    taskId: string;
+    terminalStatus: "expired" | "cancelled" | "failed";
+    terminalReason: string;
+    inboxId: string;
+    inboxTopic: string;
+    inboxPayload: JsonValue;
+    eventType: string;
+    eventPayload: JsonValue;
+    timestamp: string;
+  }): ReturnType<Persistence["submitTaskAndWakeRun"]> {
+    const currentTask = this.#persistence.getAssistanceTask(input.taskId);
+    if (!currentTask || currentTask.privateState.blocking === false) {
+      return { status: "stale" };
+    }
+    const terminated = terminateAssistanceTask(
+      fromAssistanceTaskPersistenceAggregate({
+        definition: currentTask.task,
+        privateState: currentTask.privateState
+      }),
+      {
+        status: input.terminalStatus,
+        reason: input.terminalReason,
+        now: input.timestamp
+      }
+    );
+    if (!terminated.ok) return { status: "stale" };
+
+    const effects = this.#persistableEffects(
+      input.transition.effects,
+      input.timestamp
+    );
+    const stepKey = currentStep(input.transition.state);
+    return this.#persistence.submitTaskAndWakeRun({
+      task: assistanceTaskRecord(terminated.task),
+      expectedTaskRevision: currentTask.task.revision,
+      expectedFencingToken: currentTask.fencingCounter,
+      expectedRunRevision: input.run.revision,
+      inbox: {
+        id: input.inboxId,
+        topic: input.inboxTopic,
+        aggregateId: input.taskId,
+        payload: input.inboxPayload,
+        receivedAt: input.timestamp,
+        appliedAt: input.timestamp
+      },
+      wakeEvent: this.#event(
+        input.run.id,
+        this.#persistence.listEvents(input.run.id).length + 1,
+        input.eventType,
+        input.eventPayload,
+        input.timestamp
+      ),
+      checkpoint: this.#checkpoint(input.transition.state, input.timestamp),
+      expectedCheckpointRevision: input.checkpoint.stateRevision,
+      nextRunStatus: runStatus(input.transition.state),
+      ...(stepKey ? { currentNodeKey: stepKey } : {}),
+      ...(input.transition.state.output === undefined
+        ? {}
+        : { output: input.transition.state.output }),
+      assistanceTasks: effects.tasks,
+      additionalOutbox: effects.outbox,
+      acknowledgeOutboxIds: this.#pendingOutboxIds([
+        assistanceRequestOutboxId(input.taskId),
+        assistanceDeadlineOutboxId(input.taskId)
+      ])
+    });
+  }
+
   #persistableEffects(
     effects: readonly EngineEffect[],
     timestamp: string
@@ -545,6 +746,16 @@ export class Ir2WorkflowRuntime {
           id: `effect:${effect.invocation.invocationId}`,
           topic: "runtime.invoke",
           aggregateId: effect.invocation.invocationId,
+          payload: jsonValue(effect),
+          createdAt: timestamp
+        });
+        continue;
+      }
+      if (effect.kind === "timer.schedule") {
+        outbox.push({
+          id: `effect:${effect.timer.timerId}`,
+          topic: "timer.scheduled",
+          aggregateId: effect.timer.timerId,
           payload: jsonValue(effect),
           createdAt: timestamp
         });

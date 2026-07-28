@@ -1390,7 +1390,9 @@ export class SqlitePersistence implements Persistence {
         currentTask.fencingCounter !== input.expectedFencingToken ||
         input.task.fencingCounter !== input.expectedFencingToken ||
         input.task.task.revision !== input.expectedTaskRevision + 1 ||
-        input.task.task.status !== "completed" ||
+        !["completed", "expired", "cancelled", "failed"].includes(
+          input.task.task.status
+        ) ||
         !assistanceFencingConsistent(currentTask) ||
         !assistanceFencingConsistent(input.task) ||
         currentRun.revision !== input.expectedRunRevision ||

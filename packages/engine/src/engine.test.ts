@@ -626,6 +626,17 @@ describe("deterministic IR2 engine", () => {
     );
     const waiting = engine.start("run-assistance", {});
     expect(waiting.state.status).toBe("waiting_assistance");
+    expect(waiting.effects.map((effect) => effect.kind)).toEqual([
+      "assistance.create",
+      "timer.schedule"
+    ]);
+    expect(waiting.effects[1]).toMatchObject({
+      kind: "timer.schedule",
+      timer: {
+        wakeAt: 3_000,
+        signal: { kind: "assistance.expired" }
+      }
+    });
     const active = waiting.state.active;
     if (active?.kind !== "assistance") throw new Error("fixture changed");
     const completed = engine.acceptAssistanceOutcome({
@@ -783,20 +794,41 @@ describe("deterministic IR2 engine", () => {
         failed: base.steps.failed!
       }
     };
-    const engine = new DeterministicWorkflowEngine(
-      blocking,
-      dependencies()
-    );
+    const deps = dependencies();
+    const engine = new DeterministicWorkflowEngine(blocking, deps);
     const waiting = engine.start("run-expired", {});
     const active = waiting.state.active;
     if (active?.kind !== "assistance") throw new Error("fixture changed");
-    const expired = engine.acceptAssistanceOutcome({
+    const timerEffect = waiting.effects.find(
+      (effect) => effect.kind === "timer.schedule"
+    );
+    if (timerEffect?.kind !== "timer.schedule") {
+      throw new Error("timer fixture changed");
+    }
+    expect(
+      engine.acceptTimerFire({
+        state: waiting.state,
+        timer: timerEffect.timer
+      }).disposition
+    ).toBe("stale");
+    deps.now.value = 1_100;
+    expect(
+      engine.acceptTimerFire({
+        state: waiting.state,
+        timer: { ...timerEffect.timer, fencingToken: 0 }
+      }).disposition
+    ).toBe("stale");
+    const expired = engine.acceptTimerFire({
       state: waiting.state,
-      taskId: active.request.taskId,
-      fencingToken: 1,
-      outcome: { status: "expired" }
+      timer: timerEffect.timer
     });
     expect(expired.state.status).toBe("failed");
+    expect(
+      engine.acceptTimerFire({
+        state: expired.state,
+        timer: timerEffect.timer
+      }).disposition
+    ).toBe("duplicate");
 
     const mismatched = {
       ...waiting.state,

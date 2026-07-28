@@ -15,7 +15,7 @@ import {
   RuntimeProviderRegistry,
   type RuntimeProvider
 } from "@bpa/node-runtime";
-import type { EngineState } from "@bpa/engine";
+import type { EngineState, TimerRequest } from "@bpa/engine";
 import type { AssistanceTaskRecord } from "@bpa/persistence";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import type { ArtifactRef, ExecutionPlan } from "@bpa/workflow-ir";
@@ -116,6 +116,68 @@ function taskRecord(task: AssistanceTask): AssistanceTaskRecord {
     privateState: aggregate.privateState,
     fencingCounter: aggregate.privateState.fencingCounter
   };
+}
+
+const blockingProfile = {
+  kind: "assistance_profile" as const,
+  id: "profile.review",
+  version: "1.0.0",
+  digest: `sha256:${digest("c")}`
+};
+
+function blockingAssistancePlan(deadlineMs = 60_000): ExecutionPlan {
+  return {
+    irVersion: "bpa.workflow-ir/2",
+    workflow: {
+      id: "test.assistance",
+      version: "1.0.0",
+      digest: `sha256:${digest("d")}`
+    },
+    artifactClosure: { entries: [blockingProfile] },
+    riskSnapshot: [],
+    limits: { maxDepth: 1, maxStepExecutions: 10 },
+    entry: "review",
+    steps: {
+      review: {
+        kind: "wait.assistance",
+        key: "review",
+        taskKind: "human_confirm",
+        profile: blockingProfile,
+        deadlineMs,
+        onUnavailable: "fail",
+        blocking: true,
+        routes: {
+          resolved: "done",
+          escalated: "failed",
+          expired: "failed",
+          unavailable: "failed"
+        }
+      },
+      done: { kind: "terminal", key: "done", status: "succeeded" },
+      failed: {
+        kind: "terminal",
+        key: "failed",
+        status: "failed",
+        errorCode: "REVIEW_FAILED"
+      }
+    }
+  };
+}
+
+function persistedTimer(persistence: SqlitePersistence): {
+  outboxId: string;
+  timer: TimerRequest;
+} {
+  const message = persistence
+    .listPendingEngineOutbox()
+    .find((candidate) => candidate.topic === "timer.scheduled");
+  const effect = message?.payload as
+    | { kind: "timer.schedule"; timer: TimerRequest }
+    | undefined;
+  if (!message || effect?.kind !== "timer.schedule") {
+    throw new Error("Timer fixture was not persisted");
+  }
+  return { outboxId: message.id, timer: effect.timer };
 }
 
 describe("Local Core IR2 runtime", () => {
@@ -330,53 +392,7 @@ describe("Local Core IR2 runtime", () => {
         random: () => 0.5
       }
     );
-    const profile = {
-      kind: "assistance_profile" as const,
-      id: "profile.review",
-      version: "1.0.0",
-      digest: `sha256:${digest("c")}`
-    };
-    const assistancePlan: ExecutionPlan = {
-      irVersion: "bpa.workflow-ir/2",
-      workflow: {
-        id: "test.assistance",
-        version: "1.0.0",
-        digest: `sha256:${digest("d")}`
-      },
-      artifactClosure: { entries: [profile] },
-      riskSnapshot: [],
-      limits: { maxDepth: 1, maxStepExecutions: 10 },
-      entry: "review",
-      steps: {
-        review: {
-          kind: "wait.assistance",
-          key: "review",
-          taskKind: "human_confirm",
-          profile,
-          deadlineMs: 60_000,
-          onUnavailable: "fail",
-          blocking: true,
-          routes: {
-            resolved: "done",
-            escalated: "failed",
-            expired: "failed",
-            unavailable: "failed"
-          }
-        },
-        done: { kind: "terminal", key: "done", status: "succeeded" },
-        failed: {
-          kind: "terminal",
-          key: "failed",
-          status: "failed",
-          errorCode: "REVIEW_FAILED"
-        },
-        uncertain: {
-          kind: "terminal",
-          key: "uncertain",
-          status: "uncertain"
-        }
-      }
-    };
+    const assistancePlan = blockingAssistancePlan();
     const run = runtime.start(assistancePlan, {});
     expect(run.status).toBe("waiting_human");
     const tasks = persistence.listAssistanceTasks({ limit: 10 });
@@ -386,9 +402,225 @@ describe("Local Core IR2 runtime", () => {
       mode: "human_confirm",
       status: "queued"
     });
-    expect(persistence.listPendingEngineOutbox()).toMatchObject([
-      { topic: "assistance.requested" }
-    ]);
+    expect(
+      persistence.listPendingEngineOutbox().map((message) => message.topic)
+    ).toEqual(["assistance.requested", "timer.scheduled"]);
+    persistence.close();
+  });
+
+  it("rolls back checkpoint, task, and timer intent together", () => {
+    const persistence = new SqlitePersistence({
+      path: ":memory:",
+      failureInjector(point) {
+        if (point === "recoverable_run.after_effects") {
+          throw new Error("injected timer persistence failure");
+        }
+      }
+    });
+    const runtime = new Ir2WorkflowRuntime(
+      persistence,
+      new RuntimeProviderRegistry(),
+      {
+        now: () => 1_000,
+        id: ids(),
+        random: () => 0.5
+      }
+    );
+
+    expect(() => runtime.start(blockingAssistancePlan(1_000), {})).toThrow(
+      "injected timer persistence failure"
+    );
+    expect(persistence.getRun("id-1")).toBeUndefined();
+    expect(persistence.getEngineCheckpoint("id-1")).toBeUndefined();
+    expect(persistence.listAssistanceTasks({ limit: 10 })).toEqual([]);
+    expect(persistence.listPendingEngineOutbox()).toEqual([]);
+    persistence.close();
+  });
+
+  it("expires a reclaimed blocking task once after restart and rejects late work", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "bpa-assistance-timer-"));
+    const databasePath = join(directory, "core.db");
+    try {
+      const firstPersistence = new SqlitePersistence({ path: databasePath });
+      const first = new Ir2WorkflowRuntime(
+        firstPersistence,
+        new RuntimeProviderRegistry(),
+        {
+          now: () => 1_000,
+          id: ids(),
+          random: () => 0.5
+        }
+      );
+      const run = first.start(blockingAssistancePlan(1_000), {});
+      const persisted = firstPersistence.listAssistanceTasks({ limit: 1 })[0];
+      if (!persisted) throw new Error("Assistance fixture was not created");
+      const queued = fromAssistanceTaskPersistenceAggregate({
+        definition: persisted.task,
+        privateState: persisted.privateState
+      });
+      const claimed = claimAssistanceTask(queued, {
+        leaseId: "lease-before-deadline",
+        ownerId: "operator",
+        ownerType: "human",
+        now: "1970-01-01T00:00:01.100Z",
+        leaseDurationMs: 10_000
+      });
+      if (!claimed.ok) throw new Error(claimed.error);
+      expect(
+        firstPersistence.commitAssistanceTask({
+          task: taskRecord(claimed.task),
+          expectedRevision: 0,
+          expectedFencingCounter: 0
+        }).status
+      ).toBe("accepted");
+      const released = releaseAssistanceTask(claimed.task, {
+        leaseId: "lease-before-deadline",
+        ownerId: "operator",
+        fencingToken: 1,
+        now: "1970-01-01T00:00:01.200Z"
+      });
+      if (!released.ok) throw new Error(released.error);
+      expect(
+        firstPersistence.commitAssistanceTask({
+          task: taskRecord(released.task),
+          expectedRevision: 1,
+          expectedFencingCounter: 1
+        }).status
+      ).toBe("accepted");
+      const reclaimed = claimAssistanceTask(released.task, {
+        leaseId: "lease-reclaimed",
+        ownerId: "operator-2",
+        ownerType: "human",
+        now: "1970-01-01T00:00:01.300Z",
+        leaseDurationMs: 10_000
+      });
+      if (!reclaimed.ok) throw new Error(reclaimed.error);
+      expect(reclaimed.task.fencingCounter).toBe(2);
+      expect(
+        firstPersistence.commitAssistanceTask({
+          task: taskRecord(reclaimed.task),
+          expectedRevision: 2,
+          expectedFencingCounter: 1
+        }).status
+      ).toBe("accepted");
+      const lateCompletion = submitAssistanceTask(reclaimed.task, {
+        leaseId: "lease-reclaimed",
+        ownerId: "operator-2",
+        fencingToken: 2,
+        now: "1970-01-01T00:00:01.500Z",
+        output: { approved: true },
+        resolverType: "human",
+        resolverId: "operator-2"
+      });
+      if (!lateCompletion.ok) throw new Error(lateCompletion.error);
+      const timer = persistedTimer(firstPersistence);
+      firstPersistence.close();
+
+      const reopened = new SqlitePersistence({ path: databasePath });
+      const restarted = new Ir2WorkflowRuntime(
+        reopened,
+        new RuntimeProviderRegistry(),
+        {
+          now: () => 2_000,
+          id: ids(),
+          random: () => 0.5
+        }
+      );
+      expect(restarted.recover(run.id)).toMatchObject({
+        status: "waiting_assistance"
+      });
+      expect(
+        restarted.acceptTimerFire({
+          outboxId: timer.outboxId,
+          inboxMessageId: "timer.fire:stale-fencing",
+          timer: { ...timer.timer, fencingToken: 0 }
+        })
+      ).toBe("stale");
+      expect(reopened.getRun(run.id)?.status).toBe("waiting_human");
+
+      await expect(restarted.drainOnce()).resolves.toBe(1);
+      expect(reopened.getRun(run.id)).toMatchObject({
+        status: "failed",
+        revision: 1
+      });
+      expect(reopened.getAssistanceTask(persisted.task.taskId)).toMatchObject({
+        task: { status: "expired", revision: 4 },
+        fencingCounter: 2,
+        privateState: {
+          fencingCounter: 2,
+          terminalReason: "Assistance deadline elapsed"
+        }
+      });
+      expect(reopened.listPendingEngineOutbox()).toEqual([]);
+      expect(
+        restarted.acceptTimerFire({
+          outboxId: timer.outboxId,
+          inboxMessageId: `timer.fire:${timer.timer.timerId}`,
+          timer: timer.timer
+        })
+      ).toBe("duplicate");
+      expect(
+        restarted.commitAssistanceTask({
+          requestId: "late-assistance-submit",
+          task: taskRecord(lateCompletion.task),
+          expectedRevision: 3,
+          expectedFencingCounter: 2,
+          runOutcome: {
+            status: "resolved",
+            reason: "MODE_REQUIRES_HUMAN"
+          }
+        }).status
+      ).toBe("stale");
+      expect(
+        reopened.listEvents(run.id).map((event) => event.type)
+      ).toEqual(["RUN_IR2_STARTED", "ASSISTANCE_DEADLINE_EXPIRED"]);
+      await expect(restarted.drainOnce()).resolves.toBe(0);
+      reopened.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("cancels a blocking task and ignores its late timer fire", async () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    let now = 1_000;
+    const runtime = new Ir2WorkflowRuntime(
+      persistence,
+      new RuntimeProviderRegistry(),
+      {
+        now: () => now,
+        id: ids(),
+        random: () => 0.5
+      }
+    );
+    const run = runtime.start(blockingAssistancePlan(1_000), {});
+    const task = persistence.listAssistanceTasks({ limit: 1 })[0];
+    if (!task) throw new Error("Assistance fixture was not created");
+    const timer = persistedTimer(persistence);
+    now = 1_500;
+
+    expect(runtime.cancel(run.id, "operator")).toMatchObject({
+      disposition: "advanced",
+      run: { status: "cancelled", revision: 1 }
+    });
+    expect(persistence.getAssistanceTask(task.task.taskId)).toMatchObject({
+      task: { status: "cancelled", revision: 1 },
+      privateState: { terminalReason: "Run cancelled by operator" }
+    });
+    expect(persistence.listPendingEngineOutbox()).toEqual([]);
+    now = 2_000;
+    expect(
+      runtime.acceptTimerFire({
+        outboxId: timer.outboxId,
+        inboxMessageId: `timer.fire:${timer.timer.timerId}`,
+        timer: timer.timer
+      })
+    ).toBe("duplicate");
+    await expect(runtime.drainOnce()).resolves.toBe(0);
+    expect(persistence.getRun(run.id)).toMatchObject({
+      status: "cancelled",
+      revision: 1
+    });
     persistence.close();
   });
 
@@ -524,6 +756,9 @@ describe("Local Core IR2 runtime", () => {
       { mode: "ai_review", status: "completed" },
       { mode: "human_confirm", status: "queued" }
     ]);
+    expect(
+      persistence.listPendingEngineOutbox().map((message) => message.topic)
+    ).toEqual(["assistance.requested", "timer.scheduled"]);
     expect(
       persistence.getEngineCheckpoint(run.id)?.state
     ).toMatchObject({
