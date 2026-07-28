@@ -20,6 +20,7 @@ import {
   type DatasetStagingRecord,
   type DatasetVersionDefinition,
   type DecisionRecordDefinition,
+  type EngineCheckpointRecord,
   type ExecutionScopeRecord,
   type ExecutionEventRecord,
   type GatewayCommandRecord,
@@ -368,26 +369,7 @@ export class SqlitePersistence implements Persistence {
       ) {
         throw new Error("Run, plan snapshot and initial event identities differ");
       }
-      this.#db
-        .prepare(
-          `INSERT INTO workflow_runs(
-            id, workflow_id, workflow_version, workflow_digest, status,
-            revision, input_json, output_json, current_node_key, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          run.id,
-          run.workflowId,
-          run.workflowVersion,
-          run.workflowDigest,
-          run.status,
-          run.revision,
-          json(run.input),
-          run.output === undefined ? null : json(run.output),
-          run.currentNodeKey ?? null,
-          run.createdAt,
-          run.updatedAt
-        );
+      this.#insertRun(run);
       this.#inject("create_run.after_run");
       if (input.planSnapshot) {
         this.#insertPlanSnapshot(input.planSnapshot);
@@ -399,9 +381,108 @@ export class SqlitePersistence implements Persistence {
   }
 
   createRecoverableRun(
-    input: CreateRunInput & { planSnapshot: RunPlanSnapshotRecord }
+    input: CreateRunInput & {
+      planSnapshot: RunPlanSnapshotRecord;
+      checkpoint: EngineCheckpointRecord;
+      outbox?: readonly OutboxMessage[];
+      assistanceTasks?: readonly AssistanceTaskRecord[];
+    }
   ): RunRecord {
-    return this.createRun(input);
+    return this.#db.transaction(() => {
+      if (
+        input.event.runId !== input.run.id ||
+        input.planSnapshot.runId !== input.run.id ||
+        input.checkpoint.runId !== input.run.id
+      ) {
+        throw new Error(
+          "Recoverable Run, plan, checkpoint and event identities differ"
+        );
+      }
+      this.#insertRun(input.run);
+      this.#inject("recoverable_run.after_run");
+      this.#insertPlanSnapshot(input.planSnapshot);
+      this.#insertCheckpoint(input.checkpoint);
+      for (const task of input.assistanceTasks ?? []) {
+        if (task.task.runId !== input.run.id) {
+          throw new Error("Assistance task belongs to a different Run");
+        }
+        this.#insertAssistanceTask(task);
+      }
+      for (const message of input.outbox ?? []) {
+        this.#insertOutbox("engine_outbox", message);
+      }
+      this.#inject("recoverable_run.after_effects");
+      this.#insertEvent(input.event);
+      this.#inject("recoverable_run.after_event");
+      return input.run;
+    })();
+  }
+
+  commitRecoverableTransition(
+    input: RunTransitionInput & {
+      checkpoint: EngineCheckpointRecord;
+      expectedCheckpointRevision: number;
+      outbox?: readonly OutboxMessage[];
+      assistanceTasks?: readonly AssistanceTaskRecord[];
+    }
+  ): RunRecord {
+    return this.#db.transaction(() => {
+      if (
+        input.checkpoint.runId !== input.runId ||
+        input.event.runId !== input.runId ||
+        input.checkpoint.stateRevision <= input.expectedCheckpointRevision
+      ) {
+        throw new Error("Recoverable transition identity or revision is invalid");
+      }
+      const runUpdate = this.#db
+        .prepare(
+          `UPDATE workflow_runs
+           SET status = ?, revision = revision + 1, current_node_key = ?,
+               output_json = ?, updated_at = ?
+           WHERE id = ? AND revision = ?`
+        )
+        .run(
+          input.nextStatus,
+          input.currentNodeKey ?? null,
+          input.output === undefined ? null : json(input.output),
+          input.checkpoint.updatedAt,
+          input.runId,
+          input.expectedRevision
+        );
+      const checkpointUpdate = this.#db
+        .prepare(
+          `UPDATE engine_checkpoints
+           SET state_version = ?, state_revision = ?, state_json = ?,
+               updated_at = ?
+           WHERE run_id = ? AND state_revision = ?`
+        )
+        .run(
+          input.checkpoint.stateVersion,
+          input.checkpoint.stateRevision,
+          json(input.checkpoint.state),
+          input.checkpoint.updatedAt,
+          input.runId,
+          input.expectedCheckpointRevision
+        );
+      if (runUpdate.changes !== 1 || checkpointUpdate.changes !== 1) {
+        throw new RevisionConflictError(
+          `Recoverable Run ${input.runId} revision changed`
+        );
+      }
+      this.#inject("recoverable_transition.after_state");
+      for (const task of input.assistanceTasks ?? []) {
+        if (task.task.runId !== input.runId) {
+          throw new Error("Assistance task belongs to a different Run");
+        }
+        this.#insertAssistanceTask(task);
+      }
+      for (const message of input.outbox ?? []) {
+        this.#insertOutbox("engine_outbox", message);
+      }
+      this.#insertEvent(input.event);
+      this.#inject("recoverable_transition.after_effects");
+      return this.getRun(input.runId)!;
+    })();
   }
 
   createNodeExecution(
@@ -517,6 +598,20 @@ export class SqlitePersistence implements Persistence {
       .prepare("SELECT * FROM run_plan_snapshots WHERE run_id = ?")
       .get(runId) as SqlRow | undefined;
     return row ? this.#readPlanSnapshot(row) : undefined;
+  }
+
+  getEngineCheckpoint(runId: string): EngineCheckpointRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM engine_checkpoints WHERE run_id = ?")
+      .get(runId) as SqlRow | undefined;
+    if (!row) return undefined;
+    return {
+      runId: String(row.run_id),
+      stateVersion: String(row.state_version),
+      stateRevision: Number(row.state_revision),
+      state: parseJson(row.state_json) as JsonValue,
+      updatedAt: String(row.updated_at)
+    };
   }
 
   putExecutionScope(scope: ExecutionScopeRecord): ExecutionScopeRecord {
@@ -1803,6 +1898,46 @@ export class SqlitePersistence implements Persistence {
         json(record.privateState),
         record.task.createdAt,
         record.task.updatedAt
+      );
+  }
+
+  #insertRun(run: RunRecord): void {
+    this.#db
+      .prepare(
+        `INSERT INTO workflow_runs(
+          id, workflow_id, workflow_version, workflow_digest, status,
+          revision, input_json, output_json, current_node_key, created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        run.id,
+        run.workflowId,
+        run.workflowVersion,
+        run.workflowDigest,
+        run.status,
+        run.revision,
+        json(run.input),
+        run.output === undefined ? null : json(run.output),
+        run.currentNodeKey ?? null,
+        run.createdAt,
+        run.updatedAt
+      );
+  }
+
+  #insertCheckpoint(checkpoint: EngineCheckpointRecord): void {
+    this.#db
+      .prepare(
+        `INSERT INTO engine_checkpoints(
+          run_id, state_version, state_revision, state_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(
+        checkpoint.runId,
+        checkpoint.stateVersion,
+        checkpoint.stateRevision,
+        json(checkpoint.state),
+        checkpoint.updatedAt
       );
   }
 

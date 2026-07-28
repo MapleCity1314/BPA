@@ -116,6 +116,14 @@ export interface RunPlanSnapshotRecord {
   createdAt: string;
 }
 
+export interface EngineCheckpointRecord {
+  runId: string;
+  stateVersion: string;
+  stateRevision: number;
+  state: JsonValue;
+  updatedAt: string;
+}
+
 export interface ExecutionScopeRecord {
   scopeId: string;
   runId: string;
@@ -156,6 +164,7 @@ export interface StepInstanceRecord {
 
 export interface RecoveryStateStore {
   getRunPlanSnapshot(runId: string): RunPlanSnapshotRecord | undefined;
+  getEngineCheckpoint(runId: string): EngineCheckpointRecord | undefined;
   putExecutionScope(scope: ExecutionScopeRecord): ExecutionScopeRecord;
   putIterationInstance(
     iteration: IterationInstanceRecord
@@ -241,7 +250,20 @@ export interface RunTransitionInput {
 export interface ExecutionUnitOfWork {
   createRun(input: CreateRunInput): RunRecord;
   createRecoverableRun(
-    input: CreateRunInput & { planSnapshot: RunPlanSnapshotRecord }
+    input: CreateRunInput & {
+      planSnapshot: RunPlanSnapshotRecord;
+      checkpoint: EngineCheckpointRecord;
+      outbox?: readonly OutboxMessage[];
+      assistanceTasks?: readonly AssistanceTaskRecord[];
+    }
+  ): RunRecord;
+  commitRecoverableTransition(
+    input: RunTransitionInput & {
+      checkpoint: EngineCheckpointRecord;
+      expectedCheckpointRevision: number;
+      outbox?: readonly OutboxMessage[];
+      assistanceTasks?: readonly AssistanceTaskRecord[];
+    }
   ): RunRecord;
   commitRunTransition(input: RunTransitionInput): RunRecord;
   createNodeExecution(

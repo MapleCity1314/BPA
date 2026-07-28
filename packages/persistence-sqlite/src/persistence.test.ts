@@ -10,6 +10,7 @@ import {
   type AssistanceTaskRecord,
   type AuditRecord,
   type DatasetStagingRecord,
+  type EngineCheckpointRecord,
   type ExecutionEventRecord,
   type ExecutionScopeRecord,
   type IterationInstanceRecord,
@@ -51,6 +52,24 @@ function audit(target: string): AuditRecord {
     target,
     detail: {},
     occurredAt: timestamp
+  };
+}
+
+function checkpoint(
+  runId: string,
+  stateRevision = 1
+): EngineCheckpointRecord {
+  return {
+    runId,
+    stateVersion: "bpa.engine-state/2",
+    stateRevision,
+    state: {
+      stateVersion: "bpa.engine-state/2",
+      runId,
+      revision: stateRevision,
+      status: "waiting_runtime"
+    },
+    updatedAt: timestamp
   };
 }
 
@@ -375,12 +394,31 @@ describe("recoverable execution persistence", () => {
       updatedAt: timestamp
     };
     const snapshot = planSnapshot(run.id);
+    const detachedTask = canonicalTask(run.id);
     store.createRecoverableRun({
       run,
       planSnapshot: snapshot,
+      checkpoint: checkpoint(run.id),
+      assistanceTasks: [detachedTask],
+      outbox: [
+        {
+          id: "initial-runtime-effect",
+          topic: "runtime.invoke",
+          aggregateId: run.id,
+          payload: {},
+          createdAt: timestamp
+        }
+      ],
       event: event(run.id, 1, "RUN_CREATED")
     });
     expect(store.getRunPlanSnapshot(run.id)).toEqual(snapshot);
+    expect(store.getEngineCheckpoint(run.id)).toEqual(checkpoint(run.id));
+    expect(store.getAssistanceTask(detachedTask.task.taskId)).toEqual(
+      detachedTask
+    );
+    expect(store.listPendingEngineOutbox()).toMatchObject([
+      { id: "initial-runtime-effect" }
+    ]);
     expect(store.listEvents(run.id)).toHaveLength(1);
     store.close();
   });
@@ -389,7 +427,7 @@ describe("recoverable execution persistence", () => {
     const store = new SqlitePersistence({
       path: ":memory:",
       failureInjector(point) {
-        if (point === "create_run.after_run") throw new Error("crash");
+        if (point === "recoverable_run.after_run") throw new Error("crash");
       }
     });
     const run: RunRecord = {
@@ -407,12 +445,104 @@ describe("recoverable execution persistence", () => {
       store.createRecoverableRun({
         run,
         planSnapshot: planSnapshot(run.id),
+        checkpoint: checkpoint(run.id),
         event: event(run.id, 1, "RUN_CREATED")
       })
     ).toThrow("crash");
     expect(store.getRun(run.id)).toBeUndefined();
     expect(store.getRunPlanSnapshot(run.id)).toBeUndefined();
+    expect(store.getEngineCheckpoint(run.id)).toBeUndefined();
     expect(store.listEvents(run.id)).toEqual([]);
+    store.close();
+  });
+
+  it("atomically advances a Run checkpoint, effects and event with CAS", () => {
+    let crash = false;
+    const store = new SqlitePersistence({
+      path: ":memory:",
+      failureInjector(point) {
+        if (crash && point === "recoverable_transition.after_state") {
+          throw new Error("crash");
+        }
+      }
+    });
+    const run: RunRecord = {
+      id: "run-checkpoint",
+      workflowId: "test.workflow",
+      workflowVersion: "1.0.0",
+      workflowDigest: "sha256:workflow",
+      status: "running",
+      revision: 0,
+      input: {},
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    store.createRecoverableRun({
+      run,
+      planSnapshot: planSnapshot(run.id),
+      checkpoint: checkpoint(run.id),
+      event: event(run.id, 1, "RUN_CREATED")
+    });
+    const next = checkpoint(run.id, 4);
+    crash = true;
+    expect(() =>
+      store.commitRecoverableTransition({
+        runId: run.id,
+        expectedRevision: 0,
+        nextStatus: "running",
+        checkpoint: next,
+        expectedCheckpointRevision: 1,
+        outbox: [
+          {
+            id: "checkpoint-effect",
+            topic: "runtime.invoke",
+            aggregateId: run.id,
+            payload: {},
+            createdAt: timestamp
+          }
+        ],
+        event: event(run.id, 2, "ENGINE_ADVANCED")
+      })
+    ).toThrow("crash");
+    expect(store.getRun(run.id)?.revision).toBe(0);
+    expect(store.getEngineCheckpoint(run.id)?.stateRevision).toBe(1);
+    expect(store.listPendingEngineOutbox()).toEqual([]);
+    expect(store.listEvents(run.id)).toHaveLength(1);
+
+    crash = false;
+    expect(
+      store.commitRecoverableTransition({
+        runId: run.id,
+        expectedRevision: 0,
+        nextStatus: "running",
+        checkpoint: next,
+        expectedCheckpointRevision: 1,
+        outbox: [
+          {
+            id: "checkpoint-effect",
+            topic: "runtime.invoke",
+            aggregateId: run.id,
+            payload: {},
+            createdAt: timestamp
+          }
+        ],
+        event: event(run.id, 2, "ENGINE_ADVANCED")
+      })
+    ).toMatchObject({ revision: 1 });
+    expect(store.getEngineCheckpoint(run.id)).toEqual(next);
+    expect(store.listPendingEngineOutbox()).toMatchObject([
+      { id: "checkpoint-effect" }
+    ]);
+    expect(() =>
+      store.commitRecoverableTransition({
+        runId: run.id,
+        expectedRevision: 0,
+        nextStatus: "running",
+        checkpoint: checkpoint(run.id, 5),
+        expectedCheckpointRevision: 1,
+        event: event(run.id, 3, "STALE")
+      })
+    ).toThrow(RevisionConflictError);
     store.close();
   });
 
@@ -1275,7 +1405,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(4);
+      expect(store.health().schemaVersion).toBe(5);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1306,16 +1436,17 @@ describe("append-only migrations", () => {
 
       const legacy = new Database(databasePath);
       legacy.exec(`
+        DROP TABLE engine_checkpoints;
         DROP INDEX assistance_tasks_owner_type_created;
         DROP INDEX assistance_tasks_status_mode_created;
         DROP INDEX assistance_task_request_results_task;
         DROP TABLE assistance_task_request_results;
-        DELETE FROM schema_migrations WHERE version = 4;
+        DELETE FROM schema_migrations WHERE version IN (4, 5);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(4);
+      expect(upgraded.health().schemaVersion).toBe(5);
       expect(upgraded.getAssistanceTask(task.task.taskId)).toEqual(task);
       expect(
         upgraded.getAssistanceRequestResult("not-recorded")
@@ -1340,8 +1471,29 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(4);
+      expect(store.health().schemaVersion).toBe(5);
       expect(store.getAssistanceRequestResult("not-recorded")).toBeUndefined();
+      store.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers cleanly when migration v5 is interrupted", () => {
+    const directory = mkdtempSync(join(tmpdir(), "bpa-migration-v5-crash-"));
+    const databasePath = join(directory, "bpa.sqlite3");
+    try {
+      expect(
+        () =>
+          new SqlitePersistence({
+            path: databasePath,
+            failureInjector(point) {
+              if (point === "migration.5.after_sql") throw new Error("crash");
+            }
+          })
+      ).toThrow("crash");
+      const store = new SqlitePersistence({ path: databasePath });
+      expect(store.health().schemaVersion).toBe(5);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1353,7 +1505,7 @@ describe("append-only migrations", () => {
     const databasePath = join(directory, "bpa.sqlite3");
     try {
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(4);
+      expect(store.health().schemaVersion).toBe(5);
       store.close();
       const raw = new Database(databasePath);
       raw

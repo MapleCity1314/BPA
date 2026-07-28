@@ -349,5 +349,18 @@ export const migrations: Migration[] = [
           task_id
         );
     `
+  },
+  {
+    version: 5,
+    sql: `
+      CREATE TABLE engine_checkpoints (
+        run_id TEXT PRIMARY KEY
+          REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        state_version TEXT NOT NULL,
+        state_revision INTEGER NOT NULL CHECK (state_revision >= 0),
+        state_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+    `
   }
 ];
