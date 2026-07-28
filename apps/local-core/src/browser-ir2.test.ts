@@ -248,4 +248,215 @@ describe("IR2 browser provider", () => {
     await expect(service.ir2Runtime.drainOnce()).resolves.toBe(0);
     persistence.close();
   });
+
+  it("recovers a durable cancel, sends it once, and ignores a late result", async () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const signingKey: CoreSigningKey = {
+      keyId: "core-ir2-cancel",
+      privateKey,
+      publicKey,
+      publicKeySpkiBase64: exportPublicKeySpkiBase64(publicKey)
+    };
+    const firstGateway = new LocalBrowserGateway(
+      persistence,
+      new LocalWorkflowEngine(persistence),
+      signingKey
+    );
+    const firstService = new LocalCoreService(persistence, firstGateway);
+    const node = nodeFixture();
+    expect(
+      firstService.handle({
+        id: "publish-cancel-node",
+        method: "asset.publish",
+        params: { assetType: "node", content: node, actor: "test" }
+      }).ok
+    ).toBe(true);
+    const firstOutgoing: Array<Record<string, any>> = [];
+    const firstConnection = firstGateway.attach(
+      `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      (message) => firstOutgoing.push(message)
+    );
+    firstGateway.handle({
+      protocol: "bpa.browser/1",
+      version: "1.0.0",
+      message_id: "hello-cancel-1",
+      session_id: "new",
+      seq: 0,
+      sent_at: new Date().toISOString(),
+      type: "session.hello",
+      trace_id: "trace-cancel",
+      payload: {
+        browser_instance_id: "browser-cancel",
+        extension_id: DEFAULT_BPA_EXTENSION_ID,
+        extension_version: "0.3.0",
+        supported_protocols: ["bpa.browser/1"],
+        last_acked_command_seq: 0
+      }
+    });
+    const firstSessionId = String(firstOutgoing.at(-1)?.session_id);
+    firstGateway.handle({
+      protocol: "bpa.browser/1",
+      version: "1.0.0",
+      message_id: "capability-cancel-1",
+      session_id: firstSessionId,
+      seq: 1,
+      sent_at: new Date().toISOString(),
+      type: "capability.report",
+      trace_id: "trace-cancel",
+      payload: {
+        capabilities: [
+          {
+            node_id: node.metadata.id,
+            versions: [node.metadata.version],
+            risk_level: node.risk.level,
+            permissions: node.risk.permissions,
+            adapter_id: "doudian",
+            adapter_version: "1.1.0"
+          }
+        ],
+        manifest_digest: `sha256:${"d".repeat(64)}`
+      }
+    });
+    const run = firstService.ir2Runtime.start(plan(node), {});
+    const draining = firstService.ir2Runtime.drainOnce();
+    const command = firstOutgoing.find(
+      (message) => message.type === "command.dispatch"
+    );
+    if (!command) throw new Error("IR2 browser command was not dispatched");
+    firstGateway.detach(firstConnection);
+
+    expect(
+      firstService.handle({
+        id: "cancel-run-1",
+        method: "run.cancel",
+        params: { runId: run.id, actor: "operator-1" }
+      })
+    ).toMatchObject({
+      ok: true,
+      result: { status: "cancelled", revision: 1 }
+    });
+    expect(persistence.listPendingEngineOutbox()).toEqual([]);
+    expect(
+      persistence.getGatewayCommand(String(command.payload.command_id))
+    ).toMatchObject({ state: "delivered" });
+
+    const restartedGateway = new LocalBrowserGateway(
+      persistence,
+      new LocalWorkflowEngine(persistence),
+      signingKey
+    );
+    const restartedService = new LocalCoreService(
+      persistence,
+      restartedGateway
+    );
+    expect(restartedService.ir2Runtime.recover(run.id)).toMatchObject({
+      status: "cancelled"
+    });
+    const restartedOutgoing: Array<Record<string, any>> = [];
+    restartedGateway.attach(
+      `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      (message) => restartedOutgoing.push(message)
+    );
+    restartedGateway.handle({
+      protocol: "bpa.browser/1",
+      version: "1.0.0",
+      message_id: "hello-cancel-2",
+      session_id: "new",
+      seq: 0,
+      sent_at: new Date().toISOString(),
+      type: "session.hello",
+      trace_id: "trace-cancel",
+      payload: {
+        browser_instance_id: "browser-cancel",
+        extension_id: DEFAULT_BPA_EXTENSION_ID,
+        extension_version: "0.3.0",
+        supported_protocols: ["bpa.browser/1"],
+        last_acked_command_seq: 0
+      }
+    });
+    const restartedSessionId = String(
+      restartedOutgoing.at(-1)?.session_id
+    );
+    restartedGateway.handle({
+      protocol: "bpa.browser/1",
+      version: "1.0.0",
+      message_id: "capability-cancel-2",
+      session_id: restartedSessionId,
+      seq: 1,
+      sent_at: new Date().toISOString(),
+      type: "capability.report",
+      trace_id: "trace-cancel",
+      payload: {
+        capabilities: [
+          {
+            node_id: node.metadata.id,
+            versions: [node.metadata.version],
+            risk_level: node.risk.level,
+            permissions: node.risk.permissions,
+            adapter_id: "doudian",
+            adapter_version: "1.1.0"
+          }
+        ],
+        manifest_digest: `sha256:${"e".repeat(64)}`
+      }
+    });
+    expect(
+      restartedOutgoing.filter((message) => message.type === "cancel.request")
+    ).toHaveLength(1);
+    expect(
+      restartedOutgoing.filter(
+        (message) => message.type === "command.dispatch"
+      )
+    ).toHaveLength(0);
+    expect(
+      restartedService.handle({
+        id: "cancel-run-2",
+        method: "run.cancel",
+        params: { runId: run.id, actor: "operator-1" }
+      })
+    ).toMatchObject({
+      ok: true,
+      result: { status: "cancelled", revision: 1 }
+    });
+    expect(
+      restartedOutgoing.filter((message) => message.type === "cancel.request")
+    ).toHaveLength(1);
+
+    restartedGateway.handle({
+      protocol: "bpa.browser/1",
+      version: "1.0.0",
+      message_id: "late-result-cancel",
+      session_id: restartedSessionId,
+      seq: 2,
+      sent_at: new Date().toISOString(),
+      type: "command.result",
+      trace_id: command.trace_id,
+      payload: {
+        command_seq: command.payload.command_seq,
+        command_id: command.payload.command_id,
+        node_execution_id: command.payload.node_execution_id,
+        idempotency_key: command.payload.idempotency_key,
+        fencing_token: command.payload.fencing_token,
+        status: "succeeded",
+        output: { tooLate: true },
+        evidence_refs: []
+      }
+    });
+    await expect(draining).resolves.toBe(1);
+    expect(persistence.getRun(run.id)).toMatchObject({
+      status: "cancelled",
+      revision: 1
+    });
+    expect(persistence.getRun(run.id)).not.toHaveProperty("output");
+    expect(persistence.getEngineCheckpoint(run.id)).toMatchObject({
+      state: { status: "cancelled" }
+    });
+    expect(
+      persistence
+        .listEvents(run.id)
+        .filter((event) => event.type === "RUN_IR2_CANCELLED")
+    ).toHaveLength(1);
+    persistence.close();
+  });
 });

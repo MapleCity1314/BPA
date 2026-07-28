@@ -12,7 +12,11 @@ import {
   type EngineTransition
 } from "@bpa/engine";
 import { contentDigest } from "@bpa/compiler";
-import { RuntimeProviderRegistry, type RuntimeOutcome } from "@bpa/node-runtime";
+import {
+  RuntimeProviderRegistry,
+  type RuntimeInvocation,
+  type RuntimeOutcome
+} from "@bpa/node-runtime";
 import type {
   AssistanceTaskRecord,
   CommitAssistanceTaskRequestResult,
@@ -35,6 +39,11 @@ export interface Ir2RuntimeOptions {
 }
 
 export type RuntimeResultDisposition = "advanced" | "duplicate" | "stale";
+
+export interface Ir2CancelResult {
+  readonly disposition: RuntimeResultDisposition;
+  readonly run: RunRecord;
+}
 
 function jsonValue(value: unknown): JsonValue {
   const serialized = JSON.stringify(value);
@@ -141,6 +150,42 @@ export class Ir2WorkflowRuntime {
     }
     const state = checkpoint.state as unknown as EngineState;
     return this.#engine(plan.planJson).resume(state).state;
+  }
+
+  cancel(runId: string, actor: string): Ir2CancelResult {
+    const run = this.#persistence.getRun(runId);
+    const plan = this.#persistence.getRunPlanSnapshot(runId);
+    const checkpoint = this.#persistence.getEngineCheckpoint(runId);
+    if (!run || !plan || !checkpoint) {
+      throw new Error(`Recoverable IR2 Run not found: ${runId}`);
+    }
+    const state = checkpoint.state as unknown as EngineState;
+    const activeInvocation =
+      state.active?.kind === "call" ? state.active.invocation : undefined;
+    const activeExternalId =
+      state.active?.kind === "call"
+        ? state.active.invocation.invocationId
+        : state.active?.kind === "assistance"
+          ? state.active.request.taskId
+          : undefined;
+    const transition = this.#engine(plan.planJson).cancel(state);
+    if (transition.disposition !== "advanced") {
+      return { disposition: transition.disposition, run };
+    }
+    const cancelledRun = this.#commitTransition({
+      run,
+      checkpoint,
+      transition,
+      eventType: "RUN_IR2_CANCELLED",
+      eventPayload: { actor },
+      ...(activeExternalId
+        ? { acknowledgeOutboxIds: [`effect:${activeExternalId}`] }
+        : {})
+    });
+    if (activeInvocation) {
+      this.#requestProviderCancel(activeInvocation);
+    }
+    return { disposition: "advanced", run: cancelledRun };
   }
 
   async drainOnce(): Promise<number> {
@@ -351,6 +396,7 @@ export class Ir2WorkflowRuntime {
     checkpoint: EngineCheckpointRecord;
     transition: EngineTransition;
     eventType: string;
+    eventPayload?: Readonly<Record<string, JsonValue>>;
     inbox?: InboxMessageRecord;
     acknowledgeOutboxIds?: readonly string[];
   }): RunRecord {
@@ -383,11 +429,26 @@ export class Ir2WorkflowRuntime {
         input.eventType,
         {
           stateRevision: input.transition.state.revision,
-          status: input.transition.state.status
+          status: input.transition.state.status,
+          ...input.eventPayload
         },
         timestamp
       )
     });
+  }
+
+  #requestProviderCancel(invocation: RuntimeInvocation): void {
+    try {
+      const provider = this.#providers.get(invocation.providerId);
+      const cancellation = provider.cancel?.(
+        invocation.invocationId,
+        invocation.fencingToken
+      );
+      void cancellation?.catch(() => undefined);
+    } catch {
+      // Cancellation state is already durable. Providers reconcile their
+      // durable work on recovery rather than rolling the Run back.
+    }
   }
 
   #persistableEffects(

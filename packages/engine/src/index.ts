@@ -837,6 +837,46 @@ export class DeterministicWorkflowEngine {
     return drive(this.plan, clone(snapshot), this.dependencies);
   }
 
+  cancel(snapshot: EngineState): EngineTransition {
+    if (snapshot.workflowDigest !== this.plan.workflow.digest) {
+      throw new Error("Engine snapshot does not belong to this plan");
+    }
+    const state = clone(snapshot);
+    if (state.status === "cancelled") {
+      return { state, effects: [], disposition: "duplicate" };
+    }
+    if (["succeeded", "failed", "uncertain"].includes(state.status)) {
+      return { state, effects: [], disposition: "stale" };
+    }
+    const externalId =
+      state.active?.kind === "call"
+        ? state.active.invocation.invocationId
+        : state.active?.kind === "assistance"
+          ? state.active.request.taskId
+          : undefined;
+    return {
+      state: immutableState(
+        {
+          ...state,
+          status: "cancelled",
+          cursor: undefined,
+          active: undefined,
+          completedExternalIds:
+            externalId && !state.completedExternalIds.includes(externalId)
+              ? [...state.completedExternalIds, externalId]
+              : state.completedExternalIds,
+          error: {
+            code: "RUN_CANCELLED",
+            message: "Run was cancelled before completion."
+          }
+        },
+        state.revision
+      ),
+      effects: [],
+      disposition: "advanced"
+    };
+  }
+
   acceptRuntimeOutcome(input: {
     state: EngineState;
     invocationId: string;

@@ -316,6 +316,52 @@ describe("deterministic IR2 engine", () => {
     ).toBe("stale");
   });
 
+  it("cancels a waiting invocation once and rejects its late outcome", () => {
+    const engine = new DeterministicWorkflowEngine(
+      planWithForeach(),
+      dependencies()
+    );
+    const waiting = engine.start("run-cancel", {
+      items: [{ id: "a" }]
+    });
+    const active = waiting.state.active;
+    if (active?.kind !== "call") throw new Error("fixture changed");
+
+    const cancelled = engine.cancel(waiting.state);
+    expect(cancelled).toMatchObject({
+      disposition: "advanced",
+      effects: [],
+      state: {
+        status: "cancelled",
+        cursor: undefined,
+        active: undefined,
+        error: { code: "RUN_CANCELLED" }
+      }
+    });
+    expect(cancelled.state.completedExternalIds).toContain(
+      active.invocation.invocationId
+    );
+    expect(engine.cancel(cancelled.state)).toMatchObject({
+      disposition: "duplicate",
+      state: { revision: cancelled.state.revision }
+    });
+    expect(
+      engine.acceptRuntimeOutcome({
+        state: cancelled.state,
+        invocationId: active.invocation.invocationId,
+        fencingToken: active.invocation.fencingToken,
+        outcome: succeeded({ tooLate: true })
+      })
+    ).toMatchObject({
+      disposition: "duplicate",
+      state: {
+        status: "cancelled",
+        revision: cancelled.state.revision,
+        output: undefined
+      }
+    });
+  });
+
   it("stops immediately on uncertain outcomes", () => {
     const engine = new DeterministicWorkflowEngine(
       planWithForeach(),

@@ -29,6 +29,7 @@ const browserGateway = new LocalBrowserGateway(
 );
 const service = new LocalCoreService(persistence, browserGateway);
 browserGateway.recoverTerminalResults();
+browserGateway.recoverCancellations();
 const server = new LocalControlServer(
   paths.socket,
   service

@@ -504,9 +504,16 @@ export class LocalCoreService {
       case "run.cancel":
         {
           const runId = String(params.runId);
+          const actor = String(params.actor || userInfo().username);
+          if (
+            this.persistence.getRunPlanSnapshot(runId) &&
+            this.persistence.getEngineCheckpoint(runId)
+          ) {
+            return this.ir2Runtime.cancel(runId, actor).run;
+          }
           const run = this.persistence.requestCancel(
             runId,
-            String(params.actor || userInfo().username)
+            actor
           );
           this.browserGateway?.requestCancel(runId);
           return this.persistence.getRun(runId) ?? run;

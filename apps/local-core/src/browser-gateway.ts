@@ -64,6 +64,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
   #session: ActiveSession | undefined;
   #lastError: string | undefined;
   #connectionId: string | undefined;
+  readonly #cancelRequests = new Set<string>();
 
   constructor(
     readonly persistence: Persistence,
@@ -82,6 +83,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
     this.#send = send;
     this.#session = undefined;
     this.#lastError = undefined;
+    this.#cancelRequests.clear();
     return connectionId;
   }
 
@@ -96,6 +98,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
     this.#send = undefined;
     this.#session = undefined;
     this.#connectionId = undefined;
+    this.#cancelRequests.clear();
   }
 
   status(): BrowserGatewayStatus {
@@ -255,11 +258,13 @@ export class LocalBrowserGateway implements RuntimeProvider {
   dispatchPending(): number {
     const session = this.#session;
     if (!session?.ready) return 0;
+    this.recoverCancellations();
     this.#promoteEngineMessages();
     let dispatched = 0;
     for (const command of this.persistence.listPendingGatewayCommands(
       session.lastAckedCommandSeq
     )) {
+      if (this.#runIsCancelled(command)) continue;
       if (!this.#supports(command)) continue;
       this.#sendMessage(
         "command.dispatch",
@@ -277,9 +282,11 @@ export class LocalBrowserGateway implements RuntimeProvider {
   }
 
   tick(at = new Date()): { timedOut: number; dispatched: number } {
+    this.recoverCancellations();
     this.recoverTerminalResults();
     let timedOut = 0;
     for (const command of this.persistence.listPendingGatewayCommands()) {
+      if (this.#runIsCancelled(command)) continue;
       const payload = command.payload as Record<string, unknown>;
       if (Date.parse(String(payload.deadline)) > at.getTime()) continue;
       this.#commitResult(`timeout-${command.id}-${at.getTime()}`, {
@@ -316,48 +323,37 @@ export class LocalBrowserGateway implements RuntimeProvider {
     return recovered;
   }
 
+  recoverCancellations(): number {
+    const runIds = new Set<string>();
+    for (const command of this.persistence.listPendingGatewayCommands()) {
+      const runId = this.#runId(command);
+      if (runId && this.persistence.getRun(runId)?.status === "cancelled") {
+        runIds.add(runId);
+      }
+    }
+    let recovered = 0;
+    for (const runId of runIds) {
+      recovered += this.requestCancel(runId, "RECOVERED_RUN_CANCELLED");
+    }
+    return recovered;
+  }
+
   requestCancel(runId: string, reasonCode = "USER_REQUESTED"): number {
     let requested = 0;
-    for (const command of this.persistence
-      .listGatewayCommandsForRun(runId)
-      .filter((candidate) => candidate.state !== "terminal")) {
-      if (command.state === "queued") {
-        this.#commitResult(`cancel-local-${command.id}`, {
-          command_seq: command.commandSeq,
-          command_id: command.id,
-          node_execution_id: command.nodeExecutionId,
-          idempotency_key: command.idempotencyKey,
-          fencing_token: command.fencingToken,
-          status: "cancelled"
-        });
-      } else if (this.#session?.ready) {
-        this.#sendMessage(
-          "cancel.request",
-          {
-            command_id: command.id,
-            node_execution_id: command.nodeExecutionId,
-            fencing_token: command.fencingToken,
-            reason_code: reasonCode
-          },
-          `trace-${command.nodeExecutionId}`
-        );
-      } else {
-        this.#commitResult(`cancel-uncertain-${command.id}`, {
-          command_seq: command.commandSeq,
-          command_id: command.id,
-          node_execution_id: command.nodeExecutionId,
-          idempotency_key: command.idempotencyKey,
-          fencing_token: command.fencingToken,
-          status: "uncertain",
-          error: {
-            code: "CANCEL_DELIVERY_UNCERTAIN",
-            message:
-              "The browser disconnected after delivery; cancellation could not be confirmed.",
-            retryable: false
-          }
-        });
+    const commands = new Map<string, GatewayCommandRecord>();
+    for (const command of this.persistence.listGatewayCommandsForRun(runId)) {
+      commands.set(command.id, command);
+    }
+    for (const command of this.persistence.listPendingGatewayCommands()) {
+      if (this.#runId(command) === runId) commands.set(command.id, command);
+    }
+    for (const command of commands.values()) {
+      if (
+        command.state !== "terminal" &&
+        this.#requestCommandCancel(command, reasonCode)
+      ) {
+        requested += 1;
       }
-      requested += 1;
     }
     return requested;
   }
@@ -501,6 +497,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
 
   #handleResult(message: Message): void {
     const outcome = this.#commitResult(message.message_id, message.payload);
+    this.#cancelRequests.delete(String(message.payload.command_id));
     if (outcome !== "stale") this.#lastError = undefined;
     if (outcome !== "stale") {
       const command = this.persistence.getGatewayCommand(
@@ -549,6 +546,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
       fencing_token: command.fencingToken,
       status: message.payload.status
     });
+    this.#cancelRequests.delete(command.id);
   }
 
   #commitResult(
@@ -803,8 +801,15 @@ export class LocalBrowserGateway implements RuntimeProvider {
   #cancelRuntimeCommand(commandId: string): void {
     const command = this.persistence.getGatewayCommand(commandId);
     if (!command || command.state === "terminal") return;
+    this.#requestCommandCancel(command, "RUNTIME_CANCELLED");
+  }
+
+  #requestCommandCancel(
+    command: GatewayCommandRecord,
+    reasonCode: string
+  ): boolean {
     if (command.state === "queued") {
-      this.#commitResult(`cancel-${commandId}-${randomUUID()}`, {
+      this.#commitResult(`cancel-local-${command.id}`, {
         command_seq: command.commandSeq,
         command_id: command.id,
         node_execution_id: command.nodeExecutionId,
@@ -812,20 +817,56 @@ export class LocalBrowserGateway implements RuntimeProvider {
         fencing_token: command.fencingToken,
         status: "cancelled"
       });
-      return;
+      return true;
     }
     if (this.#session?.ready) {
+      if (this.#cancelRequests.has(command.id)) return false;
       this.#sendMessage(
         "cancel.request",
         {
           command_id: command.id,
           node_execution_id: command.nodeExecutionId,
           fencing_token: command.fencingToken,
-          reason_code: "RUNTIME_CANCELLED"
+          reason_code: reasonCode
         },
         `trace-${command.nodeExecutionId}`
       );
+      this.#cancelRequests.add(command.id);
+      return true;
     }
+    if (command.id.startsWith("ir2:")) {
+      // The cancelled checkpoint is the durable cancellation intent. Preserve
+      // the delivered command until a browser session can receive it.
+      return false;
+    }
+    this.#commitResult(`cancel-uncertain-${command.id}`, {
+      command_seq: command.commandSeq,
+      command_id: command.id,
+      node_execution_id: command.nodeExecutionId,
+      idempotency_key: command.idempotencyKey,
+      fencing_token: command.fencingToken,
+      status: "uncertain",
+      error: {
+        code: "CANCEL_DELIVERY_UNCERTAIN",
+        message:
+          "The browser disconnected after delivery; cancellation could not be confirmed.",
+        retryable: false
+      }
+    });
+    return true;
+  }
+
+  #runId(command: GatewayCommandRecord): string | undefined {
+    const runId = (command.payload as Record<string, unknown>).run_id;
+    return typeof runId === "string" && runId.length > 0 ? runId : undefined;
+  }
+
+  #runIsCancelled(command: GatewayCommandRecord): boolean {
+    const runId = this.#runId(command);
+    return (
+      runId !== undefined &&
+      this.persistence.getRun(runId)?.status === "cancelled"
+    );
   }
 
   #runtimeCommandId(invocationId: string): string {

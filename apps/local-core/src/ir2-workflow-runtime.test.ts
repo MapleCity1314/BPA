@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   claimAssistanceTask,
@@ -7,7 +10,12 @@ import {
   toAssistanceTaskPersistenceAggregate,
   type AssistanceTask
 } from "@bpa/assistance-core";
-import { BuiltinRuntimeProvider, RuntimeProviderRegistry } from "@bpa/node-runtime";
+import {
+  BuiltinRuntimeProvider,
+  RuntimeProviderRegistry,
+  type RuntimeProvider
+} from "@bpa/node-runtime";
+import type { EngineState } from "@bpa/engine";
 import type { AssistanceTaskRecord } from "@bpa/persistence";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import type { ArtifactRef, ExecutionPlan } from "@bpa/workflow-ir";
@@ -169,6 +177,104 @@ describe("Local Core IR2 runtime", () => {
       output: null
     });
     persistence.close();
+  });
+
+  it("durably cancels once and never applies a late provider result", () => {
+    const directory = mkdtempSync(join(tmpdir(), "bpa-ir2-cancel-"));
+    const databasePath = join(directory, "core.db");
+    try {
+      const persistence = new SqlitePersistence({ path: databasePath });
+      const cancellations: Array<{
+        invocationId: string;
+        fencingToken: number;
+      }> = [];
+      const provider: RuntimeProvider = {
+        id: "cancellable",
+        supports: () => true,
+        invoke: async () => {
+          throw new Error("cancel test must not invoke the provider");
+        },
+        cancel: async (invocationId, fencingToken) => {
+          cancellations.push({ invocationId, fencingToken });
+        }
+      };
+      const providers = new RuntimeProviderRegistry();
+      providers.register(provider);
+      const runtime = new Ir2WorkflowRuntime(persistence, providers, {
+        now: () => 1_000,
+        id: ids(),
+        random: () => 0.5
+      });
+      const run = runtime.start(plan("cancellable"), {});
+      const waiting = persistence.getEngineCheckpoint(run.id)
+        ?.state as unknown as EngineState;
+      const active = waiting.active;
+      if (active?.kind !== "call") throw new Error("fixture changed");
+
+      expect(runtime.cancel(run.id, "operator-1")).toMatchObject({
+        disposition: "advanced",
+        run: { status: "cancelled", revision: 1 }
+      });
+      expect(cancellations).toEqual([
+        {
+          invocationId: active.invocation.invocationId,
+          fencingToken: active.invocation.fencingToken
+        }
+      ]);
+      expect(persistence.listPendingEngineOutbox()).toEqual([]);
+      const cancelled = persistence.getEngineCheckpoint(run.id)!;
+      expect(cancelled.state).toMatchObject({
+        status: "cancelled",
+        error: { code: "RUN_CANCELLED" }
+      });
+      expect(cancelled.state).not.toHaveProperty("active");
+      expect(runtime.cancel(run.id, "operator-1")).toMatchObject({
+        disposition: "duplicate",
+        run: { status: "cancelled", revision: 1 }
+      });
+      expect(cancellations).toHaveLength(1);
+      expect(
+        runtime.acceptRuntimeResult({
+          runId: run.id,
+          outboxId: `effect:${active.invocation.invocationId}`,
+          inboxMessageId: "late-result",
+          invocationId: active.invocation.invocationId,
+          fencingToken: active.invocation.fencingToken,
+          outcome: {
+            status: "succeeded",
+            output: { tooLate: true },
+            evidence: [],
+            riskSignals: []
+          }
+        })
+      ).toBe("duplicate");
+      expect(persistence.getRun(run.id)).toMatchObject({
+        status: "cancelled",
+        revision: 1
+      });
+      expect(persistence.getRun(run.id)).not.toHaveProperty("output");
+      expect(
+        persistence
+          .listEvents(run.id)
+          .filter((event) => event.type === "RUN_IR2_CANCELLED")
+      ).toHaveLength(1);
+      persistence.close();
+
+      const reopened = new SqlitePersistence({ path: databasePath });
+      const restarted = new Ir2WorkflowRuntime(reopened, providers, {
+        now: () => 2_000,
+        id: ids(),
+        random: () => 0.5
+      });
+      expect(restarted.recover(run.id)).toMatchObject({
+        status: "cancelled",
+        revision: cancelled.stateRevision
+      });
+      expect(reopened.listPendingEngineOutbox()).toEqual([]);
+      reopened.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("persists blocking assistance before exposing the waiting state", () => {
