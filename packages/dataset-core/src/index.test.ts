@@ -10,8 +10,10 @@ import {
   datasetRef,
   datasetRefEquals,
   decisionReuseMismatches,
+  listDatasetRecords,
   publishDataset,
   publishedDatasetFromDefinition,
+  readDatasetRecordPage,
   revokeDecision,
   supersedeDecision,
   toDatasetVersionDefinition,
@@ -123,6 +125,87 @@ describe("canonical dataset boundary", () => {
     expect(() =>
       publishDataset(descriptor, { publishedAt: "invalid" })
     ).toThrow(/publishedAt/);
+  });
+
+  it("reads bounded pages and aggregates them with cursor safety", () => {
+    const reader = {
+      readDatasetRecords(input: {
+        id: string;
+        version: string;
+        afterRecordKey?: string;
+        limit: number;
+      }) {
+        const records =
+          input.afterRecordKey === undefined
+            ? [{ id: "one" }, { id: "two" }]
+            : [{ id: "three" }];
+        return {
+          records: records.slice(0, input.limit),
+          ...(input.afterRecordKey === undefined
+            ? { nextRecordKey: "id:two" }
+            : {})
+        };
+      }
+    };
+    expect(
+      readDatasetRecordPage(reader, {
+        id: "dataset-1",
+        version: "1.0.0",
+        limit: 2
+      })
+    ).toEqual({
+      records: [{ id: "one" }, { id: "two" }],
+      nextRecordKey: "id:two"
+    });
+    expect(
+      listDatasetRecords(reader, {
+        id: "dataset-1",
+        version: "1.0.0",
+        pageSize: 2,
+        maxRecords: 3
+      })
+    ).toEqual([{ id: "one" }, { id: "two" }, { id: "three" }]);
+  });
+
+  it("rejects invalid page bounds and repeated cursors", () => {
+    expect(() =>
+      readDatasetRecordPage(
+        { readDatasetRecords: () => ({ records: [] }) },
+        { id: "dataset-1", version: "1.0.0", limit: 1_001 }
+      )
+    ).toThrow(/page limit/);
+    expect(() =>
+      listDatasetRecords(
+        {
+          readDatasetRecords: () => ({
+            records: [{ id: "one" }],
+            nextRecordKey: "same"
+          })
+        },
+        {
+          id: "dataset-1",
+          version: "1.0.0",
+          pageSize: 1,
+          maxRecords: 3
+        }
+      )
+    ).toThrow(/repeated pagination cursor/);
+    expect(() =>
+      listDatasetRecords(
+        {
+          readDatasetRecords: () => ({
+            records: [],
+            nextRecordKey: "id:missing"
+          })
+        },
+        {
+          id: "dataset-1",
+          version: "1.0.0",
+          pageSize: 1,
+          maxRecords: 3
+        }
+      )
+    ).toThrow(/cursor without records/);
   });
 });
 

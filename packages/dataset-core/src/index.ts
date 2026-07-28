@@ -30,6 +30,35 @@ export interface DatasetRef {
   readonly digest: string;
 }
 
+export interface DatasetRecordPage<TRecord = unknown> {
+  readonly records: readonly TRecord[];
+  readonly nextRecordKey?: string;
+}
+
+/**
+ * Narrow read port shared by Local Core and other control surfaces. Keeping it
+ * here avoids coupling dataset consumers to a concrete persistence adapter.
+ */
+export interface DatasetRecordReader<TRecord = unknown> {
+  readDatasetRecords(input: {
+    readonly id: string;
+    readonly version: string;
+    readonly afterRecordKey?: string;
+    readonly limit: number;
+  }): DatasetRecordPage<TRecord>;
+}
+
+export interface ListDatasetRecordsInput {
+  readonly id: string;
+  readonly version: string;
+  readonly pageSize?: number;
+  /**
+   * A mandatory upper bound for the aggregate helper. Callers that need to
+   * stream larger datasets should use readDatasetRecordPage directly.
+   */
+  readonly maxRecords: number;
+}
+
 export interface DecisionCandidate<TValue = unknown> {
   readonly decisionId: string;
   readonly decisionType: string;
@@ -177,6 +206,91 @@ export function datasetRefEquals(
     left.id === right.id &&
     left.version === right.version &&
     left.digest === right.digest
+  );
+}
+
+function requirePageLimit(value: number, label: string, maximum: number): void {
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+    throw new Error(`${label} must be an integer between 1 and ${maximum}`);
+  }
+}
+
+export function readDatasetRecordPage<TRecord>(
+  reader: DatasetRecordReader<TRecord>,
+  input: {
+    readonly id: string;
+    readonly version: string;
+    readonly afterRecordKey?: string;
+    readonly limit?: number;
+  }
+): DatasetRecordPage<TRecord> {
+  requireText(input.id, "dataset id");
+  requireText(input.version, "dataset version");
+  const limit = input.limit ?? 100;
+  requirePageLimit(limit, "dataset page limit", 1_000);
+  if (
+    input.afterRecordKey !== undefined &&
+    input.afterRecordKey.trim().length === 0
+  ) {
+    throw new Error("afterRecordKey must not be empty");
+  }
+  const page = reader.readDatasetRecords({
+    id: input.id,
+    version: input.version,
+    ...(input.afterRecordKey === undefined
+      ? {}
+      : { afterRecordKey: input.afterRecordKey }),
+    limit
+  });
+  if (
+    page.nextRecordKey !== undefined &&
+    page.nextRecordKey.trim().length === 0
+  ) {
+    throw new Error("Dataset reader returned an empty nextRecordKey");
+  }
+  if (page.records.length > limit) {
+    throw new Error("Dataset reader returned more records than requested");
+  }
+  return Object.freeze({
+    records: Object.freeze([...page.records]),
+    ...(page.nextRecordKey === undefined
+      ? {}
+      : { nextRecordKey: page.nextRecordKey })
+  });
+}
+
+export function listDatasetRecords<TRecord>(
+  reader: DatasetRecordReader<TRecord>,
+  input: ListDatasetRecordsInput
+): readonly TRecord[] {
+  requirePageLimit(input.maxRecords, "maxRecords", 1_000_000);
+  const pageSize = Math.min(input.pageSize ?? 1_000, input.maxRecords);
+  requirePageLimit(pageSize, "dataset page size", 1_000);
+  const records: TRecord[] = [];
+  let afterRecordKey: string | undefined;
+  const seenCursors = new Set<string>();
+  while (records.length < input.maxRecords) {
+    const page = readDatasetRecordPage(reader, {
+      id: input.id,
+      version: input.version,
+      ...(afterRecordKey === undefined ? {} : { afterRecordKey }),
+      limit: Math.min(pageSize, input.maxRecords - records.length)
+    });
+    records.push(...page.records);
+    if (page.nextRecordKey === undefined) return Object.freeze(records);
+    if (page.records.length === 0) {
+      throw new Error(
+        "Dataset reader returned a pagination cursor without records"
+      );
+    }
+    if (seenCursors.has(page.nextRecordKey)) {
+      throw new Error("Dataset reader returned a repeated pagination cursor");
+    }
+    seenCursors.add(page.nextRecordKey);
+    afterRecordKey = page.nextRecordKey;
+  }
+  throw new Error(
+    `Dataset contains more than the configured maxRecords (${input.maxRecords})`
   );
 }
 
