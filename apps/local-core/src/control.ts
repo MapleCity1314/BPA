@@ -4,6 +4,11 @@ import { createServer, createConnection, type Server, type Socket } from "node:n
 import { userInfo } from "node:os";
 import { resolve } from "node:path";
 import {
+  AssistanceTaskService,
+  type AssistanceResultValidator,
+  type TaskQueueFilter
+} from "@bpa/assistance-core";
+import {
   compileCanonicalWorkflow,
   compileWorkflow,
   contentDigest,
@@ -36,6 +41,7 @@ import {
 } from "@bpa/schemas";
 import type { LocalBrowserGateway } from "./browser-gateway.js";
 import { Ir2WorkflowRuntime } from "./ir2-workflow-runtime.js";
+import { PersistenceTaskQueue } from "./persistence-task-queue.js";
 import {
   TEAM_WORKER_CODE_DIGEST,
   TEAM_WORKER_HANDLER_REFS
@@ -59,6 +65,7 @@ export interface ControlResponse {
 export class LocalCoreService {
   readonly engine: LocalWorkflowEngine;
   readonly ir2Runtime: Ir2WorkflowRuntime;
+  readonly assistance: AssistanceTaskService;
 
   constructor(
     readonly persistence: Persistence,
@@ -90,6 +97,48 @@ export class LocalCoreService {
       });
     }
     this.ir2Runtime = new Ir2WorkflowRuntime(persistence, providers);
+    const assistanceValidator: AssistanceResultValidator = {
+      validateOutput(schema, output) {
+        try {
+          const validate = compileDataValidator(schema);
+          return validate(output)
+            ? { valid: true, errors: [] }
+            : {
+                valid: false,
+                errors: formatValidationErrors(validate.errors)
+              };
+        } catch (error) {
+          return {
+            valid: false,
+            errors: [
+              `Output Schema cannot be compiled: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            ]
+          };
+        }
+      },
+      // R1 automatic continuation is denied until the referenced, audited
+      // deterministic validator is installed in a dedicated registry.
+      validateDeterministicResult() {
+        return {
+          valid: false,
+          errors: ["No audited deterministic validator is registered"]
+        };
+      }
+    };
+    this.assistance = new AssistanceTaskService({
+      queue: new PersistenceTaskQueue(persistence, this.ir2Runtime),
+      validator: assistanceValidator,
+      profilePublished: (profile) => {
+        const published = persistence.getPublished(
+          "policy",
+          profile.id,
+          profile.version
+        );
+        return published?.digest === profile.digest;
+      }
+    });
   }
 
   handle(request: ControlRequest): ControlResponse {
@@ -108,6 +157,139 @@ export class LocalCoreService {
           message: error instanceof Error ? error.message : String(error)
         }
       };
+    }
+  }
+
+  async handleAsync(request: ControlRequest): Promise<ControlResponse> {
+    if (!request.method.startsWith("assistance.task.")) {
+      return this.handle(request);
+    }
+    try {
+      const result = await this.#dispatchAssistance(
+        request,
+        request.params ?? {}
+      );
+      return { id: request.id, ok: true, result };
+    } catch (error) {
+      return {
+        id: request.id,
+        ok: false,
+        error: {
+          code:
+            error instanceof Error && error.name
+              ? error.name.toUpperCase()
+              : "CORE_ERROR",
+          message: error instanceof Error ? error.message : String(error)
+        }
+      };
+    }
+  }
+
+  async #dispatchAssistance(
+    request: ControlRequest,
+    params: Record<string, unknown>
+  ): Promise<unknown> {
+    const requestId = String(params.operationId ?? request.id);
+    const now = new Date().toISOString();
+    switch (request.method) {
+      case "assistance.task.list":
+        return this.assistance.list({
+          ...(Array.isArray(params.statuses)
+            ? {
+                statuses: params.statuses.map(String) as NonNullable<
+                  TaskQueueFilter["statuses"]
+                >
+              }
+            : {}),
+          ...(Array.isArray(params.modes)
+            ? {
+                modes: params.modes.map(String) as NonNullable<
+                  TaskQueueFilter["modes"]
+                >
+              }
+            : {}),
+          ...(params.ownerType === "ai" || params.ownerType === "human"
+            ? { ownerType: params.ownerType }
+            : {}),
+          ...(params.limit === undefined
+            ? {}
+            : { limit: Number(params.limit) })
+        });
+      case "assistance.task.claim":
+        return this.assistance.claim({
+          taskId: String(params.taskId),
+          requestId,
+          leaseId: String(params.leaseId),
+          actorId: String(params.actorId),
+          actorType: params.actorType === "human" ? "human" : "ai",
+          now,
+          leaseDurationMs: Number(params.leaseDurationMs)
+        });
+      case "assistance.task.start":
+        return this.assistance.start({
+          taskId: String(params.taskId),
+          requestId,
+          proof: {
+            leaseId: String(params.leaseId),
+            ownerId: String(params.actorId),
+            fencingToken: Number(params.fencingToken)
+          },
+          now
+        });
+      case "assistance.task.heartbeat":
+        return this.assistance.heartbeat({
+          taskId: String(params.taskId),
+          requestId,
+          proof: {
+            leaseId: String(params.leaseId),
+            ownerId: String(params.actorId),
+            fencingToken: Number(params.fencingToken)
+          },
+          now,
+          leaseDurationMs: Number(params.leaseDurationMs)
+        });
+      case "assistance.task.release":
+        return this.assistance.release({
+          taskId: String(params.taskId),
+          requestId,
+          proof: {
+            leaseId: String(params.leaseId),
+            ownerId: String(params.actorId),
+            fencingToken: Number(params.fencingToken)
+          },
+          now
+        });
+      case "assistance.task.submit": {
+        const resolverType =
+          params.resolverType === "human" ||
+          params.resolverType === "human_ai"
+            ? params.resolverType
+            : "ai";
+        return this.assistance.submit({
+          taskId: String(params.taskId),
+          requestId,
+          proof: {
+            leaseId: String(params.leaseId),
+            ownerId: String(params.actorId),
+            fencingToken: Number(params.fencingToken)
+          },
+          now,
+          output: params.output,
+          resolverType,
+          resolverId: String(params.actorId),
+          ...(params.provider === undefined
+            ? {}
+            : { provider: String(params.provider) }),
+          ...(params.model === undefined
+            ? {}
+            : { model: String(params.model) }),
+          ...(params.confidence === undefined
+            ? {}
+            : { confidence: Number(params.confidence) })
+        });
+      }
+      default:
+        throw new Error(`Unknown control method: ${request.method}`);
     }
   }
 
@@ -668,24 +850,28 @@ export class LocalControlServer {
             );
             return;
           }
-          const legacyResponse = this.service.handle({
-            id: request.requestId,
-            method: request.method,
-            params: request.params
-          });
-          const response: ControlResponseEnvelope = legacyResponse.ok
-            ? {
-                version: "bpa.control/1",
-                kind: "result",
-                requestId: request.requestId,
-                result: legacyResponse.result
-              }
-            : controlV1Error(
-                request.requestId,
-                mapLegacyErrorCode(legacyResponse),
-                legacyResponse.error?.message ?? "Core request failed"
-              );
-          socket.write(Buffer.from(encodeControlEnvelope(response)));
+          void this.service
+            .handleAsync({
+              id: request.requestId,
+              method: request.method,
+              params: request.params
+            })
+            .then((legacyResponse) => {
+              if (socket.destroyed) return;
+              const response: ControlResponseEnvelope = legacyResponse.ok
+                ? {
+                    version: "bpa.control/1",
+                    kind: "result",
+                    requestId: request.requestId,
+                    result: legacyResponse.result
+                  }
+                : controlV1Error(
+                    request.requestId,
+                    mapLegacyErrorCode(legacyResponse),
+                    legacyResponse.error?.message ?? "Core request failed"
+                  );
+              socket.write(Buffer.from(encodeControlEnvelope(response)));
+            });
           return;
         }
         if (nativeConnectionId) {
@@ -750,15 +936,15 @@ export class LocalControlServer {
           }
           return;
         }
-        socket.write(
-          encodeFrame(
-            this.service.handle({
+        void this.service
+          .handleAsync({
               id: request.id,
               method: request.method,
               ...(request.params ? { params: request.params } : {})
             })
-          )
-        );
+          .then((response) => {
+            if (!socket.destroyed) socket.write(encodeFrame(response));
+          });
       });
       socket.once("close", () => {
         if (nativeConnectionId) {
