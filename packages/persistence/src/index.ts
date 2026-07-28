@@ -316,6 +316,14 @@ export interface SubmitAssistanceAndWakeInput {
   inbox: InboxMessageRecord;
   wakeEvent: ExecutionEventRecord;
   outbox?: OutboxMessage;
+  checkpoint?: EngineCheckpointRecord;
+  expectedCheckpointRevision?: number;
+  nextRunStatus?: RunStatus;
+  currentNodeKey?: string;
+  output?: unknown;
+  assistanceTasks?: readonly AssistanceTaskRecord[];
+  additionalOutbox?: readonly OutboxMessage[];
+  acknowledgeOutboxIds?: readonly string[];
 }
 
 export interface AssistanceTaskListFilter {

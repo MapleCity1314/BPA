@@ -39,6 +39,7 @@ export interface TaskQueuePort {
     expectedRevision: number;
     requestId: string;
     next: AssistanceTask;
+    wakeRun?: boolean;
   }): Promise<TaskQueueCommitResult>;
 }
 
@@ -294,7 +295,11 @@ export class AssistanceTaskService {
       taskId: current.taskId,
       expectedRevision: current.revision,
       requestId: input.requestId,
-      next: transitioned.task
+      next: transitioned.task,
+      wakeRun:
+        input.resolverType === "human" ||
+        input.resolverType === "human_ai" ||
+        autoContinue.allowed
     });
     if (committed.status === "conflict") {
       return {
@@ -363,6 +368,7 @@ export class MemoryTaskQueue implements TaskQueuePort {
     expectedRevision: number;
     requestId: string;
     next: AssistanceTask;
+    wakeRun?: boolean;
   }): Promise<TaskQueueCommitResult> {
     const duplicate = this.#requests.get(input.requestId);
     if (duplicate) return { status: "duplicate", task: duplicate };

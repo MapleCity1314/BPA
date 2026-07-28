@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
+import {
+  claimAssistanceTask,
+  fromAssistanceTaskPersistenceAggregate,
+  releaseAssistanceTask,
+  submitAssistanceTask,
+  toAssistanceTaskPersistenceAggregate,
+  type AssistanceTask
+} from "@bpa/assistance-core";
 import { BuiltinRuntimeProvider, RuntimeProviderRegistry } from "@bpa/node-runtime";
+import type { AssistanceTaskRecord } from "@bpa/persistence";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import type { ArtifactRef, ExecutionPlan } from "@bpa/workflow-ir";
 import { Ir2WorkflowRuntime } from "./ir2-workflow-runtime.js";
@@ -90,6 +99,15 @@ function plan(providerId = "builtin"): ExecutionPlan {
 function ids() {
   let sequence = 0;
   return () => `id-${++sequence}`;
+}
+
+function taskRecord(task: AssistanceTask): AssistanceTaskRecord {
+  const aggregate = toAssistanceTaskPersistenceAggregate(task);
+  return {
+    task: aggregate.definition,
+    privateState: aggregate.privateState,
+    fencingCounter: aggregate.privateState.fencingCounter
+  };
 }
 
 describe("Local Core IR2 runtime", () => {
@@ -223,6 +241,152 @@ describe("Local Core IR2 runtime", () => {
     expect(persistence.listPendingEngineOutbox()).toMatchObject([
       { topic: "assistance.requested" }
     ]);
+    persistence.close();
+  });
+
+  it("atomically resumes a waiting Run after a reclaimed human task completes", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const runtime = new Ir2WorkflowRuntime(
+      persistence,
+      new RuntimeProviderRegistry(),
+      {
+        now: () => 1_000,
+        id: ids(),
+        random: () => 0.5
+      }
+    );
+    const profile = {
+      kind: "assistance_profile" as const,
+      id: "profile.confirm",
+      version: "1.0.0",
+      digest: `sha256:${digest("e")}`
+    };
+    const assistancePlan: ExecutionPlan = {
+      irVersion: "bpa.workflow-ir/2",
+      workflow: {
+        id: "test.human-confirm",
+        version: "1.0.0",
+        digest: `sha256:${digest("f")}`
+      },
+      artifactClosure: { entries: [profile] },
+      riskSnapshot: [],
+      limits: { maxDepth: 1, maxStepExecutions: 10 },
+      entry: "confirm",
+      steps: {
+        confirm: {
+          kind: "wait.assistance",
+          key: "confirm",
+          taskKind: "human_confirm",
+          profile,
+          deadlineMs: 60_000,
+          onUnavailable: "fail",
+          blocking: true,
+          routes: {
+            resolved: "done",
+            escalated: "failed",
+            expired: "failed",
+            unavailable: "failed"
+          }
+        },
+        done: { kind: "terminal", key: "done", status: "succeeded" },
+        failed: {
+          kind: "terminal",
+          key: "failed",
+          status: "failed",
+          errorCode: "CONFIRM_FAILED"
+        }
+      }
+    };
+    const run = runtime.start(assistancePlan, {});
+    const queuedRecord = persistence.listAssistanceTasks({ limit: 1 })[0];
+    if (!queuedRecord) throw new Error("Assistance fixture was not created");
+    const queued = fromAssistanceTaskPersistenceAggregate({
+      definition: queuedRecord.task,
+      privateState: queuedRecord.privateState
+    });
+    const firstClaim = claimAssistanceTask(queued, {
+      leaseId: "lease-1",
+      ownerId: "operator-1",
+      ownerType: "human",
+      now: "1970-01-01T00:00:01.100Z",
+      leaseDurationMs: 10_000
+    });
+    if (!firstClaim.ok) throw new Error(firstClaim.error);
+    expect(
+      persistence.commitAssistanceTask({
+        task: taskRecord(firstClaim.task),
+        expectedRevision: 0,
+        expectedFencingCounter: 0
+      }).status
+    ).toBe("accepted");
+    const released = releaseAssistanceTask(firstClaim.task, {
+      leaseId: "lease-1",
+      ownerId: "operator-1",
+      fencingToken: 1,
+      now: "1970-01-01T00:00:01.200Z"
+    });
+    if (!released.ok) throw new Error(released.error);
+    expect(
+      persistence.commitAssistanceTask({
+        task: taskRecord(released.task),
+        expectedRevision: 1,
+        expectedFencingCounter: 1
+      }).status
+    ).toBe("accepted");
+    const secondClaim = claimAssistanceTask(released.task, {
+      leaseId: "lease-2",
+      ownerId: "operator-2",
+      ownerType: "human",
+      now: "1970-01-01T00:00:01.300Z",
+      leaseDurationMs: 10_000
+    });
+    if (!secondClaim.ok) throw new Error(secondClaim.error);
+    expect(secondClaim.task.fencingCounter).toBe(2);
+    expect(
+      persistence.commitAssistanceTask({
+        task: taskRecord(secondClaim.task),
+        expectedRevision: 2,
+        expectedFencingCounter: 1
+      }).status
+    ).toBe("accepted");
+    const completed = submitAssistanceTask(secondClaim.task, {
+      leaseId: "lease-2",
+      ownerId: "operator-2",
+      fencingToken: 2,
+      now: "1970-01-01T00:00:01.400Z",
+      output: { approved: true },
+      resolverType: "human",
+      resolverId: "operator-2"
+    });
+    if (!completed.ok) throw new Error(completed.error);
+    expect(
+      runtime.commitAssistanceTask({
+        requestId: "submit-human-1",
+        task: taskRecord(completed.task),
+        expectedRevision: 3,
+        expectedFencingCounter: 2,
+        wakeRun: true
+      })
+    ).toMatchObject({ status: "accepted" });
+    expect(persistence.getRun(run.id)).toMatchObject({
+      status: "succeeded",
+      revision: 1,
+      output: { approved: true }
+    });
+    expect(persistence.getEngineCheckpoint(run.id)).toMatchObject({
+      stateRevision: 3,
+      state: { status: "succeeded" }
+    });
+    expect(persistence.listPendingEngineOutbox()).toEqual([]);
+    expect(
+      runtime.commitAssistanceTask({
+        requestId: "submit-human-1",
+        task: taskRecord(completed.task),
+        expectedRevision: 3,
+        expectedFencingCounter: 2,
+        wakeRun: true
+      }).status
+    ).toBe("duplicate");
     persistence.close();
   });
 });

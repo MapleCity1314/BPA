@@ -943,7 +943,8 @@ export class SqlitePersistence implements Persistence {
       if (
         this.#db
           .prepare("SELECT 1 FROM engine_inbox WHERE message_id = ?")
-          .get(input.inbox.id)
+          .get(input.inbox.id) ||
+        this.getAssistanceRequestResult(input.inbox.id)
       ) {
         return { status: "duplicate" as const };
       }
@@ -960,6 +961,11 @@ export class SqlitePersistence implements Persistence {
         !assistanceFencingConsistent(currentTask) ||
         !assistanceFencingConsistent(input.task) ||
         currentRun.revision !== input.expectedRunRevision ||
+        (input.checkpoint !== undefined &&
+          (input.checkpoint.runId !== input.task.task.runId ||
+            input.expectedCheckpointRevision === undefined ||
+            input.checkpoint.stateRevision <=
+              input.expectedCheckpointRevision)) ||
         !["waiting_assistance", "waiting_human"].includes(currentRun.status)
       ) {
         return { status: "stale" as const };
@@ -987,11 +993,15 @@ export class SqlitePersistence implements Persistence {
       const runUpdate = this.#db
         .prepare(
           `UPDATE workflow_runs
-           SET status = 'running', revision = revision + 1, updated_at = ?
+           SET status = ?, revision = revision + 1, current_node_key = ?,
+               output_json = ?, updated_at = ?
            WHERE id = ? AND revision = ?
              AND status IN ('waiting_assistance', 'waiting_human')`
         )
         .run(
+          input.nextRunStatus ?? "running",
+          input.currentNodeKey ?? null,
+          input.output === undefined ? null : json(input.output),
           input.wakeEvent.occurredAt,
           input.task.task.runId,
           input.expectedRunRevision
@@ -999,8 +1009,65 @@ export class SqlitePersistence implements Persistence {
       if (taskUpdate.changes !== 1 || runUpdate.changes !== 1) {
         throw new RevisionConflictError("Assistance wake CAS failed");
       }
+      if (input.checkpoint) {
+        const checkpointUpdate = this.#db
+          .prepare(
+            `UPDATE engine_checkpoints
+             SET state_version = ?, state_revision = ?, state_json = ?,
+                 updated_at = ?
+             WHERE run_id = ? AND state_revision = ?`
+          )
+          .run(
+            input.checkpoint.stateVersion,
+            input.checkpoint.stateRevision,
+            json(input.checkpoint.state),
+            input.checkpoint.updatedAt,
+            input.checkpoint.runId,
+            input.expectedCheckpointRevision
+          );
+        if (checkpointUpdate.changes !== 1) {
+          throw new RevisionConflictError("Assistance checkpoint CAS failed");
+        }
+      }
+      this.#db
+        .prepare(
+          `INSERT INTO assistance_task_request_results(
+            request_id, task_id, expected_revision, expected_fencing_counter,
+            result_json, recorded_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          input.inbox.id,
+          input.task.task.taskId,
+          input.expectedTaskRevision,
+          input.expectedFencingToken,
+          json(input.task),
+          input.wakeEvent.occurredAt
+        );
       this.#insertEvent(input.wakeEvent);
       if (input.outbox) this.#insertOutbox("engine_outbox", input.outbox);
+      for (const task of input.assistanceTasks ?? []) {
+        if (task.task.runId !== input.task.task.runId) {
+          throw new Error("Assistance task belongs to a different Run");
+        }
+        this.#insertAssistanceTask(task);
+      }
+      for (const message of input.additionalOutbox ?? []) {
+        this.#insertOutbox("engine_outbox", message);
+      }
+      for (const outboxId of input.acknowledgeOutboxIds ?? []) {
+        const acknowledged = this.#db
+          .prepare(
+            `UPDATE engine_outbox SET acknowledged_at = ?
+             WHERE id = ? AND acknowledged_at IS NULL`
+          )
+          .run(input.wakeEvent.occurredAt, outboxId);
+        if (acknowledged.changes !== 1) {
+          throw new RevisionConflictError(
+            `Engine outbox ${outboxId} is missing or already acknowledged`
+          );
+        }
+      }
       this.#db
         .prepare(
           "UPDATE engine_inbox SET consumed_at = ? WHERE message_id = ?"

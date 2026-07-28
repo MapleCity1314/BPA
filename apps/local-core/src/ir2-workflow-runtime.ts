@@ -15,6 +15,7 @@ import { contentDigest } from "@bpa/compiler";
 import { RuntimeProviderRegistry, type RuntimeOutcome } from "@bpa/node-runtime";
 import type {
   AssistanceTaskRecord,
+  CommitAssistanceTaskRequestResult,
   EngineCheckpointRecord,
   ExecutionEventRecord,
   InboxMessageRecord,
@@ -230,6 +231,110 @@ export class Ir2WorkflowRuntime {
       acknowledgeOutboxIds: [input.outboxId]
     });
     return "advanced";
+  }
+
+  commitAssistanceTask(input: {
+    requestId: string;
+    task: AssistanceTaskRecord;
+    expectedRevision: number;
+    expectedFencingCounter: number;
+    wakeRun: boolean;
+  }): CommitAssistanceTaskRequestResult {
+    const duplicate = this.#persistence.getAssistanceRequestResult(
+      input.requestId
+    );
+    if (duplicate) return { status: "duplicate", task: duplicate };
+    if (!input.wakeRun) {
+      return this.#persistence.commitAssistanceTaskRequest({
+        requestId: input.requestId,
+        task: input.task,
+        expectedRevision: input.expectedRevision,
+        expectedFencingCounter: input.expectedFencingCounter,
+        recordedAt: new Date(this.#now()).toISOString()
+      });
+    }
+    if (input.task.task.status !== "completed") {
+      return { status: "stale" };
+    }
+    const run = this.#persistence.getRun(input.task.task.runId);
+    const plan = this.#persistence.getRunPlanSnapshot(input.task.task.runId);
+    const checkpoint = this.#persistence.getEngineCheckpoint(
+      input.task.task.runId
+    );
+    if (!run || !plan || !checkpoint) return { status: "stale" };
+    const state = checkpoint.state as unknown as EngineState;
+    const active = state.active;
+    if (
+      active?.kind !== "assistance" ||
+      active.request.taskId !== input.task.task.taskId
+    ) {
+      return { status: "stale" };
+    }
+    const transition = this.#engine(plan.planJson).acceptAssistanceOutcome({
+      state,
+      taskId: input.task.task.taskId,
+      // Task lease fencing and Engine request fencing are separate domains.
+      // A task can be reclaimed several times while the frozen Engine request
+      // keeps its original token.
+      fencingToken: active.request.fencingToken,
+      outcome: {
+        status: "resolved",
+        output: jsonValue(input.task.task.resolution?.output ?? null)
+      }
+    });
+    if (transition.disposition !== "advanced") {
+      return { status: "stale" };
+    }
+    const timestamp = new Date(this.#now()).toISOString();
+    const effects = this.#persistableEffects(
+      transition.effects,
+      timestamp
+    );
+    const stepKey = currentStep(transition.state);
+    const result = this.#persistence.submitTaskAndWakeRun({
+      task: input.task,
+      expectedTaskRevision: input.expectedRevision,
+      expectedFencingToken: input.expectedFencingCounter,
+      expectedRunRevision: run.revision,
+      inbox: {
+        id: input.requestId,
+        topic: "assistance.result",
+        aggregateId: input.task.task.taskId,
+        payload: jsonValue(input.task),
+        receivedAt: timestamp,
+        appliedAt: timestamp
+      },
+      wakeEvent: this.#event(
+        run.id,
+        this.#persistence.listEvents(run.id).length + 1,
+        "ASSISTANCE_RESULT_APPLIED",
+        {
+          taskId: input.task.task.taskId,
+          stateRevision: transition.state.revision
+        },
+        timestamp
+      ),
+      checkpoint: this.#checkpoint(transition.state, timestamp),
+      expectedCheckpointRevision: checkpoint.stateRevision,
+      nextRunStatus: runStatus(transition.state),
+      ...(stepKey ? { currentNodeKey: stepKey } : {}),
+      ...(transition.state.output === undefined
+        ? {}
+        : { output: transition.state.output }),
+      assistanceTasks: effects.tasks,
+      additionalOutbox: effects.outbox,
+      acknowledgeOutboxIds: [`effect:${input.task.task.taskId}`]
+    });
+    return result.status === "accepted"
+      ? { status: "accepted", task: result.task }
+      : result.status === "duplicate"
+        ? {
+            status: "duplicate",
+            task:
+              this.#persistence.getAssistanceRequestResult(input.requestId) ??
+              input.task
+          }
+        : { status: "stale" };
   }
 
   #engine(plan: ExecutionPlan): DeterministicWorkflowEngine {
