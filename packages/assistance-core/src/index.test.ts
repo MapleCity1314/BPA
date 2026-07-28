@@ -1,276 +1,369 @@
 import { describe, expect, it } from "vitest";
+import { validateAssistanceTask } from "@bpa/schemas";
 import {
+  awaitHumanAssistanceTask,
   claimAssistanceTask,
   createAssistanceTask,
   evaluateAutoContinue,
+  fromAssistanceTaskPersistenceAggregate,
   heartbeatAssistanceTask,
   releaseAssistanceTask,
-  submitAssistanceTask
+  startAssistanceProcessing,
+  submitAssistanceTask,
+  terminateAssistanceTask,
+  toAssistanceTaskDefinition,
+  toAssistanceTaskPersistenceAggregate
 } from "./index.js";
 
-function pendingTask() {
+const t0 = "2026-07-28T00:00:00.000Z";
+const t1 = "2026-07-28T00:00:01.000Z";
+const t2 = "2026-07-28T00:00:02.000Z";
+const t3 = "2026-07-28T00:00:03.000Z";
+const digestA = `sha256:${"a".repeat(64)}`;
+const digestB = `sha256:${"b".repeat(64)}`;
+const digestC = `sha256:${"c".repeat(64)}`;
+
+const defaultPolicy = {
+  autoContinue: true,
+  r1ProfileApproved: true,
+  durableDecision: false,
+  deterministicValidator: {
+    id: "validator",
+    version: "1.0.0",
+    digest: digestA
+  },
+  onUnavailable: "continue_unresolved" as const
+};
+
+function queued() {
   return createAssistanceTask({
     taskId: "task-1",
+    runId: "run-1",
+    stepInstanceId: "step-1",
+    profile: {
+      id: "profile-1",
+      version: "1.0.0",
+      digest: digestB
+    },
     mode: "ai_review",
-    profileId: "profile-1",
     riskLevel: "R1",
-    payload: { batch: "batch-1" },
-    now: 100
-  });
-}
-
-function claimAt(now = 200) {
-  return claimAssistanceTask(pendingTask(), {
-    leaseId: "lease-1",
-    claimantId: "worker-1",
-    now,
-    leaseDurationMs: 100
+    input: { batch: "batch-1" },
+    outputSchema: { type: "object" },
+    policySnapshot: defaultPolicy,
+    contextRefs: [
+      {
+        evidenceId: "evidence-1",
+        classification: "internal",
+        digest: digestC
+      }
+    ],
+    deadline: "2026-07-29T00:00:00.000Z",
+    now: t0
   });
 }
 
 const proof = {
-  leaseId: "lease-1",
-  claimantId: "worker-1",
+  leaseId: "private-lease-1",
+  ownerId: "worker-1",
   fencingToken: 1
 };
 
-describe("assistance task state machine", () => {
-  it("creates an immutable pending task and validates its identity", () => {
-    const task = pendingTask();
-    expect(task).toMatchObject({
-      status: "pending",
-      fencingCounter: 0,
-      createdAt: 100
-    });
+function claimed() {
+  const result = claimAssistanceTask(queued(), {
+    leaseId: proof.leaseId,
+    ownerId: proof.ownerId,
+    now: t1,
+    leaseDurationMs: 10_000
+  });
+  if (!result.ok) throw new Error(result.error);
+  return result.task;
+}
+
+describe("canonical assistance aggregate", () => {
+  it("creates a queued aggregate and serializes the canonical DTO", () => {
+    const task = queued();
+    expect(task.status).toBe("queued");
+    expect(task.revision).toBe(0);
     expect(Object.isFrozen(task)).toBe(true);
+    const definition = toAssistanceTaskDefinition(task);
+    expect(definition).toMatchObject({
+      apiVersion: "bpa.assistance/v1alpha1",
+      status: "queued",
+      runId: "run-1",
+      policySnapshot: defaultPolicy
+    });
+    expect(validateAssistanceTask(definition)).toBe(true);
     expect(() =>
       createAssistanceTask({
-        taskId: "",
-        mode: "human_action",
-        profileId: "profile",
-        riskLevel: "R2",
-        payload: null,
-        now: 0
+        ...task,
+        profile: { ...task.profile, digest: "" },
+        now: t0
       })
-    ).toThrow(/identity and timestamp/);
+    ).toThrow(/invalid/);
   });
 
-  it("claims, heartbeats, releases and reclaims with increasing fencing tokens", () => {
-    const claimed = claimAt();
-    expect(claimed).toMatchObject({
-      ok: true,
-      task: {
-        status: "claimed",
-        fencingCounter: 1,
-        lease: { fencingToken: 1, expiresAt: 300 }
-      }
-    });
-    if (!claimed.ok) throw new Error("claim failed");
-
-    const heartbeat = heartbeatAssistanceTask(claimed.task, {
+  it("moves claimed to processing, heartbeats, then releases", () => {
+    const processing = startAssistanceProcessing(claimed(), {
       ...proof,
-      now: 250,
-      leaseDurationMs: 200
+      now: t2
+    });
+    expect(processing).toMatchObject({
+      ok: true,
+      task: { status: "processing", revision: 2 }
+    });
+    if (!processing.ok) throw new Error(processing.error);
+    const heartbeat = heartbeatAssistanceTask(processing.task, {
+      ...proof,
+      now: t3,
+      leaseDurationMs: 20_000
     });
     expect(heartbeat).toMatchObject({
       ok: true,
-      task: { lease: { heartbeatAt: 250, expiresAt: 450 } }
+      task: {
+        status: "processing",
+        lease: { heartbeatAt: t3 }
+      }
     });
-    if (!heartbeat.ok) throw new Error("heartbeat failed");
+    if (!heartbeat.ok) throw new Error(heartbeat.error);
+    expect(
+      releaseAssistanceTask(heartbeat.task, {
+        ...proof,
+        now: "2026-07-28T00:00:04.000Z"
+      })
+    ).toMatchObject({ ok: true, task: { status: "queued" } });
+  });
 
-    const released = releaseAssistanceTask(heartbeat.task, {
+  it("supports processing to awaiting-human and a later human claim", () => {
+    const processing = startAssistanceProcessing(claimed(), {
       ...proof,
-      now: 300
+      now: t2
     });
-    expect(released).toMatchObject({
+    if (!processing.ok) throw new Error(processing.error);
+    const waiting = awaitHumanAssistanceTask(processing.task, {
+      ...proof,
+      now: t3
+    });
+    expect(waiting).toMatchObject({
       ok: true,
-      task: { status: "pending", fencingCounter: 1 }
+      task: { status: "awaiting_human" }
     });
-    if (!released.ok) throw new Error("release failed");
+    if (!waiting.ok) throw new Error(waiting.error);
+    const humanClaim = claimAssistanceTask(waiting.task, {
+      leaseId: "human-lease",
+      ownerId: "human-1",
+      now: "2026-07-28T00:00:04.000Z",
+      leaseDurationMs: 10_000
+    });
+    expect(humanClaim).toMatchObject({
+      ok: true,
+      task: { status: "claimed", fencingCounter: 2 }
+    });
+  });
 
-    const reclaimed = claimAssistanceTask(released.task, {
-      leaseId: "lease-2",
-      claimantId: "worker-2",
-      now: 350,
-      leaseDurationMs: 100
+  it("takes over an expired lease with a new fencing token", () => {
+    const first = claimed();
+    expect(
+      claimAssistanceTask(first, {
+        leaseId: "too-early",
+        ownerId: "worker-2",
+        now: t2,
+        leaseDurationMs: 10_000
+      })
+    ).toEqual({ ok: false, error: "TASK_ALREADY_CLAIMED" });
+    const takeover = claimAssistanceTask(first, {
+      leaseId: "private-lease-2",
+      ownerId: "worker-2",
+      now: "2026-07-28T00:00:11.000Z",
+      leaseDurationMs: 10_000
     });
-    expect(reclaimed).toMatchObject({
+    expect(takeover).toMatchObject({
       ok: true,
       task: {
+        status: "claimed",
         fencingCounter: 2,
-        lease: { fencingToken: 2 }
+        lease: { fencingToken: 2, ownerId: "worker-2" }
       }
     });
   });
 
-  it("allows takeover after expiry and rejects stale or mismatched lease proofs", () => {
-    const first = claimAt();
-    if (!first.ok) throw new Error("claim failed");
-    expect(
-      claimAssistanceTask(first.task, {
-        leaseId: "lease-2",
-        claimantId: "worker-2",
-        now: 250,
-        leaseDurationMs: 100
-      })
-    ).toEqual({ ok: false, error: "TASK_ALREADY_CLAIMED" });
-
-    const second = claimAssistanceTask(first.task, {
-      leaseId: "lease-2",
-      claimantId: "worker-2",
-      now: 300,
-      leaseDurationMs: 100
-    });
-    if (!second.ok) throw new Error("takeover failed");
-    expect(
-      submitAssistanceTask(second.task, {
-        ...proof,
-        now: 320,
-        result: "stale"
-      })
-    ).toEqual({ ok: false, error: "FENCING_TOKEN_MISMATCH" });
-    expect(
-      heartbeatAssistanceTask(second.task, {
-        leaseId: "wrong",
-        claimantId: "worker-2",
-        fencingToken: 2,
-        now: 320,
-        leaseDurationMs: 100
-      })
-    ).toEqual({ ok: false, error: "LEASE_ID_MISMATCH" });
-    expect(
-      releaseAssistanceTask(second.task, {
-        leaseId: "lease-2",
-        claimantId: "wrong",
-        fencingToken: 2,
-        now: 320
-      })
-    ).toEqual({ ok: false, error: "CLAIMANT_MISMATCH" });
-    expect(
-      releaseAssistanceTask(second.task, {
-        leaseId: "lease-2",
-        claimantId: "worker-2",
-        fencingToken: 2,
-        now: 400
-      })
-    ).toEqual({ ok: false, error: "LEASE_EXPIRED" });
-  });
-
-  it("submits once and rejects duplicate or late submissions", () => {
-    const claimed = claimAt();
-    if (!claimed.ok) throw new Error("claim failed");
-    const completed = submitAssistanceTask(claimed.task, {
+  it("submits a canonical resolution once", () => {
+    const completed = submitAssistanceTask(claimed(), {
       ...proof,
-      now: 250,
-      result: { choice: "record-1" },
-      confidence: 0.96
+      now: t2,
+      output: { selection: "record-1" },
+      resolverType: "ai",
+      resolverId: "codex-1",
+      provider: "openai",
+      model: "model-1",
+      confidence: 0.9
     });
     expect(completed).toMatchObject({
       ok: true,
       task: {
         status: "completed",
-        completion: {
-          submittedBy: "worker-1",
-          confidence: 0.96
+        resolution: {
+          resolverType: "ai",
+          output: { selection: "record-1" }
         }
       }
     });
-    if (!completed.ok) throw new Error("submit failed");
+    if (!completed.ok) throw new Error(completed.error);
+    const definition = toAssistanceTaskDefinition(completed.task);
+    expect(definition.resolution).toEqual(completed.task.resolution);
+    expect(validateAssistanceTask(definition)).toBe(true);
     expect(
       submitAssistanceTask(completed.task, {
         ...proof,
-        now: 260,
-        result: { choice: "record-2" }
+        now: t3,
+        output: null,
+        resolverType: "ai",
+        resolverId: "codex-1"
       })
-    ).toEqual({ ok: false, error: "TASK_ALREADY_COMPLETED" });
-    expect(
-      submitAssistanceTask(claimed.task, {
-        ...proof,
-        now: 300,
-        result: null
-      })
-    ).toEqual({ ok: false, error: "LEASE_EXPIRED" });
+    ).toEqual({ ok: false, error: "TASK_TERMINAL" });
   });
 
-  it("rejects invalid transitions without mutating the task", () => {
-    const pending = pendingTask();
+  it.each(["expired", "cancelled", "failed"] as const)(
+    "supports the %s terminal transition",
+    (status) => {
+      const result = terminateAssistanceTask(queued(), {
+        status,
+        reason: `${status} reason`,
+        now: t1
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        task: { status, terminalReason: `${status} reason` }
+      });
+      if (!result.ok) throw new Error(result.error);
+      expect(
+        claimAssistanceTask(result.task, {
+          leaseId: "lease",
+          ownerId: "worker",
+          now: t2,
+          leaseDurationMs: 1_000
+        })
+      ).toEqual({ ok: false, error: "TASK_TERMINAL" });
+    }
+  );
+
+  it("rejects stale, mismatched, expired, and invalid state transitions", () => {
+    const task = claimed();
     expect(
-      heartbeatAssistanceTask(pending, {
+      heartbeatAssistanceTask(task, {
         ...proof,
-        now: 150,
-        leaseDurationMs: 100
+        fencingToken: 0,
+        now: t2,
+        leaseDurationMs: 1_000
       })
+    ).toEqual({ ok: false, error: "INVALID_INPUT" });
+    expect(
+      heartbeatAssistanceTask(task, {
+        ...proof,
+        fencingToken: 2,
+        now: t2,
+        leaseDurationMs: 1_000
+      })
+    ).toEqual({ ok: false, error: "FENCING_TOKEN_MISMATCH" });
+    expect(
+      heartbeatAssistanceTask(task, {
+        ...proof,
+        leaseId: "wrong",
+        now: t2,
+        leaseDurationMs: 1_000
+      })
+    ).toEqual({ ok: false, error: "LEASE_ID_MISMATCH" });
+    expect(
+      heartbeatAssistanceTask(task, {
+        ...proof,
+        ownerId: "wrong",
+        now: t2,
+        leaseDurationMs: 1_000
+      })
+    ).toEqual({ ok: false, error: "OWNER_MISMATCH" });
+    expect(
+      heartbeatAssistanceTask(task, {
+        ...proof,
+        now: "2026-07-28T00:00:11.000Z",
+        leaseDurationMs: 1_000
+      })
+    ).toEqual({ ok: false, error: "LEASE_EXPIRED" });
+    expect(
+      startAssistanceProcessing(queued(), { ...proof, now: t1 })
     ).toEqual({ ok: false, error: "TASK_NOT_CLAIMED" });
     expect(
-      claimAssistanceTask(pending, {
-        leaseId: "",
-        claimantId: "worker",
-        now: 150,
-        leaseDurationMs: 100
+      awaitHumanAssistanceTask(task, { ...proof, now: t2 })
+    ).toEqual({ ok: false, error: "INVALID_TRANSITION" });
+  });
+
+  it("round-trips through an explicit canonical/private persistence boundary", () => {
+    const task = claimed();
+    const persisted = toAssistanceTaskPersistenceAggregate(task);
+    expect(persisted.definition.lease).not.toHaveProperty("leaseId");
+    expect(persisted.privateState).toMatchObject({
+      leaseId: proof.leaseId,
+      fencingCounter: 1
+    });
+    expect(fromAssistanceTaskPersistenceAggregate(persisted)).toEqual(task);
+    expect(() =>
+      fromAssistanceTaskPersistenceAggregate({
+        definition: persisted.definition,
+        privateState: { fencingCounter: 1 }
       })
-    ).toEqual({ ok: false, error: "INVALID_INPUT" });
-    const claimed = claimAt();
-    if (!claimed.ok) throw new Error("claim failed");
-    expect(
-      heartbeatAssistanceTask(claimed.task, {
-        ...proof,
-        now: 250,
-        leaseDurationMs: 0
-      })
-    ).toEqual({ ok: false, error: "INVALID_INPUT" });
-    expect(
-      submitAssistanceTask(claimed.task, {
-        ...proof,
-        now: 250,
-        result: null,
-        confidence: 2
-      })
-    ).toEqual({ ok: false, error: "INVALID_INPUT" });
-    expect(pending.status).toBe("pending");
+    ).toThrow(/private lease state/);
   });
 });
 
-describe("automatic continuation policy", () => {
+describe("automatic continuation policy snapshot", () => {
   const base = {
     mode: "ai_review" as const,
-    profileId: "profile-1",
+    riskLevel: "R0" as const,
     profilePublished: true,
-    r1ProfileAllowlist: ["profile-1"],
-    deterministicResultValid: true
+    policySnapshot: defaultPolicy,
+    deterministicResultValid: true,
+    confidence: 1
   };
 
-  it("allows published R0 profiles by default", () => {
-    expect(evaluateAutoContinue({ ...base, riskLevel: "R0" })).toEqual({
+  it("allows R0 only when the snapshot explicitly enables it", () => {
+    expect(evaluateAutoContinue(base)).toEqual({
       allowed: true,
-      reason: "R0_PUBLISHED_PROFILE"
+      reason: "R0_POLICY_APPROVED"
     });
     expect(
       evaluateAutoContinue({
         ...base,
-        riskLevel: "R0",
-        profilePublished: false
+        policySnapshot: { ...defaultPolicy, autoContinue: false }
       })
-    ).toEqual({ allowed: false, reason: "PROFILE_NOT_PUBLISHED" });
+    ).toEqual({
+      allowed: false,
+      reason: "POLICY_AUTO_CONTINUE_DISABLED"
+    });
   });
 
-  it("requires both an R1 allowlist entry and deterministic validation", () => {
+  it("requires the full R1 policy and validator gates", () => {
     expect(evaluateAutoContinue({ ...base, riskLevel: "R1" })).toEqual({
       allowed: true,
-      reason: "R1_ALLOWLISTED_AND_VALIDATED"
+      reason: "R1_POLICY_APPROVED_AND_VALIDATED"
     });
     expect(
       evaluateAutoContinue({
         ...base,
         riskLevel: "R1",
-        r1ProfileAllowlist: []
+        policySnapshot: { ...defaultPolicy, r1ProfileApproved: false }
       })
-    ).toEqual({ allowed: false, reason: "R1_PROFILE_NOT_ALLOWLISTED" });
+    ).toEqual({ allowed: false, reason: "R1_PROFILE_NOT_APPROVED" });
+    const { deterministicValidator: _, ...withoutValidator } = defaultPolicy;
     expect(
       evaluateAutoContinue({
         ...base,
         riskLevel: "R1",
-        deterministicResultValid: false,
-        confidence: 1
+        policySnapshot: withoutValidator
+      })
+    ).toEqual({ allowed: false, reason: "R1_VALIDATOR_NOT_CONFIGURED" });
+    expect(
+      evaluateAutoContinue({
+        ...base,
+        riskLevel: "R1",
+        deterministicResultValid: false
       })
     ).toEqual({
       allowed: false,
@@ -278,21 +371,27 @@ describe("automatic continuation policy", () => {
     });
   });
 
-  it("never lets confidence authorize R2 or human tasks", () => {
+  it("blocks durable decisions, human modes, unpublished profiles and R2-R4", () => {
     expect(
       evaluateAutoContinue({
         ...base,
-        riskLevel: "R2",
-        confidence: 1
+        policySnapshot: { ...defaultPolicy, durableDecision: true }
       })
-    ).toEqual({ allowed: false, reason: "R2_REQUIRES_HUMAN" });
+    ).toEqual({
+      allowed: false,
+      reason: "DURABLE_DECISION_REQUIRES_HUMAN"
+    });
     expect(
-      evaluateAutoContinue({
-        ...base,
-        mode: "human_confirm",
-        riskLevel: "R0",
-        confidence: 1
-      })
+      evaluateAutoContinue({ ...base, mode: "human_confirm" })
     ).toEqual({ allowed: false, reason: "MODE_REQUIRES_HUMAN" });
+    expect(
+      evaluateAutoContinue({ ...base, profilePublished: false })
+    ).toEqual({ allowed: false, reason: "PROFILE_NOT_PUBLISHED" });
+    for (const riskLevel of ["R2", "R3", "R4"] as const) {
+      expect(evaluateAutoContinue({ ...base, riskLevel })).toEqual({
+        allowed: false,
+        reason: "R2_PLUS_REQUIRES_HUMAN"
+      });
+    }
   });
 });

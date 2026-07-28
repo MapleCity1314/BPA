@@ -1,181 +1,239 @@
 import { describe, expect, it } from "vitest";
 import {
+  validateDataset,
+  validateDecisionRecord
+} from "@bpa/schemas";
+import {
   canReuseDecision,
-  confirmDecision,
-  createDatasetVersion,
-  createUnconfirmedDecision,
+  confirmDecisionCandidate,
+  createDecisionCandidate,
   datasetRef,
   datasetRefEquals,
-  decisionReuseIdentityEquals,
   decisionReuseMismatches,
-  refersToDatasetVersion
+  publishDataset,
+  publishedDatasetFromDefinition,
+  revokeDecision,
+  supersedeDecision,
+  toDatasetVersionDefinition,
+  toDecisionRecordDefinition
 } from "./index.js";
 
-const versionInput = {
-  datasetId: "dataset-1",
-  versionId: "version-1",
-  contentDigest: "sha256:content-a",
-  recordIndexDigest: "sha256:index-a",
-  recordCount: 2,
-  profile: {
-    profileId: "profile-1",
-    profileVersion: "1.0.0"
+const digestA = `sha256:${"a".repeat(64)}`;
+const digestB = `sha256:${"b".repeat(64)}`;
+const digestC = `sha256:${"c".repeat(64)}`;
+const digestD = `sha256:${"d".repeat(64)}`;
+const digestE = `sha256:${"e".repeat(64)}`;
+const digestF = `sha256:${"f".repeat(64)}`;
+
+const descriptor = {
+  id: "dataset-1",
+  version: "1.0.0",
+  title: "Reference data",
+  profile: { id: "profile-1", version: "1.0.0" },
+  source: {
+    fileName: "source.data",
+    mediaType: "application/octet-stream",
+    size: 100,
+    digest: digestA
   },
-  publishedAt: 100
+  recordSchema: { type: "object" },
+  recordCount: 2,
+  recordsDigest: digestB
 };
 
-const identity = {
-  shopId: "shop-1",
-  productId: "product-1",
-  normalizedTitleDigest: "sha256:title-a",
-  targetRecordDigest: "sha256:record-a",
-  matcherVersion: "matcher-1",
-  ruleVersion: "rule-1"
+const scope = { tenant: "tenant-1", object: "object-1" };
+const preconditions = {
+  subject: digestC,
+  target: digestD,
+  matcher: digestE,
+  rules: digestF
 };
 
-function unconfirmed() {
-  const version = createDatasetVersion(versionInput);
-  return createUnconfirmedDecision({
-    decisionId: "decision-1",
-    dataset: datasetRef(version),
-    reuseIdentity: identity,
-    decision: { targetId: "target-1" },
-    decidedAt: 120
+function candidate(
+  decisionId = "decision-1",
+  value: unknown = { target: "record-1" }
+) {
+  return createDecisionCandidate({
+    decisionId,
+    decisionType: "binding",
+    scope,
+    preconditions,
+    value,
+    valueDigest: digestA,
+    proposedAt: "2026-07-28T00:00:00.000Z"
   });
 }
 
-describe("immutable dataset identity", () => {
-  it("publishes an immutable version and derives an exact reference", () => {
-    const version = createDatasetVersion(versionInput);
-    const ref = datasetRef(version);
-    expect(Object.isFrozen(version)).toBe(true);
-    expect(Object.isFrozen(version.profile)).toBe(true);
-    expect(Object.isFrozen(ref)).toBe(true);
-    expect(ref).toEqual({
-      datasetId: "dataset-1",
-      versionId: "version-1",
-      contentDigest: "sha256:content-a"
+function active() {
+  return confirmDecisionCandidate(candidate(), {
+    confirmedBy: "human-1",
+    confirmedAt: "2026-07-28T00:00:01.000Z"
+  });
+}
+
+describe("canonical dataset boundary", () => {
+  it("publishes a descriptor as an immutable canonical DTO", () => {
+    const published = publishDataset(descriptor, {
+      publishedAt: "2026-07-28T00:00:00.000Z"
     });
-    expect(refersToDatasetVersion(ref, version)).toBe(true);
+    expect(Object.isFrozen(published)).toBe(true);
+    const definition = toDatasetVersionDefinition(published);
+    expect(definition).toMatchObject({
+      apiVersion: "bpa.data/v1alpha1",
+      kind: "DatasetVersion",
+      metadata: { id: "dataset-1", version: "1.0.0" },
+      recordsDigest: digestB
+    });
+    expect(validateDataset(definition)).toBe(true);
     expect(
-      datasetRefEquals(ref, { ...ref, contentDigest: "sha256:content-b" })
-    ).toBe(false);
+      publishedDatasetFromDefinition(published.definition, {
+        publishedAt: published.publishedAt
+      })
+    ).toEqual(published);
   });
 
-  it("rejects incomplete or invalid version identities", () => {
+  it("derives an exact id/version/digest reference", () => {
+    const first = datasetRef(
+      publishDataset(descriptor, { publishedAt: "2026-07-28T00:00:00Z" })
+    );
+    expect(first).toEqual({
+      id: "dataset-1",
+      version: "1.0.0",
+      digest: digestB
+    });
+    expect(datasetRefEquals(first, { ...first })).toBe(true);
+    expect(datasetRefEquals(first, { ...first, digest: "changed" })).toBe(
+      false
+    );
+  });
+
+  it("rejects malformed descriptors", () => {
     expect(() =>
-      createDatasetVersion({ ...versionInput, datasetId: "" })
-    ).toThrow(/datasetId/);
+      publishDataset(
+        { ...descriptor, recordsDigest: "" },
+        { publishedAt: "2026-07-28T00:00:00Z" }
+      )
+    ).toThrow(/recordsDigest/);
     expect(() =>
-      createDatasetVersion({ ...versionInput, recordCount: -1 })
-    ).toThrow(/recordCount/);
+      publishDataset(
+        { ...descriptor, recordCount: -1 },
+        { publishedAt: "2026-07-28T00:00:00Z" }
+      )
+    ).toThrow(/counts/);
     expect(() =>
-      createDatasetVersion({ ...versionInput, publishedAt: Number.NaN })
+      publishDataset(descriptor, { publishedAt: "invalid" })
     ).toThrow(/publishedAt/);
   });
 });
 
-describe("decision reuse", () => {
-  it("requires human confirmation before exact reuse", () => {
-    const proposed = unconfirmed();
-    expect(canReuseDecision(proposed, identity)).toBe(false);
-    expect(decisionReuseMismatches(proposed, identity)).toEqual([
-      "notConfirmed"
-    ]);
-    const confirmed = confirmDecision(proposed, {
-      confirmedBy: "human-1",
-      confirmedAt: 130
-    });
-    expect(Object.isFrozen(confirmed)).toBe(true);
-    expect(canReuseDecision(confirmed, identity)).toBe(true);
-    expect(
-      confirmDecision(confirmed, {
-        confirmedBy: "other-human",
-        confirmedAt: 140
+describe("canonical decision lifecycle", () => {
+  it("keeps an unconfirmed proposal as DecisionCandidate", () => {
+    const proposed = candidate();
+    expect(proposed).not.toHaveProperty("status");
+    expect(Object.isFrozen(proposed)).toBe(true);
+    expect(() =>
+      createDecisionCandidate({
+        ...proposed,
+        scope: {},
+        proposedAt: proposed.proposedAt
       })
-    ).toBe(confirmed);
+    ).toThrow(/scope/);
   });
 
-  it("compares every required identity component exactly", () => {
-    const confirmed = confirmDecision(unconfirmed(), {
-      confirmedBy: "human-1",
-      confirmedAt: 130
+  it("confirms a candidate into an active canonical DecisionRecord", () => {
+    const record = active();
+    expect(record).toMatchObject({
+      apiVersion: "bpa.decision/v1alpha1",
+      status: "active",
+      confirmedBy: "human-1"
     });
-    const expectedFields = [
-      "shopId",
-      "productId",
-      "normalizedTitleDigest",
-      "targetRecordDigest",
-      "matcherVersion",
-      "ruleVersion"
-    ] as const;
-    for (const field of expectedFields) {
-      const changed = { ...identity, [field]: `${identity[field]}-changed` };
-      expect(canReuseDecision(confirmed, changed)).toBe(false);
-      expect(decisionReuseMismatches(confirmed, changed)).toEqual([field]);
-      expect(decisionReuseIdentityEquals(identity, changed)).toBe(false);
-    }
-    expect(decisionReuseIdentityEquals(identity, { ...identity })).toBe(true);
-  });
-
-  it("does not invalidate a confirmed decision for unrelated dataset changes", () => {
-    const firstVersion = createDatasetVersion(versionInput);
-    const decision = confirmDecision(
-      createUnconfirmedDecision({
-        decisionId: "decision-1",
-        dataset: datasetRef(firstVersion),
-        reuseIdentity: identity,
-        decision: "target-1",
-        decidedAt: 120
-      }),
-      { confirmedBy: "human-1", confirmedAt: 130 }
+    expect(toDecisionRecordDefinition(record)).toBe(record);
+    expect(validateDecisionRecord(toDecisionRecordDefinition(record))).toBe(
+      true
     );
-    const datasetWithUnrelatedChange = createDatasetVersion({
-      ...versionInput,
-      versionId: "version-2",
-      contentDigest: "sha256:content-b",
-      recordIndexDigest: "sha256:index-b",
-      recordCount: 3
-    });
-
-    expect(
-      refersToDatasetVersion(decision.dataset, datasetWithUnrelatedChange)
-    ).toBe(false);
-    expect(canReuseDecision(decision, identity)).toBe(true);
-  });
-
-  it("validates decision and confirmation audit fields", () => {
     expect(() =>
-      createUnconfirmedDecision({
-        decisionId: "",
-        dataset: {
-          datasetId: "dataset-1",
-          versionId: "version-1",
-          contentDigest: "digest"
-        },
-        reuseIdentity: identity,
-        decision: null,
-        decidedAt: 1
-      })
-    ).toThrow(/decisionId/);
-    expect(() =>
-      createUnconfirmedDecision({
-        decisionId: "decision-1",
-        dataset: {
-          datasetId: "dataset-1",
-          versionId: "version-1",
-          contentDigest: "digest"
-        },
-        reuseIdentity: { ...identity, matcherVersion: "" },
-        decision: null,
-        decidedAt: 1
-      })
-    ).toThrow(/matcherVersion/);
-    expect(() =>
-      confirmDecision(unconfirmed(), {
+      confirmDecisionCandidate(candidate(), {
         confirmedBy: "human-1",
-        confirmedAt: 110
+        confirmedAt: "2026-07-27T00:00:00.000Z"
       })
     ).toThrow(/cannot precede/);
+  });
+
+  it("revokes an active record and prevents its reuse", () => {
+    const revoked = revokeDecision(active(), {
+      revokedBy: "human-2",
+      revokedAt: "2026-07-28T00:00:02.000Z"
+    });
+    expect(revoked).toMatchObject({
+      status: "revoked",
+      revokedBy: "human-2"
+    });
+    expect(canReuseDecision(revoked, { scope, preconditions })).toBe(false);
+    expect(decisionReuseMismatches(revoked, { scope, preconditions })).toEqual(
+      ["status"]
+    );
+    expect(() =>
+      revokeDecision(revoked, {
+        revokedBy: "human-2",
+        revokedAt: "2026-07-28T00:00:03.000Z"
+      })
+    ).toThrow(/Only an active/);
+  });
+
+  it("supersedes an active record with an explicitly confirmed replacement", () => {
+    const result = supersedeDecision(
+      active(),
+      candidate("decision-2", { target: "record-2" }),
+      {
+        confirmedBy: "human-2",
+        confirmedAt: "2026-07-28T00:00:02.000Z"
+      }
+    );
+    expect(result.superseded.status).toBe("superseded");
+    expect(result.replacement).toMatchObject({
+      status: "active",
+      supersedes: "decision-1",
+      decisionId: "decision-2"
+    });
+    expect(
+      canReuseDecision(result.superseded, { scope, preconditions })
+    ).toBe(false);
+    expect(
+      canReuseDecision(result.replacement, { scope, preconditions })
+    ).toBe(true);
+  });
+
+  it("requires exact active scope and preconditions for reuse", () => {
+    const record = active();
+    expect(canReuseDecision(record, { scope, preconditions })).toBe(true);
+    expect(
+      decisionReuseMismatches(record, {
+        scope: { ...scope, extra: "value" },
+        preconditions: { ...preconditions, rules: "changed" }
+      })
+    ).toEqual(["scope", "preconditions"]);
+    expect(
+      canReuseDecision(record, {
+        scope,
+        preconditions: { ...preconditions, unrelatedDatasetDigest: "changed" }
+      })
+    ).toBe(false);
+  });
+
+  it("rejects a replacement for a different type or scope", () => {
+    expect(() =>
+      supersedeDecision(
+        active(),
+        createDecisionCandidate({
+          ...candidate("decision-2"),
+          decisionType: "other-type",
+          proposedAt: "2026-07-28T00:00:00.000Z"
+        }),
+        {
+          confirmedBy: "human-2",
+          confirmedAt: "2026-07-28T00:00:02.000Z"
+        }
+      )
+    ).toThrow(/same decision type and scope/);
   });
 });
