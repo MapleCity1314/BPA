@@ -1,0 +1,136 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: doudian.editor.priority-items.inspect
+  version: 1.0.0
+  title: 只读检查抖店商品编辑页重点项
+  description: 校验商品与编辑 URL，对稳定页面执行普通必填、SKU 必填列和可选平台提醒检查；包装未匹配不阻止基础检查。
+runtime: browser
+inputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - product
+  properties:
+    product:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - editorUrl
+      properties:
+        id:
+          type: string
+          pattern: ^[0-9]{5,30}$
+        title:
+          type: string
+          minLength: 2
+        editorUrl:
+          type: string
+          format: uri
+    packagingMatch:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+      properties:
+        status:
+          enum:
+            - matched
+            - unmatched
+            - ambiguous
+        recordId:
+          type: string
+    platformFillCheck:
+      type: boolean
+      default: false
+      description: 是否读取当前页面已经呈现的平台填写检查结果；本节点不会点击按钮。
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - status
+    - inspectorVersion
+    - productId
+    - packagingMatchStatus
+    - baselineInspectionPerformed
+    - issues
+    - anomalies
+    - domMutations
+  properties:
+    status:
+      enum:
+        - complete
+        - retryable
+        - structural_anomaly
+        - blocked
+    inspectorVersion:
+      type: string
+      const: 1.0.0
+    productId:
+      type: string
+    packagingMatchStatus:
+      enum:
+        - matched
+        - unmatched
+        - ambiguous
+        - not_provided
+    baselineInspectionPerformed:
+      type: boolean
+    issues:
+      type: array
+      items:
+        type: object
+    anomalies:
+      type: array
+      items:
+        type: object
+    observedUrl:
+      type: string
+      format: uri
+    readiness:
+      type: object
+    domMutations:
+      type: integer
+      const: 0
+risk:
+  level: R0
+  permissions:
+    - browser.dom.read
+    - browser.tabs.read
+  domains:
+    - https://fxg.jinritemai.com
+execution:
+  timeoutDefault: 5m
+  idempotency: repeatable_read
+  retryableErrors:
+    - PAGE_LOADING
+    - PAGE_NOT_STABLE
+    - REQUIRED_EVIDENCE_MISSING
+    - PLATFORM_CHECK_UNAVAILABLE
+    - BROWSER_DISCONNECTED
+  cancellable: true
+errors:
+  - PAGE_MISMATCH
+  - PAGE_LOADING
+  - PAGE_NOT_STABLE
+  - REQUIRED_EVIDENCE_MISSING
+  - RISK_SIGNAL_BLOCKED
+  - PRODUCT_ID_INVALID
+  - EDITOR_URL_MISMATCH
+  - FIELD_STRUCTURE_UNKNOWN
+  - PLATFORM_CHECK_UNAVAILABLE
+  - BROWSER_DISCONNECTED
+  - CAPTCHA_REQUIRED
+  - RATE_LIMITED
+  - RISK_CONTROL
+  - SESSION_EXPIRED
+evidence:
+  required:
+    - result
+    - error
+adapter:
+  id: doudian
+  versions:
+    - 1.1.0

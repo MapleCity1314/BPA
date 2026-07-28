@@ -1,0 +1,37 @@
+{
+  "case": "scope-105-to-106",
+  "redacted": true,
+  "initialLocation": {
+    "page": 3,
+    "scrollTop": 438
+  },
+  "scope": {
+    "shopId": "shop-redacted-001",
+    "shopName": "脱敏测试旗舰店",
+    "filters": {
+      "keyword": "",
+      "category": "全部",
+      "saleStatus": "在售"
+    },
+    "statusTab": {
+      "id": "selling",
+      "label": "在售商品"
+    }
+  },
+  "rounds": [
+    {
+      "topTotal": 105,
+      "bottomTotal": 105,
+      "productCount": 105,
+      "pageSize": 50,
+      "firstProductId": 400001
+    },
+    {
+      "topTotal": 106,
+      "bottomTotal": 106,
+      "productCount": 106,
+      "pageSize": 50,
+      "firstProductId": 400001
+    }
+  ]
+}

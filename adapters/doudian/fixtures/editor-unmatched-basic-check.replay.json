@@ -1,0 +1,64 @@
+{
+  "case": "editor-unmatched-basic-check",
+  "redacted": true,
+  "product": {
+    "id": "3787892969076556012",
+    "title": "脱敏商品 500g",
+    "editorUrl": "https://fxg.jinritemai.com/ffa/g/create?product_id=3787892969076556012&entrance=edit"
+  },
+  "packagingMatch": {
+    "status": "unmatched"
+  },
+  "repeatObservation": 3,
+  "observation": {
+    "url": "https://fxg.jinritemai.com/ffa/g/create?product_id=3787892969076556012&entrance=edit",
+    "readiness": {
+      "signature": "stable-editor-redacted",
+      "hasMain": true,
+      "visibleControls": 12,
+      "knownAnchors": 4,
+      "requiredMarkers": 5,
+      "loading": false
+    },
+    "requiredFields": [
+      {
+        "key": "product-name",
+        "label": "商品名称",
+        "section": "基础信息",
+        "controlKind": "text",
+        "required": true,
+        "visible": true,
+        "disabled": false,
+        "valueState": "filled"
+      },
+      {
+        "key": "origin",
+        "label": "产地",
+        "section": "基础信息",
+        "controlKind": "combobox",
+        "required": true,
+        "visible": true,
+        "disabled": false,
+        "valueState": "empty"
+      }
+    ],
+    "skuRequiredCells": [
+      {
+        "skuId": "sku-redacted-1",
+        "row": 1,
+        "column": "价格",
+        "required": true,
+        "visible": true,
+        "valueState": "empty"
+      }
+    ],
+    "platformFillCheck": {
+      "requested": true,
+      "available": true,
+      "completed": true,
+      "warnings": [
+        "建议补充商品属性"
+      ]
+    }
+  }
+}

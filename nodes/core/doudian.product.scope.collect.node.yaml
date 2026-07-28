@@ -1,0 +1,160 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: doudian.product.scope.collect
+  version: 1.0.0
+  title: 完整采集当前抖店商品范围
+  description: 只读采集当前店铺、筛选条件和状态页签下的完整商品范围；最多三轮动态总数对账，不一致时不产生检查队列。
+runtime: browser
+inputSchema:
+  type: object
+  additionalProperties: false
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - status
+    - collectorVersion
+    - scanRounds
+    - products
+    - inspectionQueue
+    - restore
+    - diagnostics
+  properties:
+    status:
+      enum:
+        - complete
+        - inconsistent
+        - blocked
+    collectorVersion:
+      type: string
+      const: 1.0.0
+    fingerprint:
+      type: object
+      additionalProperties: false
+      required:
+        - shopId
+        - shopName
+        - filters
+        - statusTab
+        - digest
+      properties:
+        shopId:
+          type: string
+        shopName:
+          type: string
+        filters:
+          type: object
+        statusTab:
+          type: object
+          additionalProperties: false
+          required:
+            - id
+            - label
+          properties:
+            id:
+              type: string
+            label:
+              type: string
+        digest:
+          type: string
+    expectedCount:
+      type: integer
+      minimum: 0
+    scanRounds:
+      type: integer
+      minimum: 0
+      maximum: 3
+    products:
+      type: array
+      items:
+        $ref: "#/$defs/product"
+    inspectionQueue:
+      type: array
+      description: 仅在 status=complete 且数量完全对账后产生。
+      items:
+        $ref: "#/$defs/product"
+    restore:
+      type: object
+      additionalProperties: false
+      required:
+        - page
+        - scrollTop
+        - required
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        scrollTop:
+          type: number
+          minimum: 0
+        required:
+          type: boolean
+          const: true
+    diagnostics:
+      type: array
+      items:
+        type: object
+    error:
+      type: object
+  $defs:
+    product:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - editorUrl
+      properties:
+        id:
+          type: string
+          pattern: ^[0-9]{5,30}$
+        title:
+          type: string
+          minLength: 2
+        editorUrl:
+          type: string
+          format: uri
+risk:
+  level: R0
+  permissions:
+    - browser.dom.read
+    - browser.tabs.read
+  domains:
+    - https://fxg.jinritemai.com
+execution:
+  timeoutDefault: 10m
+  idempotency: repeatable_read
+  retryableErrors:
+    - PAGE_LOADING
+    - BROWSER_DISCONNECTED
+    - TOTAL_CHANGED_DURING_ROUND
+    - COUNT_MISMATCH
+  cancellable: true
+errors:
+  - ROUND_LIMIT_EXCEEDED
+  - NO_COLLECTION_ROUND
+  - PAGE_MISMATCH
+  - PAGE_LOADING
+  - BROWSER_DISCONNECTED
+  - PAGE_CONTEXT_CHANGED
+  - RISK_SIGNAL_BLOCKED
+  - TOTAL_INVALID
+  - TOTAL_CHANGED_DURING_ROUND
+  - PAGINATION_INCOMPLETE
+  - PRODUCT_ID_INVALID
+  - PRODUCT_TITLE_INVALID
+  - PRODUCT_CONFLICT
+  - COUNT_MISMATCH
+  - CAPTCHA_REQUIRED
+  - RATE_LIMITED
+  - RISK_CONTROL
+  - SESSION_EXPIRED
+evidence:
+  required:
+    - result
+    - error
+adapter:
+  id: doudian
+  versions:
+    - 1.1.0
