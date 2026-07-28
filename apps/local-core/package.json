@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@bpa/compiler": "workspace:*",
+    "@bpa/control-protocol": "workspace:*",
     "@bpa/engine": "workspace:*",
     "@bpa/gateway-core": "workspace:*",
     "@bpa/persistence": "workspace:*",

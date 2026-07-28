@@ -3,6 +3,14 @@ import { rmSync } from "node:fs";
 import { createServer, createConnection, type Server, type Socket } from "node:net";
 import { userInfo } from "node:os";
 import { compileWorkflow, contentDigest, MemoryNodeCatalog } from "@bpa/compiler";
+import {
+  CONTROL_MAX_MESSAGE_BYTES as CONTROL_V1_MAX_MESSAGE_BYTES,
+  encodeControlEnvelope,
+  parseControlRequest,
+  type ControlErrorCode,
+  type ControlRequestEnvelope,
+  type ControlResponseEnvelope
+} from "@bpa/control-protocol";
 import { LocalWorkflowEngine } from "@bpa/engine";
 import type { ArtifactType, Persistence } from "@bpa/persistence";
 import {
@@ -376,6 +384,101 @@ export function attachFrameDecoder(
   });
 }
 
+type ControlTransportMode = "legacy-frame" | "control-v1";
+
+/**
+ * The native host still uses the historical length framing on the same
+ * user-only socket. CLI/MCP use bpa.control/1 newline envelopes. The first byte
+ * is unambiguous because a valid v1 envelope begins with "{" while legacy
+ * frames begin with a four-byte length bounded below 1 MiB.
+ */
+export function attachControlDecoder(
+  socket: Socket,
+  onMessage: (message: unknown, mode: ControlTransportMode) => void
+): void {
+  let buffered = Buffer.alloc(0);
+  let mode: ControlTransportMode | undefined;
+  socket.on("data", (chunk: Buffer) => {
+    buffered = Buffer.concat([buffered, chunk]);
+    if (!mode && buffered.length > 0) {
+      mode = buffered[0] === 0x7b ? "control-v1" : "legacy-frame";
+    }
+    if (mode === "control-v1") {
+      if (buffered.length > CONTROL_V1_MAX_MESSAGE_BYTES) {
+        socket.destroy(new Error("Control v1 envelope exceeds maximum size"));
+        return;
+      }
+      let newline = buffered.indexOf(0x0a);
+      while (newline >= 0) {
+        const body = buffered.subarray(0, newline);
+        buffered = buffered.subarray(newline + 1);
+        try {
+          onMessage(JSON.parse(body.toString("utf8")), mode);
+        } catch {
+          socket.destroy(new Error("Control v1 envelope is not valid JSON"));
+          return;
+        }
+        newline = buffered.indexOf(0x0a);
+      }
+      return;
+    }
+    if (mode !== "legacy-frame") return;
+    while (buffered.length >= 4) {
+      const size = buffered.readUInt32BE(0);
+      if (size > CONTROL_MAX_MESSAGE_BYTES) {
+        socket.destroy(
+          new Error(`Control frame exceeds ${CONTROL_MAX_MESSAGE_BYTES} bytes`)
+        );
+        return;
+      }
+      if (buffered.length < size + 4) return;
+      const body = buffered.subarray(4, size + 4);
+      buffered = buffered.subarray(size + 4);
+      try {
+        onMessage(JSON.parse(body.toString("utf8")), mode);
+      } catch {
+        socket.destroy(new Error("Control frame is not valid JSON"));
+        return;
+      }
+    }
+  });
+}
+
+const CONTROL_V1_ERROR_CODES = new Set<ControlErrorCode>([
+  "INVALID_REQUEST",
+  "UNKNOWN_METHOD",
+  "DEADLINE_EXCEEDED",
+  "CONFLICT",
+  "NOT_FOUND",
+  "UNAUTHORIZED",
+  "INTERNAL"
+]);
+
+function controlV1Error(
+  requestId: string,
+  code: ControlErrorCode,
+  message: string
+): ControlResponseEnvelope {
+  return {
+    version: "bpa.control/1",
+    kind: "error",
+    requestId,
+    error: { code, message }
+  };
+}
+
+function mapLegacyErrorCode(response: ControlResponse): ControlErrorCode {
+  const code = response.error?.code;
+  if (code && CONTROL_V1_ERROR_CODES.has(code as ControlErrorCode)) {
+    return code as ControlErrorCode;
+  }
+  if (response.error?.message.startsWith("Unknown control method:")) {
+    return "UNKNOWN_METHOD";
+  }
+  if (/not found/iu.test(response.error?.message ?? "")) return "NOT_FOUND";
+  return "INTERNAL";
+}
+
 export class LocalControlServer {
   #server: Server | undefined;
 
@@ -389,7 +492,67 @@ export class LocalControlServer {
     rmSync(this.socketPath, { force: true });
     const server = createServer((socket) => {
       let nativeConnectionId: string | undefined;
-      attachFrameDecoder(socket, (message) => {
+      attachControlDecoder(socket, (message, mode) => {
+        if (mode === "control-v1") {
+          let request: ControlRequestEnvelope;
+          try {
+            request = parseControlRequest(message);
+          } catch (error) {
+            const requestId =
+              typeof (message as { requestId?: unknown })?.requestId ===
+                "string" &&
+              /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(
+                (message as { requestId: string }).requestId
+              )
+                ? (message as { requestId: string }).requestId
+                : "invalid";
+            socket.write(
+              Buffer.from(
+                encodeControlEnvelope(
+                  controlV1Error(
+                    requestId,
+                    "INVALID_REQUEST",
+                    error instanceof Error ? error.message : String(error)
+                  )
+                )
+              )
+            );
+            return;
+          }
+          if (Date.parse(request.deadline) <= Date.now()) {
+            socket.write(
+              Buffer.from(
+                encodeControlEnvelope(
+                  controlV1Error(
+                    request.requestId,
+                    "DEADLINE_EXCEEDED",
+                    "Control request deadline has elapsed"
+                  )
+                )
+              )
+            );
+            return;
+          }
+          const legacyResponse = this.service.handle({
+            id: request.requestId,
+            method: request.method,
+            params: request.params
+          });
+          const response: ControlResponseEnvelope = legacyResponse.ok
+            ? {
+                version: "bpa.control/1",
+                kind: "result",
+                requestId: request.requestId,
+                result: legacyResponse.result
+              }
+            : controlV1Error(
+                request.requestId,
+                mapLegacyErrorCode(legacyResponse),
+                legacyResponse.error?.message ?? "Core request failed"
+              );
+          socket.write(Buffer.from(encodeControlEnvelope(response)));
+          return;
+        }
         if (nativeConnectionId) {
           this.service.browserGateway?.handle(message);
           return;

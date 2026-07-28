@@ -127,6 +127,9 @@ importers:
       '@bpa/compiler':
         specifier: workspace:*
         version: link:../../packages/compiler
+      '@bpa/control-protocol':
+        specifier: workspace:*
+        version: link:../../packages/control-protocol
       '@bpa/engine':
         specifier: workspace:*
         version: link:../../packages/engine
@@ -148,9 +151,9 @@ importers:
       '@bpa/compiler':
         specifier: workspace:*
         version: link:../../packages/compiler
-      '@bpa/local-core':
+      '@bpa/control-client':
         specifier: workspace:*
-        version: link:../local-core
+        version: link:../../packages/control-client
       '@bpa/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
@@ -202,6 +205,14 @@ importers:
       yaml:
         specifier: ^2.8.1
         version: 2.9.0
+
+  packages/control-client:
+    dependencies:
+      '@bpa/control-protocol':
+        specifier: workspace:*
+        version: link:../control-protocol
+
+  packages/control-protocol: {}
 
   packages/dataset-core:
     dependencies:
