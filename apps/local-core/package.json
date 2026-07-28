@@ -16,6 +16,7 @@
     "@bpa/engine": "workspace:*",
     "@bpa/gateway-core": "workspace:*",
     "@bpa/node-runtime": "workspace:*",
+    "@bpa/page-model": "workspace:*",
     "@bpa/packaging-dataset": "workspace:*",
     "@bpa/persistence": "workspace:*",
     "@bpa/persistence-sqlite": "workspace:*",

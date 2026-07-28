@@ -38,16 +38,24 @@ import {
   formatValidationErrors,
   validateAdapterManifest,
   validateAssistanceProfile,
+  validateElementContract,
   validateDeterministicResultValidatorPolicy,
   validateJsonSchemaDefinition,
   validateNode,
+  validatePageModel,
   validateWorkflow,
   type NodeDefinition,
   type AdapterManifestDefinition,
   type AssistanceProfileDefinition,
+  type ElementContractDefinition,
+  type PageModelDefinition,
   type DeterministicResultValidatorPolicyDefinition,
   type WorkflowDefinition
 } from "@bpa/schemas";
+import {
+  validateElementContractDefinition,
+  validatePageModel as validatePageModelDefinition
+} from "@bpa/page-model";
 import type { LocalBrowserGateway } from "./browser-gateway.js";
 import { Ir2WorkflowRuntime } from "./ir2-workflow-runtime.js";
 import { PersistenceTaskQueue } from "./persistence-task-queue.js";
@@ -699,6 +707,74 @@ export class LocalCoreService {
             identity: `${content.metadata.id}@${content.metadata.version}`
           };
     }
+    if (assetType === "element_contract") {
+      if (!validateElementContract(content)) {
+        return {
+          valid: false,
+          errors: formatValidationErrors(validateElementContract.errors)
+        };
+      }
+      const issues = validateElementContractDefinition(content);
+      return issues.length > 0
+        ? {
+            valid: false,
+            errors: issues.map(
+              (issue) => `${issue.path} ${issue.code}: ${issue.message}`
+            )
+          }
+        : {
+            valid: true,
+            digest: contentDigest(content),
+            identity: `${content.metadata.id}@${content.metadata.version}`
+          };
+    }
+    if (assetType === "page_model") {
+      if (!validatePageModel(content)) {
+        return {
+          valid: false,
+          errors: formatValidationErrors(validatePageModel.errors)
+        };
+      }
+      const issues = validatePageModelDefinition(content);
+      const adapter = this.persistence.getPublished(
+        "adapter",
+        content.adapter.id,
+        content.adapter.version
+      );
+      if (!adapter || adapter.digest !== content.adapter.digest) {
+        issues.push({
+          code: "INVALID_IDENTITY",
+          path: "/adapter",
+          message: "PageModel must pin an exact published Adapter"
+        });
+      }
+      for (const [index, element] of content.elements.entries()) {
+        const contract = this.persistence.getPublished(
+          "element_contract",
+          element.contract.id,
+          element.contract.version
+        );
+        if (!contract || contract.digest !== element.contract.digest) {
+          issues.push({
+            code: "INVALID_IDENTITY",
+            path: `/elements/${index}/contract`,
+            message: "PageModel must pin exact published ElementContracts"
+          });
+        }
+      }
+      return issues.length > 0
+        ? {
+            valid: false,
+            errors: issues.map(
+              (issue) => `${issue.path} ${issue.code}: ${issue.message}`
+            )
+          }
+        : {
+            valid: true,
+            digest: contentDigest(content),
+            identity: `${content.metadata.id}@${content.metadata.version}`
+          };
+    }
     if (assetType === "policy") {
       if (!validateDeterministicResultValidatorPolicy(content)) {
         return {
@@ -811,7 +887,9 @@ export class LocalCoreService {
       assetType === "node" ||
       assetType === "adapter" ||
       assetType === "assistance_profile" ||
-      assetType === "policy"
+      assetType === "policy" ||
+      assetType === "element_contract" ||
+      assetType === "page_model"
     ) {
       const validation = this.#validateAsset(assetType, content) as {
         valid: boolean;
@@ -828,7 +906,9 @@ export class LocalCoreService {
         | WorkflowDefinition
         | AdapterManifestDefinition
         | AssistanceProfileDefinition
-        | DeterministicResultValidatorPolicyDefinition;
+        | DeterministicResultValidatorPolicyDefinition
+        | ElementContractDefinition
+        | PageModelDefinition;
       return this.persistence.saveCandidate({
         assetType,
         assetId: typed.metadata.id,

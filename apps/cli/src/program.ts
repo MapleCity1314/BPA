@@ -55,7 +55,7 @@ export function createCliProgram(options: CliProgramOptions): Command {
 
   program
     .command("validate")
-    .argument("<asset-type>", "workflow or node")
+    .argument("<asset-type>", "workflow, node, adapter, profile, policy, or page asset")
     .argument("<path>", "YAML or JSON asset")
     .action(async (assetType, path) => {
       output(
@@ -68,7 +68,7 @@ export function createCliProgram(options: CliProgramOptions): Command {
 
   program
     .command("publish")
-    .argument("<asset-type>", "workflow or node")
+    .argument("<asset-type>", "workflow, node, adapter, profile, policy, or page asset")
     .argument("<path>", "YAML or JSON asset")
     .requiredOption("--yes", "confirm human publication")
     .action(async (assetType, path) => {

@@ -4,7 +4,7 @@ import {
   teamCodeDigest
 } from "@bpa/team-runtime";
 
-export const TEAM_WORKER_VERSION = "0.2.0";
+export const TEAM_WORKER_VERSION = "0.3.0";
 
 function implementationDigest(ref: string, implementation: string): string {
   return `sha256:${createHash("sha256")
@@ -31,7 +31,7 @@ export const TEAM_WORKER_HANDLER_MANIFEST = [
     ref: "packaging.master.match.batch@1.1.0",
     implementationDigest: implementationDigest(
       "packaging.master.match.batch@1.1.0",
-      "packaging-smart-v1:ordered-inspection-queue:v1"
+      "packaging-smart-v1:ordered-inspection-queue:opaque-review-batch:v2"
     )
   },
   {

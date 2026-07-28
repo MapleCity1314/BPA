@@ -60,7 +60,18 @@ server.registerTool(
     description: "Search immutable published BPA nodes and workflows.",
     inputSchema: {
       query: z.string().default(""),
-      asset_type: z.enum(["node", "workflow", "adapter", "policy"]).optional(),
+      asset_type: z
+        .enum([
+          "node",
+          "workflow",
+          "adapter",
+          "policy",
+          "assistance_profile",
+          "dataset_profile",
+          "page_model",
+          "element_contract"
+        ])
+        .optional(),
       capability: z.string().optional(),
       capabilities: z.array(z.string()).default([]),
       platform: z.string().optional(),
@@ -795,7 +806,16 @@ server.registerTool(
     description:
       "Compare a candidate body with a published immutable artifact.",
     inputSchema: {
-      asset_type: z.enum(["node", "workflow", "adapter", "policy"]),
+      asset_type: z.enum([
+        "node",
+        "workflow",
+        "adapter",
+        "policy",
+        "assistance_profile",
+        "dataset_profile",
+        "page_model",
+        "element_contract"
+      ]),
       asset_id: z.string(),
       version: z.string(),
       candidate: z.record(z.unknown())
