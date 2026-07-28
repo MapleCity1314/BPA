@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { createServer, createConnection, type Server, type Socket } from "node:net";
 import { userInfo } from "node:os";
+import { resolve } from "node:path";
 import {
   compileCanonicalWorkflow,
   compileWorkflow,
@@ -23,6 +24,7 @@ import {
   BuiltinRuntimeProvider,
   RuntimeProviderRegistry
 } from "@bpa/node-runtime";
+import { registerTeamRuntimeProvider } from "@bpa/team-runtime";
 import {
   compileDataValidator,
   formatValidationErrors,
@@ -34,6 +36,10 @@ import {
 } from "@bpa/schemas";
 import type { LocalBrowserGateway } from "./browser-gateway.js";
 import { Ir2WorkflowRuntime } from "./ir2-workflow-runtime.js";
+import {
+  TEAM_WORKER_CODE_DIGEST,
+  TEAM_WORKER_HANDLER_REFS
+} from "../../team-worker/src/manifest.js";
 
 export const CONTROL_MAX_MESSAGE_BYTES = 512 * 1024;
 
@@ -63,6 +69,25 @@ export class LocalCoreService {
     const providers = runtimeProviders ?? new RuntimeProviderRegistry();
     if (!providers.list().includes("builtin")) {
       providers.register(new BuiltinRuntimeProvider());
+    }
+    if (!providers.list().includes("team")) {
+      registerTeamRuntimeProvider(providers, {
+        process: {
+          command: process.execPath,
+          args: [
+            "--import",
+            "tsx",
+            resolve(
+              import.meta.dirname,
+              "../../team-worker/src/main.ts"
+            )
+          ],
+          cwd: resolve(import.meta.dirname, "../../.."),
+          env: {}
+        },
+        expectedCodeDigest: TEAM_WORKER_CODE_DIGEST,
+        expectedHandlerRefs: TEAM_WORKER_HANDLER_REFS
+      });
     }
     this.ir2Runtime = new Ir2WorkflowRuntime(persistence, providers);
   }

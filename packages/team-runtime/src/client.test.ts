@@ -67,6 +67,17 @@ function invocation(
 }
 
 describe("Team Runtime Provider process lifecycle", () => {
+  it("requires an absolute Worker executable", () => {
+    expect(
+      () =>
+        new TeamWorkerClient({
+          process: { command: "node", args: [] },
+          expectedCodeDigest: codeDigest,
+          expectedHandlerRefs: [handlerRef]
+        })
+    ).toThrow(/absolute path/);
+  });
+
   it("registers provider id team with an exact node@version whitelist", () => {
     const registry = new RuntimeProviderRegistry();
     const provider = registerTeamRuntimeProvider(registry, options());

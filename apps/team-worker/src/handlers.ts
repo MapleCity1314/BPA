@@ -1,24 +1,30 @@
 import {
   PACKAGING_MATCHER_VERSION,
-  digestPackagingValue,
   matchPackagingBatch,
   type PackagingBinding,
   type PackagingMasterRecord,
   type PackagingProduct
 } from "@bpa/packaging-domain";
 import {
-  TEAM_PROTOCOL_VERSION,
   TeamHandlerError,
   TeamHandlerRegistry,
-  teamCodeDigest,
   unavailableTeamHandler
 } from "@bpa/team-runtime";
 import type { DecisionReuseContext } from "@bpa/dataset-core";
 import type { JsonValue } from "@bpa/workflow-ir";
+import {
+  TEAM_WORKER_CODE_DIGEST,
+  TEAM_WORKER_HANDLER_MANIFEST,
+  TEAM_WORKER_HANDLER_REFS,
+  TEAM_WORKER_VERSION
+} from "./manifest.js";
 
-export const TEAM_WORKER_VERSION = "0.1.0";
 export const PACKAGING_MATCH_HANDLER_REF =
   "packaging.master.match.batch@1.0.0";
+
+if (PACKAGING_MATCHER_VERSION !== "packaging-smart-v1") {
+  throw new Error("Team Worker manifest must be updated for the new matcher");
+}
 
 function objectMap<T>(
   value: unknown,
@@ -38,11 +44,13 @@ function asJsonValue(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue;
 }
 
-const packagingHandlerDigest = digestPackagingValue({
-  handler: PACKAGING_MATCH_HANDLER_REF,
-  matcherVersion: PACKAGING_MATCHER_VERSION,
-  implementation: "trusted-static-v1"
-});
+const manifestDigest = (ref: string): string => {
+  const entry = TEAM_WORKER_HANDLER_MANIFEST.find(
+    (candidate) => candidate.ref === ref
+  );
+  if (!entry) throw new Error(`Team Handler manifest entry is missing: ${ref}`);
+  return entry.implementationDigest;
+};
 
 export const teamHandlerRegistry = new TeamHandlerRegistry([
   {
@@ -50,7 +58,7 @@ export const teamHandlerRegistry = new TeamHandlerRegistry([
       id: "packaging.master.match.batch",
       version: "1.0.0"
     },
-    implementationDigest: packagingHandlerDigest,
+    implementationDigest: manifestDigest(PACKAGING_MATCH_HANDLER_REF),
     invoke(input, signal) {
       if (signal.aborted) {
         throw new TeamHandlerError(
@@ -99,33 +107,33 @@ export const teamHandlerRegistry = new TeamHandlerRegistry([
   unavailableTeamHandler({
     id: "packaging.dataset.parse",
     version: "1.0.0",
-    implementationDigest: digestPackagingValue({
-      handler: "packaging.dataset.parse@1.0.0",
-      implementation: "not-implemented"
-    })
+    implementationDigest: manifestDigest("packaging.dataset.parse@1.0.0")
   }),
   unavailableTeamHandler({
     id: "issues.reconcile",
     version: "1.0.0",
-    implementationDigest: digestPackagingValue({
-      handler: "issues.reconcile@1.0.0",
-      implementation: "not-implemented"
-    })
+    implementationDigest: manifestDigest("issues.reconcile@1.0.0")
   }),
   unavailableTeamHandler({
     id: "report.issue.build",
     version: "1.0.0",
-    implementationDigest: digestPackagingValue({
-      handler: "report.issue.build@1.0.0",
-      implementation: "not-implemented"
-    })
+    implementationDigest: manifestDigest("report.issue.build@1.0.0")
   })
 ]);
 
-export const TEAM_WORKER_CODE_DIGEST = teamCodeDigest({
-  protocolVersion: TEAM_PROTOCOL_VERSION,
-  workerVersion: TEAM_WORKER_VERSION,
-  handlers: teamHandlerRegistry.manifest()
-});
+if (
+  JSON.stringify(teamHandlerRegistry.manifest()) !==
+  JSON.stringify(
+    [...TEAM_WORKER_HANDLER_MANIFEST].sort((left, right) =>
+      left.ref.localeCompare(right.ref)
+    )
+  )
+) {
+  throw new Error("Team Worker Handler registry does not match its manifest");
+}
 
-export const TEAM_WORKER_HANDLER_REFS = teamHandlerRegistry.refs();
+export {
+  TEAM_WORKER_CODE_DIGEST,
+  TEAM_WORKER_HANDLER_REFS,
+  TEAM_WORKER_VERSION
+};

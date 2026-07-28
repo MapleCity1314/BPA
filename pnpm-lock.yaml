@@ -151,6 +151,9 @@ importers:
       '@bpa/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
+      '@bpa/team-runtime':
+        specifier: workspace:*
+        version: link:../../packages/team-runtime
       '@bpa/workflow-ir':
         specifier: workspace:*
         version: link:../../packages/workflow-ir
@@ -184,6 +187,21 @@ importers:
       '@bpa/gateway-core':
         specifier: workspace:*
         version: link:../../packages/gateway-core
+
+  apps/team-worker:
+    dependencies:
+      '@bpa/dataset-core':
+        specifier: workspace:*
+        version: link:../../packages/dataset-core
+      '@bpa/packaging-domain':
+        specifier: workspace:*
+        version: link:../../packages/packaging-domain
+      '@bpa/team-runtime':
+        specifier: workspace:*
+        version: link:../../packages/team-runtime
+      '@bpa/workflow-ir':
+        specifier: workspace:*
+        version: link:../../packages/workflow-ir
 
   packages/assistance-core:
     dependencies:
@@ -302,6 +320,15 @@ importers:
         version: 12.10.0
 
   packages/schemas: {}
+
+  packages/team-runtime:
+    dependencies:
+      '@bpa/node-runtime':
+        specifier: workspace:*
+        version: link:../node-runtime
+      '@bpa/workflow-ir':
+        specifier: workspace:*
+        version: link:../workflow-ir
 
   packages/workflow-ir: {}
 

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { isAbsolute } from "node:path";
 import type {
   RuntimeInvocation,
   RuntimeOutcome
@@ -84,8 +85,8 @@ export class TeamWorkerClient {
   #stopping = false;
 
   constructor(readonly options: TeamWorkerClientOptions) {
-    if (!options.process.command.trim()) {
-      throw new Error("Team Worker command must not be empty");
+    if (!isAbsolute(options.process.command)) {
+      throw new Error("Team Worker command must be an absolute path");
     }
     if (!/^sha256:[a-f0-9]{64}$/u.test(options.expectedCodeDigest)) {
       throw new Error("Expected Team Worker code digest is invalid");
@@ -106,10 +107,12 @@ export class TeamWorkerClient {
         ...(this.options.process.cwd === undefined
           ? {}
           : { cwd: this.options.process.cwd }),
-        env: {
-          ...process.env,
-          ...this.options.process.env
-        }
+        env: Object.fromEntries(
+          Object.entries(this.options.process.env ?? {}).filter(
+            (entry): entry is [string, string] =>
+              typeof entry[1] === "string"
+          )
+        )
       }
     );
     this.#child = child;

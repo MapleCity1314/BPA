@@ -17,6 +17,7 @@
     "@bpa/persistence": "workspace:*",
     "@bpa/persistence-sqlite": "workspace:*",
     "@bpa/schemas": "workspace:*",
+    "@bpa/team-runtime": "workspace:*",
     "@bpa/workflow-ir": "workspace:*"
   }
 }
