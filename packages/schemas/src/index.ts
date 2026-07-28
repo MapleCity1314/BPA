@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import type { ErrorObject, ValidateFunction } from "ajv";
+import Ajv2020 from "ajv/dist/2020.js";
+import addFormats from "ajv-formats";
 import type {
   BrowserProtocolMessage,
   AdapterManifestDefinition,
@@ -50,7 +51,6 @@ export const browserProtocolV1Schema = loadSchema(
   "browser-protocol-v1.schema.json"
 );
 
-const require = createRequire(import.meta.url);
 interface AjvLike {
   compile<T = unknown>(schema: object): ValidateFunction<T>;
   addSchema(schema: object): AjvLike;
@@ -58,17 +58,13 @@ interface AjvLike {
   errors?: ErrorObject[] | null;
 }
 type AjvConstructor = new (options: Record<string, unknown>) => AjvLike;
-const Ajv2020 = require("ajv/dist/2020").default as AjvConstructor;
-const addFormats = require("ajv-formats").default as (
-  instance: AjvLike
-) => void;
 
-const ajv = new Ajv2020({
+const ajv = new (Ajv2020 as unknown as AjvConstructor)({
   allErrors: true,
   strict: true,
   strictRequired: true
 });
-addFormats(ajv);
+(addFormats as unknown as (instance: AjvLike) => void)(ajv);
 ajv.addSchema(permissionSchema);
 ajv.addSchema(timingPolicySchema);
 ajv.addSchema(riskSignalSchema);
