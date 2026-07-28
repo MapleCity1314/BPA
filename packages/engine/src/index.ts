@@ -340,6 +340,7 @@ function retryDelay(
 }
 
 function scheduleCall(
+  plan: ExecutionPlan,
   state: EngineState,
   step: CallStep,
   attempt: number,
@@ -348,6 +349,7 @@ function scheduleCall(
   deps: EngineDependencies
 ): EngineTransition {
   const identity = executionIdentity(state, step.key, attempt);
+  const foreachDeadline = earliestForeachDeadline(plan, state);
   const invocation: RuntimeInvocation = {
     invocationId: deps.ids.next("invocation"),
     identity,
@@ -355,7 +357,10 @@ function scheduleCall(
     providerId: step.providerId,
     input: step.input ? resolveBinding(step.input, state) : {},
     permissionSnapshot: step.permissionSnapshot,
-    deadlineAt: notBefore + step.timeoutMs,
+    deadlineAt: Math.min(
+      notBefore + step.timeoutMs,
+      foreachDeadline?.deadlineAt ?? Number.POSITIVE_INFINITY
+    ),
     idempotencyKey: executionIdentityKey(identity),
     fencingToken,
     traceId: deps.ids.next("trace")
@@ -419,6 +424,30 @@ function aggregate(frame: ForeachFrame): ForeachAggregationResult {
   };
 }
 
+interface ForeachDeadline {
+  readonly frameIndex: number;
+  readonly deadlineAt: number;
+}
+
+function earliestForeachDeadline(
+  plan: ExecutionPlan,
+  state: EngineState
+): ForeachDeadline | undefined {
+  let earliest: ForeachDeadline | undefined;
+  state.foreachStack.forEach((frame, frameIndex) => {
+    const block = blockAt(plan, frame.parentBlockPath);
+    const foreach = block.steps[frame.stepKey];
+    if (foreach?.kind !== "foreach") {
+      throw new Error(`Foreach frame step not found: ${frame.stepKey}`);
+    }
+    const deadlineAt = frame.startedAt + foreach.limits.maxDurationMs;
+    if (!earliest || deadlineAt < earliest.deadlineAt) {
+      earliest = { frameIndex, deadlineAt };
+    }
+  });
+  return earliest;
+}
+
 function failState(
   state: EngineState,
   code: string,
@@ -433,6 +462,39 @@ function failState(
       error: { code, message }
     },
     state.revision
+  );
+}
+
+function stopForeachAtDeadline(
+  plan: ExecutionPlan,
+  state: EngineState,
+  frameIndex: number,
+  deps: EngineDependencies
+): EngineTransition {
+  const frame = state.foreachStack[frameIndex];
+  if (!frame) throw new Error(`Foreach frame not found at index ${frameIndex}`);
+  const block = blockAt(plan, frame.parentBlockPath);
+  const foreach = block.steps[frame.stepKey];
+  if (foreach?.kind !== "foreach") {
+    throw new Error(`Foreach frame step not found: ${frame.stepKey}`);
+  }
+  return drive(
+    plan,
+    immutableState(
+      {
+        ...state,
+        status: "running",
+        cursor: {
+          blockPath: frame.parentBlockPath,
+          stepKey: foreach.routes.stopped
+        },
+        foreachStack: state.foreachStack.slice(0, frameIndex),
+        active: undefined,
+        previousOutput: aggregate(frame) as unknown as JsonValue
+      },
+      state.revision
+    ),
+    deps
   );
 }
 
@@ -520,7 +582,7 @@ function completeItem(
       deps
     );
   }
-  if (deps.clock.now() - frame.startedAt > foreach.limits.maxDurationMs) {
+  if (deps.clock.now() - frame.startedAt >= foreach.limits.maxDurationMs) {
     return drive(
       plan,
       immutableState(
@@ -608,6 +670,7 @@ function drive(
     }
     if (step.kind === "call") {
       const scheduled = scheduleCall(
+        plan,
         state,
         step,
         1,
@@ -952,12 +1015,23 @@ export class DeterministicWorkflowEngine {
         },
         state.revision
       );
+      const notBefore = this.dependencies.clock.now() + delay;
+      const foreachDeadline = earliestForeachDeadline(this.plan, retryState);
+      if (foreachDeadline && notBefore >= foreachDeadline.deadlineAt) {
+        return stopForeachAtDeadline(
+          this.plan,
+          retryState,
+          foreachDeadline.frameIndex,
+          this.dependencies
+        );
+      }
       return scheduleCall(
+        this.plan,
         retryState,
         step,
         nextAttempt,
         active.invocation.fencingToken + 1,
-        this.dependencies.clock.now() + delay,
+        notBefore,
         this.dependencies
       );
     }

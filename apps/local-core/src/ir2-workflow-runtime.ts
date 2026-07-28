@@ -204,34 +204,47 @@ export class Ir2WorkflowRuntime {
       if (effect.kind !== "runtime.invoke" || effect.notBefore > this.#now()) {
         continue;
       }
-      const timeoutMs = Math.max(
-        1,
-        effect.invocation.deadlineAt - this.#now()
-      );
-      const controller = new AbortController();
-      const timer = this.#schedule(() => controller.abort(), timeoutMs);
       let outcome: RuntimeOutcome;
-      try {
-        outcome = await dispatchRuntimeEffect(
-          this.#providers,
-          effect,
-          controller.signal
-        );
-      } catch (error) {
+      const dispatchStartedAt = this.#now();
+      if (dispatchStartedAt >= effect.invocation.deadlineAt) {
         outcome = {
-          status: controller.signal.aborted ? "timed_out" : "failed",
+          status: "timed_out",
           error: {
-            code: controller.signal.aborted
-              ? "RUNTIME_DEADLINE_EXCEEDED"
-              : "RUNTIME_PROVIDER_FAILED",
-            message: error instanceof Error ? error.message : String(error),
-            retryable: !controller.signal.aborted
+            code: "RUNTIME_DEADLINE_EXCEEDED",
+            message:
+              "Runtime invocation deadline elapsed before provider dispatch.",
+            retryable: false
           },
           evidence: [],
           riskSignals: []
         };
-      } finally {
-        this.#cancelScheduled(timer);
+      } else {
+        const timeoutMs =
+          effect.invocation.deadlineAt - dispatchStartedAt;
+        const controller = new AbortController();
+        const timer = this.#schedule(() => controller.abort(), timeoutMs);
+        try {
+          outcome = await dispatchRuntimeEffect(
+            this.#providers,
+            effect,
+            controller.signal
+          );
+        } catch (error) {
+          outcome = {
+            status: controller.signal.aborted ? "timed_out" : "failed",
+            error: {
+              code: controller.signal.aborted
+                ? "RUNTIME_DEADLINE_EXCEEDED"
+                : "RUNTIME_PROVIDER_FAILED",
+              message: error instanceof Error ? error.message : String(error),
+              retryable: !controller.signal.aborted
+            },
+            evidence: [],
+            riskSignals: []
+          };
+        } finally {
+          this.#cancelScheduled(timer);
+        }
       }
       const disposition = this.acceptRuntimeResult({
         runId: effect.invocation.identity.runId,

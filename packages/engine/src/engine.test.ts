@@ -168,6 +168,93 @@ function planWithForeach(count = 2): ExecutionPlan {
   };
 }
 
+function planWithNestedForeach(): ExecutionPlan {
+  const base = planWithForeach();
+  const inner = base.steps.items;
+  if (inner?.kind !== "foreach") throw new Error("fixture changed");
+  const innerInspect = inner.body.steps.inspect;
+  if (innerInspect?.kind !== "call") throw new Error("fixture changed");
+  const outer: ForeachStep = {
+    kind: "foreach",
+    key: "groups",
+    items: {
+      kind: "reference",
+      source: "run_input",
+      path: ["groups"]
+    },
+    itemKey: { path: ["id"], valueType: "string" },
+    limits: {
+      maxItems: 10,
+      maxDurationMs: 50,
+      maxDepth: 1,
+      maxStepExecutions: 2_000
+    },
+    onItemError: "collect",
+    body: {
+      entry: "nested_items",
+      steps: {
+        nested_items: {
+          ...inner,
+          key: "nested_items",
+          items: {
+            kind: "reference",
+            source: "scope_item",
+            path: ["items"]
+          },
+          limits: { ...inner.limits, maxDurationMs: 10_000 },
+          body: {
+            ...inner.body,
+            steps: {
+              ...inner.body.steps,
+              inspect: {
+                ...innerInspect,
+                retry: { ...innerInspect.retry, maxAttempts: 1 }
+              }
+            }
+          },
+          routes: {
+            completed: "group_ok",
+            stopped: "group_failed",
+            uncertain: "group_uncertain"
+          }
+        },
+        group_ok: {
+          kind: "terminal",
+          key: "group_ok",
+          status: "succeeded"
+        },
+        group_failed: {
+          kind: "terminal",
+          key: "group_failed",
+          status: "failed",
+          errorCode: "GROUP_FAILED"
+        },
+        group_uncertain: {
+          kind: "terminal",
+          key: "group_uncertain",
+          status: "uncertain"
+        }
+      }
+    },
+    aggregation: { mode: "outcome_summary", outputKey: "groups.output" },
+    routes: {
+      completed: "done",
+      stopped: "failed",
+      uncertain: "uncertain"
+    }
+  };
+  return {
+    ...base,
+    entry: "groups",
+    steps: {
+      groups: outer,
+      done: base.steps.done!,
+      failed: base.steps.failed!,
+      uncertain: base.steps.uncertain!
+    }
+  };
+}
+
 function dependencies(): EngineDependencies & {
   now: { value: number };
 } {
@@ -314,6 +401,123 @@ describe("deterministic IR2 engine", () => {
         outcome: succeeded(null)
       }).disposition
     ).toBe("stale");
+  });
+
+  it("caps an in-flight first item at the earliest ancestor foreach deadline", () => {
+    const deps = dependencies();
+    const engine = new DeterministicWorkflowEngine(
+      planWithNestedForeach(),
+      deps
+    );
+    const waiting = engine.start("run-ancestor-deadline", {
+      groups: [{ id: "group-a", items: [{ id: "item-a" }] }]
+    });
+    const active = waiting.state.active;
+    if (active?.kind !== "call") throw new Error("fixture changed");
+
+    expect(active.invocation.deadlineAt).toBe(1_050);
+    deps.now.value = 1_050;
+    const timedOut = engine.acceptRuntimeOutcome({
+      state: waiting.state,
+      invocationId: active.invocation.invocationId,
+      fencingToken: active.invocation.fencingToken,
+      outcome: {
+        status: "timed_out",
+        error: {
+          code: "RETRY",
+          message: "ancestor foreach budget elapsed",
+          retryable: true
+        },
+        evidence: [],
+        riskSignals: []
+      }
+    });
+
+    expect(timedOut.state.status).toBe("failed");
+    expect(timedOut.state.foreachStack).toEqual([]);
+    expect(timedOut.effects).toEqual([]);
+  });
+
+  it("does not dispatch a retry whose backoff crosses foreach budget", () => {
+    const base = planWithForeach();
+    const foreach = base.steps.items;
+    if (foreach?.kind !== "foreach") throw new Error("fixture changed");
+    const bounded: ExecutionPlan = {
+      ...base,
+      steps: {
+        ...base.steps,
+        items: {
+          ...foreach,
+          limits: { ...foreach.limits, maxDurationMs: 150 }
+        }
+      }
+    };
+    const deps = dependencies();
+    const engine = new DeterministicWorkflowEngine(bounded, deps);
+    const waiting = engine.start("run-retry-budget", {
+      items: [{ id: "a" }]
+    });
+    const active = waiting.state.active;
+    if (active?.kind !== "call") throw new Error("fixture changed");
+    deps.now.value = 1_060;
+
+    const stopped = engine.acceptRuntimeOutcome({
+      state: waiting.state,
+      invocationId: active.invocation.invocationId,
+      fencingToken: active.invocation.fencingToken,
+      outcome: {
+        status: "failed",
+        error: { code: "RETRY", message: "retry", retryable: true },
+        evidence: [],
+        riskSignals: []
+      }
+    });
+
+    expect(stopped.state.status).toBe("failed");
+    expect(stopped.state.foreachStack).toEqual([]);
+    expect(stopped.effects).toEqual([]);
+  });
+
+  it("does not reset a persisted foreach budget during recovery", () => {
+    const base = planWithForeach();
+    const foreach = base.steps.items;
+    if (foreach?.kind !== "foreach") throw new Error("fixture changed");
+    const bounded: ExecutionPlan = {
+      ...base,
+      steps: {
+        ...base.steps,
+        items: {
+          ...foreach,
+          limits: { ...foreach.limits, maxDurationMs: 150 }
+        }
+      }
+    };
+    const deps = dependencies();
+    const engine = new DeterministicWorkflowEngine(bounded, deps);
+    const waiting = engine.start("run-recovered-budget", {
+      items: [{ id: "a" }]
+    });
+    const snapshot = structuredClone(waiting.state);
+    deps.now.value = 1_100;
+    const recovered = engine.resume(snapshot);
+    const active = recovered.state.active;
+    if (active?.kind !== "call") throw new Error("fixture changed");
+
+    expect(recovered.state.foreachStack[0]?.startedAt).toBe(1_000);
+    expect(active.invocation.deadlineAt).toBe(1_150);
+    const stopped = engine.acceptRuntimeOutcome({
+      state: recovered.state,
+      invocationId: active.invocation.invocationId,
+      fencingToken: active.invocation.fencingToken,
+      outcome: {
+        status: "failed",
+        error: { code: "RETRY", message: "retry", retryable: true },
+        evidence: [],
+        riskSignals: []
+      }
+    });
+    expect(stopped.state.status).toBe("failed");
+    expect(stopped.effects).toEqual([]);
   });
 
   it("cancels a waiting invocation once and rejects its late outcome", () => {

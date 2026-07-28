@@ -159,6 +159,48 @@ describe("Local Core IR2 runtime", () => {
     persistence.close();
   });
 
+  it("times out an expired persisted invocation without calling its provider", async () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    let invocations = 0;
+    const providers = new RuntimeProviderRegistry();
+    providers.register({
+      id: "counted",
+      supports: () => true,
+      invoke: async () => {
+        invocations += 1;
+        return {
+          status: "succeeded",
+          output: { shouldNotRun: true },
+          evidence: [],
+          riskSignals: []
+        };
+      }
+    });
+    const first = new Ir2WorkflowRuntime(persistence, providers, {
+      now: () => 1_000,
+      id: ids(),
+      random: () => 0.5
+    });
+    const run = first.start(plan("counted"), {});
+    const restarted = new Ir2WorkflowRuntime(persistence, providers, {
+      now: () => 2_000,
+      id: ids(),
+      random: () => 0.5
+    });
+
+    expect(restarted.recover(run.id)).toMatchObject({
+      status: "waiting_runtime"
+    });
+    await expect(restarted.drainOnce()).resolves.toBe(1);
+    expect(invocations).toBe(0);
+    expect(persistence.getRun(run.id)).toMatchObject({
+      status: "failed",
+      revision: 1
+    });
+    expect(persistence.listPendingEngineOutbox()).toEqual([]);
+    persistence.close();
+  });
+
   it("turns a missing provider into a deterministic failed route", async () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const runtime = new Ir2WorkflowRuntime(
