@@ -1,6 +1,6 @@
 import { access, readdir, readFile, stat } from "node:fs/promises";
 import { constants } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { dirname, extname, join, relative, resolve } from "node:path";
 import { parse } from "yaml";
 
 const root = resolve(import.meta.dirname, "..");
@@ -259,10 +259,103 @@ async function verifyScripts() {
   return shellScripts.length;
 }
 
+async function sourceFiles(directory) {
+  const files = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === "dist") continue;
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await sourceFiles(path)));
+    } else if (
+      [".ts", ".tsx", ".mts", ".js", ".mjs"].includes(extname(path))
+    ) {
+      files.push(path);
+    }
+  }
+  return files;
+}
+
+function importedSpecifiers(content) {
+  const imports = [];
+  const pattern =
+    /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["']([^"']+)["']/g;
+  for (const match of content.matchAll(pattern)) imports.push(match[1]);
+  return imports;
+}
+
+async function verifyDependencyBoundaries() {
+  const sourceRoots = ["apps", "packages", "adapters"];
+  const files = [];
+  for (const sourceRoot of sourceRoots) {
+    const directory = join(root, sourceRoot);
+    if (await exists(directory)) files.push(...(await sourceFiles(directory)));
+  }
+
+  for (const path of files) {
+    const repositoryPath = relative(root, path);
+    const content = await readFile(path, "utf8");
+    for (const specifier of importedSpecifiers(content)) {
+      if (/^@bpa\/[^/]+\/src(?:\/|$)/.test(specifier)) {
+        issues.push(
+          `Private package source import is forbidden: ${repositoryPath} -> ${specifier}`
+        );
+      }
+      if (
+        repositoryPath.startsWith("packages/") &&
+        specifier.startsWith(".") &&
+        relative(root, resolve(dirname(path), specifier)).startsWith("apps/")
+      ) {
+        issues.push(
+          `Package cannot import an App: ${repositoryPath} -> ${specifier}`
+        );
+      }
+      if (
+        (repositoryPath.startsWith("apps/cli/") ||
+          repositoryPath.startsWith("apps/mcp-server/")) &&
+        specifier.startsWith("@bpa/local-core")
+      ) {
+        issues.push(
+          `Control client must not import Local Core: ${repositoryPath} -> ${specifier}`
+        );
+      }
+      if (
+        repositoryPath.startsWith("packages/engine/") &&
+        ([
+          "@bpa/compiler",
+          "@bpa/persistence-sqlite",
+          "@bpa/control-client"
+        ].includes(specifier) ||
+          /(?:chrome|mcp|doudian)/i.test(specifier))
+      ) {
+        issues.push(
+          `Engine dependency boundary violated: ${repositoryPath} -> ${specifier}`
+        );
+      }
+    }
+  }
+
+  const packageDirectories = (await readdir(join(root, "packages"), {
+    withFileTypes: true
+  })).filter((entry) => entry.isDirectory());
+  for (const entry of packageDirectories) {
+    if (entry.name === "schemas") continue;
+    const packagePath = join(root, "packages", entry.name, "package.json");
+    const packageJson = await readJson(packagePath);
+    const exportKeys = Object.keys(packageJson.exports ?? {});
+    if (exportKeys.length !== 1 || exportKeys[0] !== ".") {
+      issues.push(
+        `Package must expose one public entrypoint: packages/${entry.name}/package.json`
+      );
+    }
+  }
+  return files.length;
+}
+
 const runtimeVersion = await verifyRuntimeVersions();
 const assets = await verifyAssets();
 const skillCount = await verifySkills();
 const shellScriptCount = await verifyScripts();
+const sourceFileCount = await verifyDependencyBoundaries();
 
 if (issues.length > 0) {
   process.stderr.write(
@@ -273,6 +366,6 @@ if (issues.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    `Repository verified: Runtime ${runtimeVersion}, ${assets.nodeCount} Nodes, ${assets.workflowCount} Workflows, ${skillCount} Skills, ${shellScriptCount} shell scripts.\n`
+    `Repository verified: Runtime ${runtimeVersion}, ${assets.nodeCount} Nodes, ${assets.workflowCount} Workflows, ${skillCount} Skills, ${shellScriptCount} shell scripts, ${sourceFileCount} dependency-checked source files.\n`
   );
 }

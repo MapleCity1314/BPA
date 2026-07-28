@@ -202,6 +202,9 @@ importers:
       '@bpa/schemas':
         specifier: workspace:*
         version: link:../schemas
+      '@bpa/workflow-ir':
+        specifier: workspace:*
+        version: link:../workflow-ir
       yaml:
         specifier: ^2.8.1
         version: 2.9.0
@@ -222,18 +225,12 @@ importers:
 
   packages/engine:
     dependencies:
-      '@bpa/compiler':
-        specifier: workspace:*
-        version: link:../compiler
       '@bpa/node-runtime':
         specifier: workspace:*
         version: link:../node-runtime
-      '@bpa/persistence':
+      '@bpa/workflow-ir':
         specifier: workspace:*
-        version: link:../persistence
-      '@bpa/schemas':
-        specifier: workspace:*
-        version: link:../schemas
+        version: link:../workflow-ir
 
   packages/gateway-core:
     dependencies:
