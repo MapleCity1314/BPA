@@ -24,9 +24,9 @@ pnpm bpa doctor
 Published Artifact 不允许用相同 `asset_id + version` 覆盖。以下动作会写入 Audit：
 
 ```bash
-pnpm bpa publish node nodes/core/control.start.node.yaml --yes
-pnpm bpa publish node nodes/core/control.succeed.node.yaml --yes
-pnpm bpa publish node nodes/core/doudian.shop.context.read.node.yaml --yes
+for node in nodes/core/*.node.yaml; do
+  pnpm bpa publish node "$node" --yes
+done
 pnpm bpa publish workflow workflows/examples/doudian.shop-context-observe.workflow.yaml --yes
 ```
 
@@ -37,6 +37,14 @@ apps/extension/.output/chrome-mv3
 ```
 
 固定扩展 ID 为 `hoobbnlkcdhbemedpfhhoicklplggmbc`。Native Host 只允许该 Origin。
+正式安装包将扩展复制到物理稳定路径：
+
+```text
+~/Library/Application Support/BPA/extension
+```
+
+首次安装从该目录“加载已解压的扩展程序”。以后升级会原子替换目录内容并保留失败回滚，
+Chrome 中只需点击“重新加载”；不要加载 `runtime/<version>` 下的版本化目录。
 
 打开并登录：
 
@@ -47,7 +55,7 @@ https://fxg.jinritemai.com/ffa/g/list
 执行：
 
 ```bash
-pnpm bpa run doudian.shop-context-observe --version 1.1.0
+pnpm bpa run doudian.shop-context-observe --version 1.2.0
 pnpm bpa inspect <run-id>
 pnpm bpa events <run-id>
 pnpm bpa audit
@@ -82,8 +90,8 @@ pnpm mcp
 ## 4. 安装、升级与回滚
 
 发布包携带经过 SHA-256 校验的 Node.js 24 macOS arm64 Runtime。
-当前节奏与风险治理版本为 BPA Runtime `0.2.1`，Doudian Node 和示例 Workflow 为 `1.1.0`。
-旧 Runtime `0.1.0` 与已发布资产 `1.0.0` 保留，不执行覆盖升级。
+当前版本为 BPA Runtime `0.3.0`、Doudian Node `1.2.0`、示例 Workflow `1.2.0`。
+旧 Runtime 与已发布资产继续保留，不执行覆盖升级。
 
 ```bash
 ./scripts/install-macos-arm64.sh
@@ -92,14 +100,14 @@ pnpm mcp
 ./scripts/uninstall-macos.sh --purge-data
 ```
 
-安装器先在旧版本仍运行时完成新 Runtime 和原生 ABI 预检，再短暂停止旧 Core 执行 SQLite Migration；只有全部成功才原子切换 `runtime/current`。上一版本保存在 `runtime/previous`。应用回滚不倒退数据库 Migration。
+安装器先在旧版本仍运行时完成新 Runtime 和原生 ABI 预检，再短暂停止旧 Core 执行 SQLite Migration；只有全部成功才原子切换 `runtime/current` 和稳定扩展目录。上一版本保存在 `runtime/previous`。应用回滚会同步恢复 Runtime 与扩展构建，但不倒退数据库 Migration；升级或回滚后需在 Chrome 扩展页点击“重新加载”。
 
 安装器在停止旧 Core 前先用捆绑 Node 实例化一次 `better-sqlite3` 内存库，
 验证原生模块 ABI。ABI 不匹配时安装会在切换前失败，旧 Core 保持运行。
 停止旧 Core 后，安装器按旧 PID 等待进程锁实际释放，再运行 Migration，
 避免 `launchctl bootout` 与进程退出之间的竞态。
 
-默认卸载保留：
+默认卸载移除 Runtime、Native Host 和稳定扩展目录，但保留：
 
 ```text
 ~/Library/Application Support/BPA/data

@@ -1,0 +1,33 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: data.select
+  version: 1.0.0
+  title: 安全选择 JSON 字段
+  description: 按受限点路径从指定 JSON 值中读取字段，不执行 JSONPath 或任意表达式。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - source
+    - path
+  properties:
+    source: {}
+    path:
+      type: string
+      pattern: ^(?:[A-Za-z_][A-Za-z0-9_]*)(?:\.[A-Za-z_][A-Za-z0-9_]*)*$
+      maxLength: 500
+    required:
+      type: boolean
+    default: {}
+outputSchema: {}
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 1s
+  idempotency: pure
+  cancellable: true
+errors:
+  - VALUE_NOT_FOUND

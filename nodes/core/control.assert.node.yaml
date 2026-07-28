@@ -1,0 +1,27 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: control.assert
+  version: 1.0.0
+  title: 断言业务前置条件
+  description: 使用受限比较 DSL 验证输入或上一步结果；不满足时安全失败。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  properties:
+    message:
+      type: string
+      minLength: 1
+      maxLength: 1000
+outputSchema: {}
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 1s
+  idempotency: pure
+  cancellable: true
+errors:
+  - ASSERTION_INVALID
+  - ASSERTION_FAILED

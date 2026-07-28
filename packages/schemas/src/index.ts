@@ -30,6 +30,8 @@ const require = createRequire(import.meta.url);
 interface AjvLike {
   compile<T = unknown>(schema: object): ValidateFunction<T>;
   addSchema(schema: object): AjvLike;
+  validateSchema(schema: object): boolean;
+  errors?: ErrorObject[] | null;
 }
 type AjvConstructor = new (options: Record<string, unknown>) => AjvLike;
 const Ajv2020 = require("ajv/dist/2020").default as AjvConstructor;
@@ -61,6 +63,21 @@ export const validateRiskSignal = ajv.compile(riskSignalSchema);
 export const validateBrowserProtocolMessage = ajv.compile(
   browserProtocolV1Schema
 ) as ValidateFunction<BrowserProtocolMessage>;
+
+export function validateJsonSchemaDefinition(
+  schema: Record<string, unknown>
+): { valid: true } | { valid: false; errors: string[] } {
+  const valid = ajv.validateSchema(schema);
+  return valid
+    ? { valid: true }
+    : { valid: false, errors: formatValidationErrors(ajv.errors) };
+}
+
+export function compileDataValidator<T = unknown>(
+  schema: Record<string, unknown>
+): ValidateFunction<T> {
+  return ajv.compile<T>(schema);
+}
 
 export function formatValidationErrors(
   errors: ErrorObject[] | null | undefined

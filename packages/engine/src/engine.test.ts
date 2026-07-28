@@ -19,6 +19,8 @@ const workflow: CompiledWorkflow = {
       nodeVersion: "1.0.0",
       definitionDigest: "sha256:start",
       runtime: "engine_builtin",
+      inputSchema: { type: "object" },
+      outputSchema: {},
       input: {},
       next: "observe",
       on: {},
@@ -31,6 +33,8 @@ const workflow: CompiledWorkflow = {
       nodeVersion: "1.0.0",
       definitionDigest: "sha256:observe",
       runtime: "browser",
+      inputSchema: { type: "object" },
+      outputSchema: { type: "object" },
       input: {},
       next: "finish",
       on: {},
@@ -43,6 +47,8 @@ const workflow: CompiledWorkflow = {
       nodeVersion: "1.0.0",
       definitionDigest: "sha256:finish",
       runtime: "engine_builtin",
+      inputSchema: { type: "object" },
+      outputSchema: {},
       input: {},
       on: {},
       timeoutMs: 1000,
@@ -231,6 +237,12 @@ describe("local workflow engine", () => {
           nodeVersion: "1.0.0",
           definitionDigest: "sha256:human",
           runtime: "human",
+          inputSchema: {
+            type: "object",
+            required: ["prompt"],
+            properties: { prompt: { type: "string" } }
+          },
+          outputSchema: { type: "object" },
           input: { prompt: "确认" },
           next: "finish",
           on: { rejected: "finish" },
@@ -253,6 +265,113 @@ describe("local workflow engine", () => {
     );
     expect(completed.status).toBe("succeeded");
     expect(completed.output).toEqual({ reviewer: "test" });
+    persistence.close();
+  });
+
+  it("rejects invalid workflow input before creating a run", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const engine = new LocalWorkflowEngine(persistence);
+    expect(() =>
+      engine.start(
+        {
+          ...workflow,
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["shop_id"],
+            properties: { shop_id: { type: "string" } }
+          }
+        },
+        { unexpected: true }
+      )
+    ).toThrow(/Workflow input is invalid/);
+    persistence.close();
+  });
+
+  it("resolves bindings and executes the default data nodes", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const engine = new LocalWorkflowEngine(persistence);
+    const dataWorkflow: CompiledWorkflow = {
+      ...workflow,
+      inputSchema: {
+        type: "object",
+        required: ["payload"],
+        properties: { payload: { type: "string" } }
+      },
+      outputSchema: { type: "string" },
+      nodes: {
+        start: { ...workflow.nodes.start!, next: "constant" },
+        constant: {
+          key: "constant",
+          nodeId: "data.constant",
+          nodeVersion: "1.0.0",
+          definitionDigest: "sha256:constant",
+          runtime: "engine_builtin",
+          inputSchema: {
+            type: "object",
+            required: ["value"],
+            properties: { value: {} }
+          },
+          outputSchema: {},
+          input: { value: "${input.payload}" },
+          next: "finish",
+          on: {},
+          timeoutMs: 1000,
+          retry: { maxAttempts: 1, backoffMs: 0, retryableErrors: [] }
+        },
+        finish: {
+          ...workflow.nodes.finish!,
+          inputSchema: {
+            type: "object",
+            properties: { output: {} }
+          },
+          input: { output: "${previous}" }
+        }
+      }
+    };
+    const completed = engine.start(dataWorkflow, { payload: "selected" });
+    expect(completed.status).toBe("succeeded");
+    expect(completed.output).toBe("selected");
+    expect(
+      persistence
+        .listEvents(completed.id)
+        .filter((event) => event.type === "NODE_SUCCEEDED")
+        .map((event) => (event.payload as { builtin?: string }).builtin)
+    ).toContain("data.constant");
+    persistence.close();
+  });
+
+  it("turns invalid browser output into an auditable non-retryable failure", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const engine = new LocalWorkflowEngine(persistence);
+    const { next: _next, ...terminalObserve } = workflow.nodes.observe!;
+    const strictWorkflow: CompiledWorkflow = {
+      ...workflow,
+      nodes: {
+        ...workflow.nodes,
+        observe: {
+          ...terminalObserve,
+          outputSchema: {
+            type: "object",
+            required: ["supported"],
+            properties: { supported: { const: true } }
+          }
+        }
+      }
+    };
+    const waiting = engine.start(strictWorkflow, {});
+    const executionId = persistence
+      .listEvents(waiting.id)
+      .find((event) => event.type === "NODE_DISPATCHED")!.nodeExecutionId!;
+    const failed = engine.acceptBrowserResult(strictWorkflow, executionId, {
+      status: "succeeded",
+      output: { supported: false },
+      fencingToken: 1
+    });
+    expect(failed.status).toBe("failed");
+    expect(persistence.getNodeExecution(executionId)?.error?.code).toBe(
+      "OUTPUT_SCHEMA_INVALID"
+    );
     persistence.close();
   });
 });

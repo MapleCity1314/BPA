@@ -1,0 +1,48 @@
+apiVersion: bpa/v1alpha1
+kind: Workflow
+metadata:
+  id: core.data-flow-smoke
+  version: 1.0.0
+  title: Core 数据流冒烟验证
+  description: 验证安全绑定、字段选择、确定性合并和终态输出。
+spec:
+  riskLevel: R0
+  inputSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - payload
+    properties:
+      payload:
+        type: object
+  outputSchema:
+    type: object
+    required:
+      - verified
+    properties:
+      verified:
+        type: boolean
+        const: true
+  start: start
+  nodes:
+    start:
+      use: control.start@1.1.0
+      next: select_payload
+    select_payload:
+      use: data.select@1.0.0
+      with:
+        source: "${input}"
+        path: payload
+        required: true
+      next: merge_marker
+    merge_marker:
+      use: data.merge@1.0.0
+      with:
+        values:
+          - "${previous}"
+          - verified: true
+      next: finish
+    finish:
+      use: control.succeed@1.1.0
+      with:
+        output: "${previous}"

@@ -1,484 +1,157 @@
 # BPA
 
-## 设计文档
+[![CI](https://github.com/MapleCity1314/BPA/actions/workflows/ci.yml/badge.svg)](https://github.com/MapleCity1314/BPA/actions/workflows/ci.yml)
+[![Protocol Docs](https://github.com/MapleCity1314/BPA/actions/workflows/docs-pages.yml/badge.svg)](https://github.com/MapleCity1314/BPA/actions/workflows/docs-pages.yml)
 
-- [BPA 通用技术方案 v1.0](docs/BPA通用技术方案-v1.0.md)：当前权威架构基线；包含原链路、目标架构、能力、兜底、安全、版本升级、技术选型、目录结构与演进路线。
-- [BPA Browser Protocol v1](docs/protocols/browser-protocol-v1.md)：已确认的 Native Messaging 协议 Schema、状态机、签名权限和消息样例。
-- [TimingPolicy 与 RiskSignal v1](docs/timing-and-risk-policy-v1.md)：自适应就绪、有界节奏、持久化延迟与平台风险阻断边界。
-- [本地 v1 运行与验收](docs/local-v1-operations.md)：开发、发布、Chrome 联调、MCP、安装、回滚和故障判定。
-- [BPA 技术架构草案 v0.1](docs/architecture-v0.1.md)：历史讨论稿，仅用于追溯早期设计过程，不作为实现依据。
-- [重点项检查插件抽象复盘 v0.1](docs/重点项检查插件抽象复盘-v0.1.md)：首个真实场景复盘、节点提取，以及 `workflow_gen` 与 `node_gen` 的职责划分。
-- [Bridge / Gateway 实验报告 v0.1](docs/bridge-gateway实验报告-v0.1.md)：真实扩展链路、ACK、去重、断线恢复、Gateway 重启和只读抖店节点实验。
+![BPA：真实浏览器中的受约束执行](.github/assets/readme-hero.svg)
 
-## 项目定义
+<p align="center">
+  <a href="https://maplecity1314.github.io/BPA/">协议文档</a>
+  ·
+  <a href="docs/BPA通用技术方案-v1.0.md">架构方案</a>
+  ·
+  <a href="docs/local-v1-operations.md">运行与验收</a>
+  ·
+  <a href="https://maplecity1314.github.io/BPA/reference/schemas/">JSON Schema</a>
+</p>
 
-BPA 是一种面向真实浏览器业务流程的协作与执行体系。
+BPA（Browser Process Assistance）把经过审核的浏览器流程编译成版本化 Workflow 和 Node，再交给用户真实浏览器中的扩展执行。人和 AI 可以触发同一套流程，但 AI 不直接接管浏览器，也不能在运行时下发任意 JavaScript。
 
-它将经过业务人员确认的浏览器工作流程提前完成定制、测试和版本化。进入日常使用阶段后，人和 AI 都可以成为流程的触发器；Workflow Engine 按已发布 Workflow 决定流程，浏览器扩展在用户真实浏览器和真实登录状态中读取 DOM，并只执行经过校验的当前节点动作。
+当前仓库包含一条可运行的本地纵向链路：CLI、Local Core、Workflow Engine、Browser Gateway、Native Host、Chrome Extension、SQLite 状态与审计，以及用于创作 Workflow / Node 的 MCP 工具。
 
-AI 可以理解自然语言、选择流程、补齐参数，并在允许的范围内处理页面变化和异常，但它不直接接管浏览器，也不在运行时随意生成并执行操作代码。
+2026-07-28 的代码实况、默认节点和 Skills 补强记录见 [BPA 当前实况与默认资产 v0.3](docs/current-state-and-default-assets-v0.3.md)。
 
-一句话定义：
+## 执行边界
 
-> BPA 把浏览器业务流程沉淀为一项可以被人和 AI 共同触发、稳定复用并持续演进的公司能力。
+```text
+Human / AI
+    │  structured request
+    ▼
+Workflow Compiler ──→ Workflow Engine ──→ Browser Gateway
+                                              ⇅  bpa.browser/1
+                                      Extension Bridge
+                                              │
+                                              ▼
+                                     Real Browser DOM
 
-当前名称可理解为 **Browser Process Assistance（浏览器流程协作）**。项目内部统一简称 BPA。
+Every step ──→ Event Log · Evidence · Audit · Human Approval
+```
 
-## 当前实现状态
+Workflow 决定流程，Node 定义单步能力，Extension Bridge 校验页面上下文和权限后执行动作。页面内容只是输入，不能变成系统指令。写动作的结果无法确认时，运行进入 `uncertain`，不会把未知副作用当作失败后自动重试。
 
-本地 v1 已形成可运行纵向闭环：
+这不是通用浏览器 Agent，也不以 headless 浏览器代替用户环境。当前实现首先解决真实登录态下的确定性执行、断线恢复、权限收敛和证据留存。
 
-- pnpm monorepo 与 Node.js 24 LTS 约束。
-- Workflow、Node、Event、Permission、Evidence 与 Browser Protocol JSON Schema。
-- Workflow Compiler、内容摘要与节点版本固定。
-- SQLite Registry、Execution/Event、Inbox/Outbox、幂等和 Fencing 数据模型。
-- `ExecutionUnitOfWork`、`GatewayDeliveryUnitOfWork` 与 CAS。
-- Local Core、`0600` Unix Socket Control API 和 CLI。
-- 已确认的 Browser Protocol v1、双向独立序列、24 小时轮换 Resume Token 和 Ed25519 Permission Grant。
-- `com.bpa.browser` Native Host、Origin 白名单和大小端安全 framing。
-- WXT 通用扩展、IndexedDB Pending Result、状态页和 Doudian 只读 Adapter。
-- Engine 线性执行、受限条件、有限重试、超时、人工暂停、Cancel 和 `uncertain`。
-- TimingPolicy 确定性抖动、指数退避、页面稳定性探测、Tab 级限速与 RiskSignal 阻断。
-- MCP `workflow_gen` / `node_gen` 等 Candidate-only 创作工具。
-- macOS arm64 安装、Migration 前置验证、原子切换、回滚和保留数据卸载脚本。
+## 当前版本
 
-开发验证：
+| 范围 | 版本 / 状态 | 说明 |
+| --- | --- | --- |
+| BPA Runtime | `0.3.0` | 契约执行、默认节点、精细化创作 Skills 与 macOS arm64 发布链路 |
+| Browser Protocol | `bpa.browser/1` · `1.0.0` | 已确认；双向独立序列、ACK、Resume、Cancel 与 Fencing |
+| Permission / Event / Evidence | `v1` | 稳定公共模型 |
+| Workflow / Node | `v1alpha1` | Alpha；实现方应固定版本并执行兼容测试 |
+| Reference Adapter | Doudian Adapter `1.1.0` / Node `1.2.0` | 当前只读参考场景，不代表通用零适配承诺 |
+
+机器规范以 [`packages/schemas/schema`](packages/schemas/schema) 为唯一事实来源。公开站点只复制明确列入白名单的 Schema 和中性消息样例。
+
+## 仓库结构
+
+```text
+.
+├── apps/
+│   ├── cli/                 # 本地控制 CLI
+│   ├── docs/                # Astro + Starlight 协议站
+│   ├── extension/           # WXT Chrome Extension
+│   ├── local-core/          # 本地控制面与 Unix Socket API
+│   ├── mcp-server/          # Workflow / Node 创作工具
+│   └── native-host/         # Chrome Native Messaging Host
+├── packages/
+│   ├── compiler/            # Workflow 编译、摘要与版本固定
+│   ├── engine/              # 执行、重试、暂停、取消与补偿
+│   ├── gateway-core/        # Browser Protocol 会话与投递
+│   ├── browser-bridge/      # Bridge 端协议、Pending Result
+│   ├── node-runtime/        # Node 执行契约
+│   ├── persistence/         # 持久化接口
+│   ├── persistence-sqlite/  # SQLite Registry / Event / Inbox / Outbox
+│   └── schemas/             # JSON Schema 与生成类型
+├── adapters/doudian/        # 首个真实页面适配器
+├── nodes/core/              # 内置控制与数据节点
+├── workflows/examples/      # 可发布 Workflow 样例
+├── skills/                  # BPA 创作与诊断 Skills
+├── docs/                    # 架构、协议、运维和实验记录
+└── scripts/                 # 安装、升级、回滚与卸载
+```
+
+## 开始开发
+
+要求 Node.js 24 LTS 和 pnpm 10.32.1。
 
 ```bash
-pnpm install
+git clone https://github.com/MapleCity1314/BPA.git
+cd BPA
+pnpm install --frozen-lockfile
 pnpm schema:check
 pnpm typecheck
 pnpm test
+pnpm build
 ```
 
-本地运行：
+启动 Local Core，并在另一个终端检查状态：
 
 ```bash
 pnpm core
 pnpm bpa doctor
 ```
 
-完整发布和浏览器验收步骤见[本地 v1 运行与验收](docs/local-v1-operations.md)。
+启动协议文档：
 
-## BPA 为什么存在
-
-传统 RPA 通常从人的操作动作出发，通过录制坐标、选择器和固定步骤复现操作。它可以实现全自动执行，但流程一旦遇到页面改版、弹窗变化、数据异常或计划外分支，就容易失败。
-
-另一条路线是让 AI 直接操作 headless 浏览器。AI 同时负责理解任务、观察页面、决定动作和执行操作，适应性更强，但公司的流程、规则和执行能力也容易被放进模型的临时推理中。模型行为变化、服务不可用或上下文丢失，都可能影响业务连续性。
-
-BPA 选择第三条路线：
-
-- 不录制人的每一次鼠标动作，而是沉淀完成业务目标所需的 Workflow。
-- 不让 AI 直接控制 headless 浏览器，而是通过浏览器扩展操作真实页面 DOM。
-- 不把流程保存在聊天记录和提示词中，而是将其变成独立、可测试、可版本化的公司资产。
-- 不把 AI 当作公司的能力本身，而是把 AI 放在人与公司能力之间，作为理解、选择、协调和有限调整的入口。
-
-## BPA 的核心模型
-
-```text
-人触发 ─┐
-        ├─→ 选择 Workflow ─→ 绑定参数 ─→ 权限检查
-AI触发 ─┘                                      │
-                                               ▼
-                                     浏览器扩展执行 DOM 动作
-                                               │
-                                               ▼
-                                      验证结果并保存证据
-                                               │
-                              ┌────────────────┴───────────────┐
-                              ▼                                ▼
-                         返回业务结果                    异常或人工接管
+```bash
+pnpm docs:dev
 ```
 
-BPA 的基本公式：
+Chrome 扩展、Native Host、首个只读 Workflow 和 macOS 安装流程见[本地 v1 运行与验收](docs/local-v1-operations.md)。
 
-> BPA = 双触发器 × 版本化 Workflow × 确定性浏览器执行 × AI 有限微调 × 人类最终治理
+## 从资产到执行
 
-## 人和 AI 都是触发器
+Published Artifact 不能用相同的 `asset_id + version` 覆盖。候选资产可以由 MCP 工具生成或校验，但正式发布必须由人在 CLI 中明确确认。
 
-人和 AI 是同一套公司能力的两种调用入口。
+```bash
+# 校验
+pnpm bpa validate node nodes/core/control.start.node.yaml
 
-人可以在界面中选择流程、填写参数并启动任务。AI 可以从自然语言、业务上下文或其他信息中识别意图，选择合适的 Workflow，并生成同样的结构化参数。
+# 发布
+pnpm bpa publish node nodes/core/control.start.node.yaml --yes
 
-例如，人可以在界面中选择“导出订单”，AI 也可以把“导出昨天所有已完成订单”转换成：
-
-```json
-{
-  "workflow": "order.export",
-  "version": "2.3",
-  "parameters": {
-    "date": "2026-07-26",
-    "status": "completed"
-  }
-}
+# 执行
+pnpm bpa run <workflow-id> --version <version>
+pnpm bpa inspect <run-id>
+pnpm bpa events <run-id>
 ```
 
-无论从哪个入口触发，后续使用的 Workflow、权限规则、浏览器执行器、验收标准和审计记录都相同。
+MCP 服务提供 `catalog_search`、`workflow_gen`、`workflow_validate`、`workflow_simulate`、`artifact_diff`、`node_gen` 和 `node_requirement_create`：
 
-因此，AI 不可用时，人仍然能够直接启动同一套流程。AI 在场时，公司只是多了一种更自然、更高效的调用方式。
-
-## Workflow 是 BPA 的核心资产
-
-一次成功的对话不等于公司能力，一次成功的 AI 浏览器操作也不等于公司能力。
-
-真正需要沉淀的是可独立运行的 Workflow。它至少应该包含：
-
-- 业务目标、输入和最终产出。
-- 固定步骤及其执行顺序。
-- 可选择的业务分支。
-- 所需页面能力和工具能力。
-- 每一步的前置条件。
-- 每一步的成功证据和验收标准。
-- 超时、页面变化和数据异常的处理方式。
-- 必须暂停并交还给人的条件。
-- 动作的风险等级、权限和审批要求。
-- Workflow 版本、变更记录和回退方式。
-
-Workflow 不属于某一次聊天，也不属于某一个模型。人和 AI 都只能调用它、提供参数或对它提出修改建议。
-
-## 浏览器扩展是确定性执行层
-
-BPA 不让 AI 直接操作 headless 浏览器。实际页面操作由运行在用户真实浏览器中的扩展完成。
-
-浏览器扩展负责：
-
-- 使用用户当前浏览器的真实登录状态。
-- 读取当前页面及 iframe 中可访问的 DOM。
-- 将复杂页面转换成精简的语义 DOM。
-- 为可操作元素建立短期、可验证的节点身份。
-- 执行点击、输入、选择、滚动、提取、下载等有限动作。
-- 检查元素是否仍然可见、可用和符合预期。
-- 观察页面变化并验证动作结果。
-- 在目标失效、页面变化或动作越权时拒绝执行。
-- 保存动作前后的状态和完成证据。
-
-扩展执行的是预先实现并经过审查的有限动作，不接受 AI 下发的任意 JavaScript、`eval` 代码或不受约束的远程脚本。
-
-建议的基础动作集合：
-
-```text
-observe
-click
-input
-select
-check
-scroll
-waitFor
-extract
-navigate
-switchTab
-download
-requestHuman
+```bash
+pnpm mcp
 ```
 
-## AI 在 BPA 中的角色
+这些工具只能创建 `asset.candidate`，不能代替人工批准发布。
 
-AI 是理解器、选择器、协调者和有限的异常处理者，不是 Workflow、Tool 或执行能力本身。
+## 协议与安全
 
-AI 可以负责：
+Browser Protocol v1 覆盖会话建立、能力声明、Permission Grant、命令投递、结果确认、断线恢复、取消与 Fencing。协议对未知字段严格失败，Extension Bridge 会拒绝过期权限、错误序列、无效签名和不匹配的页面上下文。
 
-- 理解人用自然语言表达的业务目标。
-- 识别应该启动哪一个 Workflow。
-- 从上下文中提取和补齐 Workflow 参数。
-- 对缺失、矛盾或高风险参数发起确认。
-- 在已有分支中选择符合当前情况的分支。
-- 根据语义信息帮助重新定位轻微变化后的页面元素。
-- 解释执行结果、异常原因和下一步建议。
-- 根据执行记录提出 Workflow、Tool、Skill 或权限的候选改进。
+- [Browser Protocol v1](https://maplecity1314.github.io/BPA/browser/v1/)
+- [消息类型与信封](https://maplecity1314.github.io/BPA/browser/v1/messages/)
+- [安全边界](https://maplecity1314.github.io/BPA/browser/v1/security/)
+- [Timing 与 Risk](https://maplecity1314.github.io/BPA/browser/v1/timing-and-risk/)
+- [公共模型与 Schema](https://maplecity1314.github.io/BPA/reference/schemas/)
+- [规范消息样例](https://maplecity1314.github.io/BPA/reference/examples/)
 
-AI 不应该负责：
+## 项目阶段
 
-- 在对话中临时承载正式业务流程。
-- 用模型推理替代可以确定计算的业务工具。
-- 随意生成 JavaScript 并让扩展执行。
-- 绕过 Workflow 直接完成高风险页面操作。
-- 未经验证就把一次临时处理写入正式流程。
-- 在运行任务时悄悄修改正在使用的 Workflow。
-- 把验证码、二次认证或人工审批当成需要绕过的障碍。
+BPA 已完成本地 v1 的纵向闭环和一个真实页面的只读参考实现。现阶段重点是收紧协议与资产模型、扩大回放和故障测试，再逐步抽离更多通用节点。仓库中的 `docs/architecture-v0.1.md` 和实验报告用于追溯，不是当前规范。
 
-## 人在 BPA 中的角色
+架构基线以 [BPA 通用技术方案 v1.0](docs/BPA通用技术方案-v1.0.md) 为准；对外集成优先阅读[协议文档站](https://maplecity1314.github.io/BPA/)。
 
-人始终站在系统之上。
+## License
 
-人的职责包括：
-
-- 定义真正需要交付的业务结果。
-- 决定哪些步骤是必要的，哪些只是历史习惯。
-- 划定 AI、Workflow 和浏览器扩展的权限边界。
-- 确定哪些动作可以自动完成，哪些必须人工确认。
-- 处理规则无法覆盖的例外。
-- 审核系统提出的流程变更。
-- 根据真实业务结果判断一次执行或一次学习是否有效。
-- 对高风险决策和最终业务结果承担责任。
-
-人工监督不等于在每一步都点击“同意”。监督强度应与风险匹配：
-
-- 读取、搜索、备份等低风险动作可以自动执行并留痕。
-- 普通可逆修改可以先执行或批量确认。
-- 发布、退款、改价、广告预算、删除等高风险动作必须设置明确的人工确认点。
-
-## AI 微调的准确含义
-
-BPA 中的“AI 微调”不是让 AI 在运行时自由改写流程，而是在 Workflow 允许的范围内处理有限的不确定性。
-
-运行时允许的微调包括：
-
-- 补齐或纠正参数。
-- 从预定义分支中选择路径。
-- 根据语义重新定位页面元素。
-- 处理加载速度、弹窗顺序和轻微页面改版。
-- 识别异常类型并选择重试、换分支或请求人工。
-
-稳定的流程变化必须进入独立的进化阶段：
-
-```text
-保存异常和人工纠正
-        ↓
-定位问题发生在哪一层
-        ↓
-AI 或人员提出候选修改
-        ↓
-使用历史案例回放和测试
-        ↓
-负责人审核差异
-        ↓
-发布新的版本
-        ↓
-后续任务复用新版本
-```
-
-如果利润算错，应修改计算工具或业务规则；如果步骤遗漏，应修改 Workflow；如果 AI 总是误解某类业务要求，才考虑修改 Skill；如果执行了不该执行的动作，应修改权限和约束。
-
-## BPA 的三个生命周期
-
-### 1. 定制期
-
-业务人员和技术人员共同把工作从“人的操作”重新整理为“可复核的产出”：
-
-- 明确输入、输出和验收标准。
-- 删除没有业务价值的历史动作。
-- 固化稳定步骤和异常分支。
-- 定义浏览器页面能力。
-- 建立权限和人工确认点。
-- 准备测试数据和回放案例。
-- 发布 Workflow 的第一个可用版本。
-
-这一步相当于把业务能力编译成可以执行的流程。
-
-### 2. 复用期
-
-人或 AI 选择 Workflow 并提供参数，系统按版本执行。
-
-运行期间的重点不是让 AI自由发挥，而是：
-
-- 确定性执行。
-- 动作幂等。
-- 失败可恢复。
-- 结果可验证。
-- 全过程可审计。
-- 必要时快速交还给人。
-
-### 3. 进化期
-
-执行异常、人工纠正和最终业务结果成为改进依据。系统提出候选变化，经过回放、验证和人工批准后发布新版本。
-
-所有重要变化都必须能比较、能解释、能撤销。
-
-## BPA 与其他方案的区别
-
-| 维度 | 传统 RPA | 自由浏览器 Agent | BPA |
-|---|---|---|---|
-| 起点 | 记录人的操作 | AI 临场理解和操作 | 定义业务产出并定制 Workflow |
-| 主要执行环境 | 桌面坐标或浏览器驱动 | headless 或受控浏览器 | 用户真实浏览器扩展 |
-| 登录状态 | 经常独立维护 | 独立 Profile 或 Cookie | 使用当前真实登录状态 |
-| 流程保存位置 | RPA 脚本 | 模型上下文和提示词 | 公司持有的版本化 Workflow |
-| AI 的位置 | 通常没有 | 理解、决策和执行一体 | 触发、协调和有限微调 |
-| 页面定位 | 坐标、CSS、XPath | 视觉或 DOM 推理 | 语义 DOM 与本地校验 |
-| 页面变化 | 容易整体失效 | AI 临场恢复 | 受约束的语义恢复 |
-| 风险控制 | 流程级 | 容易依赖模型自律 | 动作级权限和人工确认 |
-| AI 不可用时 | 不受影响 | 任务无法继续 | 人可直接调用同一 Workflow |
-| 学习方式 | 人工修改脚本 | 修改提示词或模型 | 分层归因、测试、审核和版本发布 |
-
-## BPA 的安全与治理原则
-
-### 流程属于公司
-
-Workflow、Tool、规则、数据、版本和最终责任必须留在公司系统中，不能只存在于模型上下文或员工聊天记录中。
-
-### 页面是不可信输入
-
-页面文本和 DOM 可能包含错误信息、恶意内容或针对 AI 的指令。页面内容只能作为业务数据，不能直接变成扩展命令。
-
-### AI 发送动作数据，不发送代码
-
-AI 只能使用经过定义的动作协议。浏览器扩展负责校验动作类型、参数、目标元素、页面版本和权限。
-
-### 每一步都必须验证
-
-“点击已执行”不等于业务完成。Workflow 应定义点击后应该出现的状态、数据变化、下载事件或成功提示。
-
-### 每一次重要变化都可以撤销
-
-正式 Workflow、规则和配置必须有版本。修改前后能够比较，失败后能够回退。
-
-### 权限跟随任务，而不是跟随模型
-
-权限应绑定店铺、域名、Workflow、动作类型、数据范围、金额和有效时间。不能因为某个 AI 获得了入口，就默认拥有全部浏览器权限。
-
-### 高风险动作由人负责
-
-涉及资金、对外发布、正式发货、退款、删除、广告预算和核心数据修改时，必须有清晰的责任人和确认机制。
-
-## BPA 的能力边界
-
-BPA 适合：
-
-- 查询、筛选和提取电商后台数据。
-- 订单、商品、达人、素材和投放后台的标准流程。
-- 普通表单填写和批量操作。
-- 下载、导出和状态监控。
-- 多标签页和多页面的确定性协同。
-- 需要真实登录状态的人机协同流程。
-
-纯 DOM 执行暂时不承诺完全覆盖：
-
-- 验证码、短信验证和二次认证。
-- 必须由真实用户事件触发的特殊控件。
-- 本地文件选择器和复杂文件上传。
-- Canvas、WebGL、远程桌面或没有可操作 DOM 的页面。
-- 浏览器关闭、电脑关机后的无人值守运行。
-- 任何需要规避平台安全机制的操作。
-
-遇到这些边界时，首选请求人工接管，而不是暗中退回 headless、CDP 或桌面坐标自动化。
-
-## 下一阶段的工作
-
-下一阶段不是立即建设一个“万能浏览器 Agent”，而是用一个真实流程验证 BPA 的最小闭环。
-
-### 第一阶段：确定首个业务场景
-
-选择一个平台和一个低风险、高频、结果容易验证的流程。候选场景：
-
-1. 查询并导出指定日期和状态的订单。
-2. 查询商品或投放数据并生成结构化结果。
-3. 填写商品编辑表单，但在正式提交前交给人确认。
-
-首个场景应满足：
-
-- 当前团队确实反复执行。
-- 页面以普通 DOM 为主。
-- 不涉及验证码和复杂文件上传。
-- 业务输入和输出可以明确描述。
-- 成功或失败能够通过页面状态验证。
-- 错误执行不会立即造成重大损失。
-
-### 第二阶段：设计 Workflow 描述
-
-需要明确：
-
-- Workflow 的文件格式。
-- 参数类型和校验方式。
-- 动作、条件、分支、等待和人工接管的表达方式。
-- 前置条件和后置验证的表达方式。
-- 风险等级和审批点。
-- 版本、变更和兼容规则。
-
-### 第三阶段：设计扩展动作协议
-
-需要定义 AI、Workflow Engine 与浏览器扩展之间的消息：
-
-- 页面观察结果。
-- 语义 DOM 节点格式。
-- 动作请求格式。
-- 动作执行结果。
-- 页面版本和过期目标错误。
-- 异常、超时和人工接管。
-- 幂等键、任务 ID 和动作 ID。
-
-### 第四阶段：制作浏览器扩展原型
-
-最小原型只需要实现：
-
-- 在指定域名注入 Content Script。
-- 识别按钮、输入框、选择框和表格。
-- 生成精简语义 DOM。
-- 执行有限动作。
-- 观察 DOM 变化。
-- 验证成功结果。
-- 在 Side Panel 中展示任务、步骤、证据和人工确认。
-
-### 第五阶段：建立 Workflow Engine
-
-引擎需要能够：
-
-- 按版本加载 Workflow。
-- 接受人或 AI 提供的统一触发请求。
-- 按顺序执行步骤。
-- 保存持久化状态。
-- 支持暂停、恢复、重试和取消。
-- 防止同一动作重复执行。
-- 处理浏览器扩展断线和重新连接。
-- 保存完整审计记录。
-
-### 第六阶段：接入 AI
-
-AI 首先只承担三个职责：
-
-1. 自然语言到 Workflow 的选择。
-2. Workflow 参数提取与补齐。
-3. 执行异常的解释和有限分流。
-
-在没有足够测试和治理机制之前，不扩大 AI 的运行时权限。
-
-### 第七阶段：验证与复盘
-
-每个流程至少重复测试多次，并主动加入：
-
-- 慢加载。
-- 突然出现的弹窗。
-- 列表为空。
-- 多页数据。
-- 重复按钮。
-- 页面局部改版。
-- 扩展或网络短暂断开。
-- 人工拒绝高风险动作。
-
-重点指标：
-
-- 端到端任务成功率。
-- 错误元素操作率。
-- 页面变化后的恢复率。
-- 平均人工接管次数。
-- 动作后置验证覆盖率。
-- Workflow 修改和发布成本。
-- 失败是否可以准确归因。
-- AI 不可用时人工是否仍能完成任务。
-
-## 当前暂不解决的问题
-
-以下内容不属于最小版本：
-
-- 跨所有电商平台的通用自动化。
-- 完全无人值守的云端浏览器集群。
-- 通过视觉模型处理所有无 DOM 页面。
-- 自动绕过验证码或平台风控。
-- 让 AI 自动批准自己的高风险操作。
-- 未经审核的 Workflow 自我修改和自动发布。
-- 用一个超长提示词承载全部业务知识。
-
-## 项目判断标准
-
-后续设计遇到分歧时，可以使用以下问题判断是否仍然属于 BPA：
-
-1. 如果 AI 暂时不可用，人还能否调用同一套 Workflow？
-2. 流程是否独立于聊天记录和具体模型存在？
-3. AI 是否只在明确允许的范围内调整？
-4. 实际页面动作是否由浏览器扩展校验并执行？
-5. 每一个关键动作是否有可复核的完成证据？
-6. 高风险操作是否有明确的人类责任人？
-7. 页面变化或执行失败时，系统是否会停止而不是猜测？
-8. Workflow 和规则的改变是否经过测试、审核并可以回退？
-9. 错误是否被修改在真正发生的层级？
-10. 最终积累下来的能力是否仍然属于公司？
-
-如果这些问题的答案大多是否定的，项目很可能正在退化成传统 RPA，或者变成由 AI 自由操作浏览器的黑箱 Agent。
+仓库目前尚未选择开源许可证。在 `LICENSE` 文件落地前，源码可公开阅读，但不自动授予复制、修改或再分发权利。

@@ -13,7 +13,7 @@ const paths = resolveBpaPaths();
 program
   .name("bpa")
   .description("BPA local control CLI")
-  .version("0.2.1", "--cli-version", "show CLI version");
+  .version("0.3.0", "--cli-version", "show CLI version");
 
 function output(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);

@@ -1,0 +1,32 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: data.merge
+  version: 1.0.0
+  title: 合并 JSON 对象
+  description: 按声明顺序浅合并对象；后项覆盖前项，并拒绝原型污染键。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - values
+  properties:
+    values:
+      type: array
+      minItems: 1
+      maxItems: 100
+      items:
+        type: object
+outputSchema:
+  type: object
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 1s
+  idempotency: pure
+  cancellable: true
+errors:
+  - MERGE_INPUT_INVALID
+  - MERGE_KEY_FORBIDDEN

@@ -108,5 +108,5 @@ Adapter
 - v1 只启用 Tab 级实际限速；`domain` 和 `shop` 已进入契约，后续写节点接入共享持久化 Limiter。
 - Extension 的速率状态保存在 `storage.local`，Service Worker 内同时维护预约时间，避免同一存活周期并发突发。
 - 首个节点为 R0 只读。保存、发布、改价等节点在补齐人工审批、补偿和写后验证前仍保持禁用。
-- 增强后的 Doudian Node 与示例 Workflow 使用 `1.1.0`；Extension 同时报告旧 Node `1.0.0`，不覆盖已发布资产。
+- Doudian Node 与示例 Workflow 当前使用 `1.2.0`；Extension 继续报告旧 Node `1.0.0`、`1.1.0`，不覆盖已发布资产。
 - 当前 Browser Protocol 尚未对第三方发布；这轮新增字段在本地 v1 冻结前纳入 `1.0.0`。首次对外兼容冻结后，任何新增字段都必须提升 Schema Minor 并保留兼容矩阵。

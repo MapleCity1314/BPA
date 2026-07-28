@@ -1,0 +1,4 @@
+interface:
+  display_name: "BPA Runtime Diagnostics"
+  short_description: "依据事件账本诊断 BPA Core、Gateway 与浏览器执行故障"
+  default_prompt: "使用 $bpa-runtime-diagnostics 诊断这次 BPA 执行为什么失败，并给出安全恢复建议。"

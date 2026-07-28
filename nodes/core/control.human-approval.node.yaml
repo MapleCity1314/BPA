@@ -2,12 +2,24 @@ apiVersion: bpa/v1alpha1
 kind: Node
 metadata:
   id: control.human-approval
-  version: 1.0.0
+  version: 1.1.0
   title: 人工审核
   description: 暂停 Workflow，等待当前用户明确批准或拒绝。
 runtime: human
 inputSchema:
   type: object
+  additionalProperties: false
+  required:
+    - prompt
+  properties:
+    prompt:
+      type: string
+      minLength: 1
+      maxLength: 2000
+    context: {}
+    risk_summary:
+      type: string
+      maxLength: 4000
 outputSchema:
   type: object
 risk:

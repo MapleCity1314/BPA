@@ -1,12 +1,16 @@
 import { createHash } from "node:crypto";
 import {
+  compileDataValidator,
   formatValidationErrors,
+  validateJsonSchemaDefinition,
+  validateNode,
   validateWorkflow,
   type NodeDefinition,
   type WorkflowDefinition
 } from "@bpa/schemas";
 import {
   mergeTimingPolicy,
+  SUPPORTED_BUILTIN_NODE_IDS,
   timingOverrideIssues,
   timingPolicyIssues,
   type EffectiveTimingPolicy
@@ -23,6 +27,8 @@ export interface CompiledNode {
   nodeVersion: string;
   definitionDigest: string;
   runtime: NodeDefinition["runtime"];
+  inputSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown>;
   input: unknown;
   condition?: string;
   next?: string;
@@ -53,6 +59,14 @@ export class WorkflowCompileError extends Error {
     super(`Workflow compilation failed:\n${issues.join("\n")}`);
   }
 }
+
+const RISK_RANK = { R0: 0, R1: 1, R2: 2, R3: 3, R4: 4 } as const;
+const ENABLED_RUNTIMES = new Set<NodeDefinition["runtime"]>([
+  "engine_builtin",
+  "browser",
+  "human"
+]);
+const TERMINAL_BUILTINS = new Set(["control.succeed", "control.fail"]);
 
 export function parseWorkflowYaml(source: string): unknown {
   return parse(source, {
@@ -111,6 +125,27 @@ export function compileWorkflow(
 
   const workflow = candidate;
   const issues: string[] = [];
+  for (const [name, schema] of [
+    ["inputSchema", workflow.spec.inputSchema],
+    ["outputSchema", workflow.spec.outputSchema]
+  ] as const) {
+    const validation = validateJsonSchemaDefinition(schema);
+    if (!validation.valid) {
+      issues.push(
+        ...validation.errors.map((issue) => `/spec/${name}${issue}`)
+      );
+    } else {
+      try {
+        compileDataValidator(schema);
+      } catch (error) {
+        issues.push(
+          `/spec/${name} cannot be compiled: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    }
+  }
   if (!workflow.spec.nodes[workflow.spec.start]) {
     issues.push(`/spec/start references missing node ${workflow.spec.start}`);
   }
@@ -124,9 +159,75 @@ export function compileWorkflow(
       issues.push(`/spec/nodes/${key}/use is not published: ${node.use}`);
       continue;
     }
-    if (node.condition && definition.metadata.id !== "control.condition") {
+    if (!validateNode(definition)) {
       issues.push(
-        `/spec/nodes/${key}/condition is only valid for control.condition`
+        ...formatValidationErrors(validateNode.errors).map(
+          (issue) => `/catalog/${node.use}${issue}`
+        )
+      );
+      continue;
+    }
+    if (!ENABLED_RUNTIMES.has(definition.runtime)) {
+      issues.push(
+        `/spec/nodes/${key}/use runtime ${definition.runtime} is not enabled in local v1`
+      );
+    }
+    if (
+      definition.runtime === "engine_builtin" &&
+      !SUPPORTED_BUILTIN_NODE_IDS.includes(
+        definition.metadata.id as (typeof SUPPORTED_BUILTIN_NODE_IDS)[number]
+      )
+    ) {
+      issues.push(
+        `/spec/nodes/${key}/use references unsupported builtin ${definition.metadata.id}`
+      );
+    }
+    if (
+      RISK_RANK[definition.risk.level] > RISK_RANK[workflow.spec.riskLevel]
+    ) {
+      issues.push(
+        `/spec/nodes/${key}/use risk ${definition.risk.level} exceeds workflow risk ${workflow.spec.riskLevel}`
+      );
+    }
+    for (const [schemaName, schema] of [
+      ["inputSchema", definition.inputSchema],
+      ["outputSchema", definition.outputSchema]
+    ] as const) {
+      const validation = validateJsonSchemaDefinition(schema);
+      if (!validation.valid) {
+        issues.push(
+          ...validation.errors.map(
+            (issue) => `/catalog/${node.use}/${schemaName}${issue}`
+          )
+        );
+      } else {
+        try {
+          compileDataValidator(schema);
+        } catch (error) {
+          issues.push(
+            `/catalog/${node.use}/${schemaName} cannot be compiled: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      }
+    }
+    if (
+      node.condition &&
+      !["control.condition", "control.assert"].includes(definition.metadata.id)
+    ) {
+      issues.push(
+        `/spec/nodes/${key}/condition is only valid for control.condition or control.assert`
+      );
+    }
+    if (
+      ["control.condition", "control.assert"].includes(
+        definition.metadata.id
+      ) &&
+      !node.condition
+    ) {
+      issues.push(
+        `/spec/nodes/${key}/condition is required for ${definition.metadata.id}`
       );
     }
     if (
@@ -141,6 +242,7 @@ export function compileWorkflow(
     }
     if (
       node.condition &&
+      definition.metadata.id === "control.condition" &&
       (!(node.next ?? node.on?.success) || !node.on?.failure)
     ) {
       issues.push(
@@ -150,6 +252,28 @@ export function compileWorkflow(
     const targets = [node.next, ...Object.values(node.on ?? {})].filter(
       (target): target is string => Boolean(target)
     );
+    if (
+      TERMINAL_BUILTINS.has(definition.metadata.id) &&
+      targets.length > 0
+    ) {
+      issues.push(
+        `/spec/nodes/${key} uses terminal node ${definition.metadata.id} and cannot declare outgoing edges`
+      );
+    }
+    if (
+      definition.metadata.id === "control.start" &&
+      key !== workflow.spec.start
+    ) {
+      issues.push(
+        `/spec/nodes/${key} uses control.start outside spec.start`
+      );
+    }
+    if (
+      key === workflow.spec.start &&
+      definition.metadata.id !== "control.start"
+    ) {
+      issues.push(`/spec/start must reference control.start`);
+    }
     edges.set(key, new Set(targets));
     for (const target of targets) {
       if (!workflow.spec.nodes[target]) {
@@ -193,6 +317,8 @@ export function compileWorkflow(
       nodeVersion,
       definitionDigest: contentDigest(definition),
       runtime: definition.runtime,
+      inputSchema: definition.inputSchema,
+      outputSchema: definition.outputSchema,
       input: node.with ?? {},
       ...(node.condition ? { condition: node.condition } : {}),
       ...(node.next ? { next: node.next } : {}),
@@ -219,6 +345,31 @@ export function compileWorkflow(
   if (workflow.spec.nodes[workflow.spec.start]) visit(workflow.spec.start);
   for (const key of Object.keys(workflow.spec.nodes)) {
     if (!reachable.has(key)) issues.push(`/spec/nodes/${key} is unreachable`);
+  }
+
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const detectCycle = (key: string, path: string[]): void => {
+    if (visiting.has(key)) {
+      const start = path.indexOf(key);
+      issues.push(
+        `/spec/nodes contains unsupported cycle: ${[
+          ...path.slice(Math.max(0, start)),
+          key
+        ].join(" -> ")}`
+      );
+      return;
+    }
+    if (visited.has(key)) return;
+    visiting.add(key);
+    for (const target of edges.get(key) ?? []) {
+      detectCycle(target, [...path, key]);
+    }
+    visiting.delete(key);
+    visited.add(key);
+  };
+  if (workflow.spec.nodes[workflow.spec.start]) {
+    detectCycle(workflow.spec.start, []);
   }
 
   if (issues.length > 0) throw new WorkflowCompileError(issues);

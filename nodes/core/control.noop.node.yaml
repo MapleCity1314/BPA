@@ -1,0 +1,22 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: control.noop
+  version: 1.0.0
+  title: 透传数据
+  description: 不产生外部副作用；默认透传上一步输出，也可显式输出 value。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  properties:
+    value: {}
+outputSchema: {}
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 1s
+  idempotency: pure
+  cancellable: true
+errors: []

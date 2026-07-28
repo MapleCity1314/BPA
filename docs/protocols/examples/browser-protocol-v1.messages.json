@@ -11,7 +11,7 @@
     "payload": {
       "browser_instance_id": "browser-example-01",
       "extension_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "extension_version": "0.2.1",
+      "extension_version": "0.3.0",
       "supported_protocols": ["bpa.browser/1"],
       "last_acked_command_seq": 0
     }
@@ -51,7 +51,7 @@
       "capabilities": [
         {
           "node_id": "browser.page.context.read",
-          "versions": ["1.0.0", "1.1.0"],
+          "versions": ["1.0.0", "1.1.0", "1.2.0"],
           "risk_level": "R0",
           "permissions": ["browser.dom.read", "browser.tabs.read"],
           "adapter_id": "example",
@@ -74,7 +74,7 @@
       "command_seq": 1,
       "run_id": "run-01",
       "workflow_id": "example.page-context-observe",
-      "workflow_version": "1.1.0",
+      "workflow_version": "1.2.0",
       "node_execution_id": "node-execution-01",
       "command_id": "command-01",
       "idempotency_key": "idempotency-01",
@@ -82,7 +82,7 @@
       "attempt": 1,
       "node": {
         "id": "browser.page.context.read",
-        "version": "1.1.0"
+        "version": "1.2.0"
       },
       "input": {},
       "timing_policy": {
@@ -117,7 +117,7 @@
         "run_id": "run-01",
         "node_execution_id": "node-execution-01",
         "node_id": "browser.page.context.read",
-        "node_version": "1.1.0",
+        "node_version": "1.2.0",
         "fencing_token": 1,
         "key_id": "core-key-01",
         "grant_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

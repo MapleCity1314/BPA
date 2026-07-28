@@ -137,7 +137,9 @@ export default defineContentScript({
         if (
           request.type !== "bpa.execute" ||
           request.node?.id !== "doudian.shop.context.read" ||
-          !["1.0.0", "1.1.0"].includes(request.node.version ?? "")
+          !["1.0.0", "1.1.0", "1.2.0"].includes(
+            request.node.version ?? ""
+          )
         ) {
           return undefined;
         }

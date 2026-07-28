@@ -2,13 +2,14 @@ apiVersion: bpa/v1alpha1
 kind: Node
 metadata:
   id: control.start
-  version: 1.0.0
+  version: 1.1.0
   title: 启动流程
+  description: 验证 Workflow 输入后启动执行，并将原始输入作为首个输出。
 runtime: engine_builtin
 inputSchema:
   type: object
-outputSchema:
-  type: object
+  additionalProperties: false
+outputSchema: {}
 risk:
   level: R0
   permissions: []

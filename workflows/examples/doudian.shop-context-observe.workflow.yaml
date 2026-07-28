@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha1
 kind: Workflow
 metadata:
   id: doudian.shop-context-observe
-  version: 1.1.0
+  version: 1.2.0
   title: 读取当前抖店店铺上下文
   description: 只读验证 BPA Engine 到真实浏览器 DOM 的纵向链路。
 spec:
@@ -12,18 +12,64 @@ spec:
     additionalProperties: false
   outputSchema:
     type: object
+    additionalProperties: false
     required:
       - supported
       - shop
       - tab_ref
       - page_epoch
+    properties:
+      supported:
+        type: boolean
+        const: true
+      shop:
+        type: object
+        additionalProperties: false
+        required:
+          - id
+          - name
+          - identity_confirmed
+        properties:
+          id:
+            type: string
+            minLength: 1
+          name:
+            type: string
+            minLength: 1
+          identity_confirmed:
+            type: boolean
+      url:
+        type: string
+        format: uri
+      tab_ref:
+        type: object
+        additionalProperties: false
+        required:
+          - browser_instance_id
+          - tab_id
+          - window_id
+          - origin
+        properties:
+          browser_instance_id:
+            type: string
+            minLength: 1
+          tab_id:
+            type: integer
+          window_id:
+            type: integer
+          origin:
+            type: string
+            format: uri
+      page_epoch:
+        type: string
+        minLength: 1
   start: start
   nodes:
     start:
-      use: control.start@1.0.0
+      use: control.start@1.1.0
       next: observe_shop
     observe_shop:
-      use: doudian.shop.context.read@1.1.0
+      use: doudian.shop.context.read@1.2.0
       timeout: 15s
       retry:
         maxAttempts: 2
@@ -33,6 +79,6 @@ spec:
           - BROWSER_DISCONNECTED
       next: finish
     finish:
-      use: control.succeed@1.0.0
+      use: control.succeed@1.1.0
       with:
-        output: "${nodes.observe_shop.output}"
+        output: "${previous}"

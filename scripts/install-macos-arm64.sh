@@ -2,12 +2,13 @@
 set -euo pipefail
 
 PROJECT_ROOT="${0:A:h:h}"
-VERSION="${BPA_INSTALL_VERSION:-0.2.1}"
+VERSION="${BPA_INSTALL_VERSION:-0.3.0}"
 USER_HOME="$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory | awk '{print $2}')"
 BPA_ROOT="$USER_HOME/Library/Application Support/BPA"
 RUNTIME_ROOT="$BPA_ROOT/runtime"
 VERSION_ROOT="$RUNTIME_ROOT/$VERSION"
 DATA_ROOT="$BPA_ROOT/data"
+EXTENSION_ROOT="$BPA_ROOT/extension"
 LOG_ROOT="$USER_HOME/Library/Logs/BPA"
 LAUNCH_AGENT="$USER_HOME/Library/LaunchAgents/com.bpa.core.plist"
 HOST_ROOT="$USER_HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
@@ -40,9 +41,17 @@ OLD_AGENT_WAS_RUNNING=false
 OLD_CORE_PID=""
 INSTALL_MOVED=false
 RUNTIME_SWITCHED=false
+EXTENSION_SWITCHED=false
+EXTENSION_BACKUP="$BPA_ROOT/.extension.rollback.$VERSION.$$"
 OLD_CURRENT=""
 rollback_install() {
   EXIT_CODE=$?
+  if $EXTENSION_SWITCHED; then
+    [[ -d "$EXTENSION_ROOT" ]] && rm -rf "$EXTENSION_ROOT"
+    if [[ -d "$EXTENSION_BACKUP" ]]; then
+      mv "$EXTENSION_BACKUP" "$EXTENSION_ROOT"
+    fi
+  fi
   [[ -d "$STAGING_ROOT" ]] && rm -rf "$STAGING_ROOT"
   if $RUNTIME_SWITCHED; then
     launchctl bootout "gui/$(id -u)/com.bpa.core" 2>/dev/null || true
@@ -62,13 +71,18 @@ rollback_install() {
   exit $EXIT_CODE
 }
 trap rollback_install EXIT
-mkdir -p "$STAGING_ROOT/workspace" "$STAGING_ROOT/node/bin" "$STAGING_ROOT/bin"
+mkdir -p \
+  "$STAGING_ROOT/workspace" \
+  "$STAGING_ROOT/node/bin" \
+  "$STAGING_ROOT/bin" \
+  "$STAGING_ROOT/extension"
 
 rsync -a \
   --exclude '.git' \
   --exclude '/dist' \
   --exclude '/apps/docs' \
   --exclude '/apps/extension/.wxt' \
+  --exclude '/CLAUDE.md' \
   "$PROJECT_ROOT/" "$STAGING_ROOT/workspace/"
 cp "$BUNDLED_NODE" "$STAGING_ROOT/node/bin/node"
 chmod 755 "$STAGING_ROOT/node/bin/node"
@@ -89,6 +103,9 @@ cd "$VERSION_ROOT/workspace"
 exec "$VERSION_ROOT/node/bin/node" --import tsx apps/native-host/src/main.ts "\$@"
 EOF
 chmod 755 "$STAGING_ROOT/bin/"*
+rsync -a \
+  "$STAGING_ROOT/workspace/apps/extension/.output/chrome-mv3/" \
+  "$STAGING_ROOT/extension/"
 
 # Validate the packaged native ABI before stopping the currently healthy Core.
 # Import alone is insufficient because better-sqlite3 loads its native binding
@@ -142,6 +159,12 @@ ln -s "$VERSION" "$RUNTIME_ROOT/current.next"
 mv -h "$RUNTIME_ROOT/current.next" "$RUNTIME_ROOT/current"
 RUNTIME_SWITCHED=true
 
+if [[ -d "$EXTENSION_ROOT" ]]; then
+  mv "$EXTENSION_ROOT" "$EXTENSION_BACKUP"
+fi
+EXTENSION_SWITCHED=true
+mv "$VERSION_ROOT/extension" "$EXTENSION_ROOT"
+
 cat > "$LAUNCH_AGENT" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -177,8 +200,9 @@ chmod 600 "$HOST_MANIFEST"
 launchctl bootout "gui/$(id -u)/com.bpa.core" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENT"
 launchctl kickstart -k "gui/$(id -u)/com.bpa.core"
+[[ -d "$EXTENSION_BACKUP" ]] && rm -rf "$EXTENSION_BACKUP"
 trap - EXIT
 
 print "BPA $VERSION installed."
 print "CLI: $RUNTIME_ROOT/current/bin/bpa"
-print "Extension: $RUNTIME_ROOT/current/workspace/apps/extension/.output/chrome-mv3"
+print "Extension: $EXTENSION_ROOT"

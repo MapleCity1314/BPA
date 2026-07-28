@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { contentDigest, type CompiledNode, type CompiledWorkflow } from "@bpa/compiler";
 import {
   computeDispatchDelayMs,
-  computeRetryDelayMs
+  computeRetryDelayMs,
+  executeBuiltinNode,
+  resolveBindings
 } from "@bpa/node-runtime";
 import type {
   ExecutionEventRecord,
@@ -12,7 +14,11 @@ import type {
   RunRecord,
   RunStatus
 } from "@bpa/persistence";
-import type { RiskSignal } from "@bpa/schemas";
+import {
+  compileDataValidator,
+  formatValidationErrors,
+  type RiskSignal
+} from "@bpa/schemas";
 
 export interface BrowserNodeResult {
   status: Extract<
@@ -34,6 +40,14 @@ export class LocalWorkflowEngine {
   constructor(readonly persistence: Persistence) {}
 
   start(workflow: CompiledWorkflow, input: unknown): RunRecord {
+    const inputIssues = this.#validationIssues(
+      workflow.inputSchema,
+      input,
+      "workflow input"
+    );
+    if (inputIssues.length > 0) {
+      throw new Error(`Workflow input is invalid: ${inputIssues.join("; ")}`);
+    }
     const createdAt = new Date().toISOString();
     const runId = randomUUID();
     let sequence = 1;
@@ -92,48 +106,70 @@ export class LocalWorkflowEngine {
       return this.persistence.getRun(nodeExecution.runId)!;
     }
     const run = this.persistence.getRun(nodeExecution.runId)!;
+    const compiledNode = workflow.nodes[nodeExecution.nodeKey];
+    if (!compiledNode) {
+      throw new Error(`Compiled node not found: ${nodeExecution.nodeKey}`);
+    }
+    let effectiveResult = result;
+    if (result.status === "succeeded") {
+      const outputIssues = this.#validationIssues(
+        compiledNode.outputSchema,
+        result.output,
+        `${compiledNode.nodeId} output`
+      );
+      if (outputIssues.length > 0) {
+        effectiveResult = {
+          ...result,
+          status: "failed",
+          error: {
+            code: "OUTPUT_SCHEMA_INVALID",
+            message: outputIssues.join("; "),
+            retryable: false
+          }
+        };
+      }
+    }
     let sequence = this.#nextSequence(run.id);
     this.persistence.commitNodeTransition({
       nodeExecutionId,
       expectedRevision: nodeExecution.revision,
-      nextStatus: result.status,
-      ...(result.output === undefined ? {} : { output: result.output }),
-      ...(result.error === undefined ? {} : { error: result.error }),
+      nextStatus: effectiveResult.status,
+      ...(effectiveResult.output === undefined
+        ? {}
+        : { output: effectiveResult.output }),
+      ...(effectiveResult.error === undefined
+        ? {}
+        : { error: effectiveResult.error }),
       event: this.#event(
         run.id,
         sequence++,
-        `NODE_${result.status.toUpperCase()}`,
+        `NODE_${effectiveResult.status.toUpperCase()}`,
         {
-          fencingToken: result.fencingToken,
-          ...(result.error ? { error: result.error } : {}),
-          ...(result.riskSignals?.length
-            ? { riskSignals: result.riskSignals }
+          fencingToken: effectiveResult.fencingToken,
+          ...(effectiveResult.error ? { error: effectiveResult.error } : {}),
+          ...(effectiveResult.riskSignals?.length
+            ? { riskSignals: effectiveResult.riskSignals }
             : {}),
-          ...(result.timingObservation
-            ? { timingObservation: result.timingObservation }
+          ...(effectiveResult.timingObservation
+            ? { timingObservation: effectiveResult.timingObservation }
             : {})
         },
         nodeExecutionId
       ),
       idempotencyResult: {
         key: nodeExecution.idempotencyKey,
-        status: result.status,
-        result
+        status: effectiveResult.status,
+        result: effectiveResult
       }
     });
-
-    const compiledNode = workflow.nodes[nodeExecution.nodeKey];
-    if (!compiledNode) {
-      throw new Error(`Compiled node not found: ${nodeExecution.nodeKey}`);
-    }
     const retryable =
       nodeExecution.attempt < compiledNode.retry.maxAttempts &&
-      (result.status === "timed_out" ||
-        (result.status === "failed" &&
-          (result.error?.retryable === true ||
-            (result.error?.code != null &&
+      (effectiveResult.status === "timed_out" ||
+        (effectiveResult.status === "failed" &&
+          (effectiveResult.error?.retryable === true ||
+            (effectiveResult.error?.code != null &&
               compiledNode.retry.retryableErrors.includes(
-                result.error.code
+                effectiveResult.error.code
               )))));
     if (retryable) {
       const nextAttempt = nodeExecution.attempt + 1;
@@ -142,7 +178,7 @@ export class LocalWorkflowEngine {
         this.persistence.getRun(run.id)!,
         nodeExecution.nodeKey,
         sequence,
-        result.output,
+        effectiveResult.output,
         nextAttempt,
         computeRetryDelayMs({
           policy: compiledNode.timing,
@@ -153,7 +189,7 @@ export class LocalWorkflowEngine {
       );
     }
     let target: string | undefined;
-    if (result.status === "succeeded") {
+    if (effectiveResult.status === "succeeded") {
       target = compiledNode.next ?? compiledNode.on.success;
     } else {
       const transitionKey:
@@ -162,11 +198,11 @@ export class LocalWorkflowEngine {
         | "rejected"
         | "cancelled"
         | "uncertain" =
-        result.status === "timed_out"
+        effectiveResult.status === "timed_out"
           ? "timeout"
-          : result.status === "failed"
+          : effectiveResult.status === "failed"
             ? "failure"
-            : result.status;
+            : effectiveResult.status;
       target = compiledNode.on[transitionKey] ?? compiledNode.on.failure;
     }
     if (target) {
@@ -175,26 +211,26 @@ export class LocalWorkflowEngine {
         this.persistence.getRun(run.id)!,
         target,
         sequence,
-        result.output
+        effectiveResult.output
       );
     }
     const terminalStatus: RunStatus =
-      result.status === "uncertain"
+      effectiveResult.status === "uncertain"
         ? "uncertain"
-        : result.status === "cancelled"
+        : effectiveResult.status === "cancelled"
           ? "cancelled"
-          : result.status === "succeeded"
+          : effectiveResult.status === "succeeded"
             ? "succeeded"
             : "failed";
-    return this.persistence.commitRunTransition({
-      runId: run.id,
-      expectedRevision: this.persistence.getRun(run.id)!.revision,
-      nextStatus: terminalStatus,
-      ...(result.output === undefined ? {} : { output: result.output }),
-      event: this.#event(run.id, sequence, `RUN_${terminalStatus.toUpperCase()}`, {
-        nodeExecutionId
-      })
-    });
+    return this.#finishRun(
+      workflow,
+      this.persistence.getRun(run.id)!,
+      sequence,
+      terminalStatus,
+      effectiveResult.output,
+      nodeExecutionId,
+      effectiveResult.error
+    );
   }
 
   acceptHumanResult(
@@ -245,6 +281,32 @@ export class LocalWorkflowEngine {
           )
         : 0;
     const createdAt = new Date().toISOString();
+    let resolvedInput: unknown = compiledNode.input;
+    let localInputError: NodeExecutionRecord["error"] | undefined;
+    try {
+      resolvedInput = resolveBindings(compiledNode.input, {
+        input: currentRun.input,
+        previous: previousOutput
+      });
+      const inputIssues = this.#validationIssues(
+        compiledNode.inputSchema,
+        resolvedInput,
+        `${compiledNode.nodeId} input`
+      );
+      if (inputIssues.length > 0) {
+        localInputError = {
+          code: "INPUT_SCHEMA_INVALID",
+          message: inputIssues.join("; "),
+          retryable: false
+        };
+      }
+    } catch (error) {
+      localInputError = {
+        code: "BINDING_RESOLUTION_FAILED",
+        message: error instanceof Error ? error.message : String(error),
+        retryable: false
+      };
+    }
     const nodeExecution: NodeExecutionRecord = {
       id: randomUUID(),
       runId: run.id,
@@ -260,7 +322,7 @@ export class LocalWorkflowEngine {
         attempt
       }),
       fencingToken: 1,
-      input: compiledNode.input,
+      input: resolvedInput,
       createdAt,
       updatedAt: createdAt
     };
@@ -288,6 +350,17 @@ export class LocalWorkflowEngine {
       currentNodeKey: nodeKey,
       event: this.#event(run.id, sequence++, "RUN_NODE_SELECTED", { nodeKey })
     });
+
+    if (localInputError) {
+      return this.#completeLocalFailure(
+        workflow,
+        run,
+        nodeExecution,
+        compiledNode,
+        sequence,
+        localInputError
+      );
+    }
 
     if (compiledNode.runtime === "engine_builtin") {
       return this.#executeBuiltin(
@@ -369,59 +442,134 @@ export class LocalWorkflowEngine {
     sequence: number,
     previousOutput: unknown
   ): RunRecord {
-    if (
-      !["control.start", "control.succeed", "control.condition"].includes(
-        node.nodeId
-      )
-    ) {
-      throw new Error(`Unknown builtin node: ${node.nodeId}`);
+    let result = executeBuiltinNode({
+      nodeId: node.nodeId,
+      nodeInput: nodeExecution.input,
+      workflowInput: run.input,
+      previousOutput,
+      ...(node.condition ? { condition: node.condition } : {})
+    });
+    if (result.status === "succeeded") {
+      const outputIssues = this.#validationIssues(
+        node.outputSchema,
+        result.output,
+        `${node.nodeId} output`
+      );
+      if (outputIssues.length > 0) {
+        result = {
+          status: "failed",
+          error: {
+            code: "OUTPUT_SCHEMA_INVALID",
+            message: outputIssues.join("; "),
+            retryable: false
+          }
+        };
+      }
     }
-    const conditionResult =
-      node.nodeId === "control.condition"
-        ? this.#evaluateCondition(
-            node.condition,
-            this.persistence.getRun(run.id)?.input,
-            previousOutput
-          )
-        : undefined;
-    const output =
-      node.nodeId === "control.succeed"
-        ? previousOutput ?? {}
-        : node.nodeId === "control.condition"
-          ? { matched: conditionResult }
-          : {};
     this.persistence.commitNodeTransition({
       nodeExecutionId: nodeExecution.id,
       expectedRevision: nodeExecution.revision,
-      nextStatus: "succeeded",
-      output,
+      nextStatus: result.status,
+      ...("output" in result ? { output: result.output } : {}),
+      ...(result.status === "failed" ? { error: result.error } : {}),
       event: this.#event(
         run.id,
         sequence++,
-        "NODE_SUCCEEDED",
-        { builtin: node.nodeId },
+        `NODE_${result.status.toUpperCase()}`,
+        {
+          builtin: node.nodeId,
+          ...(result.status === "failed" ? { error: result.error } : {})
+        },
         nodeExecution.id
       ),
       idempotencyResult: {
         key: nodeExecution.idempotencyKey,
-        status: "succeeded",
-        result: output
+        status: result.status,
+        result
       }
     });
+    if (result.status === "failed") {
+      const target = node.on.failure;
+      if (target) {
+        return this.#schedule(
+          workflow,
+          run,
+          target,
+          sequence,
+          "output" in result ? result.output : undefined
+        );
+      }
+      return this.#finishRun(
+        workflow,
+        run,
+        sequence,
+        "failed",
+        "output" in result ? result.output : undefined,
+        nodeExecution.id,
+        result.error
+      );
+    }
     const target =
-      node.nodeId === "control.condition" && conditionResult === false
+      result.branch === "failure"
         ? node.on.failure
         : node.next ?? node.on.success;
     if (target) {
-      return this.#schedule(workflow, run, target, sequence, output);
+      return this.#schedule(workflow, run, target, sequence, result.output);
     }
-    return this.persistence.commitRunTransition({
-      runId: run.id,
-      expectedRevision: run.revision,
-      nextStatus: "succeeded",
-      output,
-      event: this.#event(run.id, sequence, "RUN_SUCCEEDED", {})
+    return this.#finishRun(
+      workflow,
+      run,
+      sequence,
+      "succeeded",
+      result.output,
+      nodeExecution.id
+    );
+  }
+
+  #completeLocalFailure(
+    workflow: CompiledWorkflow,
+    run: RunRecord,
+    nodeExecution: NodeExecutionRecord,
+    node: CompiledNode,
+    sequence: number,
+    error: NonNullable<NodeExecutionRecord["error"]>
+  ): RunRecord {
+    this.persistence.commitNodeTransition({
+      nodeExecutionId: nodeExecution.id,
+      expectedRevision: nodeExecution.revision,
+      nextStatus: "failed",
+      error,
+      event: this.#event(
+        run.id,
+        sequence++,
+        "NODE_FAILED",
+        { error, localValidation: true },
+        nodeExecution.id
+      ),
+      idempotencyResult: {
+        key: nodeExecution.idempotencyKey,
+        status: "failed",
+        result: { status: "failed", error }
+      }
     });
+    if (node.on.failure) {
+      return this.#schedule(
+        workflow,
+        run,
+        node.on.failure,
+        sequence,
+        undefined
+      );
+    }
+    return this.#finishRun(
+      workflow,
+      run,
+      sequence,
+      "failed",
+      undefined,
+      nodeExecution.id,
+      error
+    );
   }
 
   #browserCommandPayload(
@@ -444,33 +592,63 @@ export class LocalWorkflowEngine {
     };
   }
 
-  #evaluateCondition(
-    expression: string | undefined,
-    input: unknown,
-    previous: unknown
-  ): boolean {
-    if (!expression) {
-      throw new Error("control.condition requires a condition expression");
-    }
-    const match =
-      /^(input|previous)((?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*(==|!=)\s*(.+)$/.exec(
-        expression
+  #finishRun(
+    workflow: CompiledWorkflow,
+    run: RunRecord,
+    sequence: number,
+    requestedStatus: RunStatus,
+    output: unknown,
+    nodeExecutionId: string,
+    error?: NodeExecutionRecord["error"]
+  ): RunRecord {
+    let status = requestedStatus;
+    let terminalError = error;
+    if (status === "succeeded") {
+      const outputIssues = this.#validationIssues(
+        workflow.outputSchema,
+        output,
+        "workflow output"
       );
-    if (!match) throw new Error(`Unsupported condition: ${expression}`);
-    const root = match[1] === "input" ? input : previous;
-    const path = (match[2] ?? "")
-      .split(".")
-      .filter(Boolean);
-    let actual = root;
-    for (const part of path) {
-      actual =
-        actual && typeof actual === "object"
-          ? (actual as Record<string, unknown>)[part]
-          : undefined;
+      if (outputIssues.length > 0) {
+        status = "failed";
+        terminalError = {
+          code: "WORKFLOW_OUTPUT_INVALID",
+          message: outputIssues.join("; "),
+          retryable: false
+        };
+      }
     }
-    const expected = JSON.parse(match[4]!);
-    const equal = JSON.stringify(actual) === JSON.stringify(expected);
-    return match[3] === "==" ? equal : !equal;
+    return this.persistence.commitRunTransition({
+      runId: run.id,
+      expectedRevision: this.persistence.getRun(run.id)!.revision,
+      nextStatus: status,
+      ...(output === undefined ? {} : { output }),
+      event: this.#event(run.id, sequence, `RUN_${status.toUpperCase()}`, {
+        nodeExecutionId,
+        ...(terminalError ? { error: terminalError } : {})
+      })
+    });
+  }
+
+  #validationIssues(
+    schema: Record<string, unknown>,
+    value: unknown,
+    label: string
+  ): string[] {
+    try {
+      const validate = compileDataValidator(schema);
+      return validate(value)
+        ? []
+        : formatValidationErrors(validate.errors).map(
+            (issue) => `${label}${issue}`
+          );
+    } catch (error) {
+      return [
+        `${label} schema cannot be compiled: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      ];
+    }
   }
 
   #nextSequence(runId: string): number {

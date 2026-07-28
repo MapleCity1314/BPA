@@ -57,25 +57,26 @@ describe("local browser gateway", () => {
         }).ok
       ).toBe(true);
     }
-    expect(
-      service.handle({
-        id: "workflow",
-        method: "asset.publish",
-        params: {
-          assetType: "workflow",
-          content: fixture(
-            "workflows/examples/doudian.shop-context-observe.workflow.yaml"
-          ),
-          actor: "test"
-        }
-      }).ok
-    ).toBe(true);
+    const workflowPublish = service.handle({
+      id: "workflow",
+      method: "asset.publish",
+      params: {
+        assetType: "workflow",
+        content: fixture(
+          "workflows/examples/doudian.shop-context-observe.workflow.yaml"
+        ),
+        actor: "test"
+      }
+    });
+    expect(workflowPublish, JSON.stringify(workflowPublish)).toMatchObject({
+      ok: true
+    });
     const started = service.handle({
       id: "run",
       method: "run.create",
       params: {
         workflowId: "doudian.shop-context-observe",
-        workflowVersion: "1.1.0",
+        workflowVersion: "1.2.0",
         input: {}
       }
     });
@@ -100,7 +101,7 @@ describe("local browser gateway", () => {
       payload: {
         browser_instance_id: "browser-test",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
-        extension_version: "0.2.1",
+        extension_version: "0.3.0",
         supported_protocols: ["bpa.browser/1"],
         last_acked_command_seq: 0
       }
@@ -121,7 +122,7 @@ describe("local browser gateway", () => {
         capabilities: [
           {
             node_id: "doudian.shop.context.read",
-            versions: ["1.0.0", "1.1.0"],
+            versions: ["1.0.0", "1.1.0", "1.2.0"],
             risk_level: "R0",
             permissions: ["browser.dom.read", "browser.tabs.read"],
             adapter_id: "doudian",
@@ -182,10 +183,15 @@ describe("local browser gateway", () => {
         status: "succeeded",
         output: {
           supported: true,
-          shop: { id: "shop-1", name: "测试店铺" },
+          shop: {
+            id: "shop-1",
+            name: "测试店铺",
+            identity_confirmed: true
+          },
           tab_ref: {
             browser_instance_id: "browser-test",
             tab_id: 1,
+            window_id: 1,
             origin: "https://fxg.jinritemai.com"
           },
           page_epoch: "epoch-1"
@@ -211,7 +217,7 @@ describe("local browser gateway", () => {
       method: "run.create",
       params: {
         workflowId: "doudian.shop-context-observe",
-        workflowVersion: "1.1.0",
+        workflowVersion: "1.2.0",
         input: {}
       }
     });

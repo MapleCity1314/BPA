@@ -6,7 +6,9 @@ import { compileWorkflow, contentDigest, MemoryNodeCatalog } from "@bpa/compiler
 import { LocalWorkflowEngine } from "@bpa/engine";
 import type { ArtifactType, Persistence } from "@bpa/persistence";
 import {
+  compileDataValidator,
   formatValidationErrors,
+  validateJsonSchemaDefinition,
   validateNode,
   validateWorkflow,
   type NodeDefinition,
@@ -138,6 +140,36 @@ export class LocalCoreService {
           valid: false,
           errors: formatValidationErrors(validateNode.errors)
         };
+      }
+      const schemaErrors: string[] = [];
+      for (const [name, schema] of [
+        ["inputSchema", content.inputSchema],
+        ["outputSchema", content.outputSchema],
+        ...(content.configSchema
+          ? ([["configSchema", content.configSchema]] as const)
+          : [])
+      ] as const) {
+        const schemaValidation = validateJsonSchemaDefinition(schema);
+        if (!schemaValidation.valid) {
+          schemaErrors.push(
+            ...schemaValidation.errors.map(
+              (issue) => `/${name}${issue}`
+            )
+          );
+          continue;
+        }
+        try {
+          compileDataValidator(schema);
+        } catch (error) {
+          schemaErrors.push(
+            `/${name} cannot be compiled: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      }
+      if (schemaErrors.length > 0) {
+        return { valid: false, errors: schemaErrors };
       }
       return {
         valid: true,

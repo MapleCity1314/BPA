@@ -1,0 +1,24 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: data.constant
+  version: 1.0.0
+  title: 输出固定 JSON 值
+  description: 输出 Workflow 中声明的固定 JSON 值，不读取页面或外部环境。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - value
+  properties:
+    value: {}
+outputSchema: {}
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 1s
+  idempotency: pure
+  cancellable: true
+errors: []

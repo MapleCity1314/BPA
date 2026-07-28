@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha1
 kind: Node
 metadata:
   id: doudian.shop.context.read
-  version: 1.1.0
+  version: 1.2.0
   title: 读取当前抖店店铺上下文
 runtime: browser
 inputSchema:
@@ -10,11 +10,57 @@ inputSchema:
   additionalProperties: false
 outputSchema:
   type: object
+  additionalProperties: false
   required:
     - supported
     - shop
     - tab_ref
     - page_epoch
+  properties:
+    supported:
+      type: boolean
+      const: true
+    shop:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - identity_confirmed
+      properties:
+        id:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+        identity_confirmed:
+          type: boolean
+    url:
+      type: string
+      format: uri
+    tab_ref:
+      type: object
+      additionalProperties: false
+      required:
+        - browser_instance_id
+        - tab_id
+        - window_id
+        - origin
+      properties:
+        browser_instance_id:
+          type: string
+          minLength: 1
+        tab_id:
+          type: integer
+        window_id:
+          type: integer
+        origin:
+          type: string
+          format: uri
+    page_epoch:
+      type: string
+      minLength: 1
 risk:
   level: R0
   permissions:

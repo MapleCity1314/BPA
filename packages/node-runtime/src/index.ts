@@ -228,3 +228,297 @@ export function firstBlockingRiskSignal(
 ): RiskSignal | undefined {
   return signals.find((signal) => signal.severity === "blocking");
 }
+
+export const SUPPORTED_BUILTIN_NODE_IDS = [
+  "control.start",
+  "control.succeed",
+  "control.fail",
+  "control.noop",
+  "control.condition",
+  "control.assert",
+  "data.constant",
+  "data.select",
+  "data.merge"
+] as const;
+
+export type SupportedBuiltinNodeId =
+  (typeof SUPPORTED_BUILTIN_NODE_IDS)[number];
+
+export interface BindingContext {
+  input: unknown;
+  previous: unknown;
+}
+
+const BINDING_PATTERN =
+  /^\$\{(input|previous)((?:\.[A-Za-z_][A-Za-z0-9_]*)*)\}$/;
+const SAFE_PATH_PATTERN = /^(?:[A-Za-z_][A-Za-z0-9_]*)(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+const FORBIDDEN_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+function cloneJsonValue(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  return structuredClone(value);
+}
+
+function readPath(root: unknown, path: string): unknown {
+  if (!path) return root;
+  if (!SAFE_PATH_PATTERN.test(path)) {
+    throw new Error(`Unsafe or unsupported data path: ${path}`);
+  }
+  let current = root;
+  for (const segment of path.split(".")) {
+    if (FORBIDDEN_KEYS.has(segment)) {
+      throw new Error(`Forbidden data path segment: ${segment}`);
+    }
+    current =
+      current !== null && typeof current === "object"
+        ? (current as Record<string, unknown>)[segment]
+        : undefined;
+  }
+  return current;
+}
+
+export function resolveBindings(
+  value: unknown,
+  context: BindingContext,
+  depth = 0
+): unknown {
+  if (depth > 50) throw new Error("Binding input exceeds maximum depth");
+  if (typeof value === "string") {
+    const binding = BINDING_PATTERN.exec(value);
+    if (binding) {
+      const root = binding[1] === "input" ? context.input : context.previous;
+      const path = (binding[2] ?? "").replace(/^\./, "");
+      return cloneJsonValue(readPath(root, path));
+    }
+    if (value.includes("${")) {
+      throw new Error(
+        `Unsupported binding expression: ${value}. Only exact \${input.path} and \${previous.path} references are allowed.`
+      );
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => resolveBindings(entry, context, depth + 1));
+  }
+  if (value !== null && typeof value === "object") {
+    const resolved: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(
+      value as Record<string, unknown>
+    )) {
+      if (FORBIDDEN_KEYS.has(key)) {
+        throw new Error(`Forbidden object key: ${key}`);
+      }
+      resolved[key] = resolveBindings(entry, context, depth + 1);
+    }
+    return resolved;
+  }
+  return value;
+}
+
+export function evaluateConditionExpression(
+  expression: string,
+  context: BindingContext
+): boolean {
+  const match =
+    /^(input|previous)((?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*(==|!=)\s*(.+)$/.exec(
+      expression
+    );
+  if (!match) throw new Error(`Unsupported condition: ${expression}`);
+  const root = match[1] === "input" ? context.input : context.previous;
+  const path = (match[2] ?? "").replace(/^\./, "");
+  const actual = readPath(root, path);
+  const expected = JSON.parse(match[4]!);
+  const equal = JSON.stringify(actual) === JSON.stringify(expected);
+  return match[3] === "==" ? equal : !equal;
+}
+
+export type BuiltinExecutionResult =
+  | { status: "succeeded"; output: unknown; branch?: "success" | "failure" }
+  | {
+      status: "failed";
+      output?: unknown;
+      error: { code: string; message: string; retryable: false };
+    };
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+export function executeBuiltinNode(input: {
+  nodeId: string;
+  nodeInput: unknown;
+  workflowInput: unknown;
+  previousOutput: unknown;
+  condition?: string;
+}): BuiltinExecutionResult {
+  if (
+    !SUPPORTED_BUILTIN_NODE_IDS.includes(
+      input.nodeId as SupportedBuiltinNodeId
+    )
+  ) {
+    return {
+      status: "failed",
+      error: {
+        code: "BUILTIN_NOT_SUPPORTED",
+        message: `Unknown builtin node: ${input.nodeId}`,
+        retryable: false
+      }
+    };
+  }
+  const nodeInput = asRecord(input.nodeInput);
+  switch (input.nodeId as SupportedBuiltinNodeId) {
+    case "control.start":
+      return { status: "succeeded", output: cloneJsonValue(input.workflowInput) };
+    case "control.succeed":
+      return {
+        status: "succeeded",
+        output: Object.hasOwn(nodeInput, "output")
+          ? cloneJsonValue(nodeInput.output)
+          : cloneJsonValue(input.previousOutput) ?? {}
+      };
+    case "control.fail":
+      return {
+        status: "failed",
+        output: {
+          code:
+            typeof nodeInput.code === "string"
+              ? nodeInput.code
+              : "WORKFLOW_FAILED",
+          ...(Object.hasOwn(nodeInput, "details")
+            ? { details: cloneJsonValue(nodeInput.details) }
+            : {})
+        },
+        error: {
+          code: "WORKFLOW_FAILED",
+          message:
+            typeof nodeInput.message === "string"
+              ? nodeInput.message
+              : "Workflow reached an explicit failure node.",
+          retryable: false
+        }
+      };
+    case "control.noop":
+      return {
+        status: "succeeded",
+        output: Object.hasOwn(nodeInput, "value")
+          ? cloneJsonValue(nodeInput.value)
+          : cloneJsonValue(input.previousOutput) ?? {}
+      };
+    case "control.condition": {
+      if (!input.condition) {
+        return {
+          status: "failed",
+          error: {
+            code: "CONDITION_INVALID",
+            message: "control.condition requires a condition expression.",
+            retryable: false
+          }
+        };
+      }
+      const matched = evaluateConditionExpression(input.condition, {
+        input: input.workflowInput,
+        previous: input.previousOutput
+      });
+      return {
+        status: "succeeded",
+        output: { matched },
+        branch: matched ? "success" : "failure"
+      };
+    }
+    case "control.assert": {
+      if (!input.condition) {
+        return {
+          status: "failed",
+          error: {
+            code: "ASSERTION_INVALID",
+            message: "control.assert requires a condition expression.",
+            retryable: false
+          }
+        };
+      }
+      const matched = evaluateConditionExpression(input.condition, {
+        input: input.workflowInput,
+        previous: input.previousOutput
+      });
+      return matched
+        ? {
+            status: "succeeded",
+            output: cloneJsonValue(input.previousOutput) ?? {}
+          }
+        : {
+            status: "failed",
+            error: {
+              code: "ASSERTION_FAILED",
+              message:
+                typeof nodeInput.message === "string"
+                  ? nodeInput.message
+                  : "Workflow assertion failed.",
+              retryable: false
+            }
+          };
+    }
+    case "data.constant":
+      return {
+        status: "succeeded",
+        output: cloneJsonValue(nodeInput.value)
+      };
+    case "data.select": {
+      const source = nodeInput.source;
+      const path = typeof nodeInput.path === "string" ? nodeInput.path : "";
+      const selected = readPath(source, path);
+      if (selected === undefined) {
+        if (Object.hasOwn(nodeInput, "default")) {
+          return {
+            status: "succeeded",
+            output: cloneJsonValue(nodeInput.default)
+          };
+        }
+        if (nodeInput.required === true) {
+          return {
+            status: "failed",
+            error: {
+              code: "VALUE_NOT_FOUND",
+              message: `Required value was not found at path: ${path}`,
+              retryable: false
+            }
+          };
+        }
+      }
+      return { status: "succeeded", output: cloneJsonValue(selected) };
+    }
+    case "data.merge": {
+      const values = Array.isArray(nodeInput.values) ? nodeInput.values : [];
+      const output: Record<string, unknown> = {};
+      for (const value of values) {
+        if (value === null || typeof value !== "object" || Array.isArray(value)) {
+          return {
+            status: "failed",
+            error: {
+              code: "MERGE_INPUT_INVALID",
+              message: "data.merge accepts objects only.",
+              retryable: false
+            }
+          };
+        }
+        for (const [key, entry] of Object.entries(
+          value as Record<string, unknown>
+        )) {
+          if (FORBIDDEN_KEYS.has(key)) {
+            return {
+              status: "failed",
+              error: {
+                code: "MERGE_KEY_FORBIDDEN",
+                message: `data.merge rejected forbidden key: ${key}`,
+                retryable: false
+              }
+            };
+          }
+          output[key] = cloneJsonValue(entry);
+        }
+      }
+      return { status: "succeeded", output };
+    }
+  }
+}

@@ -20,7 +20,7 @@ import {
 const NATIVE_HOST = "com.bpa.browser";
 const PROTOCOL = "bpa.browser/1";
 const VERSION = "1.0.0";
-const NODE_VERSIONS = ["1.0.0", "1.1.0"] as const;
+const NODE_VERSIONS = ["1.0.0", "1.1.0", "1.2.0"] as const;
 const capabilityBase = {
   nodeId: "doudian.shop.context.read",
   riskLevel: "R0",

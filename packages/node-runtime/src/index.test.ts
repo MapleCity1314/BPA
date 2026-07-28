@@ -3,8 +3,11 @@ import {
   AdaptiveReadinessGate,
   computeDispatchDelayMs,
   computeRetryDelayMs,
+  evaluateConditionExpression,
+  executeBuiltinNode,
   firstBlockingRiskSignal,
   mergeTimingPolicy,
+  resolveBindings,
   reserveRateLimit,
   timingPolicyIssues
 } from "./index.js";
@@ -118,5 +121,89 @@ describe("node timing runtime", () => {
         }
       ])?.code
     ).toBe("CAPTCHA_REQUIRED");
+  });
+});
+
+describe("builtin node runtime", () => {
+  it("resolves exact input and previous bindings without evaluating code", () => {
+    expect(
+      resolveBindings(
+        {
+          shop: "${input.shop}",
+          id: "${previous.id}",
+          label: "literal"
+        },
+        {
+          input: { shop: { name: "A" } },
+          previous: { id: "shop-1" }
+        }
+      )
+    ).toEqual({
+      shop: { name: "A" },
+      id: "shop-1",
+      label: "literal"
+    });
+    expect(() =>
+      resolveBindings("${input.shop + process.exit()}", {
+        input: {},
+        previous: {}
+      })
+    ).toThrow(/Unsupported binding expression/);
+    expect(() =>
+      resolveBindings("${input.__proto__}", {
+        input: {},
+        previous: {}
+      })
+    ).toThrow(/Forbidden data path segment/);
+  });
+
+  it("evaluates the restricted condition DSL only", () => {
+    expect(
+      evaluateConditionExpression("input.ready == true", {
+        input: { ready: true },
+        previous: {}
+      })
+    ).toBe(true);
+    expect(() =>
+      evaluateConditionExpression("process.exit() == true", {
+        input: {},
+        previous: {}
+      })
+    ).toThrow(/Unsupported condition/);
+  });
+
+  it("executes safe data selection, merge and explicit failure nodes", () => {
+    expect(
+      executeBuiltinNode({
+        nodeId: "data.select",
+        nodeInput: {
+          source: { shop: { id: "shop-1" } },
+          path: "shop.id",
+          required: true
+        },
+        workflowInput: {},
+        previousOutput: {}
+      })
+    ).toEqual({ status: "succeeded", output: "shop-1" });
+    expect(
+      executeBuiltinNode({
+        nodeId: "data.merge",
+        nodeInput: { values: [{ a: 1 }, { b: 2, a: 3 }] },
+        workflowInput: {},
+        previousOutput: {}
+      })
+    ).toEqual({ status: "succeeded", output: { a: 3, b: 2 } });
+    expect(
+      executeBuiltinNode({
+        nodeId: "control.fail",
+        nodeInput: { code: "SAFE_STOP", message: "Stop here" },
+        workflowInput: {},
+        previousOutput: {}
+      })
+    ).toMatchObject({
+      status: "failed",
+      output: { code: "SAFE_STOP" },
+      error: { code: "WORKFLOW_FAILED", retryable: false }
+    });
   });
 });

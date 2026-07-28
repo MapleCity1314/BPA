@@ -144,4 +144,97 @@ describe("workflow compiler", () => {
       )
     ).toThrow(/stableForMs cannot exceed timeoutMs/);
   });
+
+  it("rejects cycles because loop execution is not implemented", () => {
+    const candidate = structuredClone(workflow);
+    candidate.spec.nodes.finish = {
+      use: "control.noop@1.0.0",
+      next: "start"
+    };
+    expect(() =>
+      compileWorkflow(
+        candidate,
+        new MemoryNodeCatalog([
+          node("control.start"),
+          node("control.noop")
+        ])
+      )
+    ).toThrow(/unsupported cycle/);
+  });
+
+  it("rejects node risk above the declared workflow risk", () => {
+    const browserNode = node("browser.read");
+    browserNode.runtime = "browser";
+    browserNode.risk = {
+      level: "R2",
+      permissions: ["browser.dom.read"],
+      domains: ["https://example.com"]
+    };
+    const candidate = structuredClone(workflow);
+    candidate.spec.nodes.start!.next = "read";
+    candidate.spec.nodes.read = {
+      use: "browser.read@1.0.0",
+      next: "finish"
+    };
+    expect(() =>
+      compileWorkflow(
+        candidate,
+        new MemoryNodeCatalog([
+          node("control.start"),
+          browserNode,
+          node("control.succeed")
+        ])
+      )
+    ).toThrow(/risk R2 exceeds workflow risk R0/);
+  });
+
+  it("rejects disabled runtimes and unknown builtin implementations", () => {
+    const candidate = structuredClone(workflow);
+    candidate.spec.nodes.start!.next = "custom";
+    candidate.spec.nodes.custom = {
+      use: "team.custom@1.0.0",
+      next: "finish"
+    };
+    const teamNode = node("team.custom");
+    teamNode.runtime = "engine_team";
+    expect(() =>
+      compileWorkflow(
+        candidate,
+        new MemoryNodeCatalog([
+          node("control.start"),
+          teamNode,
+          node("control.succeed")
+        ])
+      )
+    ).toThrow(/engine_team is not enabled/);
+
+    const unknown = node("control.unknown");
+    candidate.spec.nodes.custom.use = "control.unknown@1.0.0";
+    expect(() =>
+      compileWorkflow(
+        candidate,
+        new MemoryNodeCatalog([
+          node("control.start"),
+          unknown,
+          node("control.succeed")
+        ])
+      )
+    ).toThrow(/unsupported builtin control.unknown/);
+  });
+
+  it("rejects outgoing edges from explicit terminal nodes", () => {
+    const candidate = structuredClone(workflow);
+    candidate.spec.nodes.finish!.next = "after";
+    candidate.spec.nodes.after = { use: "control.noop@1.0.0" };
+    expect(() =>
+      compileWorkflow(
+        candidate,
+        new MemoryNodeCatalog([
+          node("control.start"),
+          node("control.succeed"),
+          node("control.noop")
+        ])
+      )
+    ).toThrow(/terminal node control.succeed/);
+  });
 });

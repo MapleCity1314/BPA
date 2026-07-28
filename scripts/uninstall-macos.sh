@@ -17,6 +17,7 @@ launchctl bootout "gui/$(id -u)/com.bpa.core" 2>/dev/null || true
 [[ -f "$LAUNCH_AGENT" ]] && rm "$LAUNCH_AGENT"
 [[ -f "$HOST_MANIFEST" ]] && rm "$HOST_MANIFEST"
 [[ -d "$BPA_ROOT/runtime" ]] && rm -rf "$BPA_ROOT/runtime"
+[[ -d "$BPA_ROOT/extension" ]] && rm -rf "$BPA_ROOT/extension"
 [[ -S "$BPA_ROOT/run/core.sock" ]] && rm "$BPA_ROOT/run/core.sock"
 
 if $PURGE_DATA; then

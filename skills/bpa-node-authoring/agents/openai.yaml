@@ -1,0 +1,4 @@
+interface:
+  display_name: "BPA Node Authoring"
+  short_description: "设计最小权限、版本固定且可测试的 BPA Node 候选"
+  default_prompt: "使用 $bpa-node-authoring 把这个能力缺口设计成安全的 BPA Node 候选。"

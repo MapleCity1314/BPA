@@ -5,11 +5,16 @@ import { stringify } from "yaml";
 import { sendControlRequest } from "@bpa/local-core/control";
 import { resolveBpaPaths } from "@bpa/local-core/paths";
 import type { ArtifactRecord } from "@bpa/persistence";
-import type { NodeDefinition, RiskLevel, WorkflowDefinition } from "@bpa/schemas";
+import {
+  diffArtifacts,
+  generateNodeDraft,
+  generateWorkflowDraft,
+  simulateCompiledWorkflow
+} from "./authoring.js";
 
 const server = new McpServer({
   name: "bpa-local",
-  version: "0.2.1"
+  version: "0.3.0"
 });
 const socket = resolveBpaPaths().socket;
 
@@ -83,70 +88,67 @@ server.registerTool(
   {
     title: "Generate BPA workflow candidate",
     description:
-      "Create a candidate-only Workflow draft from exact published Node references. This tool never publishes.",
+      "Create, validate and save a candidate-only Workflow from exact published business Node references. Risk and failure routing are derived conservatively. This tool never publishes.",
     inputSchema: {
       id: z.string(),
       version: z.string().default("0.1.0"),
       title: z.string(),
       description: z.string(),
       node_refs: z.array(z.string()).default([]),
-      risk_level: z.enum(["R0", "R1", "R2", "R3", "R4"]).default("R0")
+      risk_level: z.enum(["R0", "R1", "R2", "R3", "R4"]).optional(),
+      input_schema: z.record(z.unknown()).optional(),
+      output_schema: z.record(z.unknown()).optional()
     }
   },
-  async ({ id, version, title, description, node_refs, risk_level }) => {
-    const nodes: WorkflowDefinition["spec"]["nodes"] = {
-      start: {
-        use: "control.start@1.0.0",
-        next: node_refs.length > 0 ? "step_1" : "finish"
-      }
-    };
-    node_refs.forEach((reference, index) => {
-      nodes[`step_${index + 1}`] = {
-        use: reference,
-        next:
-          index === node_refs.length - 1
-            ? "finish"
-            : `step_${index + 2}`,
-        on: {
-          failure: "finish",
-          timeout: "finish",
-          rejected: "finish",
-          uncertain: "finish"
-        }
-      };
-    });
-    nodes.finish = { use: "control.succeed@1.0.0" };
-    const workflow: WorkflowDefinition = {
-      apiVersion: "bpa/v1alpha1",
-      kind: "Workflow",
-      metadata: { id, version, title, description },
-      spec: {
-        riskLevel: risk_level as RiskLevel,
-        inputSchema: { type: "object" },
-        outputSchema: { type: "object" },
-        start: "start",
-        nodes
-      }
-    };
+  async ({
+    id,
+    version,
+    title,
+    description,
+    node_refs,
+    risk_level,
+    input_schema,
+    output_schema
+  }) => {
+    const published = (await core("catalog.list", {
+      assetType: "node"
+    })) as ArtifactRecord[];
+    const draft = generateWorkflowDraft(
+      {
+        id,
+        version,
+        title,
+        description,
+        nodeRefs: node_refs,
+        ...(risk_level ? { riskLevel: risk_level } : {}),
+        ...(input_schema ? { inputSchema: input_schema } : {}),
+        ...(output_schema ? { outputSchema: output_schema } : {})
+      },
+      published
+    );
+    if (draft.status === "rejected") return result(draft);
+    const validation = (await core("asset.validate", {
+      assetType: "workflow",
+      content: draft.workflow
+    })) as { valid: boolean; errors?: string[] };
+    if (!validation.valid) {
+      return result({
+        status: "rejected",
+        errors: validation.errors ?? ["Workflow validation failed"],
+        review: draft.review
+      });
+    }
     const candidate = await core("asset.candidate", {
       assetType: "workflow",
-      content: workflow,
+      content: draft.workflow,
       actor: "codex:mcp"
     });
     return result({
+      status: "candidate",
       candidate,
-      workflow,
-      yaml: stringify(workflow),
-      tests: [
-        "validate exact Node versions",
-        "simulate success and each declared failure edge",
-        "confirm permissions are no broader than referenced Nodes"
-      ],
-      risks: [
-        "Candidate is not approved or published.",
-        "Generated failure edges should be reviewed for business semantics."
-      ],
-      capability_gaps: []
+      workflow: draft.workflow,
+      yaml: stringify(draft.workflow),
+      review: draft.review
     });
   }
 );
@@ -156,7 +158,7 @@ server.registerTool(
   {
     title: "Generate BPA node candidate",
     description:
-      "Create a candidate Node contract and implementation skeleton. Browser and team code remains disabled until reviewed and published manually.",
+      "Create and validate a candidate Node contract with conservative risk inference, permission checks and implementation boundaries. This tool never publishes.",
     inputSchema: {
       id: z.string(),
       version: z.string().default("0.1.0"),
@@ -165,9 +167,12 @@ server.registerTool(
       runtime: z
         .enum(["composite", "browser", "engine_team", "human"])
         .default("composite"),
-      risk_level: z.enum(["R0", "R1", "R2", "R3", "R4"]).default("R0"),
+      risk_level: z.enum(["R0", "R1", "R2", "R3", "R4"]).optional(),
       permissions: z.array(z.string()).default([]),
-      domains: z.array(z.string().url()).default([])
+      domains: z.array(z.string().url()).default([]),
+      input_schema: z.record(z.unknown()).optional(),
+      output_schema: z.record(z.unknown()).optional(),
+      config_schema: z.record(z.unknown()).optional()
     }
   },
   async ({
@@ -178,60 +183,47 @@ server.registerTool(
     runtime,
     risk_level,
     permissions,
-    domains
+    domains,
+    input_schema,
+    output_schema,
+    config_schema
   }) => {
-    if (runtime === "browser" && domains.length === 0) {
+    const draft = generateNodeDraft({
+      id,
+      version,
+      title,
+      description,
+      runtime,
+      ...(risk_level ? { riskLevel: risk_level } : {}),
+      permissions,
+      domains,
+      ...(input_schema ? { inputSchema: input_schema } : {}),
+      ...(output_schema ? { outputSchema: output_schema } : {}),
+      ...(config_schema ? { configSchema: config_schema } : {})
+    });
+    if (draft.status === "rejected") return result(draft);
+    const validation = (await core("asset.validate", {
+      assetType: "node",
+      content: draft.node
+    })) as { valid: boolean; errors?: string[] };
+    if (!validation.valid) {
       return result({
         status: "rejected",
-        errors: ["browser nodes must declare at least one allowed domain"]
+        errors: validation.errors ?? ["Node validation failed"],
+        review: draft.review
       });
     }
-    const browserDomains = domains as [string, ...string[]];
-    const node: NodeDefinition = {
-      apiVersion: "bpa/v1alpha1",
-      kind: "Node",
-      metadata: { id, version, title, description },
-      runtime,
-      inputSchema: { type: "object" },
-      outputSchema: { type: "object" },
-      risk: {
-        level: risk_level as RiskLevel,
-        permissions,
-        ...(runtime === "browser" ? { domains: browserDomains } : {})
-      },
-      execution: {
-        timeoutDefault: "30s",
-        idempotency: runtime === "browser" ? "repeatable_read" : "pure",
-        cancellable: true
-      },
-      errors: ["NOT_IMPLEMENTED"]
-    };
     const candidate = await core("asset.candidate", {
       assetType: "node",
-      content: node,
+      content: draft.node,
       actor: "codex:mcp"
     });
     return result({
+      status: "candidate",
       candidate,
-      node,
-      yaml: stringify(node),
-      implementation_skeleton: {
-        execute:
-          "async function execute(input, context) { throw new Error('NOT_IMPLEMENTED'); }"
-      },
-      contract_tests: [
-        "reject malformed input",
-        "enforce timeout and cancellation",
-        "verify declared permission boundary",
-        "verify idempotency behavior"
-      ],
-      permission_report: {
-        risk_level,
-        permissions,
-        domains,
-        publishable: false,
-        reason: "Manual review and CLI publish are required."
-      }
+      node: draft.node,
+      yaml: stringify(draft.node),
+      review: draft.review
     });
   }
 );
@@ -286,28 +278,18 @@ server.registerTool(
       start: string;
       nodes: Record<
         string,
-        { nodeId: string; nodeVersion: string; next?: string; on: unknown }
+        {
+          nodeId: string;
+          nodeVersion: string;
+          next?: string;
+          on: Record<string, string>;
+        }
       >;
     };
-    const order: unknown[] = [];
-    const seen = new Set<string>();
-    let key: string | undefined = compiled.start;
-    while (key && !seen.has(key)) {
-      seen.add(key);
-      const compiledNode: {
-        nodeId: string;
-        nodeVersion: string;
-        next?: string;
-        on: unknown;
-      } = compiled.nodes[key]!;
-      order.push({
-        key,
-        node: `${compiledNode.nodeId}@${compiledNode.nodeVersion}`,
-        on: compiledNode.on
-      });
-      key = compiledNode.next;
-    }
-    return result({ valid: true, mode: "static-no-side-effects", order });
+    return result({
+      valid: true,
+      ...simulateCompiledWorkflow(compiled)
+    });
   }
 );
 
@@ -332,12 +314,13 @@ server.registerTool(
       (artifact) =>
         artifact.assetId === asset_id && artifact.version === version
     );
+    const differences = diffArtifacts(published?.content, candidate);
     return result({
       published: published?.content,
       candidate,
-      identical:
-        published != null &&
-        JSON.stringify(published.content) === JSON.stringify(candidate)
+      identical: published != null && differences.length === 0,
+      differences,
+      truncated: differences.length >= 200
     });
   }
 );

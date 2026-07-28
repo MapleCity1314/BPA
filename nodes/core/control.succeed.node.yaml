@@ -2,13 +2,16 @@ apiVersion: bpa/v1alpha1
 kind: Node
 metadata:
   id: control.succeed
-  version: 1.0.0
+  version: 1.1.0
   title: 成功结束流程
+  description: 以显式 output 或上一步输出成功结束 Workflow。
 runtime: engine_builtin
 inputSchema:
   type: object
-outputSchema:
-  type: object
+  additionalProperties: false
+  properties:
+    output: {}
+outputSchema: {}
 risk:
   level: R0
   permissions: []

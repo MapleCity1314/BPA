@@ -1,0 +1,4 @@
+interface:
+  display_name: "BPA Workflow Authoring"
+  short_description: "把真实浏览器业务流程整理为安全、可验证的 Workflow 候选"
+  default_prompt: "使用 $bpa-workflow-authoring 将这个业务流程整理成可审查的 BPA Workflow 候选。"
