@@ -50,7 +50,8 @@ import {
   type ElementContractDefinition,
   type PageModelDefinition,
   type DeterministicResultValidatorPolicyDefinition,
-  type WorkflowDefinition
+  type WorkflowDefinition,
+  type WorkflowDefinitionV1Alpha2
 } from "@bpa/schemas";
 import {
   validateElementContractDefinition,
@@ -67,6 +68,7 @@ import {
   TEAM_WORKER_CODE_DIGEST,
   TEAM_WORKER_HANDLER_REFS
 } from "../../team-worker/src/manifest.js";
+import type { JsonValue } from "@bpa/workflow-ir";
 
 export const CONTROL_MAX_MESSAGE_BYTES = 512 * 1024;
 
@@ -519,6 +521,21 @@ export class LocalCoreService {
           String(params.workflowVersion),
           params.input ?? {}
         );
+      case "run.node.preview":
+        return this.#previewSingleNode(
+          String(params.nodeId),
+          String(params.nodeVersion),
+          params.input ?? {}
+        );
+      case "run.node.create":
+        return this.#createSingleNodeRun({
+          nodeId: String(params.nodeId),
+          nodeVersion: String(params.nodeVersion),
+          input: params.input ?? {},
+          expectedPreviewDigest: String(params.expectedPreviewDigest),
+          confirmed: params.confirmed === true,
+          actor: String(params.actor || userInfo().username)
+        });
       case "run.inspect": {
         const runId = String(params.runId);
         const run = this.persistence.getRun(runId);
@@ -951,6 +968,155 @@ export class LocalCoreService {
     const run = this.engine.start(compiled, input);
     this.browserGateway?.dispatchPending();
     return run;
+  }
+
+  #singleNodePlan(
+    nodeId: string,
+    nodeVersion: string,
+    input: unknown
+  ): {
+    node: NodeDefinition;
+    input: JsonValue;
+    plan: ReturnType<typeof compileCanonicalWorkflow>;
+    previewDigest: string;
+  } {
+    const artifact = this.persistence.getPublished(
+      "node",
+      nodeId,
+      nodeVersion
+    );
+    if (!artifact) {
+      throw new Error(`Published Node not found: ${nodeId}@${nodeVersion}`);
+    }
+    const node = artifact.content as NodeDefinition;
+    if (
+      node.risk.level === "R2" ||
+      node.risk.level === "R3" ||
+      node.risk.level === "R4"
+    ) {
+      throw new Error(
+        "SingleNodeRun is limited to R0/R1; use a published Workflow with the formal approval path for R2+"
+      );
+    }
+    const safeInput = JSON.parse(JSON.stringify(input)) as JsonValue;
+    const validateInput = compileDataValidator(node.inputSchema);
+    if (!validateInput(safeInput)) {
+      throw new Error(
+        `SingleNodeRun input is invalid: ${formatValidationErrors(
+          validateInput.errors
+        ).join("; ")}`
+      );
+    }
+    const identityDigest = contentDigest({
+      node: {
+        id: node.metadata.id,
+        version: node.metadata.version,
+        digest: artifact.digest
+      },
+      input: safeInput
+    }).slice("sha256:".length, "sha256:".length + 32);
+    const workflow: WorkflowDefinitionV1Alpha2 = {
+      apiVersion: "bpa/v1alpha2",
+      kind: "Workflow",
+      metadata: {
+        id: `single-node.${identityDigest}`,
+        version: "1.0.0",
+        title: `Single Node: ${node.metadata.title}`,
+        description:
+          "Core-generated bounded wrapper for one exact published Node."
+      },
+      spec: {
+        riskLevel: node.risk.level,
+        inputSchema: node.inputSchema,
+        outputSchema: node.outputSchema,
+        // The compiler closes every call outcome with deterministic fallback
+        // terminals, so the bounded wrapper contains more than its two authored
+        // steps even though only one Node invocation can occur.
+        limits: { maxDepth: 1, maxStepExecutions: 8 },
+        root: {
+          kind: "sequence",
+          steps: [
+            {
+              key: "invoke",
+              kind: "call",
+              use: `${node.metadata.id}@${node.metadata.version}`,
+              with: "${input}",
+              retry: { maxAttempts: 1 }
+            },
+            {
+              key: "done",
+              kind: "terminal",
+              status: "succeeded",
+              output: "${steps.invoke.output}"
+            }
+          ]
+        }
+      }
+    };
+    const plan = compileCanonicalWorkflow(workflow, this.#ir2Catalog());
+    return {
+      node,
+      input: safeInput,
+      plan,
+      previewDigest: contentDigest({
+        mode: "single_node",
+        planDigest: contentDigest(plan),
+        inputDigest: contentDigest(safeInput)
+      })
+    };
+  }
+
+  #previewSingleNode(
+    nodeId: string,
+    nodeVersion: string,
+    input: unknown
+  ): unknown {
+    const prepared = this.#singleNodePlan(nodeId, nodeVersion, input);
+    return {
+      mode: "single_node",
+      node: {
+        id: prepared.node.metadata.id,
+        version: prepared.node.metadata.version
+      },
+      riskLevel: prepared.node.risk.level,
+      permissions: [...prepared.node.risk.permissions],
+      domains: [...(prepared.node.risk.domains ?? [])],
+      artifactClosure: prepared.plan.artifactClosure,
+      riskSnapshot: prepared.plan.riskSnapshot,
+      previewDigest: prepared.previewDigest,
+      requiresConfirmation: prepared.node.risk.level === "R1"
+    };
+  }
+
+  #createSingleNodeRun(input: {
+    nodeId: string;
+    nodeVersion: string;
+    input: unknown;
+    expectedPreviewDigest: string;
+    confirmed: boolean;
+    actor: string;
+  }): unknown {
+    const prepared = this.#singleNodePlan(
+      input.nodeId,
+      input.nodeVersion,
+      input.input
+    );
+    if (input.expectedPreviewDigest !== prepared.previewDigest) {
+      throw new Error(
+        "SingleNodeRun preview is stale; inspect the exact Node, permissions, and input again"
+      );
+    }
+    if (prepared.node.risk.level === "R1" && !input.confirmed) {
+      throw new Error("R1 SingleNodeRun requires explicit human confirmation");
+    }
+    return this.ir2Runtime.start(prepared.plan, prepared.input, {
+      mode: "single_node",
+      actor: input.actor,
+      nodeId: prepared.node.metadata.id,
+      nodeVersion: prepared.node.metadata.version,
+      previewDigest: prepared.previewDigest,
+      confirmed: input.confirmed
+    });
   }
 
   #completeHumanStep(

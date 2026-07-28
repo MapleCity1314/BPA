@@ -100,7 +100,11 @@ export class Ir2WorkflowRuntime {
       ((handle) => clearTimeout(handle as NodeJS.Timeout));
   }
 
-  start(plan: ExecutionPlan, input: JsonValue): RunRecord {
+  start(
+    plan: ExecutionPlan,
+    input: JsonValue,
+    startMetadata?: JsonValue
+  ): RunRecord {
     const runId = this.#id();
     const transition = this.#engine(plan).start(runId, input);
     const timestamp = new Date(this.#now()).toISOString();
@@ -138,7 +142,10 @@ export class Ir2WorkflowRuntime {
       assistanceTasks: effects.tasks,
       event: this.#event(runId, 1, "RUN_IR2_STARTED", {
         stateRevision: transition.state.revision,
-        effectCount: transition.effects.length
+        effectCount: transition.effects.length,
+        ...(startMetadata === undefined
+          ? {}
+          : { startMetadata: jsonValue(startMetadata) })
       }, timestamp)
     });
   }

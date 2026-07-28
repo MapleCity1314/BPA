@@ -16,6 +16,12 @@ class RecordingClient implements ControlRequester {
     params: Record<string, unknown> = {}
   ): Promise<TResult> {
     this.calls.push({ method, params });
+    if (method === "run.node.preview") {
+      return {
+        previewDigest: "sha256:preview",
+        requiresConfirmation: false
+      } as TResult;
+    }
     return { ok: true } as TResult;
   }
 }
@@ -130,6 +136,76 @@ describe("dataset CLI control mapping", () => {
           afterRecordKey: "id:pack-one",
           limit: 250
         }
+      }
+    ]);
+  });
+});
+
+describe("single Node CLI control mapping", () => {
+  it("previews an exact Node without starting it", async () => {
+    const { client, program } = fixture();
+    await program.parseAsync([
+      "node",
+      "bpa",
+      "node-preview",
+      "data.constant",
+      "--version",
+      "1.0.0",
+      "--input",
+      '{"value":"preview"}'
+    ]);
+    expect(client.calls).toEqual([
+      {
+        method: "run.node.preview",
+        params: {
+          nodeId: "data.constant",
+          nodeVersion: "1.0.0",
+          input: { value: "preview" }
+        }
+      }
+    ]);
+  });
+
+  it("uses the exact preview digest when starting an R0 Node", async () => {
+    const { client, output, program } = fixture();
+    await program.parseAsync([
+      "node",
+      "bpa",
+      "run-node",
+      "data.constant",
+      "--version",
+      "1.0.0",
+      "--input",
+      '{"value":"run"}'
+    ]);
+    expect(client.calls).toEqual([
+      {
+        method: "run.node.preview",
+        params: {
+          nodeId: "data.constant",
+          nodeVersion: "1.0.0",
+          input: { value: "run" }
+        }
+      },
+      {
+        method: "run.node.create",
+        params: {
+          nodeId: "data.constant",
+          nodeVersion: "1.0.0",
+          input: { value: "run" },
+          expectedPreviewDigest: "sha256:preview",
+          confirmed: false,
+          actor: "cli-user"
+        }
+      }
+    ]);
+    expect(output).toEqual([
+      {
+        preview: {
+          previewDigest: "sha256:preview",
+          requiresConfirmation: false
+        },
+        run: { ok: true }
       }
     ]);
   });

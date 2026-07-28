@@ -124,4 +124,118 @@ describe("Local Core IR2 control integration", () => {
     });
     persistence.close();
   });
+
+  it("previews and runs one exact R0 Node through a recoverable wrapper", async () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    persistence.publish({
+      assetType: "node",
+      assetId: constantNode.metadata.id,
+      version: constantNode.metadata.version,
+      digest: contentDigest(constantNode),
+      content: constantNode,
+      actor: "test"
+    });
+    const service = new LocalCoreService(persistence);
+    const preview = service.handle({
+      id: "preview",
+      method: "run.node.preview",
+      params: {
+        nodeId: constantNode.metadata.id,
+        nodeVersion: constantNode.metadata.version,
+        input: { value: "standalone" }
+      }
+    });
+    expect(preview).toMatchObject({
+      ok: true,
+      result: {
+        mode: "single_node",
+        node: {
+          id: constantNode.metadata.id,
+          version: constantNode.metadata.version
+        },
+        riskLevel: "R0",
+        permissions: [],
+        requiresConfirmation: false
+      }
+    });
+    const previewDigest = (preview.result as { previewDigest: string })
+      .previewDigest;
+    const created = service.handle({
+      id: "run-node",
+      method: "run.node.create",
+      params: {
+        nodeId: constantNode.metadata.id,
+        nodeVersion: constantNode.metadata.version,
+        input: { value: "standalone" },
+        expectedPreviewDigest: previewDigest,
+        actor: "test"
+      }
+    });
+    expect(created).toMatchObject({
+      ok: true,
+      result: { status: "running" }
+    });
+    const runId = (created.result as { id: string }).id;
+    await expect(service.ir2Runtime.drainOnce()).resolves.toBe(1);
+    expect(persistence.getRun(runId)).toMatchObject({
+      status: "succeeded",
+      output: "standalone"
+    });
+    expect(persistence.listEvents(runId)[0]).toMatchObject({
+      type: "RUN_IR2_STARTED",
+      payload: {
+        startMetadata: {
+          mode: "single_node",
+          actor: "test",
+          nodeId: constantNode.metadata.id,
+          previewDigest
+        }
+      }
+    });
+    persistence.close();
+  });
+
+  it("rejects invalid input and stale standalone Node previews", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    persistence.publish({
+      assetType: "node",
+      assetId: constantNode.metadata.id,
+      version: constantNode.metadata.version,
+      digest: contentDigest(constantNode),
+      content: constantNode,
+      actor: "test"
+    });
+    const service = new LocalCoreService(persistence);
+    expect(
+      service.handle({
+        id: "invalid",
+        method: "run.node.preview",
+        params: {
+          nodeId: constantNode.metadata.id,
+          nodeVersion: constantNode.metadata.version,
+          input: {}
+        }
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("input is invalid") }
+    });
+    expect(
+      service.handle({
+        id: "stale",
+        method: "run.node.create",
+        params: {
+          nodeId: constantNode.metadata.id,
+          nodeVersion: constantNode.metadata.version,
+          input: { value: "standalone" },
+          expectedPreviewDigest: "sha256:stale",
+          actor: "test"
+        }
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("preview is stale") }
+    });
+    persistence.close();
+  });
 });

@@ -179,6 +179,57 @@ export function createCliProgram(options: CliProgramOptions): Command {
     });
 
   program
+    .command("node-preview")
+    .description("preview the exact closure and permissions for one published Node")
+    .argument("<node>", "published node id")
+    .requiredOption("--version <version>", "published node version")
+    .option("--input <json>", "node input JSON", "{}")
+    .action(async (node, commandOptions) => {
+      output(
+        await client.request("run.node.preview", {
+          nodeId: node,
+          nodeVersion: commandOptions.version as string,
+          input: JSON.parse(commandOptions.input as string)
+        })
+      );
+    });
+
+  program
+    .command("run-node")
+    .description(
+      "run one exact R0/R1 published Node through a generated bounded Workflow"
+    )
+    .argument("<node>", "published node id")
+    .requiredOption("--version <version>", "published node version")
+    .option("--input <json>", "node input JSON", "{}")
+    .option("--yes", "confirm an R1 permission preview")
+    .action(async (node, commandOptions) => {
+      const input = JSON.parse(commandOptions.input as string);
+      const preview = await client.request<{
+        previewDigest: string;
+        requiresConfirmation: boolean;
+      }>("run.node.preview", {
+        nodeId: node,
+        nodeVersion: commandOptions.version as string,
+        input
+      });
+      if (preview.requiresConfirmation && !commandOptions.yes) {
+        throw new Error(
+          `R1 Node requires --yes after reviewing preview ${preview.previewDigest}`
+        );
+      }
+      const run = await client.request("run.node.create", {
+        nodeId: node,
+        nodeVersion: commandOptions.version as string,
+        input,
+        expectedPreviewDigest: preview.previewDigest,
+        confirmed: Boolean(commandOptions.yes),
+        actor
+      });
+      output({ preview, run });
+    });
+
+  program
     .command("inspect")
     .argument("<run-id>")
     .action(async (runId) =>
