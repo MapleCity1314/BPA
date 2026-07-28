@@ -85,20 +85,55 @@ describe("packaging-master-v1 Excel profile", () => {
     }
   );
 
-  it("uses row-local record digests so an unrelated row does not invalidate a binding", () => {
-    const bytes = fixtureWorkbook([
+  it("uses content identities so unrelated row insertion does not invalidate a binding", () => {
+    const original = fixtureWorkbook([
       ["产品名称", "品牌", "克重", "包装形态"],
       ["东北酸菜丝500g [榆园]", "榆园", "500g", "正反面包装"],
       ["冷面350g [昊七七]", "昊七七", "350g", "透明袋贴纸"]
     ]);
     const first = parsePackagingDataset({
-      bytes,
+      bytes: original,
       fileName: "master.xlsx",
       version: "1.0.0"
     });
-    const target = first.records.find((record) => record.sourceRow === 2);
+    const changed = parsePackagingDataset({
+      bytes: fixtureWorkbook([
+        ["产品名称", "品牌", "克重", "包装形态"],
+        ["新商品100g [新品牌]", "新品牌", "100g", "纸盒"],
+        ["东北酸菜丝500g [榆园]", "榆园", "500g", "正反面包装"],
+        ["冷面350g [昊七七]", "昊七七", "350g", "透明袋贴纸"]
+      ]),
+      fileName: "master.xlsx",
+      version: "1.1.0"
+    });
+    const target = first.records.find(
+      (record) => record.productName === "东北酸菜丝500g [榆园]"
+    );
+    const shifted = changed.records.find(
+      (record) => record.productName === target?.productName
+    );
     expect(target?.recordDigest).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(target?.recordDigest).not.toBe(first.descriptor?.recordsDigest);
+    expect(shifted?.sourceRow).not.toBe(target?.sourceRow);
+    expect(shifted?.id).toBe(target?.id);
+    expect(shifted?.recordDigest).toBe(target?.recordDigest);
+  });
+
+  it("deduplicates exact repeated business records", () => {
+    const imported = parsePackagingDataset({
+      bytes: fixtureWorkbook([
+        ["产品名称", "品牌", "克重", "包装形态"],
+        ["东北酸菜丝500g [榆园]", "榆园", "500g", "正反面包装"],
+        ["东北酸菜丝500g [榆园]", "榆园", "500g", "正反面包装"]
+      ]),
+      fileName: "master.xlsx",
+      version: "1.0.0"
+    });
+    expect(imported.status).toBe("valid");
+    expect(imported.records).toHaveLength(1);
+    expect(imported.warnings).toEqual([
+      "第 3 行与第 2 行内容重复，已忽略重复记录"
+    ]);
   });
 
   it("rejects malformed containers and unsafe names", () => {

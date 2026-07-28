@@ -261,6 +261,7 @@ export function parsePackagingDataset(input: {
   const errors: string[] = [];
   const warnings: string[] = [];
   const records: PackagingMasterRecord[] = [];
+  const seenRecordDigests = new Map<string, number>();
   for (const row of extracted.rows) {
     const productName = normalizeText(row.values["产品名称"]);
     const brand = normalizeText(row.values["品牌"]);
@@ -280,20 +281,29 @@ export function parsePackagingDataset(input: {
       continue;
     }
     try {
+      const recordDigest = digestPackagingValue({
+        productName,
+        brand,
+        weight,
+        packagingShape
+      });
+      const duplicateRow = seenRecordDigests.get(recordDigest);
+      if (duplicateRow !== undefined) {
+        warnings.push(
+          `第 ${row.sourceRow} 行与第 ${duplicateRow} 行内容重复，已忽略重复记录`
+        );
+        continue;
+      }
+      seenRecordDigests.set(recordDigest, row.sourceRow);
       records.push(
         createPackagingMasterRecord({
-          id: `row-${row.sourceRow}`,
+          id: `pack-${recordDigest.slice("sha256:".length, 31)}`,
           sourceRow: row.sourceRow,
           productName,
           brand,
           weight,
           packagingShape,
-          recordDigest: digestPackagingValue({
-            productName,
-            brand,
-            weight,
-            packagingShape
-          })
+          recordDigest
         })
       );
     } catch (error) {
