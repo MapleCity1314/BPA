@@ -1,127 +1,105 @@
 # BPA 当前实况与默认资产 v0.3
 
 > 盘点日期：2026-07-28
-> 范围：本地 Core、Compiler、Engine、MCP 创作工具、默认 Node 和 Repo Skills
+> 本文记录代码实况，不把下一阶段设想写成已完成能力。
 
-## 1. 盘点结论
+## 1. 当前结论
 
-0.2.1 已经具备真实 Chrome + 抖店只读纵向闭环，但“架构设计中的能力”和“代码实际启用的能力”仍有明显距离：
-
-- 仓库只有 5 个 Node 资产；Engine 实际只执行 `control.start`、`control.succeed`、`control.condition`，另有人工暂停和一个 Doudian Browser Node。
-- 方案中列出的 `control.fail` 尚未实现，生成器把失败路由到成功终点，可能掩盖异常语义。
-- Compiler 能检查引用和可达性，但没有拒绝循环、风险降级、禁用 Runtime、未知 Builtin 或终端节点出边。
-- Engine 没有执行 Workflow 输入、Node 输入、Node 输出和 Workflow 输出的 JSON Schema 契约。
-- `with` 参数没有正式绑定语义；示例中的节点输出引用事实上依靠 `control.succeed` 隐式透传。
-- `workflow_gen`、`node_gen` 已能创建 Candidate，但风险推导、能力缺口、权限报告、异常路由和模拟输出仍较粗。
-- 架构文档描述了 Workflow/Node Skill，仓库此前没有可被 Codex 发现和复用的正式 Repo Skill。
-
-因此，0.3 的重点不是增加更多页面写动作，而是先补齐“默认组合能力 + 契约执行 + 生成治理”。
-
-## 2. 0.3 默认资产
-
-| Node | Runtime | 作用 |
-|---|---|---|
-| `control.start@1.1.0` | Core | 唯一入口，输出已验证的 Workflow 输入 |
-| `control.succeed@1.1.0` | Core | 明确成功终点 |
-| `control.fail@1.0.0` | Core | 明确失败终点；系统错误固定，业务原因单独保存 |
-| `control.noop@1.0.0` | Core | 透传上一步或显式 value |
-| `control.condition@1.1.0` | Core | 受限真假分支 |
-| `control.assert@1.0.0` | Core | 前置条件不满足时失败 |
-| `control.human-approval@1.1.0` | Human | 等待当前用户批准或拒绝 |
-| `data.constant@1.0.0` | Core | 输出固定 JSON |
-| `data.select@1.0.0` | Core | 按安全点路径选择字段 |
-| `data.merge@1.0.0` | Core | 安全浅合并对象 |
-| `doudian.shop.context.read@1.2.0` | Browser | 读取真实抖店店铺上下文 |
-
-仍未启用：
-
-- `switch`、`wait`、循环、并行、补偿和子流程。
-- `composite` 与 `engine_team` Runtime。
-- 通用零适配的 click/input/select Browser Node。
-- 未经人工批准的页面写入。
-
-Compiler 会在发布前拒绝这些尚未实现的能力，不再把错误推迟到运行时。
-
-## 3. 契约执行链
+BPA 已从单条 Browser 冒烟链路进入可恢复的本地平台阶段，并具备一条完整的
+“重点项只读检查”候选闭环：
 
 ```text
-Workflow Schema
-  → Workflow input validation
-  → safe input/previous binding
-  → Node input validation
-  → Builtin / Browser / Human execution
-  → Node output validation
-  → transition and risk handling
-  → Workflow output validation
-  → terminal Run
+不可变包装 Dataset
+→ 当前店铺
+→ 完整商品范围
+→ 确定性批量匹配
+→ 单次歧义 Assistance
+→ foreach 打开并只读检查商品
+→ 问题归并
+→ 确定性报告
 ```
 
-参数绑定只允许精确引用：
+当前仍是候选阶段。真实抖店页面 Design Mode、正式资产发布和真实登录态验收需要
+用户在对应安全门出现时确认；代码和测试不会代替这些授权。
 
-```text
-${input}
-${input.shop_id}
-${previous}
-${previous.shop.id}
-```
+## 2. 已实现的平台脊柱
 
-不支持字符串内插、函数、算术、JSONPath、JavaScript 或 `nodes.*` 历史访问。需要保存多个结果时，应使用明确的数据节点或后续受审查的状态模型。
+- Workflow v1alpha1/v1alpha2 编译为冻结 IR2，Run 保存执行计划、风险和资产闭包。
+- v1alpha2 已开放 `call`、`decision`、顺序 `foreach`、`wait.assistance`、`terminal`。
+- 执行身份固定为 `run + scopePath + iterationKey + stepKey + attempt`。
+- Runtime 通过 Provider Registry 注册；Engine 不依赖 SQLite、Chrome、Compiler 或 MCP。
+- SQLite v6 保存 Run、Checkpoint、Scope、Iteration、Inbox/Outbox、Assistance、Dataset、
+  Candidate/Draft 和审计；状态推进采用 CAS 与原子 UoW。
+- 取消会原子终结 IR2 Checkpoint，并向 Provider 传播；重复取消和迟到 Result 不推进状态。
+- R1 AI 结果必须通过精确版本、摘要和候选范围验证；拒绝自动继续时原子升级，不会留下
+  已完成 Task + 永久等待 Run。
+- Dataset 导入拒绝符号链接、相对路径、非 `.xlsx`、变化中的文件和 50 MiB 以上来源；
+  原始 Excel 不进入数据库。
+- Team Worker 是固定 Node.js 24 独立进程，只加载安装包内白名单 Handler；它不是恶意
+  代码沙箱。
 
-## 4. Compiler 新约束
+## 3. 当前正式源资产
 
-- Workflow 风险不得低于任一引用 Node。
-- 本地未启用的 Runtime 在编译期拒绝。
-- `engine_builtin` 必须在 Core 支持清单中。
-- `control.start` 只能作为 `spec.start`。
-- `control.succeed` 和 `control.fail` 不得声明出边。
-- `control.condition` 和 `control.assert` 必须声明受限条件。
-- 图中存在循环时拒绝；本地 v1 不用递归执行模拟循环。
-- Workflow 与 Node 的嵌入 JSON Schema 必须是合法且可编译的 Schema。
-- Browser 成功 Result 不符合输出契约时转换为不可重试的 `OUTPUT_SCHEMA_INVALID`。
+仓库包含 20 个 Node、3 个 Workflow、1 个 Doudian Adapter、2 个 Assistance Profile
+和 1 个确定性验证 Policy。关键业务能力如下：
 
-## 5. 创作工具与 Skills
+| 资产 | 作用 |
+|---|---|
+| `dataset.records.read@1.0.0` | 受限读取不可变 Dataset 记录页 |
+| `packaging.products.normalize@1.0.0` | 合并店铺上下文与完整商品范围 |
+| `packaging.master.match.batch@1.1.0` | 匹配主数据并生成完整检查队列和冻结歧义批次 |
+| `doudian.shop.context.read@1.2.0` | 读取并确认当前店铺 |
+| `doudian.product.scope.collect@1.0.0` | 分页、虚拟滚动、动态总数对账和位置恢复 |
+| `doudian.product.editor.open@1.0.0` | 显式导航并确认商品编辑页 |
+| `doudian.editor.priority-items.inspect@1.0.0` | 只读检查普通必填、SKU 与平台提醒 |
+| `issues.reconcile@1.0.0` | 区分真实商品问题和 Adapter 诊断 |
+| `report.issue.build@1.0.0` | 生成稳定报告、问题指纹和摘要 |
+| `packaging_match_review@1.0.0` | R1 Codex 批量歧义审核 |
+| `binding_confirm@1.0.0` | R2 长期绑定人工批量确认 |
 
-`workflow_gen` 现在先读取 Published Catalog，再：
+`doudian.priority-items-readonly-inspect@0.2.0` 已通过 Core 级端到端 fixture：
+健康但未匹配的商品仍完成打开、检查、归并和报告，结果为 0 商品问题、0 Assistance。
 
-- 检查精确 Node 版本和默认控制节点。
-- 推导不低于 Node 的 Workflow 风险。
-- 汇总权限。
-- 把 failure/timeout/rejected/cancelled 路由到明确失败终点。
-- 保留 `uncertain` 为人工核验终态。
-- 在保存 Candidate 前调用正式 Compiler。
+## 4. 浏览器与业务边界
 
-`node_gen` 现在：
+通用扩展固定报告四项 `doudian@1.1.0` 能力和精确权限。Adapter Manifest 将 Node
+版本、Handler、实现摘要、Origin 和权限绑定在一起；权限扩张会在发布前拒绝。
 
-- 保护 `control.*`、`data.*` 命名空间。
-- 要求 Browser Node 使用精确 Origin。
-- 根据权限推导最低风险并拒绝降级。
-- 区分 composite、browser、engine_team 和 human 实现边界。
-- 输出契约测试清单；仍不能发布。
+当前不会：
 
-Repo 新增三项 Skill：
+- 修改表单、选择包装、保存或发布商品。
+- 绕过登录、验证码、平台风控或限流。
+- 把 CSS、XPath、坐标、任意 JavaScript 放入 Workflow。
+- 因包装未匹配或歧义而跳过商品基础检查。
+- 把未匹配计入商品问题或问题指纹。
 
-- `bpa-workflow-authoring`
-- `bpa-node-authoring`
-- `bpa-runtime-diagnostics`
+## 5. AI 创作实况
 
-Skill 只教授方法和停止边界；正式资产操作仍通过 MCP/CLI，运行时不读取 Skill。
+- Catalog v2 可按能力、平台、输入输出、风险、权限和 Adapter 版本搜索。
+- Workflow Draft 使用 revision/CAS 增量编辑并保存语义 diff。
+- MCP 能生成 Workflow/Node Candidate、验证、模拟和创建 CapabilityGap。
+- Codex 只能创建 Candidate，不能批准或发布。
+- 三套 Repo Skills 已对齐 IR2、顺序 foreach、Assistance、Dataset 和 Candidate-only
+  边界。
 
-## 6. 本轮真实验收
+Design Mode 的真实页面授权和多状态 ElementContract 验证尚未完成；授权前只能使用
+脱敏 fixture/replay。
 
-- BPA Runtime `0.3.0` 已用捆绑 Node.js 24 在 macOS arm64 完成安装和 Migration。
-- 11 个默认 Node、`core.data-flow-smoke@1.0.0` 和
-  `doudian.shop-context-observe@1.2.0` 已经 CLI 校验、发布并生成审计。
-- Core 数据流真实运行通过，安全字段选择和合并得到带 `verified: true` 的终态输出。
-- Chrome 扩展报告 3 个 Doudian Node 版本能力；真实抖店 1.2 Workflow
-  通过严格 Node/Workflow 输出 Schema 并成功终结。
-- 扩展升级路径改为 `~/Library/Application Support/BPA/extension` 物理稳定目录。
-  安装失败会恢复旧目录；以后版本切换后只需在 Chrome 重新加载。
-- Gateway 实验 5 项、BPA 58 项、原重点项插件 51 项和原插件 E2E 2 项均通过。
+## 6. 工程与发布
 
-## 7. 下一步建议
+- 整仓门禁覆盖 Schema drift、依赖边界、TypeScript strict、Unit/Contract/Integration、
+  Extension MV3 build 和文档构建。
+- Runtime 包不再复制源码、测试、Skills、开发依赖或用户文件；生产闭包约 16 MiB，
+  包含编译应用、Schema、正式源资产、扩展、三个原生运行依赖、SBOM 和逐文件 SHA-256。
+- 安装前在数据库副本上完成 Migration 与完整性检查；切换后检查 Core、Socket、
+  Persistence、Native Host 文件和 Extension 文件。
+- 旧 Runtime 数据库 Schema 低于当前数据时，手工回滚会失败关闭，不执行错误回滚。
 
-1. 为 `control.wait` 设计持久化 Timer Inbox/Outbox，避免 Core 内阻塞等待。
-2. 增加只读通用 Browser observe/assert 节点，再迁移重点项检查的扫描阶段。
-3. 为多结果引用设计显式 Run State，而不是扩大字符串模板能力。
-4. 完成 Evidence 分块传输后再开放写前/写后证据。
-5. 在隔离 Worker 和签名分发完成前继续禁用 `engine_team`。
+## 7. 尚未完成
+
+- 真实页面 Design Mode 授权及生成式 ElementContract 验收。
+- Chrome for Testing 的完整 Native Messaging 安装包 E2E。
+- 与旧插件在独立真实 Chrome Profile 的影子对比。
+- 用户真实登录态下的只读验收。
+- 长期绑定 DecisionRecord 的正式写入；当前确认 Task 不修改商品页面。
+- `poll`、Timer、SingleNodeRun、parallel、通用 paginate、不可信代码 Sandbox。

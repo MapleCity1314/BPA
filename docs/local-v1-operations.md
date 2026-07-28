@@ -19,7 +19,7 @@ pnpm core
 pnpm bpa doctor
 ```
 
-## 2. 发布首个只读 Workflow
+## 2. 导入数据并准备只读 Workflow
 
 Published Artifact 不允许用相同 `asset_id + version` 覆盖。以下动作会写入 Audit：
 
@@ -27,7 +27,24 @@ Published Artifact 不允许用相同 `asset_id + version` 覆盖。以下动作
 for node in nodes/core/*.node.yaml; do
   pnpm bpa publish node "$node" --yes
 done
+pnpm bpa publish adapter adapters/doudian/doudian.adapter.yaml --yes
+pnpm bpa publish policy policies/core/packaging_match_review.validator.policy.json --yes
+pnpm bpa publish assistance_profile assistance-profiles/core/packaging_match_review.assistance-profile.json --yes
+pnpm bpa publish assistance_profile assistance-profiles/core/binding_confirm.assistance-profile.yaml --yes
 pnpm bpa publish workflow workflows/examples/doudian.shop-context-observe.workflow.yaml --yes
+pnpm bpa publish workflow workflows/examples/doudian.priority-items-readonly-inspect.workflow.yaml --yes
+```
+
+上述命令只是发布顺序示例。正式资产发布属于人工安全门，Codex 不会代替用户执行。
+
+先导入不可变包装主数据：
+
+```bash
+pnpm bpa dataset import /absolute/path/to/包装主数据.xlsx \
+  --id packaging-master \
+  --version 2026.07.28 \
+  --yes
+pnpm bpa dataset inspect packaging-master --version 2026.07.28
 ```
 
 构建扩展后，在 Chrome 的 `chrome://extensions` 开启开发者模式，加载：
@@ -56,12 +73,16 @@ https://fxg.jinritemai.com/ffa/g/list
 
 ```bash
 pnpm bpa run doudian.shop-context-observe --version 1.2.0
+pnpm bpa run doudian.priority-items-readonly-inspect \
+  --version 0.2.0 \
+  --input '{"dataset":{"id":"packaging-master","version":"2026.07.28"},"platformFillCheck":false}'
 pnpm bpa inspect <run-id>
 pnpm bpa events <run-id>
 pnpm bpa audit
 ```
 
-首个节点仅读取当前店铺 ID、名称、URL、TabRef 和 PageEpoch，不执行保存、发布、改价或其他写操作。
+完整 Workflow 会读取范围、逐商品导航和检查，但不修改表单、不保存、不发布、不改价。
+包装未匹配不会阻止基础检查，也不会被计为商品问题。
 
 该节点已启用有界调度抖动、自适应页面稳定性等待和 Tab 级最小操作间隔。
 因此 Run 进入 `waiting_browser` 后可能短暂停留在持久化延迟 Outbox，这是正常状态。
@@ -90,22 +111,27 @@ pnpm mcp
 ## 4. 安装、升级与回滚
 
 发布包携带经过 SHA-256 校验的 Node.js 24 macOS arm64 Runtime。
-当前版本为 BPA Runtime `0.3.0`、Doudian Node `1.2.0`、示例 Workflow `1.2.0`。
+当前版本为 BPA Runtime `0.3.0`、Doudian Adapter `1.1.0`、重点项只读 Workflow `0.2.0`。
 旧 Runtime 与已发布资产继续保留，不执行覆盖升级。
 
 ```bash
-./scripts/install-macos-arm64.sh
-./scripts/rollback-macos.sh
-./scripts/uninstall-macos.sh
-./scripts/uninstall-macos.sh --purge-data
+BPA_BUNDLED_NODE=/absolute/path/to/node24 \
+  ./scripts/package-macos-arm64.sh
+tar -xzf artifacts/bpa-local-v0.3.0-macos-arm64.tar.gz
+cd bpa
+./install.sh
+./rollback.sh
+./uninstall.sh
+./uninstall.sh --purge-data
 ```
 
-安装器先在旧版本仍运行时完成新 Runtime 和原生 ABI 预检，再短暂停止旧 Core 执行 SQLite Migration；只有全部成功才原子切换 `runtime/current` 和稳定扩展目录。上一版本保存在 `runtime/previous`。应用回滚会同步恢复 Runtime 与扩展构建，但不倒退数据库 Migration；升级或回滚后需在 Chrome 扩展页点击“重新加载”。
+安装包是生产 allowlist 闭包，不含源码、测试、Skills、开发依赖、缓存或用户文件。
+逐文件 Manifest、包级 SHA-256、SBOM、Node 版本、平台、原生 ABI 和包体预算均在切换前检查。
 
-安装器在停止旧 Core 前先用捆绑 Node 实例化一次 `better-sqlite3` 内存库，
-验证原生模块 ABI。ABI 不匹配时安装会在切换前失败，旧 Core 保持运行。
-停止旧 Core 后，安装器按旧 PID 等待进程锁实际释放，再运行 Migration，
-避免 `launchctl bootout` 与进程退出之间的竞态。
+停止旧 Core 后，安装器执行 WAL checkpoint 和完整性检查，保存升级前快照，在数据库
+副本上先跑 Migration；成功后才迁移业务库并原子切换 Runtime/Extension。切换后自动
+检查 Core、Persistence、Socket 和安装文件。健康检查失败且没有新业务写入时恢复快照；
+检测到新写入则拒绝破坏性回滚并保留现场。手工回滚不会执行 down migration。
 
 默认卸载移除 Runtime、Native Host 和稳定扩展目录，但保留：
 
