@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import validateMessage from "@bpa/schemas/browser-protocol-v1.validator";
 import {
@@ -10,6 +11,23 @@ import {
 
 const permissions = ["browser.dom.read", "browser.tabs.read"];
 
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  return `{${Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(
+      ([key, entry]) =>
+        `${JSON.stringify(key)}:${canonicalJson(entry)}`
+    )
+    .join(",")}}`;
+}
+
 describe("extension capability manifest", () => {
   it("reports all pinned read-only capabilities without changing protocol v1", () => {
     expect(BROWSER_PROTOCOL).toBe("bpa.browser/1");
@@ -17,22 +35,22 @@ describe("extension capability manifest", () => {
       capabilities: [
         {
           node_id: "doudian.shop.context.read",
-          versions: ["1.0.0", "1.1.0", "1.2.0"],
+          versions: ["1.0.0", "1.1.0", "1.2.0", "1.3.0"],
           risk_level: "R0",
           permissions,
           adapter_id: "doudian",
-          adapter_version: "1.1.0"
+          adapter_version: "1.2.0"
         },
         {
           node_id: "doudian.product.scope.collect",
-          versions: ["1.0.0"],
+          versions: ["1.0.0", "1.1.0"],
           risk_level: "R0",
           permissions,
           adapter_id: "doudian",
-          adapter_version: "1.1.0"
+          adapter_version: "1.2.0"
         },
         {
-          node_id: "doudian.product.editor.open",
+          node_id: "doudian.product.scope.restore",
           versions: ["1.0.0"],
           risk_level: "R0",
           permissions: [
@@ -41,22 +59,39 @@ describe("extension capability manifest", () => {
             "browser.tabs.navigate"
           ],
           adapter_id: "doudian",
-          adapter_version: "1.1.0"
+          adapter_version: "1.2.0"
+        },
+        {
+          node_id: "doudian.product.editor.open",
+          versions: ["1.0.0", "1.1.0"],
+          risk_level: "R0",
+          permissions: [
+            "browser.dom.read",
+            "browser.tabs.read",
+            "browser.tabs.navigate"
+          ],
+          adapter_id: "doudian",
+          adapter_version: "1.2.0"
         },
         {
           node_id: "doudian.editor.priority-items.inspect",
-          versions: ["1.0.0"],
+          versions: ["1.0.0", "1.1.0"],
           risk_level: "R0",
           permissions,
           adapter_id: "doudian",
-          adapter_version: "1.1.0"
+          adapter_version: "1.2.0"
         }
       ],
       manifest_digest: CAPABILITY_MANIFEST_DIGEST
     });
     expect(CAPABILITY_MANIFEST_DIGEST).toBe(
-      "sha256:46b9dd94f854528a4c28b5709c68e614d959c65057120a48cc35c6bd3e9519b3"
+      "sha256:70cb2ad0d566aa2e52de57a59388d58614fc98933fab01571a0bf48bda9c791c"
     );
+    expect(
+      `sha256:${createHash("sha256")
+        .update(canonicalJson(capabilityReport().capabilities))
+        .digest("hex")}`
+    ).toBe(CAPABILITY_MANIFEST_DIGEST);
     expect(
       validateMessage({
         protocol: BROWSER_PROTOCOL,
@@ -75,7 +110,7 @@ describe("extension capability manifest", () => {
   it.each([
     {
       nodeId: "doudian.shop.context.read",
-      nodeVersion: "1.2.0",
+      nodeVersion: "1.3.0",
       currentUrl: "https://fxg.jinritemai.com/ffa/g/list?status=0"
     },
     {
@@ -84,8 +119,23 @@ describe("extension capability manifest", () => {
       currentUrl: "https://fxg.jinritemai.com/ffa/g/list"
     },
     {
-      nodeId: "doudian.product.editor.open",
+      nodeId: "doudian.product.scope.collect",
+      nodeVersion: "1.1.0",
+      currentUrl: "https://fxg.jinritemai.com/ffa/g/list"
+    },
+    {
+      nodeId: "doudian.product.scope.restore",
       nodeVersion: "1.0.0",
+      currentUrl: "https://fxg.jinritemai.com/ffa/g/list",
+      grantedPermissions: [
+        "browser.dom.read",
+        "browser.tabs.read",
+        "browser.tabs.navigate"
+      ]
+    },
+    {
+      nodeId: "doudian.product.editor.open",
+      nodeVersion: "1.1.0",
       currentUrl:
         "https://fxg.jinritemai.com/ffa/g/create?product_id=400001&entrance=edit",
       grantedPermissions: [
@@ -96,7 +146,7 @@ describe("extension capability manifest", () => {
     },
     {
       nodeId: "doudian.editor.priority-items.inspect",
-      nodeVersion: "1.0.0",
+      nodeVersion: "1.1.0",
       currentUrl:
         "https://fxg.jinritemai.com/ffa/g/create?product_id=400001"
     }

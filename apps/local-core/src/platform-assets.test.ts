@@ -14,19 +14,35 @@ describe("Local Core platform assets", () => {
   it("binds the Doudian Adapter to exact published Browser Nodes", () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const service = new LocalCoreService(persistence);
-    for (const id of [
-      "doudian.shop.context.read",
-      "doudian.product.scope.collect",
-      "doudian.product.editor.open",
-      "doudian.editor.priority-items.inspect"
-    ]) {
+    for (const [id, path] of [
+      [
+        "doudian.shop.context.read",
+        "nodes/core/doudian.shop.context.read@1.3.0.node.yaml"
+      ],
+      [
+        "doudian.product.scope.collect",
+        "nodes/core/doudian.product.scope.collect@1.1.0.node.yaml"
+      ],
+      [
+        "doudian.product.scope.restore",
+        "nodes/core/doudian.product.scope.restore.node.yaml"
+      ],
+      [
+        "doudian.product.editor.open",
+        "nodes/core/doudian.product.editor.open@1.1.0.node.yaml"
+      ],
+      [
+        "doudian.editor.priority-items.inspect",
+        "nodes/core/doudian.editor.priority-items.inspect@1.1.0.node.yaml"
+      ]
+    ] as const) {
       expect(
         service.handle({
           id: `publish:${id}`,
           method: "asset.publish",
           params: {
             assetType: "node",
-            content: asset(`nodes/core/${id}.node.yaml`),
+            content: asset(path),
             actor: "test"
           }
         }).ok
@@ -34,6 +50,33 @@ describe("Local Core platform assets", () => {
     }
 
     const adapter = asset("adapters/doudian/doudian.adapter.yaml");
+    expect(adapter).toMatchObject({
+      metadata: { id: "doudian", version: "1.2.0" },
+      capabilities: expect.arrayContaining([
+        {
+          nodeId: "doudian.product.scope.collect",
+          nodeVersions: ["1.1.0"],
+          handlerId: "doudian.product.scope.collect",
+          handlerVersion: "1.2.0",
+          implementationDigest:
+            "sha256:70cb2ad0d566aa2e52de57a59388d58614fc98933fab01571a0bf48bda9c791c",
+          permissions: ["browser.dom.read", "browser.tabs.read"]
+        },
+        {
+          nodeId: "doudian.product.scope.restore",
+          nodeVersions: ["1.0.0"],
+          handlerId: "doudian.product.scope.restore",
+          handlerVersion: "1.2.0",
+          implementationDigest:
+            "sha256:70cb2ad0d566aa2e52de57a59388d58614fc98933fab01571a0bf48bda9c791c",
+          permissions: [
+            "browser.dom.read",
+            "browser.tabs.read",
+            "browser.tabs.navigate"
+          ]
+        }
+      ])
+    });
     expect(
       service.handle({
         id: "validate:adapter",
@@ -44,7 +87,7 @@ describe("Local Core platform assets", () => {
       ok: true,
       result: {
         valid: true,
-        identity: "doudian@1.1.0"
+        identity: "doudian@1.2.0"
       }
     });
 
@@ -63,7 +106,7 @@ describe("Local Core platform assets", () => {
       result: {
         valid: false,
         errors: [
-          "Adapter capability permissions differ from Node doudian.shop.context.read@1.2.0"
+          "Adapter capability permissions differ from Node doudian.shop.context.read@1.3.0"
         ]
       }
     });
@@ -103,7 +146,7 @@ describe("Local Core platform assets", () => {
       },
       adapter: {
         id: "doudian",
-        version: "1.1.0",
+        version: "1.2.0",
         digest: (publishedAdapter.result as { digest: string }).digest
       },
       origins: ["https://fxg.jinritemai.com"],

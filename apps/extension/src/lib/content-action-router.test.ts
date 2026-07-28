@@ -32,6 +32,9 @@ function handlers(): ContentActionHandlers {
     "doudian.product.scope.collect": vi.fn(async () => ({
       output: { status: "complete", inspectionQueue: [] }
     })),
+    "doudian.product.scope.restore": vi.fn(async () => ({
+      output: { status: "restored", formMutations: 0 }
+    })),
     "doudian.product.editor.open": vi.fn(async () => ({
       output: { status: "ready", domMutations: 0 }
     })),
@@ -150,6 +153,56 @@ describe("content action router", () => {
       })
     ).resolves.toMatchObject({
       response: { ok: false, error: { code: "EDITOR_TARGET_INVALID" } }
+    });
+  });
+
+  it("routes only an exact same-origin list restore target", async () => {
+    const actions = handlers();
+    const listUrl =
+      "https://fxg.jinritemai.com/ffa/g/list?status=0&keyword=redacted";
+    const restore = {
+      listUrl,
+      page: 3,
+      scrollTop: 438,
+      shopId: "shop-1",
+      shopName: "脱敏店铺",
+      scopeDigest: "abcdef12",
+      required: true
+    };
+    await expect(
+      routeContentAction({
+        request: {
+          ...request("doudian.product.scope.restore", restore),
+          grantedPermissions: [...permissions, "browser.tabs.navigate"]
+        },
+        currentUrl: listUrl,
+        handlers: actions,
+        now: Date.parse("2026-07-28T00:00:00.000Z")
+      })
+    ).resolves.toMatchObject({
+      response: {
+        ok: true,
+        output: { status: "restored", formMutations: 0 }
+      }
+    });
+    await expect(
+      routeContentAction({
+        request: {
+          ...request("doudian.product.scope.restore", {
+            ...restore,
+            listUrl: "https://evil.example/ffa/g/list"
+          }),
+          grantedPermissions: [...permissions, "browser.tabs.navigate"]
+        },
+        currentUrl: listUrl,
+        handlers: actions,
+        now: Date.parse("2026-07-28T00:00:00.000Z")
+      })
+    ).resolves.toMatchObject({
+      response: {
+        ok: false,
+        error: { code: "SCOPE_RESTORE_TARGET_INVALID" }
+      }
     });
   });
 

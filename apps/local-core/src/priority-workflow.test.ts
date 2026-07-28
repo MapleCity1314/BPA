@@ -50,7 +50,7 @@ function catalog(): CatalogResolver {
   const doudianAdapter: ArtifactRef & { kind: "adapter" } = {
     kind: "adapter",
     id: "doudian",
-    version: "1.1.0",
+    version: "1.2.0",
     digest: `sha256:${"a".repeat(64)}`
   };
   const packagingProfile: ArtifactRef & { kind: "dataset_profile" } = {
@@ -143,6 +143,36 @@ function succeeded(output: JsonValue) {
 }
 
 describe("priority-items readonly workflow asset", () => {
+  it("keeps every legacy Browser Node identity immutable beside the new closure", () => {
+    for (const [path, expectedDigest] of [
+      [
+        "nodes/core/doudian.shop.context.read.node.yaml",
+        "sha256:7c29706f4ad7c3b7c66c2829749878e26794b1857236e49b5e8c2aec39716708"
+      ],
+      [
+        "nodes/core/doudian.product.scope.collect.node.yaml",
+        "sha256:e8cabcb29dffb5b3961773ab0b4061a43d2c8c6b6521d826448ebfabb42cc91b"
+      ],
+      [
+        "nodes/core/doudian.product.editor.open.node.yaml",
+        "sha256:7baf05b6613e6a2d0acf1d9c9404178c0725ff3bdeb07eff78ea13d986c423c7"
+      ],
+      [
+        "nodes/core/doudian.editor.priority-items.inspect.node.yaml",
+        "sha256:fce76c2d447adbc09600bb787ba9d920ea5bb0a2011fd4a6e0e4a1312a9aec6d"
+      ]
+    ] as const) {
+      expect(contentDigest(loadAsset(path)), path).toBe(expectedDigest);
+    }
+    const assets = catalog();
+    expect(
+      assets.getNode("doudian.product.scope.collect", "1.0.0")
+    ).toBeDefined();
+    expect(
+      assets.getNode("doudian.product.scope.collect", "1.1.0")
+    ).toBeDefined();
+  });
+
   it("compiles into a closed IR2 plan with stable foreach aggregation", () => {
     const plan = compilePriorityWorkflow();
     expect(plan.steps.shop_identity_uncertain).toMatchObject({
@@ -175,6 +205,11 @@ describe("priority-items readonly workflow asset", () => {
         expect.objectContaining({
           kind: "node",
           id: "packaging.products.normalize"
+        }),
+        expect.objectContaining({
+          kind: "node",
+          id: "doudian.product.scope.restore",
+          version: "1.0.0"
         }),
         expect.objectContaining({
           kind: "assistance_profile",
@@ -238,6 +273,18 @@ describe("priority-items readonly workflow asset", () => {
           }
         }
       }
+    });
+    expect(plan.steps.build_report).toMatchObject({
+      kind: "call",
+      routes: { succeeded: "restore_scope" }
+    });
+    expect(plan.steps.restore_scope).toMatchObject({
+      kind: "call",
+      node: {
+        id: "doudian.product.scope.restore",
+        version: "1.0.0"
+      },
+      routes: { succeeded: "completed" }
     });
   });
 
@@ -322,19 +369,27 @@ describe("priority-items readonly workflow asset", () => {
     complete("control.noop", { status: "confirmed" });
     complete("doudian.product.scope.collect", {
       status: "complete",
-      collectorVersion: "1.0.0",
+      collectorVersion: "1.1.0",
       fingerprint: {
         shopId: "shop-1",
         shopName: "测试店",
         filters: {},
         statusTab: { id: "selling", label: "售卖中" },
-        digest: "scope-digest"
+        digest: "abcdef12"
       },
       expectedCount: 1,
       scanRounds: 1,
       products: [collectedProduct],
       inspectionQueue: [collectedProduct],
-      restore: { page: 1, scrollTop: 0, required: true },
+      restore: {
+        listUrl: "https://fxg.jinritemai.com/ffa/g/list?status=0",
+        page: 1,
+        scrollTop: 0,
+        shopId: "shop-1",
+        shopName: "测试店",
+        scopeDigest: "abcdef12",
+        required: true
+      },
       diagnostics: []
     });
     complete(
@@ -491,6 +546,34 @@ describe("priority-items readonly workflow asset", () => {
         reconciliation
       });
     });
+    complete(
+      "doudian.product.scope.restore",
+      {
+        status: "restored",
+        restoreVersion: "1.1.0",
+        listUrl: "https://fxg.jinritemai.com/ffa/g/list?status=0",
+        page: 1,
+        scrollTop: 0,
+        fingerprint: {
+          shopId: "shop-1",
+          shopName: "测试店",
+          filters: {},
+          statusTab: { id: "selling", label: "售卖中" },
+          digest: "abcdef12"
+        },
+        formMutations: 0
+      },
+      (input) =>
+        expect(input).toEqual({
+          listUrl: "https://fxg.jinritemai.com/ffa/g/list?status=0",
+          page: 1,
+          scrollTop: 0,
+          shopId: "shop-1",
+          shopName: "测试店",
+          scopeDigest: "abcdef12",
+          required: true
+        })
+    );
     expect(transition.state.status).toBe("succeeded");
     expect(transition.state.output).toMatchObject({
       report,

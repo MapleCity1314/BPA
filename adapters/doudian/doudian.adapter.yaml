@@ -2,9 +2,9 @@ apiVersion: bpa.adapter/v1alpha1
 kind: Adapter
 metadata:
   id: doudian
-  version: 1.1.0
+  version: 1.2.0
   title: 抖店只读重点项检查 Adapter
-  description: 固定通用扩展内四项已审核只读能力及其精确权限、Origin 和实现摘要。
+  description: 固定通用扩展内五项已审核只读能力及其精确权限、Origin 和实现摘要。
 platform: doudian
 origins:
   - https://fxg.jinritemai.com
@@ -13,38 +13,48 @@ extension:
 capabilities:
   - nodeId: doudian.shop.context.read
     nodeVersions:
-      - 1.2.0
+      - 1.3.0
     handlerId: doudian.shop.context.read
-    handlerVersion: 1.1.0
-    implementationDigest: sha256:46b9dd94f854528a4c28b5709c68e614d959c65057120a48cc35c6bd3e9519b3
+    handlerVersion: 1.2.0
+    implementationDigest: sha256:70cb2ad0d566aa2e52de57a59388d58614fc98933fab01571a0bf48bda9c791c
     permissions:
       - browser.dom.read
       - browser.tabs.read
   - nodeId: doudian.product.scope.collect
     nodeVersions:
-      - 1.0.0
+      - 1.1.0
     handlerId: doudian.product.scope.collect
-    handlerVersion: 1.1.0
-    implementationDigest: sha256:46b9dd94f854528a4c28b5709c68e614d959c65057120a48cc35c6bd3e9519b3
+    handlerVersion: 1.2.0
+    implementationDigest: sha256:70cb2ad0d566aa2e52de57a59388d58614fc98933fab01571a0bf48bda9c791c
     permissions:
       - browser.dom.read
       - browser.tabs.read
-  - nodeId: doudian.product.editor.open
+  - nodeId: doudian.product.scope.restore
     nodeVersions:
       - 1.0.0
+    handlerId: doudian.product.scope.restore
+    handlerVersion: 1.2.0
+    implementationDigest: sha256:70cb2ad0d566aa2e52de57a59388d58614fc98933fab01571a0bf48bda9c791c
+    permissions:
+      - browser.dom.read
+      - browser.tabs.read
+      - browser.tabs.navigate
+  - nodeId: doudian.product.editor.open
+    nodeVersions:
+      - 1.1.0
     handlerId: doudian.product.editor.open
-    handlerVersion: 1.1.0
-    implementationDigest: sha256:46b9dd94f854528a4c28b5709c68e614d959c65057120a48cc35c6bd3e9519b3
+    handlerVersion: 1.2.0
+    implementationDigest: sha256:70cb2ad0d566aa2e52de57a59388d58614fc98933fab01571a0bf48bda9c791c
     permissions:
       - browser.dom.read
       - browser.tabs.read
       - browser.tabs.navigate
   - nodeId: doudian.editor.priority-items.inspect
     nodeVersions:
-      - 1.0.0
+      - 1.1.0
     handlerId: doudian.editor.priority-items.inspect
-    handlerVersion: 1.1.0
-    implementationDigest: sha256:46b9dd94f854528a4c28b5709c68e614d959c65057120a48cc35c6bd3e9519b3
+    handlerVersion: 1.2.0
+    implementationDigest: sha256:70cb2ad0d566aa2e52de57a59388d58614fc98933fab01571a0bf48bda9c791c
     permissions:
       - browser.dom.read
       - browser.tabs.read

@@ -1,5 +1,8 @@
 import type { RiskSignal, TimingPolicy } from "@bpa/schemas";
-import { validateDoudianEditorTarget } from "@bpa/adapter-doudian";
+import {
+  validateDoudianEditorTarget,
+  validateDoudianScopeRestoreTarget
+} from "@bpa/adapter-doudian";
 import {
   validPageEpoch,
   validateCapabilityRoute,
@@ -34,6 +37,10 @@ export interface ContentActionHandlers {
     request: ContentActionRequest
   ) => Promise<ContentActionResult>;
   readonly "doudian.product.scope.collect": (
+    input: Readonly<Record<string, unknown>>,
+    request: ContentActionRequest
+  ) => Promise<ContentActionResult>;
+  readonly "doudian.product.scope.restore": (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
   ) => Promise<ContentActionResult>;
@@ -155,6 +162,20 @@ function editorOpenIdentityMatches(
   }
 }
 
+function scopeRestoreIdentityMatches(
+  input: Readonly<Record<string, unknown>>,
+  currentUrl: URL
+): boolean {
+  try {
+    return (
+      validateDoudianScopeRestoreTarget(input, currentUrl.href).listUrl ===
+      currentUrl.href
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function routeContentAction(input: {
   readonly request: ContentActionRequest;
   readonly currentUrl: string;
@@ -210,6 +231,7 @@ export async function routeContentAction(input: {
     route.capability.nodeId !==
       "doudian.editor.priority-items.inspect" &&
     route.capability.nodeId !== "doudian.product.editor.open" &&
+    route.capability.nodeId !== "doudian.product.scope.restore" &&
     Object.keys(actionInput).length > 0
   ) {
     return failure(
@@ -225,6 +247,16 @@ export async function routeContentAction(input: {
     return failure(
       "EDITOR_TARGET_INVALID",
       "编辑页导航目标与当前页面不一致。",
+      request.pageEpoch
+    );
+  }
+  if (
+    route.capability.nodeId === "doudian.product.scope.restore" &&
+    !scopeRestoreIdentityMatches(actionInput, route.url)
+  ) {
+    return failure(
+      "SCOPE_RESTORE_TARGET_INVALID",
+      "商品列表恢复目标与当前页面不一致。",
       request.pageEpoch
     );
   }
@@ -298,7 +330,8 @@ export async function routeContentAction(input: {
               ? error.retryable
               : code === "PAGE_LOADING" ||
                 code === "PAGE_NOT_STABLE" ||
-                code === "REQUIRED_EVIDENCE_MISSING"
+                code === "REQUIRED_EVIDENCE_MISSING" ||
+                code === "SCOPE_RESTORE_PAGE_UNAVAILABLE"
         },
         ...(riskSignals?.length ? { riskSignals } : {})
       }

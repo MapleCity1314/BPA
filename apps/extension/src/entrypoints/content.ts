@@ -2,7 +2,10 @@ import {
   collectDoudianProductScope,
   detectDoudianRiskSignals,
   inspectDoudianPriorityItems,
+  legacyDoudianScopeCollectionResult,
   readDoudianShopContext,
+  restoreDoudianProductScope,
+  validateDoudianScopeRestoreTarget,
   verifyDoudianEditorOpen
 } from "@bpa/adapter-doudian";
 import {
@@ -137,8 +140,49 @@ const handlers: ContentActionHandlers = {
       request.timingPolicy,
       request.deadline
     );
-    const output = await collectDoudianProductScope(document, {
+    const collected = await collectDoudianProductScope(document, {
       shop: ready.context.shop,
+      deadline: request.deadline!,
+      ...(request.timingPolicy?.readiness?.pollIntervalMs === undefined
+        ? {}
+        : {
+            waitMs: request.timingPolicy.readiness.pollIntervalMs
+          })
+    });
+    const riskSignals = detectDoudianRiskSignals(document, location.href);
+    if (firstBlockingRiskSignal(riskSignals)) {
+      throw new ContentActionRiskError(riskSignals);
+    }
+    const output =
+      request.node?.version === "1.0.0"
+        ? legacyDoudianScopeCollectionResult(collected)
+        : collected;
+    return {
+      output: { ...output },
+      riskSignals,
+      timingObservation: {
+        readiness_wait_ms: Date.now() - startedAt,
+        stable_for_ms:
+          request.timingPolicy?.readiness?.stableForMs ??
+          ready.timingObservation.stable_for_ms
+      }
+    };
+  },
+
+  async "doudian.product.scope.restore"(input, request) {
+    const startedAt = Date.now();
+    const target = validateDoudianScopeRestoreTarget(input, location.href);
+    const ready = await readShopContextWhenReady(
+      request.timingPolicy,
+      request.deadline
+    );
+    if (
+      ready.context.shop.id !== target.shopId ||
+      ready.context.shop.name !== target.shopName
+    ) {
+      throw new Error("SCOPE_RESTORE_CONTEXT_MISMATCH");
+    }
+    const output = await restoreDoudianProductScope(document, input, {
       deadline: request.deadline!,
       ...(request.timingPolicy?.readiness?.pollIntervalMs === undefined
         ? {}

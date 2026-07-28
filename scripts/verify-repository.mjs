@@ -111,9 +111,14 @@ async function verifyAssets() {
       continue;
     }
     const expectedFilename = `${node.metadata.id}.node.yaml`;
-    if (filename !== expectedFilename) {
+    const expectedVersionedFilename =
+      `${node.metadata.id}@${node.metadata.version}.node.yaml`;
+    if (
+      filename !== expectedFilename &&
+      filename !== expectedVersionedFilename
+    ) {
       issues.push(
-        `Node filename ${filename} must match identity ${expectedFilename}`
+        `Node filename ${filename} must match ${expectedFilename} or ${expectedVersionedFilename}`
       );
     }
     const reference = `${node.metadata.id}@${node.metadata.version}`;

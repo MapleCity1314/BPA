@@ -1,12 +1,13 @@
 import type { BridgeCapability } from "@bpa/browser-bridge";
 
 export const BROWSER_PROTOCOL = "bpa.browser/1";
-export const DOUDIAN_ADAPTER_VERSION = "1.1.0";
+export const DOUDIAN_ADAPTER_VERSION = "1.2.0";
 export const DOUDIAN_ORIGIN = "https://fxg.jinritemai.com";
 
 export type ExtensionNodeId =
   | "doudian.shop.context.read"
   | "doudian.product.scope.collect"
+  | "doudian.product.scope.restore"
   | "doudian.product.editor.open"
   | "doudian.editor.priority-items.inspect";
 
@@ -27,7 +28,7 @@ const READ_ONLY_PERMISSIONS = [
 export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   {
     nodeId: "doudian.shop.context.read",
-    versions: ["1.0.0", "1.1.0", "1.2.0"],
+    versions: ["1.0.0", "1.1.0", "1.2.0", "1.3.0"],
     riskLevel: "R0",
     permissions: READ_ONLY_PERMISSIONS,
     origin: DOUDIAN_ORIGIN,
@@ -35,15 +36,27 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   },
   {
     nodeId: "doudian.product.scope.collect",
-    versions: ["1.0.0"],
+    versions: ["1.0.0", "1.1.0"],
     riskLevel: "R0",
     permissions: READ_ONLY_PERMISSIONS,
     origin: DOUDIAN_ORIGIN,
     pathname: "/ffa/g/list"
   },
   {
-    nodeId: "doudian.product.editor.open",
+    nodeId: "doudian.product.scope.restore",
     versions: ["1.0.0"],
+    riskLevel: "R0",
+    permissions: [
+      "browser.dom.read",
+      "browser.tabs.read",
+      "browser.tabs.navigate"
+    ],
+    origin: DOUDIAN_ORIGIN,
+    pathname: "/ffa/g/list"
+  },
+  {
+    nodeId: "doudian.product.editor.open",
+    versions: ["1.0.0", "1.1.0"],
     riskLevel: "R0",
     permissions: [
       "browser.dom.read",
@@ -55,7 +68,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   },
   {
     nodeId: "doudian.editor.priority-items.inspect",
-    versions: ["1.0.0"],
+    versions: ["1.0.0", "1.1.0"],
     riskLevel: "R0",
     permissions: READ_ONLY_PERMISSIONS,
     origin: DOUDIAN_ORIGIN,
@@ -68,7 +81,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
  * Updating a capability requires updating this value and its fixture test.
  */
 export const CAPABILITY_MANIFEST_DIGEST =
-  "sha256:46b9dd94f854528a4c28b5709c68e614d959c65057120a48cc35c6bd3e9519b3";
+  "sha256:70cb2ad0d566aa2e52de57a59388d58614fc98933fab01571a0bf48bda9c791c";
 
 export function capabilityReport(): {
   capabilities: Array<{

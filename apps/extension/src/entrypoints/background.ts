@@ -9,7 +9,6 @@ import {
   reserveRateLimit
 } from "@bpa/node-runtime";
 import type { RiskSignal, TimingPolicy } from "@bpa/schemas";
-import { validateDoudianEditorTarget } from "@bpa/adapter-doudian";
 import {
   listPendingResults,
   normalizePendingResultForReplay,
@@ -27,6 +26,7 @@ import {
   validPageEpoch,
   validateCapabilityRoute
 } from "../lib/capability-manifest";
+import { resolveNavigationTarget } from "../lib/navigation-target";
 
 const NATIVE_HOST = "com.bpa.browser";
 const PROTOCOL = BROWSER_PROTOCOL;
@@ -160,23 +160,14 @@ export default defineBackground(() => {
       currentWindow: true
     });
     const currentUrl = tab?.url ?? "";
-    let executionUrl = currentUrl;
-    let editorTargetValid = true;
-    if (payload.node.id === "doudian.product.editor.open") {
-      try {
-        const input =
-          payload.input && typeof payload.input === "object"
-            ? (payload.input as Record<string, unknown>)
-            : {};
-        executionUrl = validateDoudianEditorTarget(input).editUrl;
-        const current = new URL(currentUrl);
-        editorTargetValid =
-          current.origin === new URL(executionUrl).origin &&
-          !/login|passport|signin|authorize/i.test(current.pathname);
-      } catch {
-        editorTargetValid = false;
-      }
-    }
+    const navigationTarget = resolveNavigationTarget({
+      nodeId: payload.node.id,
+      payloadInput: payload.input,
+      currentUrl
+    });
+    const executionUrl = navigationTarget.valid
+      ? navigationTarget.executionUrl
+      : currentUrl;
     const grantedPermissions = Array.isArray(
       payload.permission_grant?.permissions
     )
@@ -185,14 +176,14 @@ export default defineBackground(() => {
             typeof permission === "string"
         )
       : [];
-    const route = editorTargetValid
+    const route = navigationTarget.valid
       ? validateCapabilityRoute({
           nodeId: payload.node.id,
           nodeVersion: payload.node.version,
           currentUrl: executionUrl,
           grantedPermissions
         })
-      : ({ valid: false, reason: "EDITOR_TARGET_INVALID" } as const);
+      : ({ valid: false, reason: navigationTarget.reason } as const);
     const authorization =
       route.valid && session.keyId && session.publicKey
         ? await verifyCommandAuthorization({
@@ -367,8 +358,8 @@ export default defineBackground(() => {
       if (
         currentTab?.id === tab.id &&
         currentTab.url === currentUrl &&
-        payload.node.id === "doudian.product.editor.open" &&
-        executionUrl !== currentUrl
+        navigationTarget.valid &&
+        navigationTarget.navigate
       ) {
         const preflight = (await browser.tabs.sendMessage(tab.id, {
           type: "bpa.risk.preflight"
@@ -410,12 +401,12 @@ export default defineBackground(() => {
       } else if (!navigationReady) {
         adapterResponse = {
           ok: false,
-          pageEpoch,
-          error: {
-            code: "NAVIGATION_UNCERTAIN",
-            message: "The editor page did not become ready before deadline.",
-            retryable: true
-          }
+            pageEpoch,
+            error: {
+              code: "NAVIGATION_UNCERTAIN",
+              message: "The reviewed destination did not become ready before deadline.",
+              retryable: true
+            }
         };
       } else if (
         currentTab?.id !== tab.id ||

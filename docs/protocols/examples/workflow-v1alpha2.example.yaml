@@ -25,7 +25,7 @@ spec:
     steps:
       - key: collect
         kind: call
-        use: doudian.product.scope.collect@1.0.0
+        use: doudian.product.scope.collect@1.1.0
         timeout: 10m
       - key: inspect_products
         kind: foreach
@@ -41,7 +41,7 @@ spec:
           steps:
             - key: inspect
               kind: call
-              use: doudian.editor.priority-items.inspect@1.0.0
+              use: doudian.editor.priority-items.inspect@1.1.0
               with:
                 product: ${item}
               timeout: 5m
@@ -53,6 +53,11 @@ spec:
         blocking: true
         deadline: 10m
         onUnavailable: continue_unresolved
+      - key: restore_scope
+        kind: call
+        use: doudian.product.scope.restore@1.0.0
+        with: ${steps.collect.output.restore}
+        timeout: 30s
       - key: finish
         kind: terminal
         status: succeeded

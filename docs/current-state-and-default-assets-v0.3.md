@@ -40,7 +40,7 @@ BPA 已从单条 Browser 冒烟链路进入可恢复的本地平台阶段，并�
 
 ## 3. 当前正式源资产
 
-仓库包含 20 个 Node、3 个 Workflow、1 个 Doudian Adapter、5 个 Assistance Profile
+仓库包含 25 个版本化 Node 源资产（21 个 Node ID）、3 个 Workflow、1 个 Doudian Adapter、5 个 Assistance Profile
 和 1 个确定性验证 Policy。关键业务能力如下：
 
 | 资产 | 作用 |
@@ -48,10 +48,11 @@ BPA 已从单条 Browser 冒烟链路进入可恢复的本地平台阶段，并�
 | `dataset.records.read@1.0.0` | 受限读取不可变 Dataset 记录页 |
 | `packaging.products.normalize@1.0.0` | 合并店铺上下文与完整商品范围 |
 | `packaging.master.match.batch@1.1.0` | 匹配主数据并生成完整检查队列和冻结歧义批次 |
-| `doudian.shop.context.read@1.2.0` | 读取并确认当前店铺 |
-| `doudian.product.scope.collect@1.0.0` | 分页、虚拟滚动、动态总数对账和位置恢复 |
-| `doudian.product.editor.open@1.0.0` | 显式导航并确认商品编辑页 |
-| `doudian.editor.priority-items.inspect@1.0.0` | 只读检查普通必填、SKU 与平台提醒 |
+| `doudian.shop.context.read@1.3.0` | 读取并确认当前店铺；旧 `1.2.0` 资产保持不变 |
+| `doudian.product.scope.collect@1.1.0` | 分页、虚拟滚动、动态总数对账，并冻结原始列表 URL、页码和滚动位置；旧 `1.0.0` 资产保持不变且扩展继续兼容其输出 |
+| `doudian.product.scope.restore@1.0.0` | 报告生成后同源返回商品列表，复核店铺与筛选指纹并恢复原位置 |
+| `doudian.product.editor.open@1.1.0` | 显式导航并确认商品编辑页；旧 `1.0.0` 资产保持不变 |
+| `doudian.editor.priority-items.inspect@1.1.0` | 只读检查普通必填、SKU 与平台提醒；旧 `1.0.0` 资产保持不变 |
 | `issues.reconcile@1.0.0` | 区分真实商品问题和 Adapter 诊断 |
 | `report.issue.build@1.0.0` | 生成稳定报告、问题指纹和摘要 |
 | `packaging_match_review@1.0.0` | R1 Codex 批量歧义审核 |
@@ -61,12 +62,14 @@ BPA 已从单条 Browser 冒烟链路进入可恢复的本地平台阶段，并�
 | `adapter_anomaly_review@1.0.0` | R1 页面结构异常分类，仅生成建议或 Candidate |
 
 `doudian.priority-items-readonly-inspect@0.3.0` 已通过 Core 级端到端 fixture：
-健康但未匹配的商品仍完成打开、检查、归并和报告，结果为 0 商品问题、0 Assistance。
+健康但未匹配的商品仍完成打开、检查、归并、报告和原列表位置恢复，结果为 0 商品问题、0 Assistance。
 
 ## 4. 浏览器与业务边界
 
-通用扩展固定报告四项 `doudian@1.1.0` 能力和精确权限。Adapter Manifest 将 Node
+通用扩展固定报告五项 `doudian@1.2.0` 能力和精确权限。Adapter Manifest 将 Node
 版本、Handler、实现摘要、Origin 和权限绑定在一起；权限扩张会在发布前拒绝。
+恢复导航只接受当前标签页同 Origin 的 `/ffa/g/list` URL；Content Handler 会再次
+校验店铺身份、筛选/页签指纹、页码和滚动位置。
 
 当前不会：
 

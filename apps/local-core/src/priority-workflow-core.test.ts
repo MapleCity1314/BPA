@@ -126,8 +126,10 @@ describe("Local Core priority inspection workflow", () => {
     const store = new SqlitePersistence({ path: ":memory:" });
     publishDataset(store);
     const providers = new RuntimeProviderRegistry();
+    const invocationOrder: string[] = [];
     providers.register(
-      new FixtureProvider("browser", (nodeId) => {
+      new FixtureProvider("browser", (nodeId, input) => {
+        invocationOrder.push(nodeId);
         if (nodeId === "doudian.shop.context.read") {
           return success({
             supported: true,
@@ -154,24 +156,58 @@ describe("Local Core priority inspection workflow", () => {
           };
           return success({
             status: "complete",
-            collectorVersion: "1.0.0",
+            collectorVersion: "1.1.0",
             fingerprint: {
               shopId: "shop-1",
               shopName: "测试店",
               filters: {},
               statusTab: { id: "selling", label: "售卖中" },
-              digest: "scope-digest"
+              digest: "abcdef12"
             },
             expectedCount: 1,
             scanRounds: 1,
             products: [product],
             inspectionQueue: [product],
-            restore: { page: 1, scrollTop: 0, required: true },
+            restore: {
+              listUrl: "https://fxg.jinritemai.com/ffa/g/list?status=0",
+              page: 1,
+              scrollTop: 0,
+              shopId: "shop-1",
+              shopName: "测试店",
+              scopeDigest: "abcdef12",
+              required: true
+            },
             diagnostics: []
           });
         }
         if (nodeId === "doudian.product.editor.open") {
           return success({ status: "ready" });
+        }
+        if (nodeId === "doudian.product.scope.restore") {
+          expect(input).toEqual({
+            listUrl: "https://fxg.jinritemai.com/ffa/g/list?status=0",
+            page: 1,
+            scrollTop: 0,
+            shopId: "shop-1",
+            shopName: "测试店",
+            scopeDigest: "abcdef12",
+            required: true
+          });
+          return success({
+            status: "restored",
+            restoreVersion: "1.1.0",
+            listUrl: "https://fxg.jinritemai.com/ffa/g/list?status=0",
+            page: 1,
+            scrollTop: 0,
+            fingerprint: {
+              shopId: "shop-1",
+              shopName: "测试店",
+              filters: {},
+              statusTab: { id: "selling", label: "售卖中" },
+              digest: "abcdef12"
+            },
+            formMutations: 0
+          });
         }
         return success({
           status: "complete",
@@ -187,6 +223,7 @@ describe("Local Core priority inspection workflow", () => {
     );
     providers.register(
       new FixtureProvider("team", (nodeId, input) => {
+        invocationOrder.push(nodeId);
         const value = input as Record<string, JsonValue>;
         if (nodeId === "packaging.products.normalize") {
           const product = (value.products as JsonValue[])[0] as Record<
@@ -273,6 +310,7 @@ describe("Local Core priority inspection workflow", () => {
       "dataset.records.read",
       "doudian.shop.context.read",
       "doudian.product.scope.collect",
+      "doudian.product.scope.restore",
       "doudian.product.editor.open",
       "doudian.editor.priority-items.inspect",
       "packaging.products.normalize",
@@ -280,7 +318,21 @@ describe("Local Core priority inspection workflow", () => {
       "issues.reconcile",
       "report.issue.build"
     ]) {
-      publish(service, "node", `nodes/core/${id}.node.yaml`);
+      const versionedPath = ({
+        "doudian.shop.context.read":
+          "nodes/core/doudian.shop.context.read@1.3.0.node.yaml",
+        "doudian.product.scope.collect":
+          "nodes/core/doudian.product.scope.collect@1.1.0.node.yaml",
+        "doudian.product.editor.open":
+          "nodes/core/doudian.product.editor.open@1.1.0.node.yaml",
+        "doudian.editor.priority-items.inspect":
+          "nodes/core/doudian.editor.priority-items.inspect@1.1.0.node.yaml"
+      } as Record<string, string>)[id];
+      publish(
+        service,
+        "node",
+        versionedPath ?? `nodes/core/${id}.node.yaml`
+      );
     }
     publish(service, "adapter", "adapters/doudian/doudian.adapter.yaml");
     publish(
@@ -339,6 +391,10 @@ describe("Local Core priority inspection workflow", () => {
         }
       }
     });
+    expect(invocationOrder.indexOf("report.issue.build")).toBeGreaterThan(-1);
+    expect(
+      invocationOrder.indexOf("doudian.product.scope.restore")
+    ).toBeGreaterThan(invocationOrder.indexOf("report.issue.build"));
     expect(
       store
         .listAssistanceTasks({ limit: 20 })

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   collectDoudianProductScope,
+  legacyDoudianScopeCollectionResult,
+  restoreDoudianProductScope,
   validateDoudianEditorTarget,
+  validateDoudianScopeRestoreTarget,
   verifyDoudianEditorOpen
 } from "./browser-actions.js";
 
@@ -72,7 +75,9 @@ describe("doudian read-only browser actions", () => {
     };
     const doc = {
       defaultView: {
-        location: { href: "https://fxg.jinritemai.com/ffa/g/list" }
+        location: {
+          href: "https://fxg.jinritemai.com/ffa/g/list?status=0"
+        }
       },
       body: { innerText: "" },
       scrollingElement: scroll,
@@ -138,15 +143,69 @@ describe("doudian read-only browser actions", () => {
 
     expect(result).toMatchObject({
       status: "complete",
+      collectorVersion: "1.1.0",
       expectedCount: 2,
       scanRounds: 2,
       products: [{ id: "400001" }, { id: "400002" }],
       inspectionQueue: [{ id: "400001" }, { id: "400002" }],
-      restore: { page: 2, scrollTop: 35, required: true }
+      restore: {
+        listUrl: "https://fxg.jinritemai.com/ffa/g/list?status=0",
+        page: 2,
+        scrollTop: 35,
+        shopId: "shop-redacted",
+        shopName: "脱敏旗舰店",
+        scopeDigest: expect.stringMatching(/^[a-f0-9]{8}$/u),
+        required: true
+      }
     });
     expect(currentPage).toBe(2);
     expect(scroll.scrollTop).toBe(35);
     expect(navigation).toEqual([1, 2, 1, 2]);
+    expect(legacyDoudianScopeCollectionResult(result)).toMatchObject({
+      collectorVersion: "1.0.0",
+      restore: { page: 2, scrollTop: 35, required: true }
+    });
+    expect(
+      legacyDoudianScopeCollectionResult(result).restore
+    ).not.toHaveProperty("listUrl");
+
+    currentPage = 1;
+    scroll.scrollTop = 0;
+    await expect(
+      restoreDoudianProductScope(
+        doc,
+        result.restore as unknown as Readonly<Record<string, unknown>>,
+        {
+          deadline: "2026-07-29T00:00:00.000Z",
+          now: () => Date.parse("2026-07-28T00:00:00.000Z"),
+          wait: async () => {}
+        }
+      )
+    ).resolves.toMatchObject({
+      status: "restored",
+      restoreVersion: "1.1.0",
+      page: 2,
+      scrollTop: 35,
+      formMutations: 0
+    });
+    expect(currentPage).toBe(2);
+    expect(scroll.scrollTop).toBe(35);
+    expect(navigation).toEqual([1, 2, 1, 2, 2]);
+    await expect(
+      restoreDoudianProductScope(
+        doc,
+        {
+          ...result.restore,
+          scopeDigest: "deadbeef"
+        },
+        {
+          deadline: "2026-07-29T00:00:00.000Z",
+          now: () => Date.parse("2026-07-28T00:00:00.000Z"),
+          wait: async () => {}
+        }
+      )
+    ).rejects.toThrow("SCOPE_RESTORE_CONTEXT_MISMATCH");
+    expect(navigation).toEqual([1, 2, 1, 2, 2]);
   });
 
   it("canonicalizes only the frozen Doudian editor target", () => {
@@ -169,6 +228,45 @@ describe("doudian read-only browser actions", () => {
       expect(() =>
         validateDoudianEditorTarget({ productId: "400001", editUrl })
       ).toThrow("EDITOR_TARGET_INVALID");
+    }
+  });
+
+  it("allows only a same-origin product-list restore target", () => {
+    const valid = {
+      listUrl:
+        "https://fxg.jinritemai.com/ffa/g/list?status=0&keyword=redacted",
+      page: 3,
+      scrollTop: 438,
+      shopId: "shop-1",
+      shopName: "脱敏店铺",
+      scopeDigest: "abcdef12",
+      required: true
+    };
+    expect(
+      validateDoudianScopeRestoreTarget(
+        valid,
+        "https://fxg.jinritemai.com/ffa/g/create?product_id=400001"
+      )
+    ).toEqual({
+      listUrl: valid.listUrl,
+      page: valid.page,
+      scrollTop: valid.scrollTop,
+      shopId: valid.shopId,
+      shopName: valid.shopName,
+      scopeDigest: valid.scopeDigest
+    });
+    for (const listUrl of [
+      "https://evil.example/ffa/g/list",
+      "https://fxg.jinritemai.com/ffa/g/create",
+      "https://fxg.jinritemai.com/ffa/g/list#unsafe",
+      "https://user:secret@fxg.jinritemai.com/ffa/g/list"
+    ]) {
+      expect(() =>
+        validateDoudianScopeRestoreTarget(
+          { ...valid, listUrl },
+          "https://fxg.jinritemai.com/ffa/g/create?product_id=400001"
+        )
+      ).toThrow("SCOPE_RESTORE_TARGET_INVALID");
     }
   });
 

@@ -1,0 +1,138 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: doudian.product.scope.restore
+  version: 1.0.0
+  title: 恢复抖店商品列表原始位置
+  description: 只读返回采集时固定的同源商品列表 URL，并在校验店铺与筛选范围后恢复原页码和滚动位置。
+runtime: browser
+inputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - listUrl
+    - page
+    - scrollTop
+    - shopId
+    - shopName
+    - scopeDigest
+    - required
+  properties:
+    listUrl:
+      type: string
+      format: uri
+    page:
+      type: integer
+      minimum: 1
+    scrollTop:
+      type: number
+      minimum: 0
+    shopId:
+      type: string
+      minLength: 1
+    shopName:
+      type: string
+      minLength: 1
+    scopeDigest:
+      type: string
+      pattern: ^[a-f0-9]{8}$
+    required:
+      type: boolean
+      const: true
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - status
+    - restoreVersion
+    - listUrl
+    - page
+    - scrollTop
+    - fingerprint
+    - formMutations
+  properties:
+    status:
+      type: string
+      const: restored
+    restoreVersion:
+      type: string
+      const: 1.1.0
+    listUrl:
+      type: string
+      format: uri
+    page:
+      type: integer
+      minimum: 1
+    scrollTop:
+      type: number
+      minimum: 0
+    fingerprint:
+      type: object
+      additionalProperties: false
+      required:
+        - shopId
+        - shopName
+        - filters
+        - statusTab
+        - digest
+      properties:
+        shopId:
+          type: string
+        shopName:
+          type: string
+        filters:
+          type: object
+        statusTab:
+          type: object
+          additionalProperties: false
+          required:
+            - id
+            - label
+          properties:
+            id:
+              type: string
+            label:
+              type: string
+        digest:
+          type: string
+    formMutations:
+      type: integer
+      const: 0
+risk:
+  level: R0
+  permissions:
+    - browser.dom.read
+    - browser.tabs.read
+    - browser.tabs.navigate
+  domains:
+    - https://fxg.jinritemai.com
+execution:
+  timeoutDefault: 30s
+  idempotency: repeatable_read
+  retryableErrors:
+    - PAGE_LOADING
+    - BROWSER_DISCONNECTED
+    - NAVIGATION_UNCERTAIN
+    - SCOPE_RESTORE_PAGE_UNAVAILABLE
+  cancellable: true
+errors:
+  - SCOPE_RESTORE_TARGET_INVALID
+  - SCOPE_RESTORE_URL_MISMATCH
+  - SCOPE_RESTORE_CONTEXT_MISMATCH
+  - SCOPE_RESTORE_PAGE_UNAVAILABLE
+  - SCOPE_RESTORE_POSITION_MISMATCH
+  - PAGE_LOADING
+  - BROWSER_DISCONNECTED
+  - NAVIGATION_UNCERTAIN
+  - CAPTCHA_REQUIRED
+  - RATE_LIMITED
+  - RISK_CONTROL
+  - SESSION_EXPIRED
+evidence:
+  required:
+    - result
+    - error
+adapter:
+  id: doudian
+  versions:
+    - 1.2.0

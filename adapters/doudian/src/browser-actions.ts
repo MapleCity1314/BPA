@@ -13,6 +13,7 @@ import {
   reconcileProductScope,
   type ScopeCollectionReplay,
   type ScopeCollectionResult,
+  type ScopeFingerprint,
   type ScopePageReplay,
   type ScopeRiskSignal,
   type ScopeVirtualView
@@ -23,6 +24,10 @@ const PAGE_CONTROLS =
 const PRODUCT_ROWS = "tr[data-row-key]";
 const DEFAULT_WAIT_MS = 120;
 const MAX_VIRTUAL_VIEWS = 200;
+const DOUDIAN_ORIGIN = "https://fxg.jinritemai.com";
+const PRODUCT_LIST_PATH = "/ffa/g/list";
+
+export const DOUDIAN_SCOPE_ACTION_VERSION = "1.1.0";
 
 export interface DoudianReadOnlyActionOptions {
   readonly deadline: string;
@@ -41,6 +46,33 @@ export interface DoudianScopeActionOptions extends DoudianReadOnlyActionOptions 
 export interface DoudianEditorTarget {
   readonly productId: string;
   readonly editUrl: string;
+}
+
+export interface DoudianScopeRestoreTarget {
+  readonly listUrl: string;
+  readonly page: number;
+  readonly scrollTop: number;
+  readonly shopId: string;
+  readonly shopName: string;
+  readonly scopeDigest: string;
+}
+
+export interface DoudianScopeCollectionV1_1Result
+  extends Omit<ScopeCollectionResult, "collectorVersion" | "restore"> {
+  readonly collectorVersion: typeof DOUDIAN_SCOPE_ACTION_VERSION;
+  readonly restore: DoudianScopeRestoreTarget & {
+    readonly required: true;
+  };
+}
+
+export interface DoudianScopeRestoreResult {
+  readonly status: "restored";
+  readonly restoreVersion: typeof DOUDIAN_SCOPE_ACTION_VERSION;
+  readonly listUrl: string;
+  readonly page: number;
+  readonly scrollTop: number;
+  readonly fingerprint: ScopeFingerprint;
+  readonly formMutations: 0;
 }
 
 export interface DoudianEditorOpenResult {
@@ -96,6 +128,73 @@ export function validateDoudianEditorTarget(
   canonical.searchParams.set("product_id", productId);
   canonical.searchParams.set("entrance", "edit");
   return { productId, editUrl: canonical.href };
+}
+
+export function validateDoudianScopeRestoreTarget(
+  input: Readonly<Record<string, unknown>>,
+  currentUrl?: string
+): DoudianScopeRestoreTarget {
+  if (
+    Object.keys(input).some(
+      (key) =>
+        ![
+          "listUrl",
+          "page",
+          "scrollTop",
+          "shopId",
+          "shopName",
+          "scopeDigest",
+          "required"
+        ].includes(key)
+    ) ||
+    typeof input.listUrl !== "string" ||
+    typeof input.page !== "number" ||
+    !Number.isSafeInteger(input.page) ||
+    input.page < 1 ||
+    typeof input.scrollTop !== "number" ||
+    !Number.isFinite(input.scrollTop) ||
+    input.scrollTop < 0 ||
+    typeof input.shopId !== "string" ||
+    input.shopId.trim().length === 0 ||
+    typeof input.shopName !== "string" ||
+    input.shopName.trim().length === 0 ||
+    typeof input.scopeDigest !== "string" ||
+    !/^[a-f0-9]{8}$/u.test(input.scopeDigest) ||
+    (input.required !== undefined && input.required !== true)
+  ) {
+    throw new Error("SCOPE_RESTORE_TARGET_INVALID");
+  }
+  let target: URL;
+  try {
+    target = new URL(input.listUrl);
+  } catch {
+    throw new Error("SCOPE_RESTORE_TARGET_INVALID");
+  }
+  let current: URL | undefined;
+  try {
+    current = currentUrl === undefined ? undefined : new URL(currentUrl);
+  } catch {
+    throw new Error("SCOPE_RESTORE_TARGET_INVALID");
+  }
+  if (
+    target.origin !== DOUDIAN_ORIGIN ||
+    target.pathname !== PRODUCT_LIST_PATH ||
+    target.username ||
+    target.password ||
+    target.hash ||
+    target.href.length > 4_096 ||
+    (current !== undefined && current.origin !== target.origin)
+  ) {
+    throw new Error("SCOPE_RESTORE_TARGET_INVALID");
+  }
+  return {
+    listUrl: target.href,
+    page: input.page,
+    scrollTop: input.scrollTop,
+    shopId: input.shopId.trim(),
+    shopName: input.shopName.trim(),
+    scopeDigest: input.scopeDigest
+  };
 }
 
 function normalizeText(value: string | null | undefined): string {
@@ -272,7 +371,7 @@ async function collectVirtualViews(input: {
 export async function collectDoudianProductScope(
   doc: Document,
   options: DoudianScopeActionOptions
-): Promise<ScopeCollectionResult> {
+): Promise<DoudianScopeCollectionV1_1Result> {
   const now = options.now ?? (() => Date.now());
   const wait = options.wait ?? defaultWait;
   const waitMs = options.waitMs ?? DEFAULT_WAIT_MS;
@@ -281,6 +380,14 @@ export async function collectDoudianProductScope(
     shopId: options.shop.id,
     shopName: options.shop.name
   });
+  const listUrl = validateDoudianScopeRestoreTarget({
+    listUrl: doc.defaultView?.location.href ?? "",
+    page: initial.page,
+    scrollTop: initial.view.scrollTop,
+    shopId: initial.fingerprint.shopId,
+    shopName: initial.fingerprint.shopName,
+    scopeDigest: initial.fingerprint.digest
+  }).listUrl;
   const initialTarget = scrollTarget(doc);
   const initialLocation = {
     page: initial.page,
@@ -365,13 +472,6 @@ export async function collectDoudianProductScope(
         break;
       }
     }
-    return (
-      result ??
-      reconcileProductScope({
-        initialLocation,
-        rounds: []
-      })
-    );
   } finally {
     try {
       const restoreDeadline = new Date(now() + 5_000).toISOString();
@@ -390,6 +490,110 @@ export async function collectDoudianProductScope(
       // The deterministic result still carries an explicit restore instruction.
     }
   }
+  const reconciled =
+    result ??
+    reconcileProductScope({
+      initialLocation,
+      rounds: []
+    });
+  return {
+    ...reconciled,
+    collectorVersion: DOUDIAN_SCOPE_ACTION_VERSION,
+    restore: {
+      listUrl,
+      ...initialLocation,
+      shopId: initial.fingerprint.shopId,
+      shopName: initial.fingerprint.shopName,
+      scopeDigest: initial.fingerprint.digest,
+      required: true
+    }
+  };
+}
+
+export function legacyDoudianScopeCollectionResult(
+  result: DoudianScopeCollectionV1_1Result
+): ScopeCollectionResult {
+  return {
+    ...result,
+    collectorVersion: "1.0.0",
+    restore: {
+      page: result.restore.page,
+      scrollTop: result.restore.scrollTop,
+      required: true
+    }
+  };
+}
+
+/**
+ * Restores the exact list scope after editor inspection. It only navigates
+ * pagination and scroll state; it never types, saves, publishes or mutates a
+ * form value.
+ */
+export async function restoreDoudianProductScope(
+  doc: Document,
+  input: Readonly<Record<string, unknown>>,
+  options: DoudianReadOnlyActionOptions
+): Promise<DoudianScopeRestoreResult> {
+  const target = validateDoudianScopeRestoreTarget(
+    input,
+    doc.defaultView?.location.href
+  );
+  if (doc.defaultView?.location.href !== target.listUrl) {
+    throw new Error("SCOPE_RESTORE_URL_MISMATCH");
+  }
+  const now = options.now ?? (() => Date.now());
+  const wait = options.wait ?? defaultWait;
+  const waitMs = options.waitMs ?? DEFAULT_WAIT_MS;
+  assertBeforeDeadline(options.deadline, now);
+  const before = readDoudianScopeDom(doc, {
+    shopId: target.shopId,
+    shopName: target.shopName
+  });
+  if (before.fingerprint.digest !== target.scopeDigest) {
+    throw new Error("SCOPE_RESTORE_CONTEXT_MISMATCH");
+  }
+  const reached = await moveToPage({
+    doc,
+    page: target.page,
+    shopId: target.shopId,
+    shopName: target.shopName,
+    deadline: options.deadline,
+    now,
+    wait,
+    waitMs
+  });
+  if (!reached) throw new Error("SCOPE_RESTORE_PAGE_UNAVAILABLE");
+  const afterPage = readDoudianScopeDom(doc, {
+    shopId: target.shopId,
+    shopName: target.shopName
+  });
+  if (afterPage.fingerprint.digest !== target.scopeDigest) {
+    throw new Error("SCOPE_RESTORE_CONTEXT_MISMATCH");
+  }
+  const scroll = scrollTarget(doc);
+  setReadOnlyScroll(scroll, target.scrollTop);
+  const restoredScrollTop = Number(scroll?.scrollTop ?? 0);
+  const restored = readDoudianScopeDom(doc, {
+    shopId: target.shopId,
+    shopName: target.shopName,
+    scrollTop: restoredScrollTop
+  });
+  if (
+    restored.page !== target.page ||
+    restored.fingerprint.digest !== target.scopeDigest ||
+    Math.abs(restoredScrollTop - target.scrollTop) > 1
+  ) {
+    throw new Error("SCOPE_RESTORE_POSITION_MISMATCH");
+  }
+  return {
+    status: "restored",
+    restoreVersion: DOUDIAN_SCOPE_ACTION_VERSION,
+    listUrl: target.listUrl,
+    page: target.page,
+    scrollTop: restoredScrollTop,
+    fingerprint: restored.fingerprint,
+    formMutations: 0
+  };
 }
 
 function priorityReplayInput(
