@@ -6,6 +6,24 @@ if [[ ! -f "$ARCHIVE" ]]; then
   print -u2 "Usage: $0 /absolute/path/to/bpa-local-<version>-macos-arm64.tar.gz"
   exit 1
 fi
+CHECKSUM="$ARCHIVE.sha256"
+if [[ ! -f "$CHECKSUM" ]]; then
+  print -u2 "Release checksum sidecar is missing; legacy archives are not installable."
+  exit 1
+fi
+if [[ "$(wc -l < "$CHECKSUM" | tr -d ' ')" != "1" ]]; then
+  print -u2 "Release checksum sidecar must contain exactly one entry."
+  exit 1
+fi
+EXPECTED_HASH="$(awk '{print $1}' "$CHECKSUM")"
+EXPECTED_NAME="$(awk '{print $2}' "$CHECKSUM")"
+ACTUAL_HASH="$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')"
+if ! print -n "$EXPECTED_HASH" | grep -Eq '^[a-f0-9]{64}$' ||
+    [[ "$EXPECTED_HASH" != "$ACTUAL_HASH" ||
+      "$EXPECTED_NAME" != "${ARCHIVE:t}" ]]; then
+  print -u2 "Release checksum or checksum filename does not match the archive."
+  exit 1
+fi
 
 VERIFY_ROOT="$(mktemp -d)"
 CORE_PID=""
@@ -44,8 +62,30 @@ PACKAGE_ROOT="$VERIFY_ROOT/bpa"
 RUNTIME_ROOT="$PACKAGE_ROOT/runtime"
 NODE="$RUNTIME_ROOT/node/bin/node"
 "$NODE" "$RUNTIME_ROOT/bin/bpa-runtime-verify.js" "$RUNTIME_ROOT"
-if [[ "$("$NODE" -p 'process.platform + ":" + process.arch + ":" + process.versions.node.split(".")[0]')" != "darwin:arm64:24" ]]; then
+MANIFEST_NODE_VERSION="$(
+  "$NODE" --input-type=module -e '
+    import { readFileSync } from "node:fs";
+    const manifest = JSON.parse(readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(manifest.release.nodeVersion);
+  ' "$RUNTIME_ROOT/runtime-manifest.json"
+)"
+if [[ "$("$NODE" -p 'process.platform + ":" + process.arch + ":" + process.versions.node')" != \
+      "darwin:arm64:$MANIFEST_NODE_VERSION" ]]; then
   print -u2 "Packaged Node identity is invalid."
+  exit 1
+fi
+"$NODE" "$RUNTIME_ROOT/bin/bpa-release-scan.js" "$PACKAGE_ROOT"
+RELEASE_IDENTITY="$(
+  "$NODE" --input-type=module -e '
+    import { readFileSync } from "node:fs";
+    const manifest = JSON.parse(readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(manifest.release.identity);
+  ' "$RUNTIME_ROOT/runtime-manifest.json"
+)"
+EXPECTED_ARCHIVE="bpa-local-${RELEASE_IDENTITY}-macos-arm64.tar.gz"
+if [[ "${ARCHIVE:t}" != "$EXPECTED_ARCHIVE" ]]; then
+  print -u2 "Release filename does not match its manifest: expected $EXPECTED_ARCHIVE."
+  print -u2 "Legacy artifacts are explicitly rejected."
   exit 1
 fi
 if [[ ! -f "$RUNTIME_ROOT/extension/manifest.json" ]]; then

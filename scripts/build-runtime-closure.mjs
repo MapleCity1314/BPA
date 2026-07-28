@@ -12,8 +12,14 @@ import {
   writeFile
 } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { build } from "esbuild";
+import {
+  createReleaseMetadata,
+  formatSensitiveFindings,
+  sensitiveContentFindings
+} from "./release-gates.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const outputRoot = resolve(process.argv[2] ?? "");
@@ -38,6 +44,20 @@ if (
     "Runtime closure must be built by the packaged Node.js 24 darwin-arm64 executable"
   );
 }
+const trackedChanges = execFileSync(
+  "git",
+  ["status", "--porcelain=v1", "--untracked-files=no"],
+  { cwd: repositoryRoot, encoding: "utf8" }
+).trim();
+if (trackedChanges.length > 0) {
+  throw new Error(
+    "Release closure must be built from a clean tracked Git checkout"
+  );
+}
+const gitCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+  cwd: repositoryRoot,
+  encoding: "utf8"
+}).trim();
 
 const entryPoints = {
   "bpa-core": join(repositoryRoot, "apps/local-core/src/main.ts"),
@@ -54,6 +74,10 @@ const entryPoints = {
   "bpa-runtime-verify": join(
     repositoryRoot,
     "scripts/verify-runtime-closure.mjs"
+  ),
+  "bpa-release-scan": join(
+    repositoryRoot,
+    "scripts/scan-release-contents.mjs"
   )
 };
 
@@ -198,6 +222,13 @@ await chmod(join(outputRoot, "node/bin/node"), 0o755);
 const rootPackage = JSON.parse(
   await readFile(join(repositoryRoot, "package.json"), "utf8")
 );
+const release = createReleaseMetadata({
+  runtimeVersion: String(rootPackage.version),
+  gitCommit,
+  nodeVersion: process.versions.node,
+  platform: process.platform,
+  architecture: process.arch
+});
 const migrationSource = await readFile(
   join(repositoryRoot, "packages/persistence-sqlite/src/migrations.ts"),
   "utf8"
@@ -219,7 +250,8 @@ await writeFile(
       private: true,
       type: "module",
       engines: { node: ">=24 <25" },
-      dependencies: { "better-sqlite3": betterSqlite.version }
+      dependencies: { "better-sqlite3": betterSqlite.version },
+      bpaRelease: release
     },
     null,
     2
@@ -232,8 +264,8 @@ await writeFile(
       spdxVersion: "SPDX-2.3",
       dataLicense: "CC0-1.0",
       SPDXID: "SPDXRef-DOCUMENT",
-      name: `bpa-runtime-${rootPackage.version}`,
-      documentNamespace: `https://bpa.local/sbom/${rootPackage.version}`,
+      name: `bpa-runtime-${release.identity}`,
+      documentNamespace: `https://bpa.local/sbom/${release.identity}`,
       packages: [
         {
           SPDXID: "SPDXRef-Package-BPA",
@@ -267,7 +299,14 @@ const forbiddenNames = [
 const files = await collectFiles(outputRoot);
 let totalBytes = 0;
 const manifestFiles = [];
-for (const file of files) {
+const sensitiveFindings = [];
+for (const file of files.sort((left, right) =>
+  left.relativePath < right.relativePath
+    ? -1
+    : left.relativePath > right.relativePath
+      ? 1
+      : 0
+)) {
   if (
     forbiddenNames.includes(basename(file.path)) ||
     /\.(?:pem|p12|key)$/i.test(file.path)
@@ -276,6 +315,9 @@ for (const file of files) {
   }
   const metadata = await stat(file.path);
   const bytes = await readFile(file.path);
+  sensitiveFindings.push(
+    ...sensitiveContentFindings(bytes, file.relativePath)
+  );
   totalBytes += metadata.size;
   manifestFiles.push({
     path: file.relativePath,
@@ -283,21 +325,30 @@ for (const file of files) {
     sha256: digest(bytes)
   });
 }
+if (sensitiveFindings.length > 0) {
+  throw new Error(
+    `Sensitive content detected in runtime closure: ${formatSensitiveFindings(
+      sensitiveFindings
+    )}`
+  );
+}
 if (totalBytes > maximumBytes) {
   throw new Error(
     `Runtime closure is ${totalBytes} bytes; budget is ${maximumBytes} bytes`
   );
 }
-manifestFiles.sort((left, right) => left.path.localeCompare(right.path));
 await writeFile(
   join(outputRoot, "runtime-manifest.json"),
   `${JSON.stringify(
     {
-      schemaVersion: 1,
+      schemaVersion: 2,
       runtimeVersion: rootPackage.version,
       databaseSchemaVersion,
-      platform: "darwin",
-      architecture: "arm64",
+      release,
+      gitCommit: release.gitCommit,
+      nodeVersion: release.nodeVersion,
+      platform: release.platform,
+      architecture: release.architecture,
       totalBytes,
       files: manifestFiles
     },

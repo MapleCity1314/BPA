@@ -80,13 +80,18 @@ async function verifyRuntimeVersions() {
   );
   await expectFileContains(
     join(root, "scripts/install-macos-arm64.sh"),
-    `BPA_INSTALL_VERSION:-${version}`,
-    "Installer version"
+    "manifest.release.identity",
+    "Installer immutable release identity"
   );
   await expectFileContains(
     join(root, "scripts/package-macos-arm64.sh"),
-    `bpa-local-v${version}-macos-arm64.tar.gz`,
-    "Package filename version"
+    'RUNTIME_VERSION="$("$BUNDLED_NODE" -p \'require("./package.json").version\')"',
+    "Package Runtime version source"
+  );
+  await expectFileContains(
+    join(root, "scripts/package-macos-arm64.sh"),
+    'EXPECTED_BASENAME="bpa-local-${RELEASE_IDENTITY}-macos-arm64.tar.gz"',
+    "Package immutable release filename"
   );
   return version;
 }

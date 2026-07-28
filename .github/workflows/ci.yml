@@ -19,3 +19,47 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
+
+  release-package:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+          run_install: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Verify release build host
+        run: |
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          node -e '
+            if (
+              process.platform !== "darwin" ||
+              process.arch !== "arm64" ||
+              process.versions.node.split(".")[0] !== "24"
+            ) process.exit(1);
+          '
+      - run: pnpm install --frozen-lockfile
+      - name: Build and verify immutable RC archive
+        run: |
+          commit="$(git rev-parse HEAD)"
+          version="$(node -p 'require("./package.json").version')"
+          identity="v${version}-rc.${commit:0:12}"
+          archive="$RUNNER_TEMP/bpa-local-${identity}-macos-arm64.tar.gz"
+          BPA_BUNDLED_NODE="$(command -v node)" \
+            BPA_PACKAGE_OUTPUT="$archive" \
+            zsh scripts/package-macos-arm64.sh
+          zsh scripts/verify-package-macos-arm64.sh "$archive"
+      - name: Upload verified RC archive
+        uses: actions/upload-artifact@v6
+        with:
+          name: bpa-macos-arm64-rc
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/bpa-local-*-macos-arm64.tar.gz
+            ${{ runner.temp }}/bpa-local-*-macos-arm64.tar.gz.sha256

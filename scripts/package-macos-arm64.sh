@@ -3,7 +3,6 @@ set -euo pipefail
 
 PROJECT_ROOT="${0:A:h:h}"
 BUNDLED_NODE="${BPA_BUNDLED_NODE:-}"
-OUTPUT="${BPA_PACKAGE_OUTPUT:-$PROJECT_ROOT/artifacts/bpa-local-v0.3.0-macos-arm64.tar.gz}"
 
 if [[ -z "$BUNDLED_NODE" || ! -x "$BUNDLED_NODE" ]]; then
   print -u2 "Set BPA_BUNDLED_NODE to a Node.js 24 macOS arm64 executable."
@@ -15,7 +14,28 @@ if [[ "$("$BUNDLED_NODE" -p 'process.platform + ":" + process.arch + ":" + proce
 fi
 
 cd "$PROJECT_ROOT"
-pnpm verify
+if [[ -n "$(git status --porcelain=v1 --untracked-files=no)" ]]; then
+  print -u2 "Release packages must be built from a clean tracked Git checkout."
+  exit 1
+fi
+RUNTIME_VERSION="$("$BUNDLED_NODE" -p 'require("./package.json").version')"
+GIT_COMMIT="$(git rev-parse HEAD)"
+RELEASE_IDENTITY="v${RUNTIME_VERSION}-rc.$(print -n "$GIT_COMMIT" | cut -c1-12)"
+EXPECTED_BASENAME="bpa-local-${RELEASE_IDENTITY}-macos-arm64.tar.gz"
+OUTPUT="${BPA_PACKAGE_OUTPUT:-$PROJECT_ROOT/artifacts/$EXPECTED_BASENAME}"
+OUTPUT="${OUTPUT:A}"
+if [[ "${OUTPUT:t}" != "$EXPECTED_BASENAME" ]]; then
+  print -u2 "Release archive must be named $EXPECTED_BASENAME."
+  print -u2 "Legacy or mismatched output names are refused and will not be overwritten."
+  exit 1
+fi
+if [[ -e "$OUTPUT" || -e "$OUTPUT.sha256" ]]; then
+  print -u2 "Release output already exists and will not be overwritten: $OUTPUT"
+  exit 1
+fi
+
+PATH="${BUNDLED_NODE:h}:$PATH" pnpm verify
+"$BUNDLED_NODE" --test "$PROJECT_ROOT/scripts/release-gates.check.mjs"
 PACKAGE_ROOT="$(mktemp -d)"
 trap 'rm -rf "$PACKAGE_ROOT"' EXIT
 mkdir -p "$PACKAGE_ROOT/bpa" "${OUTPUT:h}"
@@ -36,6 +56,9 @@ chmod 755 "$PACKAGE_ROOT/bpa/"*.sh
 )
 rm -rf "$PACKAGE_ROOT/verify-data"
 tar -C "$PACKAGE_ROOT" -czf "$OUTPUT" bpa
-shasum -a 256 "$OUTPUT" > "$OUTPUT.sha256"
+(
+  cd "${OUTPUT:h}"
+  shasum -a 256 "${OUTPUT:t}" > "${OUTPUT:t}.sha256"
+)
 "$PROJECT_ROOT/scripts/verify-package-macos-arm64.sh" "$OUTPUT"
 print "$OUTPUT"

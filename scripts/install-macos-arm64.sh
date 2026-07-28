@@ -9,11 +9,10 @@ else
   # Repository execution keeps the installer under scripts/.
   PROJECT_ROOT="${SCRIPT_ROOT:h}"
 fi
-VERSION="${BPA_INSTALL_VERSION:-0.3.0}"
+REQUESTED_VERSION="${BPA_INSTALL_VERSION:-}"
 USER_HOME="$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory | awk '{print $2}')"
 BPA_ROOT="$USER_HOME/Library/Application Support/BPA"
 RUNTIME_ROOT="$BPA_ROOT/runtime"
-VERSION_ROOT="$RUNTIME_ROOT/$VERSION"
 DATA_ROOT="$BPA_ROOT/data"
 DATA_DB="$DATA_ROOT/bpa.sqlite"
 BACKUP_ROOT="$BPA_ROOT/backups"
@@ -45,6 +44,25 @@ fi
 "$BUNDLED_NODE" \
   "$PACKAGED_RUNTIME/bin/bpa-runtime-verify.js" \
   "$PACKAGED_RUNTIME"
+RELEASE_SCAN_ROOT="$PACKAGED_RUNTIME"
+if [[ -d "$SCRIPT_ROOT/runtime" ]]; then
+  RELEASE_SCAN_ROOT="$PROJECT_ROOT"
+fi
+"$BUNDLED_NODE" \
+  "$PACKAGED_RUNTIME/bin/bpa-release-scan.js" \
+  "$RELEASE_SCAN_ROOT"
+VERSION="$(
+  "$BUNDLED_NODE" --input-type=module -e '
+    import { readFileSync } from "node:fs";
+    const manifest = JSON.parse(readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(manifest.release.identity);
+  ' "$PACKAGED_RUNTIME/runtime-manifest.json"
+)"
+if [[ -n "$REQUESTED_VERSION" && "$REQUESTED_VERSION" != "$VERSION" ]]; then
+  print -u2 "Requested install identity $REQUESTED_VERSION does not match package $VERSION."
+  exit 1
+fi
+VERSION_ROOT="$RUNTIME_ROOT/$VERSION"
 if [[ -e "$VERSION_ROOT" ]]; then
   print -u2 "Runtime $VERSION is already installed and will not be overwritten."
   exit 1
