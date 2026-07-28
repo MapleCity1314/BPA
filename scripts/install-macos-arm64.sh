@@ -1,7 +1,14 @@
 #!/bin/zsh
 set -euo pipefail
 
-PROJECT_ROOT="${0:A:h:h}"
+SCRIPT_ROOT="${0:A:h}"
+if [[ -d "$SCRIPT_ROOT/runtime" ]]; then
+  # Production archives place install.sh beside runtime/.
+  PROJECT_ROOT="$SCRIPT_ROOT"
+else
+  # Repository execution keeps the installer under scripts/.
+  PROJECT_ROOT="${SCRIPT_ROOT:h}"
+fi
 VERSION="${BPA_INSTALL_VERSION:-0.3.0}"
 USER_HOME="$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory | awk '{print $2}')"
 BPA_ROOT="$USER_HOME/Library/Application Support/BPA"

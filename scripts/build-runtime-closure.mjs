@@ -17,7 +17,9 @@ import { build } from "esbuild";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const outputRoot = resolve(process.argv[2] ?? "");
-const maximumBytes = Number(process.env.BPA_RUNTIME_MAX_BYTES ?? 80 * 1024 * 1024);
+const maximumBytes = Number(
+  process.env.BPA_RUNTIME_MAX_BYTES ?? 160 * 1024 * 1024
+);
 
 if (
   process.argv[2] === undefined ||
@@ -26,6 +28,15 @@ if (
   outputRoot === "/"
 ) {
   throw new Error("Provide a dedicated runtime closure output directory");
+}
+if (
+  process.platform !== "darwin" ||
+  process.arch !== "arm64" ||
+  process.versions.node.split(".")[0] !== "24"
+) {
+  throw new Error(
+    "Runtime closure must be built by the packaged Node.js 24 darwin-arm64 executable"
+  );
 }
 
 const entryPoints = {
@@ -68,9 +79,23 @@ async function packageDirectory(name, from) {
   return dirname(await realpath(packageJsonPath));
 }
 
-async function copyRuntimeDependency(name, from = repositoryRoot) {
+async function copyRuntimeDependency(name, files, from = repositoryRoot) {
   const source = await packageDirectory(name, from);
-  await copyDirectory(source, join(outputRoot, "node_modules", name));
+  for (const file of files) {
+    const sourcePath = join(source, file);
+    const metadata = await stat(sourcePath);
+    if (metadata.isDirectory()) {
+      await copyDirectory(
+        sourcePath,
+        join(outputRoot, "node_modules", name, file)
+      );
+    } else {
+      await copyFile(
+        sourcePath,
+        join(outputRoot, "node_modules", name, file)
+      );
+    }
+  }
   const metadata = JSON.parse(await readFile(join(source, "package.json"), "utf8"));
   return {
     name,
@@ -149,14 +174,26 @@ await copyDirectory(
   join(outputRoot, "assets/policies")
 );
 
-const betterSqlite = await copyRuntimeDependency("better-sqlite3");
+const betterSqlite = await copyRuntimeDependency("better-sqlite3", [
+  "package.json",
+  "LICENSE",
+  "lib",
+  "build/Release/better_sqlite3.node"
+]);
 const betterSqlitePath = await packageDirectory("better-sqlite3", repositoryRoot);
-const bindings = await copyRuntimeDependency("bindings", betterSqlitePath);
+const bindings = await copyRuntimeDependency(
+  "bindings",
+  ["package.json", "LICENSE.md", "bindings.js"],
+  betterSqlitePath
+);
 const bindingsPath = await packageDirectory("bindings", betterSqlitePath);
 const fileUriToPath = await copyRuntimeDependency(
   "file-uri-to-path",
+  ["package.json", "LICENSE", "index.js"],
   bindingsPath
 );
+await copyFile(process.execPath, join(outputRoot, "node/bin/node"));
+await chmod(join(outputRoot, "node/bin/node"), 0o755);
 
 const rootPackage = JSON.parse(
   await readFile(join(repositoryRoot, "package.json"), "utf8")

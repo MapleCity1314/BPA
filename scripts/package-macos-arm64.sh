@@ -18,12 +18,10 @@ cd "$PROJECT_ROOT"
 pnpm verify
 PACKAGE_ROOT="$(mktemp -d)"
 trap 'rm -rf "$PACKAGE_ROOT"' EXIT
-mkdir -p "$PACKAGE_ROOT/bpa/runtime/node/bin" "${OUTPUT:h}"
+mkdir -p "$PACKAGE_ROOT/bpa" "${OUTPUT:h}"
 "$BUNDLED_NODE" \
   "$PROJECT_ROOT/scripts/build-runtime-closure.mjs" \
   "$PACKAGE_ROOT/bpa/runtime"
-cp "$BUNDLED_NODE" "$PACKAGE_ROOT/bpa/runtime/node/bin/node"
-chmod 755 "$PACKAGE_ROOT/bpa/runtime/node/bin/node"
 cp "$PROJECT_ROOT/scripts/install-macos-arm64.sh" "$PACKAGE_ROOT/bpa/install.sh"
 cp "$PROJECT_ROOT/scripts/rollback-macos.sh" "$PACKAGE_ROOT/bpa/rollback.sh"
 cp "$PROJECT_ROOT/scripts/uninstall-macos.sh" "$PACKAGE_ROOT/bpa/uninstall.sh"
@@ -39,4 +37,5 @@ chmod 755 "$PACKAGE_ROOT/bpa/"*.sh
 rm -rf "$PACKAGE_ROOT/verify-data"
 tar -C "$PACKAGE_ROOT" -czf "$OUTPUT" bpa
 shasum -a 256 "$OUTPUT" > "$OUTPUT.sha256"
+"$PROJECT_ROOT/scripts/verify-package-macos-arm64.sh" "$OUTPUT"
 print "$OUTPUT"
