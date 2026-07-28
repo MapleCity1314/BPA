@@ -193,6 +193,9 @@ importers:
       '@bpa/dataset-core':
         specifier: workspace:*
         version: link:../../packages/dataset-core
+      '@bpa/packaging-dataset':
+        specifier: workspace:*
+        version: link:../../packages/packaging-dataset
       '@bpa/packaging-domain':
         specifier: workspace:*
         version: link:../../packages/packaging-domain
