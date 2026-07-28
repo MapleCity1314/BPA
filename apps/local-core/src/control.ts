@@ -48,6 +48,7 @@ import type { LocalBrowserGateway } from "./browser-gateway.js";
 import { Ir2WorkflowRuntime } from "./ir2-workflow-runtime.js";
 import { PersistenceTaskQueue } from "./persistence-task-queue.js";
 import { LocalAuthoringService } from "./authoring-service.js";
+import { PackagingDatasetService } from "./dataset-service.js";
 import {
   TEAM_WORKER_CODE_DIGEST,
   TEAM_WORKER_HANDLER_REFS
@@ -73,6 +74,7 @@ export class LocalCoreService {
   readonly ir2Runtime: Ir2WorkflowRuntime;
   readonly assistance: AssistanceTaskService;
   readonly authoring: LocalAuthoringService;
+  readonly datasets: PackagingDatasetService;
 
   constructor(
     readonly persistence: Persistence,
@@ -152,6 +154,7 @@ export class LocalCoreService {
       }
     });
     this.authoring = new LocalAuthoringService(persistence);
+    this.datasets = new PackagingDatasetService(persistence);
   }
 
   handle(request: ControlRequest): ControlResponse {
@@ -174,14 +177,26 @@ export class LocalCoreService {
   }
 
   async handleAsync(request: ControlRequest): Promise<ControlResponse> {
-    if (!request.method.startsWith("assistance.task.")) {
+    if (
+      !request.method.startsWith("assistance.task.") &&
+      request.method !== "dataset.import"
+    ) {
       return this.handle(request);
     }
     try {
-      const result = await this.#dispatchAssistance(
-        request,
-        request.params ?? {}
-      );
+      const params = request.params ?? {};
+      const result =
+        request.method === "dataset.import"
+          ? await this.datasets.import({
+              path: String(params.path),
+              id: String(params.id),
+              version: String(params.version),
+              actor: String(params.actor || userInfo().username),
+              ...(params.title === undefined
+                ? {}
+                : { title: String(params.title) })
+            })
+          : await this.#dispatchAssistance(request, params);
       return { id: request.id, ok: true, result };
     } catch (error) {
       return {
@@ -431,6 +446,19 @@ export class LocalCoreService {
           expectedRevision: Number(params.expectedRevision),
           candidateId: String(params.candidateId),
           now: new Date().toISOString()
+        });
+      case "dataset.inspect":
+        return this.datasets.get(String(params.id), String(params.version));
+      case "dataset.read":
+        return this.datasets.readPage({
+          id: String(params.id),
+          version: String(params.version),
+          ...(params.afterRecordKey === undefined
+            ? {}
+            : { afterRecordKey: String(params.afterRecordKey) }),
+          ...(params.limit === undefined
+            ? {}
+            : { limit: Number(params.limit) })
         });
       case "audit.list":
         return this.persistence.listAudit(

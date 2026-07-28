@@ -136,6 +136,9 @@ importers:
       '@bpa/control-protocol':
         specifier: workspace:*
         version: link:../../packages/control-protocol
+      '@bpa/dataset-core':
+        specifier: workspace:*
+        version: link:../../packages/dataset-core
       '@bpa/engine':
         specifier: workspace:*
         version: link:../../packages/engine
@@ -145,6 +148,9 @@ importers:
       '@bpa/node-runtime':
         specifier: workspace:*
         version: link:../../packages/node-runtime
+      '@bpa/packaging-dataset':
+        specifier: workspace:*
+        version: link:../../packages/packaging-dataset
       '@bpa/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
