@@ -1,9 +1,13 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  ControlClient,
+  UnixSocketControlTransport
+} from "@bpa/control-client";
 import { z } from "zod";
 import { stringify } from "yaml";
-import { sendControlRequest } from "@bpa/local-core/control";
-import { resolveBpaPaths } from "@bpa/local-core/paths";
 import type { ArtifactRecord } from "@bpa/persistence";
 import {
   diffArtifacts,
@@ -11,12 +15,20 @@ import {
   generateWorkflowDraft,
   simulateCompiledWorkflow
 } from "./authoring.js";
+import { assertMcpControlMethodAllowed } from "./policy.js";
 
 const server = new McpServer({
   name: "bpa-local",
   version: "0.3.0"
 });
-const socket = resolveBpaPaths().socket;
+const bpaRoot =
+  process.env.BPA_HOME ??
+  join(homedir(), "Library", "Application Support", "BPA");
+const socket =
+  process.env.BPA_CONTROL_SOCKET ?? join(bpaRoot, "run", "core.sock");
+const control = new ControlClient(new UnixSocketControlTransport(socket), {
+  timeoutMs: 10_000
+});
 
 function result(value: unknown) {
   return {
@@ -30,11 +42,12 @@ function result(value: unknown) {
   };
 }
 
-async function core(
+async function core<TResult = unknown>(
   method: string,
   params?: Record<string, unknown>
-): Promise<any> {
-  return sendControlRequest(socket, method, params);
+): Promise<TResult> {
+  assertMcpControlMethodAllowed(method);
+  return control.request<TResult>(method, params);
 }
 
 server.registerTool(
@@ -44,24 +57,289 @@ server.registerTool(
     description: "Search immutable published BPA nodes and workflows.",
     inputSchema: {
       query: z.string().default(""),
-      asset_type: z.enum(["node", "workflow", "adapter", "policy"]).optional()
+      asset_type: z.enum(["node", "workflow", "adapter", "policy"]).optional(),
+      capability: z.string().optional(),
+      platform: z.string().optional(),
+      runtime: z
+        .enum(["builtin", "browser", "team", "assistance", "composite"])
+        .optional(),
+      maximum_risk: z.enum(["R0", "R1", "R2", "R3", "R4"]).optional(),
+      permissions: z.array(z.string()).default([]),
+      adapter_ref: z.string().optional()
     }
   },
-  async ({ query, asset_type }) => {
-    const artifacts = (await core("catalog.list", {
+  async ({
+    query,
+    asset_type,
+    capability,
+    platform,
+    runtime,
+    maximum_risk,
+    permissions,
+    adapter_ref
+  }) => {
+    if (
+      capability ||
+      platform ||
+      runtime ||
+      maximum_risk ||
+      permissions.length > 0 ||
+      adapter_ref
+    ) {
+      return result(
+        await core("catalog.search.v2", {
+          query,
+          ...(asset_type ? { assetType: asset_type } : {}),
+          ...(capability ? { capability } : {}),
+          ...(platform ? { platform } : {}),
+          ...(runtime ? { runtime } : {}),
+          ...(maximum_risk ? { maximumRisk: maximum_risk } : {}),
+          ...(permissions.length > 0 ? { permissions } : {}),
+          ...(adapter_ref ? { adapterRef: adapter_ref } : {})
+        })
+      );
+    }
+    const artifacts = await core<ArtifactRecord[]>("catalog.list", {
       ...(asset_type ? { assetType: asset_type } : {})
-    })) as ArtifactRecord[];
+    });
     const needle = query.toLowerCase();
     return result(
-      artifacts.filter((artifact) =>
-        `${artifact.assetId} ${artifact.version} ${JSON.stringify(
-          artifact.content
-        )}`
-          .toLowerCase()
-          .includes(needle)
-      )
+      artifacts.filter((artifact) => {
+        const haystack =
+          `${artifact.assetId} ${artifact.version} ${JSON.stringify(
+            artifact.content
+          )}`.toLowerCase();
+        return haystack.includes(needle);
+      })
     );
   }
+);
+
+server.registerTool(
+  "task_list",
+  {
+    title: "List BPA assistance tasks",
+    description:
+      "List provider-neutral AI review and human assistance tasks available through Core.",
+    inputSchema: {
+      statuses: z
+        .array(
+          z.enum([
+            "queued",
+            "claimed",
+            "processing",
+            "awaiting_human",
+            "completed",
+            "expired",
+            "cancelled",
+            "failed"
+          ])
+        )
+        .optional(),
+      modes: z
+        .array(z.enum(["ai_review", "human_confirm", "human_action"]))
+        .optional(),
+      limit: z.number().int().min(1).max(1000).default(100)
+    }
+  },
+  async ({ statuses, modes, limit }) =>
+    result(
+      await core("assistance.task.list", {
+        ...(statuses ? { statuses } : {}),
+        ...(modes ? { modes } : {}),
+        limit
+      })
+    )
+);
+
+server.registerTool(
+  "task_claim",
+  {
+    title: "Claim BPA assistance task",
+    description:
+      "Claim one task with an actor-bound lease and fencing token. AI actors cannot claim human-only tasks.",
+    inputSchema: {
+      task_id: z.string(),
+      actor_id: z.string(),
+      actor_type: z.enum(["ai", "human"]).default("ai"),
+      lease_id: z.string(),
+      lease_duration_ms: z.number().int().min(1000).max(15 * 60 * 1000)
+    }
+  },
+  async ({
+    task_id,
+    actor_id,
+    actor_type,
+    lease_id,
+    lease_duration_ms
+  }) =>
+    result(
+      await core("assistance.task.claim", {
+        taskId: task_id,
+        actorId: actor_id,
+        actorType: actor_type,
+        leaseId: lease_id,
+        leaseDurationMs: lease_duration_ms
+      })
+    )
+);
+
+server.registerTool(
+  "task_heartbeat",
+  {
+    title: "Heartbeat BPA assistance lease",
+    description:
+      "Extend an active lease only when actor, lease id, and fencing token still match.",
+    inputSchema: {
+      task_id: z.string(),
+      actor_id: z.string(),
+      lease_id: z.string(),
+      fencing_token: z.number().int().positive(),
+      lease_duration_ms: z.number().int().min(1000).max(15 * 60 * 1000)
+    }
+  },
+  async ({
+    task_id,
+    actor_id,
+    lease_id,
+    fencing_token,
+    lease_duration_ms
+  }) =>
+    result(
+      await core("assistance.task.heartbeat", {
+        taskId: task_id,
+        actorId: actor_id,
+        leaseId: lease_id,
+        fencingToken: fencing_token,
+        leaseDurationMs: lease_duration_ms
+      })
+    )
+);
+
+server.registerTool(
+  "task_submit",
+  {
+    title: "Submit BPA assistance task",
+    description:
+      "Submit schema-validated output under the current lease. Core decides whether deterministic auto-continuation is allowed.",
+    inputSchema: {
+      task_id: z.string(),
+      actor_id: z.string(),
+      actor_type: z.enum(["ai", "human", "human_ai"]),
+      lease_id: z.string(),
+      fencing_token: z.number().int().positive(),
+      output: z.unknown(),
+      provider: z.string().optional(),
+      model: z.string().optional(),
+      confidence: z.number().min(0).max(1).optional()
+    }
+  },
+  async ({
+    task_id,
+    actor_id,
+    actor_type,
+    lease_id,
+    fencing_token,
+    output,
+    provider,
+    model,
+    confidence
+  }) =>
+    result(
+      await core("assistance.task.submit", {
+        taskId: task_id,
+        actorId: actor_id,
+        resolverType: actor_type,
+        leaseId: lease_id,
+        fencingToken: fencing_token,
+        output,
+        ...(provider ? { provider } : {}),
+        ...(model ? { model } : {}),
+        ...(confidence === undefined ? {} : { confidence })
+      })
+    )
+);
+
+server.registerTool(
+  "workflow_draft_create",
+  {
+    title: "Create incremental Workflow Draft",
+    description:
+      "Create an editable Workflow Draft. The draft remains non-executable and cannot be published by Codex.",
+    inputSchema: {
+      id: z.string(),
+      title: z.string(),
+      description: z.string()
+    }
+  },
+  async ({ id, title, description }) =>
+    result(
+      await core("authoring.workflow-draft.create", {
+        id,
+        title,
+        description,
+        actor: { type: "ai", id: "codex:mcp" }
+      })
+    )
+);
+
+server.registerTool(
+  "workflow_draft_get",
+  {
+    title: "Get Workflow Draft",
+    description: "Read one Workflow Draft and its current CAS revision.",
+    inputSchema: { draft_id: z.string() }
+  },
+  async ({ draft_id }) =>
+    result(
+      await core("authoring.workflow-draft.get", { draftId: draft_id })
+    )
+);
+
+server.registerTool(
+  "workflow_draft_apply",
+  {
+    title: "Apply Workflow Draft operation",
+    description:
+      "Apply one typed incremental edit using the expected revision. This never publishes.",
+    inputSchema: {
+      draft_id: z.string(),
+      expected_revision: z.number().int().nonnegative(),
+      operation: z.record(z.unknown())
+    }
+  },
+  async ({ draft_id, expected_revision, operation }) =>
+    result(
+      await core("authoring.workflow-draft.apply", {
+        draftId: draft_id,
+        expectedRevision: expected_revision,
+        operation,
+        actor: { type: "ai", id: "codex:mcp" }
+      })
+    )
+);
+
+server.registerTool(
+  "workflow_candidate_save",
+  {
+    title: "Save Workflow Candidate",
+    description:
+      "Freeze a validated Draft revision as a Candidate. Codex cannot publish it.",
+    inputSchema: {
+      draft_id: z.string(),
+      expected_revision: z.number().int().nonnegative(),
+      candidate_id: z.string()
+    }
+  },
+  async ({ draft_id, expected_revision, candidate_id }) =>
+    result(
+      await core("authoring.workflow-candidate.save", {
+        draftId: draft_id,
+        expectedRevision: expected_revision,
+        candidateId: candidate_id,
+        actor: { type: "ai", id: "codex:mcp" }
+      })
+    )
 );
 
 server.registerTool(
@@ -269,26 +547,35 @@ server.registerTool(
     }
   },
   async ({ workflow }) => {
-    const validation = await core("asset.validate", {
+    const validation = await core<{
+      valid: boolean;
+      errors?: string[];
+      compiled?: {
+        start: string;
+        nodes: Record<
+          string,
+          {
+            nodeId: string;
+            nodeVersion: string;
+            next?: string;
+            on: Record<string, string>;
+          }
+        >;
+      };
+    }>("asset.validate", {
       assetType: "workflow",
       content: workflow
     });
     if (!validation.valid) return result(validation);
-    const compiled = validation.compiled as {
-      start: string;
-      nodes: Record<
-        string,
-        {
-          nodeId: string;
-          nodeVersion: string;
-          next?: string;
-          on: Record<string, string>;
-        }
-      >;
-    };
+    if (!validation.compiled) {
+      return result({
+        valid: false,
+        errors: ["Core did not return a compiled Workflow"]
+      });
+    }
     return result({
       valid: true,
-      ...simulateCompiledWorkflow(compiled)
+      ...simulateCompiledWorkflow(validation.compiled)
     });
   }
 );

@@ -5,7 +5,7 @@
   "type": "module",
   "dependencies": {
     "@bpa/compiler": "workspace:*",
-    "@bpa/local-core": "workspace:*",
+    "@bpa/control-client": "workspace:*",
     "@bpa/persistence": "workspace:*",
     "@bpa/schemas": "workspace:*",
     "@modelcontextprotocol/sdk": "1.29.0",
