@@ -14,6 +14,7 @@ description: 将 BPA Catalog 中缺失的稳定业务能力设计、生成或升
 3. 必须读取真实页面 DOM 时选择 `browser`，实现归属经过审查的 Adapter。
 4. 必须执行确定性公司逻辑时选择 `engine_team`；只允许安装包内、摘要固定、Handler 白名单中的审核代码。
 5. 需要 AI 分析、人工确认或人工操作时选择 `assistance`，并区分 `ai_review`、`human_confirm` 和 `human_action`。
+   优先复用已发布 Profile：包装歧义 `packaging_match_review`、长期绑定 `binding_confirm`、范围确认 `scope_review`、登录风控 `auth_takeover`、结构异常 `adapter_anomaly_review`。
 6. 仍不清楚契约时先调用 `node_requirement_create`，不要伪造 Node。
 
 ## 编写契约

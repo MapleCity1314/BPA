@@ -14,7 +14,7 @@ Candidate；正式发布必须由用户通过 CLI 确认。
 2. 先用 Catalog v2 按能力、平台、输入输出、风险、权限和 Adapter 版本搜索已有 Workflow、Recipe 和 Node。只使用完整 `node_id@semver`；不得猜测 Node、版本或权限。
 3. 读取 [risk-and-routing.md](references/risk-and-routing.md)，确定 Workflow 风险、失败出口、人工点和 `uncertain` 处理。
 4. 创建带 revision 的小型 Workflow Draft。每次用 CAS 只增加或修改一个 Step、绑定、测试或异常策略；冲突后先读取最新 revision，不覆盖并发修改。
-5. 使用 v1alpha2 的 `call`、`decision`、顺序 `foreach`、`wait.assistance` 和 `terminal`。绑定只允许 `${input...}`、`${steps.<key>.output...}`；foreach 内还允许 `${item...}`、`${index...}`。不得写 `${previous...}`。
+5. 使用 v1alpha2 的 `call`、`decision`、顺序 `foreach`、`wait.assistance` 和 `terminal`。绑定只允许 `${input...}`、`${steps.<key>.output...}`；foreach 内允许 `${item...}`。当前 Compiler 禁止 `${index...}` 进入执行身份或业务绑定，也不得写 `${previous...}`。
 6. 为每个外部动作补齐超时、有限重试和明确异常处理；为 foreach 固定 `itemKey`、`maxItems`、`maxDuration` 和 `onItemError`。
 7. 依次校验 Candidate、模拟代表性样例并查看语义 diff。输出候选身份、执行图、权限并集、风险等级、成功/异常测试、CapabilityGap 和人工确认事项。
 
@@ -28,13 +28,16 @@ Candidate；正式发布必须由用户通过 CLI 确认。
 - Catalog 缺能力时，记录 CapabilityGap，调用 `node_requirement_create`，再切换到 `$bpa-node-authoring`。页面元素预定位属于 Browser Node / Adapter 创作，不属于 Workflow。不得生成临时代码绕过 Catalog。
 - AI/Codex 只能保存 Candidate，不能批准或发布；长期绑定、R2+ 动作和正式资产始终要求人工确认。
 - Candidate 未通过代表性输入、每条异常边、权限审查和人工批准前，不得发布。
+- 临时只运行一个现有能力时，不创建一次性 Workflow：先执行 `bpa node-preview <id> --version <semver> --input '<json>'`，再使用 `bpa run-node`。Core 只接受已发布的 R0/R1 Node、冻结输入摘要和权限闭包；R1 要求 `--yes`，R2+ 必须回到正式 Workflow 审批。
 
 ## 结构选择
 
 - 单个稳定能力：`call`。
 - 确定性真假路由：`decision`，只用受限条件对象。
 - 有界集合：顺序 `foreach`；需要完整结果时用 `collect`，安全门禁失败时用 `stop`。
-- AI 分析或人工确认/操作：`wait.assistance`，引用精确 Assistance Profile 版本。
+- AI 歧义分析：`packaging_match_review@1.0.0`；长期绑定确认：`binding_confirm@1.0.0`。
+- 店铺/范围确认、登录风控接管、Adapter 异常分类分别使用 `scope_review@1.0.0`、`auth_takeover@1.0.0`、`adapter_anomaly_review@1.0.0`。
+- 其他 AI 分析或人工确认/操作：`wait.assistance`，引用精确 Assistance Profile 版本。
 - 明确结局：`terminal`，区分 `succeeded`、`failed`、`cancelled`、`uncertain`。
 
 在交付前按 [review-checklist.md](references/review-checklist.md) 完成检查。

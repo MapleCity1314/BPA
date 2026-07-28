@@ -37,9 +37,9 @@
 
 ## 常见模式
 
-- 单节点临时调用：当前主闭环不内联临时代码；使用已发布 Node 组成最小 Workflow Candidate。
+- 单节点临时调用：先 `bpa node-preview`，再用 `bpa run-node` 执行 Core 生成的有界包装器；不要创建一次性 Workflow Candidate。只允许已发布 R0/R1 Node，R1 要明确确认，R2+ 回到正式 Workflow。
 - 需要协助：选择 `ai_review`、`human_confirm` 或 `human_action`，不统一写成批准。
-- 等待外部变化：使用持久化 wait/poll，不使用长 sleep。
+- 等待外部变化：当前不要生成 `poll` 或长 sleep；记录 CapabilityGap，等待持久化 Timer/Poll 能力正式开放。
 - 集合处理：使用顺序 foreach，设置稳定 `itemKey`、上限、总时限和错误聚合策略。
 - 页面定位缺失：创建 NodeRequirement 和 ElementContract 候选，不污染 Workflow。
 
@@ -50,8 +50,8 @@ ${input.dataset}
 ${steps.shop_context.output.shop.id}
 ${steps.collect_products.output.products}
 ${item.id}
-${index}
 ```
 
-只允许从输入、已完成 Step 输出和当前 foreach 作用域读取。不要使用
+只允许从输入、已完成 Step 输出和当前 foreach item 读取。当前不要使用 `${index}`；
+它不允许参与稳定执行身份或普通绑定。不要使用
 `${previous}`、CSS、XPath、坐标、函数、模板表达式或 JavaScript。

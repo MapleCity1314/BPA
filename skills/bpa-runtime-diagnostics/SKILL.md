@@ -30,10 +30,11 @@ description: 诊断 BPA 本地 Core、SQLite、Native Host、Browser Protocol、
 
 ```text
 bpa doctor
-bpa catalog --asset-type node
+bpa catalog --type node
 bpa inspect <run-id>
 bpa events <run-id>
 bpa audit --target <asset-or-run>
+bpa node-preview <node-id> --version <semver> --input '<json>'
 ~/Library/Logs/BPA/core.stderr.log
 ~/Library/Logs/BPA/native-host.stderr.log
 ```
