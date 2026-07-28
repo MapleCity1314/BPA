@@ -6,7 +6,7 @@ metadata:
   title: 抖店重点项只读检查
   description: 从不可变包装主数据开始，完整采集当前范围，批量匹配，并逐商品打开编辑页执行只读重点项检查。
 spec:
-  riskLevel: R0
+  riskLevel: R2
   inputSchema:
     type: object
     additionalProperties: false
@@ -148,10 +148,7 @@ spec:
                         - key: review_ambiguities
                           kind: wait.assistance
                           use: packaging_match_review@1.0.0
-                          with:
-                            shopId: ${steps.read_shop.output.shop.id}
-                            dataset: ${steps.read_dataset.output.dataset}
-                            ambiguities: ${steps.match_packaging.output.ambiguous}
+                          with: ${steps.match_packaging.output.ambiguityReview}
                           blocking: false
                           deadline: 10m
                           onUnavailable: continue_unresolved

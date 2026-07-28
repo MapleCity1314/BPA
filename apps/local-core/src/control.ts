@@ -53,6 +53,8 @@ import { Ir2WorkflowRuntime } from "./ir2-workflow-runtime.js";
 import { PersistenceTaskQueue } from "./persistence-task-queue.js";
 import { LocalAuthoringService } from "./authoring-service.js";
 import { PackagingDatasetService } from "./dataset-service.js";
+import { DatasetRuntimeProvider } from "./dataset-runtime-provider.js";
+import { PACKAGING_DATASET_PROFILE } from "@bpa/packaging-dataset";
 import {
   TEAM_WORKER_CODE_DIGEST,
   TEAM_WORKER_HANDLER_REFS
@@ -86,12 +88,16 @@ export class LocalCoreService {
     runtimeProviders?: RuntimeProviderRegistry
   ) {
     this.engine = new LocalWorkflowEngine(persistence);
+    this.datasets = new PackagingDatasetService(persistence);
     const providers = runtimeProviders ?? new RuntimeProviderRegistry();
     if (!providers.list().includes("builtin")) {
       providers.register(new BuiltinRuntimeProvider());
     }
     if (browserGateway && !providers.list().includes("browser")) {
       providers.register(browserGateway);
+    }
+    if (!providers.list().includes("dataset")) {
+      providers.register(new DatasetRuntimeProvider(this.datasets));
     }
     if (!providers.list().includes("team")) {
       const packagedWorker = resolve(
@@ -173,7 +179,6 @@ export class LocalCoreService {
       }
     });
     this.authoring = new LocalAuthoringService(persistence);
-    this.datasets = new PackagingDatasetService(persistence);
   }
 
   handle(request: ControlRequest): ControlResponse {
@@ -939,7 +944,10 @@ export class LocalCoreService {
               )[0]
           : undefined;
         return {
-          providerId: definition.runtime.replace(/^engine_/, ""),
+          providerId:
+            id === "dataset.records.read"
+              ? "dataset"
+              : definition.runtime.replace(/^engine_/, ""),
           adapters: adapter
             ? [
                 {
@@ -951,7 +959,17 @@ export class LocalCoreService {
               ]
             : [],
           policies: [],
-          datasetProfiles: []
+          datasetProfiles:
+            id === "dataset.records.read"
+              ? [
+                  {
+                    kind: "dataset_profile" as const,
+                    id: PACKAGING_DATASET_PROFILE.id,
+                    version: PACKAGING_DATASET_PROFILE.version,
+                    digest: contentDigest(PACKAGING_DATASET_PROFILE)
+                  }
+                ]
+              : []
         };
       },
       getAssistanceProfile: (id, version) => {

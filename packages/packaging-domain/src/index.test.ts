@@ -187,6 +187,45 @@ describe("packaging matching", () => {
     expect(outcome.candidates).toHaveLength(2);
   });
 
+  it("freezes one opaque deterministic review batch for ambiguous products", () => {
+    const product = normalizePackagingProducts("shop-1", [
+      {
+        id: "20001",
+        title: "【榆园】东北酸菜丝500g",
+        editorUrl:
+          "https://fxg.jinritemai.com/ffa/g/create?product_id=20001"
+      }
+    ]).products;
+    const result = matchPackagingInspectionBatch(product, [
+      record({ id: "record-1", sourceRow: 2 }),
+      record({ id: "record-2", sourceRow: 3 })
+    ]);
+
+    expect(result.ambiguityReview).toMatchObject({
+      batchRef: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+      items: [
+        {
+          productRef: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+          productId: "20001",
+          candidates: [
+            {
+              candidateRef: expect.stringMatching(
+                /^sha256:[a-f0-9]{64}$/u
+              ),
+              recordId: "record-1"
+            },
+            {
+              candidateRef: expect.stringMatching(
+                /^sha256:[a-f0-9]{64}$/u
+              ),
+              recordId: "record-2"
+            }
+          ]
+        }
+      ]
+    });
+  });
+
   it("matches the proven long-title acid-vegetable case but rejects a prepared dish", () => {
     const acid = record({
       id: "acid",

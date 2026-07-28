@@ -23,8 +23,11 @@ import { describe, expect, it } from "vitest";
 
 const root = new URL("../../../", import.meta.url);
 
-function loadYaml(path: string): unknown {
-  return parseWorkflowYaml(readFileSync(new URL(path, root), "utf8"));
+function loadAsset(path: string): unknown {
+  const source = readFileSync(new URL(path, root), "utf8");
+  return path.endsWith(".json")
+    ? JSON.parse(source)
+    : parseWorkflowYaml(source);
 }
 
 function catalog(): CatalogResolver {
@@ -32,7 +35,7 @@ function catalog(): CatalogResolver {
     readdirSync(new URL("nodes/core/", root))
       .filter((name) => name.endsWith(".node.yaml"))
       .map((name) => {
-        const node = loadYaml(`nodes/core/${name}`) as NodeDefinition;
+        const node = loadAsset(`nodes/core/${name}`) as NodeDefinition;
         if (!validateNode(node)) {
           throw new Error(
             `${name}: ${formatValidationErrors(validateNode.errors).join("; ")}`
@@ -58,10 +61,10 @@ function catalog(): CatalogResolver {
   };
   const assistanceProfiles = new Map(
     [
-      "packaging_match_review.assistance.yaml",
-      "binding_confirm.assistance.yaml"
+      "core/packaging_match_review.assistance-profile.json",
+      "core/binding_confirm.assistance-profile.yaml"
     ].map((name) => {
-      const profile = loadYaml(
+      const profile = loadAsset(
         `assistance-profiles/${name}`
       ) as AssistanceProfileDefinition;
       if (!validateAssistanceProfile(profile)) {
@@ -111,7 +114,7 @@ function catalog(): CatalogResolver {
 }
 
 function compilePriorityWorkflow() {
-  const workflow = loadYaml(
+  const workflow = loadAsset(
     "workflows/examples/doudian.priority-items-readonly-inspect.workflow.yaml"
   );
   expect(
@@ -198,6 +201,12 @@ describe("priority-items readonly workflow asset", () => {
       kind: "wait.assistance",
       taskKind: "ai_review",
       blocking: false,
+      input: {
+        kind: "reference",
+        source: "step_output",
+        stepKey: "match_packaging",
+        path: ["ambiguityReview"]
+      },
       next: "confirm_bindings"
     });
     expect(plan.steps.confirm_bindings).toMatchObject({

@@ -114,6 +114,18 @@ export interface PackagingBatchResult {
 
 export interface PackagingInspectionBatchResult extends PackagingBatchResult {
   readonly inspectionQueue: readonly PackagingInspectionQueueItem[];
+  readonly ambiguityReview: {
+    readonly batchRef: string;
+    readonly items: readonly {
+      readonly productRef: string;
+      readonly productId: string;
+      readonly candidates: readonly {
+        readonly candidateRef: string;
+        readonly recordId: string;
+        readonly recordDigest: string;
+      }[];
+    }[];
+  };
 }
 
 function normalizeWhitespace(value: string): string {
@@ -596,9 +608,43 @@ export function matchPackagingInspectionBatch(
       })
     });
   });
+  const reviewItems = result.ambiguous.map(({ product, outcome }) => {
+    const productRef = digestPackagingValue({
+      shopId: product.shopId,
+      productId: product.productId,
+      title: product.title,
+      matcherVersion: result.matcherVersion
+    });
+    return Object.freeze({
+      productRef,
+      productId: product.productId,
+      candidates: Object.freeze(
+        outcome.candidates.slice(0, 10).map((candidate) =>
+          Object.freeze({
+            candidateRef: digestPackagingValue({
+              productRef,
+              recordId: candidate.record.id,
+              recordDigest: candidate.record.recordDigest,
+              score: candidate.score
+            }),
+            recordId: candidate.record.id,
+            recordDigest: candidate.record.recordDigest
+          })
+        )
+      )
+    });
+  });
+  const ambiguityReview = Object.freeze({
+    batchRef: digestPackagingValue({
+      matcherVersion: result.matcherVersion,
+      items: reviewItems
+    }),
+    items: Object.freeze(reviewItems)
+  });
   return Object.freeze({
     ...result,
-    inspectionQueue: Object.freeze(inspectionQueue)
+    inspectionQueue: Object.freeze(inspectionQueue),
+    ambiguityReview
   });
 }
 

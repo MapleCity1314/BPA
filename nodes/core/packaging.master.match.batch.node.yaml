@@ -58,6 +58,7 @@ outputSchema:
     - ambiguous
     - unmatched
     - inspectionQueue
+    - ambiguityReview
   properties:
     matcherVersion:
       type: string
@@ -77,6 +78,52 @@ outputSchema:
       maxItems: 500
       items:
         type: object
+    ambiguityReview:
+      type: object
+      additionalProperties: false
+      required:
+        - batchRef
+        - items
+      properties:
+        batchRef:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        items:
+          type: array
+          maxItems: 500
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - productRef
+              - productId
+              - candidates
+            properties:
+              productRef:
+                type: string
+                pattern: ^sha256:[a-f0-9]{64}$
+              productId:
+                type: string
+              candidates:
+                type: array
+                minItems: 1
+                maxItems: 10
+                items:
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - candidateRef
+                    - recordId
+                    - recordDigest
+                  properties:
+                    candidateRef:
+                      type: string
+                      pattern: ^sha256:[a-f0-9]{64}$
+                    recordId:
+                      type: string
+                    recordDigest:
+                      type: string
+                      pattern: ^sha256:[a-f0-9]{64}$
     inspectionQueue:
       type: array
       maxItems: 500
