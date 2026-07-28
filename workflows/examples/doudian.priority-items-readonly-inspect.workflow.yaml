@@ -29,6 +29,8 @@ spec:
             minLength: 1
       platformFillCheck:
         type: boolean
+        const: false
+        description: 当前只读版本不主动点击平台“填写检查”；必须保持关闭。
   outputSchema:
     type: object
     additionalProperties: false

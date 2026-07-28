@@ -100,6 +100,20 @@ describe("Local Core IR2 control integration", () => {
         }
       })
     ).toMatchObject({ ok: true });
+    expect(
+      service.handle({
+        id: "run-invalid-input",
+        method: "run.create",
+        params: {
+          workflowId: workflow.metadata.id,
+          workflowVersion: workflow.metadata.version,
+          input: []
+        }
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("Workflow input is invalid") }
+    });
     const created = service.handle({
       id: "run",
       method: "run.create",

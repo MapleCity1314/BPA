@@ -953,6 +953,23 @@ export class LocalCoreService {
         `Published workflow not found: ${workflowId}@${workflowVersion}`
       );
     }
+    const safeInput = JSON.parse(JSON.stringify(input)) as JsonValue;
+    const workflowInputSchema = (
+      artifact.content as {
+        spec?: { inputSchema?: Record<string, unknown> };
+      }
+    ).spec?.inputSchema;
+    if (!workflowInputSchema) {
+      throw new Error("Published Workflow has no frozen input Schema");
+    }
+    const validateInput = compileDataValidator(workflowInputSchema);
+    if (!validateInput(safeInput)) {
+      throw new Error(
+        `Workflow input is invalid: ${formatValidationErrors(
+          validateInput.errors
+        ).join("; ")}`
+      );
+    }
     const isV1Alpha2 =
       artifact.content !== null &&
       typeof artifact.content === "object" &&
@@ -961,11 +978,11 @@ export class LocalCoreService {
     if (isV1Alpha2) {
       return this.ir2Runtime.start(
         compileCanonicalWorkflow(artifact.content, this.#ir2Catalog()),
-        JSON.parse(JSON.stringify(input))
+        safeInput
       );
     }
     const compiled = compileWorkflow(artifact.content, this.#nodeCatalog());
-    const run = this.engine.start(compiled, input);
+    const run = this.engine.start(compiled, safeInput);
     this.browserGateway?.dispatchPending();
     return run;
   }
