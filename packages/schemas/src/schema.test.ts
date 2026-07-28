@@ -130,6 +130,52 @@ describe("strong iteration contract schemas", () => {
     expect(validateWorkflowV1Alpha2(unbounded)).toBe(false);
   });
 
+  it("accepts structured decisions and rejects executable browser primitives", () => {
+    const source = readFileSync(
+      new URL(
+        "../../../docs/protocols/examples/workflow-v1alpha2.example.yaml",
+        import.meta.url
+      ),
+      "utf8"
+    );
+    const workflow = parse(source) as Record<string, any>;
+    workflow.spec.root.steps.splice(1, 0, {
+      key: "has_products",
+      kind: "decision",
+      condition: {
+        kind: "compare",
+        operator: "exists",
+        left: {
+          kind: "binding",
+          binding: "${steps.collect.output.products}"
+        }
+      },
+      then: {
+        kind: "sequence",
+        steps: [{ key: "yes", kind: "terminal", status: "succeeded" }]
+      },
+      else: {
+        kind: "sequence",
+        steps: [{ key: "no", kind: "terminal", status: "failed" }]
+      }
+    });
+    expect(validateWorkflowV1Alpha2(workflow)).toBe(true);
+
+    const executable = structuredClone(workflow);
+    executable.spec.root.steps[0].with = {
+      selector: "#unsafe",
+      script: "return document.body"
+    };
+    expect(validateWorkflowV1Alpha2(executable)).toBe(false);
+
+    const invalidExists = structuredClone(workflow);
+    invalidExists.spec.root.steps[1].condition.right = {
+      kind: "literal",
+      value: true
+    };
+    expect(validateWorkflowV1Alpha2(invalidExists)).toBe(false);
+  });
+
   it("accepts AssistanceTask and Dataset examples", () => {
     expect(
       validateAssistanceTask(

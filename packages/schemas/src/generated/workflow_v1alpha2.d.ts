@@ -6,8 +6,32 @@ export type RiskLevel = "R0" | "R1" | "R2" | "R3" | "R4";
 export type Step = CallStep | DecisionStep | ForeachStep | AssistanceStep | TerminalStep;
 export type StepKey = string;
 export type NodeRef = string;
+export type SafeValue =
+  | null
+  | boolean
+  | number
+  | string
+  | SafeValue[]
+  | {
+      [k: string]: SafeValue;
+    };
 export type Duration = string;
-export type Expression = string;
+export type Condition =
+  | {
+      [k: string]: unknown;
+    }
+  | {
+      kind: "all" | "any";
+      /**
+       * @minItems 1
+       * @maxItems 50
+       */
+      conditions: Condition[];
+    }
+  | {
+      kind: "not";
+      condition: Condition;
+    };
 export type Binding = string;
 export type Identifier = string;
 
@@ -47,7 +71,7 @@ export interface CallStep {
   key: StepKey;
   kind: "call";
   use: NodeRef;
-  with?: unknown;
+  with?: SafeValue;
   timeout?: Duration;
   retry?: Retry;
   timing?: BPATimingPolicyV1;
@@ -95,7 +119,7 @@ export interface Handlers {
 export interface DecisionStep {
   key: StepKey;
   kind: "decision";
-  expression: Expression;
+  condition: Condition;
   then: Block;
   else: Block;
   description?: string;
@@ -117,7 +141,7 @@ export interface AssistanceStep {
   key: StepKey;
   kind: "wait.assistance";
   use: NodeRef;
-  with?: unknown;
+  with?: SafeValue;
   blocking: boolean;
   deadline?: Duration;
   onUnavailable: "continue_unresolved" | "human_action" | "fail";
@@ -128,7 +152,7 @@ export interface TerminalStep {
   key: StepKey;
   kind: "terminal";
   status: "succeeded" | "failed" | "cancelled" | "uncertain";
-  output?: unknown;
+  output?: SafeValue;
   error?: {
     code: string;
     message: string;

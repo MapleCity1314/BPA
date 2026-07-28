@@ -173,6 +173,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/gateway-core
 
+  packages/assistance-core: {}
+
   packages/browser-bridge:
     dependencies:
       '@bpa/schemas':
@@ -194,6 +196,8 @@ importers:
       yaml:
         specifier: ^2.8.1
         version: 2.9.0
+
+  packages/dataset-core: {}
 
   packages/engine:
     dependencies:
@@ -221,8 +225,18 @@ importers:
       '@bpa/schemas':
         specifier: workspace:*
         version: link:../schemas
+      '@bpa/workflow-ir':
+        specifier: workspace:*
+        version: link:../workflow-ir
 
-  packages/persistence: {}
+  packages/persistence:
+    dependencies:
+      '@bpa/schemas':
+        specifier: workspace:*
+        version: link:../schemas
+      '@bpa/workflow-ir':
+        specifier: workspace:*
+        version: link:../workflow-ir
 
   packages/persistence-sqlite:
     dependencies:
@@ -234,6 +248,8 @@ importers:
         version: 12.10.0
 
   packages/schemas: {}
+
+  packages/workflow-ir: {}
 
 packages:
 

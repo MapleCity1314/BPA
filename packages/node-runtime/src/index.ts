@@ -1,4 +1,109 @@
 import type { RiskSignal, TimingPolicy } from "@bpa/schemas";
+import type {
+  ArtifactRef,
+  ExecutionIdentity,
+  JsonValue
+} from "@bpa/workflow-ir";
+
+/**
+ * Provider-neutral invocation persisted before dispatch. Engine code selects a
+ * provider by id through the registry; it never branches on runtime kind.
+ */
+export interface RuntimeInvocation {
+  readonly invocationId: string;
+  readonly identity: ExecutionIdentity;
+  readonly node: ArtifactRef & { readonly kind: "node" };
+  readonly providerId: string;
+  readonly input: JsonValue;
+  readonly permissionSnapshot: JsonValue;
+  readonly deadlineAt: number;
+  readonly idempotencyKey: string;
+  readonly fencingToken: number;
+  readonly traceId: string;
+}
+
+export interface RuntimeError {
+  readonly code: string;
+  readonly message: string;
+  readonly retryable: boolean;
+  readonly details?: JsonValue;
+}
+
+export interface RuntimeEvidenceRef {
+  readonly evidenceId: string;
+  readonly digest: string;
+  readonly classification: "public" | "internal" | "sensitive";
+}
+
+export type RuntimeOutcome =
+  | {
+      readonly status: "succeeded";
+      readonly output: JsonValue;
+      readonly evidence: readonly RuntimeEvidenceRef[];
+      readonly riskSignals: readonly RiskSignal[];
+    }
+  | {
+      readonly status:
+        | "failed"
+        | "rejected"
+        | "timed_out"
+        | "cancelled"
+        | "uncertain";
+      readonly error: RuntimeError;
+      readonly output?: JsonValue;
+      readonly evidence: readonly RuntimeEvidenceRef[];
+      readonly riskSignals: readonly RiskSignal[];
+    };
+
+export interface RuntimeProvider {
+  readonly id: string;
+  supports(node: ArtifactRef & { readonly kind: "node" }): boolean;
+  invoke(
+    invocation: RuntimeInvocation,
+    signal: AbortSignal
+  ): Promise<RuntimeOutcome>;
+  cancel?(invocationId: string, fencingToken: number): Promise<void>;
+}
+
+export class RuntimeProviderRegistry {
+  readonly #providers = new Map<string, RuntimeProvider>();
+
+  register(provider: RuntimeProvider): void {
+    const id = provider.id.trim();
+    if (id.length === 0) {
+      throw new Error("Runtime provider id must not be empty");
+    }
+    if (this.#providers.has(id)) {
+      throw new Error(`Runtime provider already registered: ${id}`);
+    }
+    this.#providers.set(id, provider);
+  }
+
+  get(providerId: string): RuntimeProvider {
+    const provider = this.#providers.get(providerId);
+    if (!provider) {
+      throw new Error(`Runtime provider is not registered: ${providerId}`);
+    }
+    return provider;
+  }
+
+  resolve(
+    providerId: string,
+    node: ArtifactRef & { readonly kind: "node" }
+  ): RuntimeProvider {
+    const provider = this.get(providerId);
+    if (!provider.supports(node)) {
+      throw new Error(
+        `Runtime provider ${providerId} does not support ${node.id}@${node.version}`
+      );
+    }
+    return provider;
+  }
+
+  list(): readonly string[] {
+    return [...this.#providers.keys()].sort();
+  }
+}
 
 export interface EffectiveTimingPolicy {
   readiness?: {

@@ -38,6 +38,14 @@ sequence
 - `${item...}`
 - `${index}`
 
+`decision` 不接收表达式字符串，而使用 `compare`、`all`、`any`、`not`
+组成的结构化条件树。比较两侧只能是显式 binding 或 JSON literal，不能传入
+JavaScript、模板代码或动态求值表达式。
+
+`with` 和 `terminal.output` 是受限 JSON。Schema 先拒绝 selector、XPath、
+坐标和脚本类保留键；Compiler 还必须结合目标 Node 的 input Schema 和权限
+声明校验。Workflow 无法借普通参数绕过 Adapter 边界。
+
 Step key 在当前作用域内唯一。`foreach` 的 `itemKey` 必须在冻结的输入集合中
 唯一且稳定。数组下标不能单独作为长期身份。
 
@@ -56,6 +64,8 @@ Step key 在当前作用域内唯一。`foreach` 的 `itemKey` 必须在冻结�
 - `blocking=false` 只创建后续任务，不改变 Run 的执行游标。
 - Provider 不可用时只能使用已发布 Profile 中固定的
   `continue_unresolved`、`human_action` 或 `fail`。
+- 非阻塞 Task 创建后沿 `next` 立即继续；它后续完成只能写 Task、Event 和
+  Audit，不能倒推或重新推进已经前行的 Run。
 
 ## 3. IR2 与恢复
 
@@ -65,6 +75,11 @@ Compiler 将 v1alpha1 和 v1alpha2 都编译为 IR2。创建 Run 时固化：
 - Workflow source digest。
 - 风险快照。
 - 所有 Node、Adapter 和 Policy 的精确版本与摘要。
+
+IR 标识固定为 `bpa.workflow-ir/2`。每个 `call` 固化 timeout、retry、timing、
+Runtime Provider、权限快照引用以及各类终态路由；每个 `foreach` 固化
+`maxItems`、`maxDuration`、`onItemError` 和聚合语义；每个
+`wait.assistance` 固化 blocking、deadline 和 provider-unavailable 策略。
 
 Engine 恢复时不重新选择资产。Step attempt 身份为：
 
@@ -95,12 +110,19 @@ queued / claimed / processing → expired | cancelled | failed
 Claim 使用可续租 Lease 和递增 fencing token。Lease 过期后可被重新认领；旧
 owner 的提交必须拒绝。
 
+`processing` 只能由当前 Lease owner 从 `claimed` 进入。AI 结果需要人复核时
+进入 `awaiting_human`，并发放新的递增 fencing token；任何 terminal 状态都
+不能再次认领或提交。
+
 AI 是否自动推进由发布策略决定：
 
 - R0 Profile 可选择自动推进。
 - R1 还需要白名单和确定性结果验证器。
 - R2+、durable decision 和未来写授权必须人工确认。
 - confidence 不提供权限。
+
+这里的“可选择”由发布 Profile 产生的 `policySnapshot.autoContinue` 明确
+记录；没有该快照或快照为 false 时，即使是 R0 也不能自动推进。
 
 ## 5. Dataset 与 Decision
 
@@ -120,6 +142,10 @@ source file
 DecisionRecord 可撤销或被新记录替代。复用必须精确匹配记录声明的 scope 和
 precondition digests。包装绑定至少包含店铺、商品、规范化标题、目标记录、
 matcher 和 rule 版本；Excel 中无关记录改变不会导致绑定失效。
+
+未经过人工确认的对象称为 `DecisionCandidate`，不是 DecisionRecord。只有
+确认后才创建 `active` DecisionRecord；被替代或撤销后分别进入
+`superseded`、`revoked`，两者都不可复用。
 
 ## 6. PageModel 与 Adapter
 

@@ -9,8 +9,10 @@ import {
   mergeTimingPolicy,
   resolveBindings,
   reserveRateLimit,
+  RuntimeProviderRegistry,
   timingPolicyIssues
 } from "./index.js";
+import type { RuntimeProvider } from "./index.js";
 
 const policy = mergeTimingPolicy(
   {
@@ -25,6 +27,50 @@ const policy = mergeTimingPolicy(
   },
   undefined
 );
+
+describe("runtime provider registry", () => {
+  const provider = (id: string, supported = true): RuntimeProvider => ({
+    id,
+    supports: () => supported,
+    invoke: async () => ({
+      status: "succeeded",
+      output: null,
+      evidence: [],
+      riskSignals: []
+    })
+  });
+
+  it("registers providers without adding runtime branches to the engine", () => {
+    const registry = new RuntimeProviderRegistry();
+    registry.register(provider("browser"));
+    registry.register(provider("builtin"));
+    expect(registry.list()).toEqual(["browser", "builtin"]);
+    expect(
+      registry.resolve("browser", {
+        kind: "node",
+        id: "doudian.shop.context.read",
+        version: "1.0.0",
+        digest: "a".repeat(64)
+      }).id
+    ).toBe("browser");
+    expect(() => registry.register(provider("browser"))).toThrow(
+      "already registered"
+    );
+  });
+
+  it("rejects unknown and unsupported provider selections", () => {
+    const registry = new RuntimeProviderRegistry();
+    registry.register(provider("team", false));
+    const node = {
+      kind: "node" as const,
+      id: "packaging.master.match.batch",
+      version: "1.0.0",
+      digest: "b".repeat(64)
+    };
+    expect(() => registry.resolve("missing", node)).toThrow("not registered");
+    expect(() => registry.resolve("team", node)).toThrow("does not support");
+  });
+});
 
 describe("node timing runtime", () => {
   it("produces bounded deterministic dispatch and retry delays", () => {
