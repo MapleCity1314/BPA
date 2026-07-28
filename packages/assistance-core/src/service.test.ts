@@ -348,6 +348,56 @@ describe("provider-neutral AssistanceTaskService", () => {
       ok: true,
       duplicate: true
     });
+    await expect(subject.submit(submit)).resolves.not.toHaveProperty(
+      "autoContinue"
+    );
+  });
+
+  it("safely denies auto-continue when validation dependencies fail before commit", async () => {
+    const queue = new MemoryTaskQueue();
+    await queue.create(task(), "create-1");
+    const subject = new AssistanceTaskService({
+      queue,
+      validator: {
+        ...validator,
+        validateDeterministicResult: () => {
+          throw new Error("validator unavailable");
+        }
+      },
+      profilePublished: () => {
+        throw new Error("catalog unavailable");
+      }
+    });
+    await subject.claim({
+      taskId: "task-1",
+      requestId: "claim-1",
+      leaseId: proof.leaseId,
+      actorId: proof.ownerId,
+      actorType: "ai",
+      now: "2026-07-28T00:00:01.000Z",
+      leaseDurationMs: 10_000
+    });
+    await expect(
+      subject.submit({
+        taskId: "task-1",
+        requestId: "submit-safe-deny",
+        proof,
+        now: "2026-07-28T00:00:02.000Z",
+        output: { selection: "record-1" },
+        resolverType: "ai",
+        resolverId: proof.ownerId
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      task: { status: "completed" },
+      autoContinue: {
+        allowed: false,
+        reason: "PROFILE_NOT_PUBLISHED"
+      }
+    });
+    await expect(queue.get("task-1")).resolves.toMatchObject({
+      status: "completed"
+    });
   });
 
   it("surfaces a submit CAS conflict and applies queue filters deterministically", async () => {

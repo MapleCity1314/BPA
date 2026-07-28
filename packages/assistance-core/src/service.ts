@@ -232,6 +232,9 @@ export class AssistanceTaskService {
     }
     const duplicate = await this.#queue.getRequestResult(input.requestId);
     if (duplicate) {
+      // The original decision is intentionally not recomputed against a
+      // potentially newer Profile catalog. Callers must use the durable task
+      // result and the Run wake outcome recorded for the original request.
       return { ok: true, task: duplicate, duplicate: true };
     }
     const current = await this.#queue.get(input.taskId);
@@ -260,6 +263,33 @@ export class AssistanceTaskService {
         : { confidence: input.confidence })
     });
     if (!transitioned.ok) return transitioned;
+    let deterministicResultValid = false;
+    try {
+      deterministicResultValid =
+        this.#validator.validateDeterministicResult(
+          current,
+          input.output
+        ).valid;
+    } catch {
+      // Validator failures are a safe deny for automatic continuation. The
+      // reviewed result can still be stored and inspected.
+    }
+    let profilePublished = false;
+    try {
+      profilePublished = await this.#profilePublished(current.profile);
+    } catch {
+      // Catalog lookup failures must never produce an automatic continuation.
+    }
+    const autoContinue = evaluateAutoContinue({
+      mode: current.mode,
+      riskLevel: current.riskLevel,
+      profilePublished,
+      policySnapshot: current.policySnapshot,
+      deterministicResultValid,
+      ...(input.confidence === undefined
+        ? {}
+        : { confidence: input.confidence })
+    });
     const committed = await this.#queue.compareAndSet({
       taskId: current.taskId,
       expectedRevision: current.revision,
@@ -273,18 +303,6 @@ export class AssistanceTaskService {
         ...(committed.current ? { current: committed.current } : {})
       };
     }
-    const deterministicValidation =
-      this.#validator.validateDeterministicResult(current, input.output);
-    const autoContinue = evaluateAutoContinue({
-      mode: current.mode,
-      riskLevel: current.riskLevel,
-      profilePublished: await this.#profilePublished(current.profile),
-      policySnapshot: current.policySnapshot,
-      deterministicResultValid: deterministicValidation.valid,
-      ...(input.confidence === undefined
-        ? {}
-        : { confidence: input.confidence })
-    });
     return {
       ok: true,
       task: committed.task,
