@@ -12,6 +12,8 @@ const schemas = [
   "workflow.schema.json",
   "workflow-v1alpha2.schema.json",
   "node.schema.json",
+  "adapter-manifest.schema.json",
+  "assistance-profile.schema.json",
   "assistance-task.schema.json",
   "dataset.schema.json",
   "decision-record.schema.json",

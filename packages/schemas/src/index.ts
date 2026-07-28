@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 import type { ErrorObject, ValidateFunction } from "ajv";
 import type {
   BrowserProtocolMessage,
+  AdapterManifestDefinition,
+  AssistanceProfileDefinition,
   AssistanceTaskDefinition,
   DatasetVersionDefinition,
   DecisionRecordDefinition,
@@ -26,6 +28,12 @@ export const workflowV1Alpha2Schema = loadSchema(
   "workflow-v1alpha2.schema.json"
 );
 export const nodeSchema = loadSchema("node.schema.json");
+export const adapterManifestSchema = loadSchema(
+  "adapter-manifest.schema.json"
+);
+export const assistanceProfileSchema = loadSchema(
+  "assistance-profile.schema.json"
+);
 export const assistanceTaskSchema = loadSchema("assistance-task.schema.json");
 export const datasetSchema = loadSchema("dataset.schema.json");
 export const decisionRecordSchema = loadSchema("decision-record.schema.json");
@@ -74,6 +82,12 @@ export const validateWorkflowV1Alpha2 = ajv.compile(
 export const validateNode = ajv.compile(
   nodeSchema
 ) as ValidateFunction<NodeDefinition>;
+export const validateAdapterManifest = ajv.compile(
+  adapterManifestSchema
+) as ValidateFunction<AdapterManifestDefinition>;
+export const validateAssistanceProfile = ajv.compile(
+  assistanceProfileSchema
+) as ValidateFunction<AssistanceProfileDefinition>;
 export const validateAssistanceTask = ajv.compile(
   assistanceTaskSchema
 ) as ValidateFunction<AssistanceTaskDefinition>;

@@ -8,6 +8,7 @@ import {
   type AssistanceResultValidator,
   type TaskQueueFilter
 } from "@bpa/assistance-core";
+import type { DraftOperation } from "@bpa/authoring-core";
 import {
   compileCanonicalWorkflow,
   compileWorkflow,
@@ -33,15 +34,20 @@ import { registerTeamRuntimeProvider } from "@bpa/team-runtime";
 import {
   compileDataValidator,
   formatValidationErrors,
+  validateAdapterManifest,
+  validateAssistanceProfile,
   validateJsonSchemaDefinition,
   validateNode,
   validateWorkflow,
   type NodeDefinition,
+  type AdapterManifestDefinition,
+  type AssistanceProfileDefinition,
   type WorkflowDefinition
 } from "@bpa/schemas";
 import type { LocalBrowserGateway } from "./browser-gateway.js";
 import { Ir2WorkflowRuntime } from "./ir2-workflow-runtime.js";
 import { PersistenceTaskQueue } from "./persistence-task-queue.js";
+import { LocalAuthoringService } from "./authoring-service.js";
 import {
   TEAM_WORKER_CODE_DIGEST,
   TEAM_WORKER_HANDLER_REFS
@@ -66,6 +72,7 @@ export class LocalCoreService {
   readonly engine: LocalWorkflowEngine;
   readonly ir2Runtime: Ir2WorkflowRuntime;
   readonly assistance: AssistanceTaskService;
+  readonly authoring: LocalAuthoringService;
 
   constructor(
     readonly persistence: Persistence,
@@ -134,14 +141,17 @@ export class LocalCoreService {
       queue: new PersistenceTaskQueue(persistence, this.ir2Runtime),
       validator: assistanceValidator,
       profilePublished: (profile) => {
-        const published = persistence.getPublished(
-          "policy",
-          profile.id,
-          profile.version
-        );
+        const published =
+          persistence.getPublished(
+            "assistance_profile",
+            profile.id,
+            profile.version
+          ) ??
+          persistence.getPublished("policy", profile.id, profile.version);
         return published?.digest === profile.digest;
       }
     });
+    this.authoring = new LocalAuthoringService(persistence);
   }
 
   handle(request: ControlRequest): ControlResponse {
@@ -313,6 +323,115 @@ export class LocalCoreService {
         return this.persistence.listPublished(
           params.assetType as ArtifactType | undefined
         );
+      case "catalog.search.v2":
+        return this.authoring.catalogSearch({
+          ...(params.query === undefined
+            ? {}
+            : { query: String(params.query) }),
+          ...(params.assetType === undefined
+            ? {}
+            : { assetType: String(params.assetType) }),
+          ...(Array.isArray(params.capabilityIds)
+            ? { capabilityIds: params.capabilityIds.map(String) }
+            : {}),
+          ...(params.platform === undefined
+            ? {}
+            : { platform: String(params.platform) }),
+          ...(params.runtime === undefined
+            ? {}
+            : {
+                runtime: params.runtime as
+                  | "builtin"
+                  | "browser"
+                  | "team"
+                  | "assistance"
+                  | "composite"
+              }),
+          ...(Array.isArray(params.availableInputTypes)
+            ? {
+                availableInputTypes:
+                  params.availableInputTypes.map(String)
+              }
+            : {}),
+          ...(Array.isArray(params.requiredOutputTypes)
+            ? {
+                requiredOutputTypes:
+                  params.requiredOutputTypes.map(String)
+              }
+            : {}),
+          ...(params.maximumRisk === undefined
+            ? {}
+            : {
+                maximumRisk: params.maximumRisk as
+                  | "R0"
+                  | "R1"
+                  | "R2"
+                  | "R3"
+                  | "R4"
+              }),
+          ...(Array.isArray(params.allowedPermissions)
+            ? {
+                allowedPermissions:
+                  params.allowedPermissions.map(String)
+              }
+            : {}),
+          ...(params.adapter &&
+          typeof params.adapter === "object" &&
+          !Array.isArray(params.adapter)
+            ? {
+                adapter: {
+                  id: String(
+                    (params.adapter as Record<string, unknown>).id
+                  ),
+                  version: String(
+                    (params.adapter as Record<string, unknown>).version
+                  )
+                }
+              }
+            : {}),
+          ...(params.limit === undefined
+            ? {}
+            : { limit: Number(params.limit) })
+        });
+      case "authoring.workflow-draft.create":
+        return this.authoring.drafts.create({
+          draftId: String(params.id ?? params.draftId),
+          title: String(params.title),
+          description: String(params.description),
+          now: new Date().toISOString()
+        });
+      case "authoring.workflow-draft.get": {
+        const draftId = String(params.draftId);
+        const draft = this.authoring.drafts.get(draftId);
+        if (!draft) throw new Error(`Workflow Draft not found: ${draftId}`);
+        return draft;
+      }
+      case "authoring.workflow-draft.apply":
+        return this.authoring.drafts.apply(
+          String(params.draftId),
+          Number(params.expectedRevision),
+          params.operation as DraftOperation,
+          new Date().toISOString()
+        );
+      case "authoring.workflow-draft.diff":
+        return this.authoring.diff(
+          String(params.draftId),
+          Number(params.fromRevision),
+          Number(params.toRevision),
+          Number(params.limit ?? 200)
+        );
+      case "authoring.workflow-draft.validate-candidate":
+        return this.authoring.validate(
+          String(params.draftId),
+          Number(params.expectedRevision)
+        );
+      case "authoring.workflow-candidate.save":
+        return this.authoring.saveCandidate({
+          draftId: String(params.draftId),
+          expectedRevision: Number(params.expectedRevision),
+          candidateId: String(params.candidateId),
+          now: new Date().toISOString()
+        });
       case "audit.list":
         return this.persistence.listAudit(
           params.target == null ? undefined : String(params.target)
@@ -440,7 +559,142 @@ export class LocalCoreService {
         compiled
       };
     }
+    if (assetType === "adapter") {
+      if (!validateAdapterManifest(content)) {
+        return {
+          valid: false,
+          errors: formatValidationErrors(validateAdapterManifest.errors)
+        };
+      }
+      const issues = this.#adapterManifestIssues(content);
+      return issues.length > 0
+        ? { valid: false, errors: issues }
+        : {
+            valid: true,
+            digest: contentDigest(content),
+            identity: `${content.metadata.id}@${content.metadata.version}`
+          };
+    }
+    if (assetType === "assistance_profile") {
+      if (!validateAssistanceProfile(content)) {
+        return {
+          valid: false,
+          errors: formatValidationErrors(validateAssistanceProfile.errors)
+        };
+      }
+      const issues: string[] = [];
+      const schemaValidation = validateJsonSchemaDefinition(
+        content.outputSchema
+      );
+      if (!schemaValidation.valid) {
+        issues.push(
+          ...schemaValidation.errors.map(
+            (issue) => `/outputSchema${issue}`
+          )
+        );
+      } else {
+        try {
+          compileDataValidator(content.outputSchema);
+        } catch (error) {
+          issues.push(
+            `/outputSchema cannot be compiled: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      }
+      if (
+        content.taskKind !== "ai_review" &&
+        content.policySnapshot.autoContinue
+      ) {
+        issues.push("Human assistance Profiles cannot auto-continue");
+      }
+      if (
+        content.riskLevel === "R1" &&
+        content.policySnapshot.autoContinue &&
+        !content.policySnapshot.deterministicValidator
+      ) {
+        issues.push(
+          "R1 automatic continuation requires a deterministic validator"
+        );
+      }
+      const validatorRef =
+        content.policySnapshot.deterministicValidator;
+      if (validatorRef) {
+        const validator = this.persistence.getPublished(
+          "policy",
+          validatorRef.id,
+          validatorRef.version
+        );
+        if (!validator || validator.digest !== validatorRef.digest) {
+          issues.push(
+            "Deterministic validator must reference an exact published Policy"
+          );
+        }
+      }
+      return issues.length > 0
+        ? { valid: false, errors: issues }
+        : {
+            valid: true,
+            digest: contentDigest(content),
+            identity: `${content.metadata.id}@${content.metadata.version}`
+          };
+    }
     throw new Error(`Unsupported asset type: ${assetType}`);
+  }
+
+  #adapterManifestIssues(
+    manifest: AdapterManifestDefinition
+  ): string[] {
+    const issues: string[] = [];
+    const identities = new Set<string>();
+    const origins = new Set(manifest.origins);
+    for (const capability of manifest.capabilities) {
+      for (const version of capability.nodeVersions) {
+        const identity = `${capability.nodeId}@${version}`;
+        if (identities.has(identity)) {
+          issues.push(`Duplicate Adapter capability: ${identity}`);
+          continue;
+        }
+        identities.add(identity);
+        const published = this.persistence.getPublished(
+          "node",
+          capability.nodeId,
+          version
+        );
+        const node = published?.content as NodeDefinition | undefined;
+        if (!node || node.runtime !== "browser") {
+          issues.push(`Published Browser Node is missing: ${identity}`);
+          continue;
+        }
+        if (
+          node.adapter?.id !== manifest.metadata.id ||
+          !node.adapter.versions.includes(manifest.metadata.version)
+        ) {
+          issues.push(
+            `Browser Node ${identity} does not pin Adapter ${manifest.metadata.id}@${manifest.metadata.version}`
+          );
+        }
+        const expectedPermissions = [...node.risk.permissions].sort();
+        const reportedPermissions = [...capability.permissions].sort();
+        if (
+          JSON.stringify(expectedPermissions) !==
+          JSON.stringify(reportedPermissions)
+        ) {
+          issues.push(
+            `Adapter capability permissions differ from Node ${identity}`
+          );
+        }
+        for (const origin of node.risk.domains ?? []) {
+          if (!origins.has(origin)) {
+            issues.push(
+              `Adapter origin allowlist is missing ${origin} for ${identity}`
+            );
+          }
+        }
+      }
+    }
+    return issues;
   }
 
   #publishAsset(
@@ -478,7 +732,12 @@ export class LocalCoreService {
     content: unknown,
     actor: string
   ): unknown {
-    if (assetType === "workflow" || assetType === "node") {
+    if (
+      assetType === "workflow" ||
+      assetType === "node" ||
+      assetType === "adapter" ||
+      assetType === "assistance_profile"
+    ) {
       const validation = this.#validateAsset(assetType, content) as {
         valid: boolean;
         errors?: string[];
@@ -489,10 +748,11 @@ export class LocalCoreService {
           `Asset validation failed: ${(validation.errors ?? []).join("; ")}`
         );
       }
-      const typed =
-        assetType === "node"
-          ? (content as NodeDefinition)
-          : (content as WorkflowDefinition);
+      const typed = content as
+        | NodeDefinition
+        | WorkflowDefinition
+        | AdapterManifestDefinition
+        | AssistanceProfileDefinition;
       return this.persistence.saveCandidate({
         assetType,
         assetId: typed.metadata.id,
@@ -502,7 +762,7 @@ export class LocalCoreService {
         actor
       });
     }
-    if (!["adapter", "policy"].includes(assetType)) {
+    if (!["policy"].includes(assetType)) {
       throw new Error(`Unsupported candidate type: ${assetType}`);
     }
     const assetId = String(
@@ -605,6 +865,9 @@ export class LocalCoreService {
     );
     const adapters = this.persistence.listPublished("adapter");
     const policies = this.persistence.listPublished("policy");
+    const assistanceProfiles = this.persistence.listPublished(
+      "assistance_profile"
+    );
     return {
       getNode: (id, version) => nodes.get(`${id}@${version}`),
       getNodeExecution: (id, version) => {
@@ -640,7 +903,7 @@ export class LocalCoreService {
         };
       },
       getAssistanceProfile: (id, version) => {
-        const artifact = policies.find(
+        const artifact = [...assistanceProfiles, ...policies].find(
           (candidate) =>
             candidate.assetId === id && candidate.version === version
         );

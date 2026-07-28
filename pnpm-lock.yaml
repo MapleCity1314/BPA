@@ -127,6 +127,9 @@ importers:
       '@bpa/assistance-core':
         specifier: workspace:*
         version: link:../../packages/assistance-core
+      '@bpa/authoring-core':
+        specifier: workspace:*
+        version: link:../../packages/authoring-core
       '@bpa/compiler':
         specifier: workspace:*
         version: link:../../packages/compiler

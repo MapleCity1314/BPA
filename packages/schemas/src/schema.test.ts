@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
+  validateAdapterManifest,
+  validateAssistanceProfile,
   validateAssistanceTask,
   validateBrowserProtocolMessage,
   validateDataset,
@@ -114,6 +116,66 @@ const protocolExample = (name: string): unknown =>
   );
 
 describe("strong iteration contract schemas", () => {
+  it("validates immutable Adapter and Assistance Profile assets", () => {
+    const adapter = {
+      apiVersion: "bpa.adapter/v1alpha1",
+      kind: "Adapter",
+      metadata: {
+        id: "doudian",
+        version: "1.1.0",
+        title: "Doudian Adapter"
+      },
+      platform: "doudian",
+      origins: ["https://fxg.jinritemai.com"],
+      capabilities: [
+        {
+          nodeId: "doudian.product.scope.collect",
+          nodeVersions: ["1.0.0"],
+          handlerId: "doudian.product.scope.collect",
+          handlerVersion: "1.0.0",
+          implementationDigest: `sha256:${"a".repeat(64)}`,
+          permissions: ["browser.dom.read", "browser.tabs.read"]
+        }
+      ]
+    };
+    expect(validateAdapterManifest(adapter)).toBe(true);
+    expect(
+      validateAdapterManifest({
+        ...adapter,
+        origins: ["http://fxg.jinritemai.com"]
+      })
+    ).toBe(false);
+
+    const profile = {
+      apiVersion: "bpa.assistance/v1alpha1",
+      kind: "AssistanceProfile",
+      metadata: {
+        id: "packaging-match-review",
+        version: "1.0.0",
+        title: "Packaging match review"
+      },
+      taskKind: "ai_review",
+      riskLevel: "R1",
+      outputSchema: { type: "object" },
+      policySnapshot: {
+        autoContinue: false,
+        r1ProfileApproved: false,
+        durableDecision: false,
+        onUnavailable: "continue_unresolved"
+      }
+    };
+    expect(validateAssistanceProfile(profile)).toBe(true);
+    expect(
+      validateAssistanceProfile({
+        ...profile,
+        policySnapshot: {
+          ...profile.policySnapshot,
+          unexpected: true
+        }
+      })
+    ).toBe(false);
+  });
+
   it("accepts a bounded structured Workflow and rejects unbounded foreach", () => {
     const source = readFileSync(
       new URL(

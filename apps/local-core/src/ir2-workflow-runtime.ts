@@ -410,11 +410,17 @@ export class Ir2WorkflowRuntime {
         });
         continue;
       }
-      const profileArtifact = this.#persistence.getPublished(
-        "policy",
-        effect.request.profile.id,
-        effect.request.profile.version
-      );
+      const profileArtifact =
+        this.#persistence.getPublished(
+          "assistance_profile",
+          effect.request.profile.id,
+          effect.request.profile.version
+        ) ??
+        this.#persistence.getPublished(
+          "policy",
+          effect.request.profile.id,
+          effect.request.profile.version
+        );
       if (
         profileArtifact &&
         profileArtifact.digest !== effect.request.profile.digest

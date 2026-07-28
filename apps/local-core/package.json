@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@bpa/assistance-core": "workspace:*",
+    "@bpa/authoring-core": "workspace:*",
     "@bpa/compiler": "workspace:*",
     "@bpa/control-protocol": "workspace:*",
     "@bpa/engine": "workspace:*",

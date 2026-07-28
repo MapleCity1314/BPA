@@ -16,6 +16,12 @@ import type {
   BPAAssistanceTaskV1Alpha1
 } from "./generated/assistance_task.js";
 import type {
+  BPAAdapterManifestV1Alpha1
+} from "./generated/adapter_manifest.js";
+import type {
+  BPAAssistanceProfileV1Alpha1
+} from "./generated/assistance_profile.js";
+import type {
   BPADatasetVersionV1Alpha1
 } from "./generated/dataset.js";
 import type {
@@ -30,6 +36,8 @@ import type {
 
 export type {
   BPABrowserProtocolV1Message,
+  BPAAdapterManifestV1Alpha1,
+  BPAAssistanceProfileV1Alpha1,
   BPAAssistanceTaskV1Alpha1,
   BPADatasetVersionV1Alpha1,
   BPADecisionRecordV1Alpha1,
@@ -53,6 +61,8 @@ export type WorkflowNode = GeneratedWorkflowNode;
 export type NodeDefinition = BPANodeDefinition;
 export type BrowserProtocolMessage = BPABrowserProtocolV1Message;
 export type AssistanceTaskDefinition = BPAAssistanceTaskV1Alpha1;
+export type AdapterManifestDefinition = BPAAdapterManifestV1Alpha1;
+export type AssistanceProfileDefinition = BPAAssistanceProfileV1Alpha1;
 export type DatasetVersionDefinition = BPADatasetVersionV1Alpha1;
 export type DecisionRecordDefinition = BPADecisionRecordV1Alpha1;
 export type ElementContractDefinition = BPAElementContractV1Alpha1;

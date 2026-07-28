@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/assistance-profile/v1alpha1",
+  "title": "BPA Assistance Profile v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "taskKind",
+    "riskLevel",
+    "outputSchema",
+    "policySnapshot"
+  ],
+  "properties": {
+    "apiVersion": { "const": "bpa.assistance/v1alpha1" },
+    "kind": { "const": "AssistanceProfile" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "title"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/semver" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 4000 }
+      }
+    },
+    "taskKind": {
+      "enum": ["ai_review", "human_confirm", "human_action"]
+    },
+    "riskLevel": { "enum": ["R0", "R1", "R2", "R3", "R4"] },
+    "outputSchema": { "type": "object" },
+    "policySnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "autoContinue",
+        "r1ProfileApproved",
+        "durableDecision",
+        "onUnavailable"
+      ],
+      "properties": {
+        "autoContinue": { "type": "boolean" },
+        "r1ProfileApproved": { "type": "boolean" },
+        "durableDecision": { "type": "boolean" },
+        "deterministicValidator": { "$ref": "#/$defs/assetRef" },
+        "onUnavailable": {
+          "enum": ["continue_unresolved", "human_action", "fail"]
+        }
+      }
+    },
+    "instructions": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "type": "string", "minLength": 1, "maxLength": 2000 }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "assetRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/semver" },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}
