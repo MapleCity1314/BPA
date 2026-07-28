@@ -309,7 +309,7 @@ describe("Local Core priority inspection workflow", () => {
       method: "run.create",
       params: {
         workflowId: "doudian.priority-items-readonly-inspect",
-        workflowVersion: "0.2.0",
+        workflowVersion: "0.3.0",
         input: {
           dataset: { id: "packaging-master", version: "1.0.0" },
           platformFillCheck: false

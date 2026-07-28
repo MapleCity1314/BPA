@@ -57,7 +57,7 @@ BPA 已从单条 Browser 冒烟链路进入可恢复的本地平台阶段，并�
 | `packaging_match_review@1.0.0` | R1 Codex 批量歧义审核 |
 | `binding_confirm@1.0.0` | R2 长期绑定人工批量确认 |
 
-`doudian.priority-items-readonly-inspect@0.2.0` 已通过 Core 级端到端 fixture：
+`doudian.priority-items-readonly-inspect@0.3.0` 已通过 Core 级端到端 fixture：
 健康但未匹配的商品仍完成打开、检查、归并和报告，结果为 0 商品问题、0 Assistance。
 
 ## 4. 浏览器与业务边界

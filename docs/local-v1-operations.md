@@ -74,7 +74,7 @@ https://fxg.jinritemai.com/ffa/g/list
 ```bash
 pnpm bpa run doudian.shop-context-observe --version 1.2.0
 pnpm bpa run doudian.priority-items-readonly-inspect \
-  --version 0.2.0 \
+  --version 0.3.0 \
   --input '{"dataset":{"id":"packaging-master","version":"2026.07.28"},"platformFillCheck":false}'
 pnpm bpa inspect <run-id>
 pnpm bpa events <run-id>
@@ -111,7 +111,7 @@ pnpm mcp
 ## 4. 安装、升级与回滚
 
 发布包携带经过 SHA-256 校验的 Node.js 24 macOS arm64 Runtime。
-当前版本为 BPA Runtime `0.3.0`、Doudian Adapter `1.1.0`、重点项只读 Workflow `0.2.0`。
+当前版本为 BPA Runtime `0.3.0`、Doudian Adapter `1.1.0`、重点项只读 Workflow `0.3.0`。
 旧 Runtime 与已发布资产继续保留，不执行覆盖升级。
 
 ```bash

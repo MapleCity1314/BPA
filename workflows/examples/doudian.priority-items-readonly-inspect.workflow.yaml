@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha2
 kind: Workflow
 metadata:
   id: doudian.priority-items-readonly-inspect
-  version: 0.2.0
+  version: 0.3.0
   title: 抖店重点项只读检查
   description: 从不可变包装主数据开始，完整采集当前范围，批量匹配，并逐商品打开编辑页执行只读重点项检查。
 spec:
@@ -61,6 +61,36 @@ spec:
           retryableErrors:
             - PAGE_LOADING
             - BROWSER_DISCONNECTED
+      - key: shop_identity_gate
+        kind: decision
+        condition:
+          kind: compare
+          operator: equals
+          left:
+            kind: binding
+            binding: ${steps.read_shop.output.shop.identity_confirmed}
+          right:
+            kind: literal
+            value: true
+        then:
+          kind: sequence
+          steps:
+            - key: shop_identity_confirmed
+              kind: call
+              use: control.noop@1.0.0
+              with:
+                value:
+                  status: confirmed
+              timeout: 1s
+        else:
+          kind: sequence
+          steps:
+            - key: shop_identity_uncertain
+              kind: terminal
+              status: uncertain
+              error:
+                code: SHOP_IDENTITY_UNCONFIRMED
+                message: 当前页面未提供稳定店铺 ID；为防止跨店检查，任务已停止。
       - key: collect_scope
         kind: call
         use: doudian.product.scope.collect@1.0.0

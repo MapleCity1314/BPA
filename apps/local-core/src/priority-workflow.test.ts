@@ -145,12 +145,22 @@ function succeeded(output: JsonValue) {
 describe("priority-items readonly workflow asset", () => {
   it("compiles into a closed IR2 plan with stable foreach aggregation", () => {
     const plan = compilePriorityWorkflow();
+    expect(plan.steps.shop_identity_uncertain).toMatchObject({
+      kind: "terminal",
+      status: "uncertain",
+      errorCode: "SHOP_IDENTITY_UNCONFIRMED"
+    });
     expect(plan.workflow).toMatchObject({
       id: "doudian.priority-items-readonly-inspect",
-      version: "0.2.0"
+      version: "0.3.0"
     });
     expect(plan.workflow.digest).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(plan.entry).toBe("read_shop");
+    expect(plan.steps.shop_identity_gate).toMatchObject({
+      kind: "decision",
+      branches: [{ target: "shop_identity_confirmed" }],
+      defaultTarget: "shop_identity_uncertain"
+    });
     expect(plan.artifactClosure.entries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -231,6 +241,39 @@ describe("priority-items readonly workflow asset", () => {
     });
   });
 
+  it("stops before collection when the page has no stable shop identity", () => {
+    const plan = compilePriorityWorkflow();
+    const engine = new DeterministicWorkflowEngine(plan, dependencies());
+    const started = engine.start("run-unconfirmed-shop", {
+      dataset: { id: "packaging-master", version: "2026.07.28" },
+      platformFillCheck: false
+    });
+    const active = started.state.active;
+    if (active?.kind !== "call") throw new Error("fixture changed");
+    const stopped = engine.acceptRuntimeOutcome({
+      state: started.state,
+      invocationId: active.invocation.invocationId,
+      fencingToken: active.invocation.fencingToken,
+      outcome: succeeded({
+        supported: true,
+        shop: {
+          id: "name:temporary",
+          name: "未确认店铺",
+          identity_confirmed: false
+        },
+        tab_ref: {
+          browser_instance_id: "browser-1",
+          tab_id: 1,
+          window_id: 1,
+          origin: "https://fxg.jinritemai.com"
+        },
+        page_epoch: "epoch-1"
+      })
+    });
+    expect(stopped.state.status).toBe("uncertain");
+    expect(stopped.effects).toEqual([]);
+  });
+
   it("executes unmatched products through open, inspect, reconcile and report bindings", () => {
     const plan = compilePriorityWorkflow();
     expect(contentDigest(plan)).toMatch(/^sha256:[a-f0-9]{64}$/u);
@@ -276,6 +319,7 @@ describe("priority-items readonly workflow asset", () => {
       },
       page_epoch: "epoch-1"
     });
+    complete("control.noop", { status: "confirmed" });
     complete("doudian.product.scope.collect", {
       status: "complete",
       collectorVersion: "1.0.0",
