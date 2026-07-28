@@ -7,9 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@bpa/compiler": "workspace:*",
     "@bpa/node-runtime": "workspace:*",
-    "@bpa/persistence": "workspace:*",
-    "@bpa/schemas": "workspace:*"
+    "@bpa/workflow-ir": "workspace:*"
   }
 }

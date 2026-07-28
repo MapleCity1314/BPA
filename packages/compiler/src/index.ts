@@ -401,3 +401,5 @@ export class MemoryNodeCatalog implements CatalogLookup {
     return this.#nodes.get(`${id}@${version}`);
   }
 }
+
+export * from "./ir2.js";

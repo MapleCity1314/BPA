@@ -1,377 +1,806 @@
 import { describe, expect, it } from "vitest";
-import type { CompiledWorkflow } from "@bpa/compiler";
-import { SqlitePersistence } from "@bpa/persistence-sqlite";
-import { LocalWorkflowEngine } from "./index.js";
+import type {
+  ArtifactRef,
+  CallRoutes,
+  ExecutionPlan,
+  ExecutionStep,
+  ForeachStep,
+  PermissionSnapshot
+} from "@bpa/workflow-ir";
+import { RuntimeProviderRegistry } from "@bpa/node-runtime";
+import {
+  DeterministicWorkflowEngine,
+  dispatchRuntimeEffect,
+  evaluateCondition,
+  resolveBinding,
+  type EngineDependencies,
+  type EngineState
+} from "./index.js";
 
-const workflow: CompiledWorkflow = {
-  format: "bpa.workflow-ir/1",
-  workflowId: "doudian.shop-context-observe",
-  workflowVersion: "1.0.0",
-  workflowDigest: "sha256:workflow",
+const digest = (character: string): string => character.repeat(64);
+const node: ArtifactRef & { kind: "node" } = {
+  kind: "node",
+  id: "test.inspect",
+  version: "1.0.0",
+  digest: digest("a")
+};
+const profile: ArtifactRef & { kind: "assistance_profile" } = {
+  kind: "assistance_profile",
+  id: "test.review",
+  version: "1.0.0",
+  digest: digest("b")
+};
+const permissions: PermissionSnapshot = {
   riskLevel: "R0",
-  inputSchema: { type: "object" },
-  outputSchema: { type: "object" },
-  start: "start",
-  nodes: {
-    start: {
-      key: "start",
-      nodeId: "control.start",
-      nodeVersion: "1.0.0",
-      definitionDigest: "sha256:start",
-      runtime: "engine_builtin",
-      inputSchema: { type: "object" },
-      outputSchema: {},
-      input: {},
-      next: "observe",
-      on: {},
-      timeoutMs: 1000,
-      retry: { maxAttempts: 1, backoffMs: 0, retryableErrors: [] }
-    },
-    observe: {
-      key: "observe",
-      nodeId: "doudian.shop.context.read",
-      nodeVersion: "1.0.0",
-      definitionDigest: "sha256:observe",
-      runtime: "browser",
-      inputSchema: { type: "object" },
-      outputSchema: { type: "object" },
-      input: {},
-      next: "finish",
-      on: {},
-      timeoutMs: 10000,
-      retry: { maxAttempts: 1, backoffMs: 0, retryableErrors: [] }
-    },
-    finish: {
-      key: "finish",
-      nodeId: "control.succeed",
-      nodeVersion: "1.0.0",
-      definitionDigest: "sha256:finish",
-      runtime: "engine_builtin",
-      inputSchema: { type: "object" },
-      outputSchema: {},
-      input: {},
-      on: {},
-      timeoutMs: 1000,
-      retry: { maxAttempts: 1, backoffMs: 0, retryableErrors: [] }
-    }
-  }
+  permissions: [],
+  domains: []
 };
 
-describe("local workflow engine", () => {
-  it("runs builtins, waits for a browser result and completes", () => {
-    const persistence = new SqlitePersistence({ path: ":memory:" });
-    const engine = new LocalWorkflowEngine(persistence);
-    const waiting = engine.start(workflow, {});
-    expect(waiting.status).toBe("waiting_browser");
-    const dispatched = persistence
-      .listEvents(waiting.id)
-      .find((event) => event.type === "NODE_DISPATCHED");
-    expect(dispatched?.nodeExecutionId).toBeTruthy();
-
-    const completed = engine.acceptBrowserResult(
-      workflow,
-      dispatched!.nodeExecutionId!,
-      {
-        status: "succeeded",
-        output: { shop: { id: "shop-1" }, supported: true },
-        fencingToken: 1
+function call(key: string, routes: CallRoutes): ExecutionStep {
+  return {
+    kind: "call",
+    key,
+    node,
+    providerId: "test",
+    permissionSnapshot: permissions,
+    dependencies: {
+      adapters: [],
+      policies: [],
+      datasetProfiles: []
+    },
+    timeoutMs: 1_000,
+    retry: {
+      maxAttempts: 2,
+      retryableOutcomes: ["failed", "timed_out"],
+      retryableErrorCodes: ["RETRY"],
+      backoff: {
+        strategy: "fixed",
+        baseDelayMs: 100,
+        maxDelayMs: 100,
+        jitterRatio: 0
       }
-    );
-    expect(completed.status).toBe("succeeded");
-    expect(completed.output).toEqual({
-      shop: { id: "shop-1" },
-      supported: true
-    });
-    expect(
-      persistence.listEvents(completed.id).map((event) => event.sequence)
-    ).toEqual(
-      persistence
-        .listEvents(completed.id)
-        .map((_, index) => index + 1)
-    );
-    persistence.close();
-  });
+    },
+    timing: {},
+    input: {
+      kind: "object",
+      entries: {
+        item: { kind: "reference", source: "scope_item", path: [] }
+      }
+    },
+    routes
+  };
+}
 
-  it("rejects a stale browser fencing token", () => {
-    const persistence = new SqlitePersistence({ path: ":memory:" });
-    const engine = new LocalWorkflowEngine(persistence);
-    const waiting = engine.start(workflow, {});
-    const nodeExecutionId = persistence
-      .listEvents(waiting.id)
-      .find((event) => event.type === "NODE_DISPATCHED")!.nodeExecutionId!;
-    expect(() =>
-      engine.acceptBrowserResult(workflow, nodeExecutionId, {
-        status: "succeeded",
-        fencingToken: 0
-      })
-    ).toThrow(/Stale fencing token/);
-    persistence.close();
-  });
-
-  it("retries only up to the compiled finite attempt limit", () => {
-    const persistence = new SqlitePersistence({ path: ":memory:" });
-    const engine = new LocalWorkflowEngine(persistence);
-    const retryWorkflow: CompiledWorkflow = {
-      ...workflow,
-      nodes: {
-        ...workflow.nodes,
-        observe: {
-          ...workflow.nodes.observe!,
-          retry: {
-            maxAttempts: 2,
-            backoffMs: 0,
-            retryableErrors: ["PAGE_LOADING"]
-          },
-          timing: {
-            dispatchJitter: {
-              minMs: 0,
-              maxMs: 0,
-              distribution: "uniform"
-            },
-            retryBackoff: {
-              strategy: "exponential",
-              baseMs: 1000,
-              maxMs: 5000,
-              jitterRatio: 0
-            }
-          }
+function planWithForeach(count = 2): ExecutionPlan {
+  const inspectRoutes: CallRoutes = {
+    succeeded: "item_ok",
+    failed: "item_failed",
+    timed_out: "item_failed",
+    rejected: "item_failed",
+    cancelled: "item_failed",
+    uncertain: "item_uncertain"
+  };
+  const foreach: ForeachStep = {
+    kind: "foreach",
+    key: "items",
+    items: {
+      kind: "reference",
+      source: "run_input",
+      path: ["items"]
+    },
+    itemKey: { path: ["id"], valueType: "string" },
+    limits: {
+      maxItems: Math.max(500, count),
+      maxDurationMs: 60_000,
+      maxDepth: 0,
+      maxStepExecutions: 2_000
+    },
+    onItemError: "collect",
+    body: {
+      entry: "inspect",
+      steps: {
+        inspect: call("inspect", inspectRoutes),
+        item_ok: {
+          kind: "terminal",
+          key: "item_ok",
+          status: "succeeded"
+        },
+        item_failed: {
+          kind: "terminal",
+          key: "item_failed",
+          status: "failed",
+          errorCode: "ITEM_FAILED"
+        },
+        item_uncertain: {
+          kind: "terminal",
+          key: "item_uncertain",
+          status: "uncertain"
         }
       }
+    },
+    aggregation: { mode: "outcome_summary", outputKey: "items.output" },
+    routes: {
+      completed: "review_detached",
+      stopped: "failed",
+      uncertain: "uncertain"
+    }
+  };
+  return {
+    irVersion: "bpa.workflow-ir/2",
+    workflow: {
+      id: "test.foreach",
+      version: "1.0.0",
+      digest: digest("c")
+    },
+    artifactClosure: { entries: [node, profile] },
+    riskSnapshot: [],
+    limits: { maxDepth: 1, maxStepExecutions: 3_000 },
+    entry: "items",
+    steps: {
+      items: foreach,
+      review_detached: {
+        kind: "wait.assistance",
+        key: "review_detached",
+        taskKind: "ai_review",
+        profile,
+        deadlineMs: 1_000,
+        onUnavailable: "continue_unresolved",
+        blocking: false,
+        next: "done"
+      },
+      done: {
+        kind: "terminal",
+        key: "done",
+        status: "succeeded"
+      },
+      failed: {
+        kind: "terminal",
+        key: "failed",
+        status: "failed",
+        errorCode: "FAILED"
+      },
+      uncertain: {
+        kind: "terminal",
+        key: "uncertain",
+        status: "uncertain"
+      }
+    }
+  };
+}
+
+function dependencies(): EngineDependencies & {
+  now: { value: number };
+} {
+  let sequence = 0;
+  const now = { value: 1_000 };
+  return {
+    now,
+    clock: { now: () => now.value },
+    ids: {
+      next: (kind) => `${kind}-${++sequence}`
+    },
+    random: { next: () => 0.5 }
+  };
+}
+
+function succeeded(output: unknown) {
+  return {
+    status: "succeeded" as const,
+    output: output as never,
+    evidence: [],
+    riskSignals: []
+  };
+}
+
+describe("deterministic IR2 engine", () => {
+  it("runs sequential foreach and emits detached assistance without pausing", () => {
+    const deps = dependencies();
+    const engine = new DeterministicWorkflowEngine(planWithForeach(), deps);
+    let transition = engine.start("run-1", {
+      items: [
+        { id: "a", value: 1 },
+        { id: "b", value: 2 }
+      ]
+    });
+    expect(transition.state.status).toBe("waiting_runtime");
+    expect(transition.state.active?.kind).toBe("call");
+    const first = transition.state.active;
+    if (first?.kind !== "call") throw new Error("fixture changed");
+    expect(first.invocation.identity).toMatchObject({
+      runId: "run-1",
+      iterationKey: "a",
+      stepKey: "inspect",
+      attempt: 1
+    });
+
+    transition = engine.acceptRuntimeOutcome({
+      state: transition.state,
+      invocationId: first.invocation.invocationId,
+      fencingToken: 1,
+      outcome: succeeded({ checked: "a" })
+    });
+    const second = transition.state.active;
+    if (second?.kind !== "call") throw new Error("fixture changed");
+    expect(second.invocation.identity.iterationKey).toBe("b");
+
+    transition = engine.acceptRuntimeOutcome({
+      state: transition.state,
+      invocationId: second.invocation.invocationId,
+      fencingToken: 1,
+      outcome: succeeded({ checked: "b" })
+    });
+    expect(transition.state.status).toBe("succeeded");
+    expect(transition.effects).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "assistance.create" })
+      ])
+    );
+    expect(transition.state.output).toMatchObject({
+      total: 2,
+      succeeded: { count: 2 },
+      failed: { count: 0 },
+      unresolved: { count: 0 }
+    });
+  });
+
+  it("persists frozen foreach items across recovery and source growth 105→106", () => {
+    const deps = dependencies();
+    const source = {
+      items: Array.from({ length: 105 }, (_, index) => ({
+        id: `p-${index}`
+      }))
     };
-    const waiting = engine.start(retryWorkflow, {});
-    const first = persistence
-      .listEvents(waiting.id)
-      .find((event) => event.type === "NODE_DISPATCHED")!.nodeExecutionId!;
-    const retrying = engine.acceptBrowserResult(retryWorkflow, first, {
-      status: "failed",
-      error: {
-        code: "PAGE_LOADING",
-        message: "Loading",
-        retryable: true
-      },
-      fencingToken: 1
+    const engine = new DeterministicWorkflowEngine(
+      planWithForeach(500),
+      deps
+    );
+    const waiting = engine.start("run-frozen", source);
+    source.items.push({ id: "p-105" });
+    const snapshot = structuredClone(waiting.state);
+    expect(snapshot.foreachStack[0]?.items).toHaveLength(105);
+
+    const restored = engine.resume(snapshot);
+    expect(restored.state).toEqual(snapshot);
+    const active = restored.state.active;
+    if (active?.kind !== "call") throw new Error("fixture changed");
+    const next = engine.acceptRuntimeOutcome({
+      state: restored.state,
+      invocationId: active.invocation.invocationId,
+      fencingToken: 1,
+      outcome: succeeded({ ok: true })
     });
-    expect(retrying.status).toBe("waiting_browser");
-    const dispatched = persistence
-      .listEvents(waiting.id)
-      .filter((event) => event.type === "NODE_DISPATCHED");
-    expect(dispatched).toHaveLength(2);
-    const second = dispatched[1]!.nodeExecutionId!;
-    expect(persistence.getNodeExecution(second)?.attempt).toBe(2);
-    expect(
-      persistence
-        .listEvents(waiting.id)
-        .filter((event) => event.type === "NODE_SCHEDULED")
-        .at(-1)?.payload
-    ).toMatchObject({ attempt: 2, delayMs: 1000 });
-    const completed = engine.acceptBrowserResult(retryWorkflow, second, {
-      status: "succeeded",
-      output: { supported: true },
-      fencingToken: 1
-    });
-    expect(completed.status).toBe("succeeded");
-    persistence.close();
+    expect(next.state.foreachStack[0]?.items).toHaveLength(105);
+    expect(next.state.foreachStack[0]?.index).toBe(1);
   });
 
-  it("records blocking risk signals without retrying the rejected action", () => {
-    const persistence = new SqlitePersistence({ path: ":memory:" });
-    const engine = new LocalWorkflowEngine(persistence);
-    const waiting = engine.start(workflow, {});
-    const nodeExecutionId = persistence
-      .listEvents(waiting.id)
-      .find((event) => event.type === "NODE_DISPATCHED")!.nodeExecutionId!;
-    const completed = engine.acceptBrowserResult(workflow, nodeExecutionId, {
-      status: "rejected",
-      error: {
-        code: "CAPTCHA_REQUIRED",
-        message: "Human verification required.",
-        retryable: false
-      },
-      riskSignals: [
-        {
-          code: "CAPTCHA_REQUIRED",
-          category: "challenge",
-          severity: "blocking",
-          source: "page",
-          detected_at: "2026-07-27T00:00:00.000Z"
-        }
-      ],
-      timingObservation: {
-        rate_limit_wait_ms: 350,
-        readiness_wait_ms: 420,
-        stable_for_ms: 300
-      },
-      fencingToken: 1
+  it("retries deterministically and rejects duplicate or late outcomes", () => {
+    const deps = dependencies();
+    const engine = new DeterministicWorkflowEngine(planWithForeach(), deps);
+    const waiting = engine.start("run-retry", {
+      items: [{ id: "a" }]
     });
-    expect(completed.status).toBe("failed");
-    expect(
-      persistence
-        .listEvents(completed.id)
-        .find((event) => event.type === "NODE_REJECTED")?.payload
-    ).toMatchObject({
-      riskSignals: [{ code: "CAPTCHA_REQUIRED", severity: "blocking" }],
-      timingObservation: {
-        rate_limit_wait_ms: 350,
-        readiness_wait_ms: 420
+    const first = waiting.state.active;
+    if (first?.kind !== "call") throw new Error("fixture changed");
+    const retrying = engine.acceptRuntimeOutcome({
+      state: waiting.state,
+      invocationId: first.invocation.invocationId,
+      fencingToken: 1,
+      outcome: {
+        status: "failed",
+        error: { code: "RETRY", message: "retry", retryable: true },
+        evidence: [],
+        riskSignals: []
       }
     });
+    const retry = retrying.state.active;
+    if (retry?.kind !== "call") throw new Error("fixture changed");
+    expect(retry.invocation.identity.attempt).toBe(2);
+    expect(retry.invocation.fencingToken).toBe(2);
+    expect(retrying.effects[0]).toMatchObject({ notBefore: 1_100 });
+
     expect(
-      persistence
-        .listEvents(completed.id)
-        .filter((event) => event.type === "NODE_SCHEDULED")
-    ).toHaveLength(2);
-    persistence.close();
+      engine.acceptRuntimeOutcome({
+        state: retrying.state,
+        invocationId: first.invocation.invocationId,
+        fencingToken: 1,
+        outcome: succeeded(null)
+      }).disposition
+    ).toBe("duplicate");
+    expect(
+      engine.acceptRuntimeOutcome({
+        state: retrying.state,
+        invocationId: "unknown",
+        fencingToken: 1,
+        outcome: succeeded(null)
+      }).disposition
+    ).toBe("stale");
   });
 
-  it("pauses and resumes a human node", () => {
-    const persistence = new SqlitePersistence({ path: ":memory:" });
-    const engine = new LocalWorkflowEngine(persistence);
-    const humanWorkflow: CompiledWorkflow = {
-      ...workflow,
-      nodes: {
-        ...workflow.nodes,
-        start: { ...workflow.nodes.start!, next: "review" },
+  it("stops immediately on uncertain outcomes", () => {
+    const engine = new DeterministicWorkflowEngine(
+      planWithForeach(),
+      dependencies()
+    );
+    const waiting = engine.start("run-uncertain", {
+      items: [{ id: "a" }]
+    });
+    const active = waiting.state.active;
+    if (active?.kind !== "call") throw new Error("fixture changed");
+    const stopped = engine.acceptRuntimeOutcome({
+      state: waiting.state,
+      invocationId: active.invocation.invocationId,
+      fencingToken: 1,
+      outcome: {
+        status: "uncertain",
+        error: {
+          code: "OUTCOME_UNKNOWN",
+          message: "Unknown",
+          retryable: false
+        },
+        evidence: [],
+        riskSignals: []
+      }
+    });
+    expect(stopped.state.status).toBe("uncertain");
+    expect(stopped.effects).toEqual([]);
+    expect(stopped.state.cursor).toBeUndefined();
+  });
+
+  it("pauses only for blocking assistance and resumes by explicit route", () => {
+    const base = planWithForeach();
+    const blocking: ExecutionPlan = {
+      ...base,
+      entry: "review",
+      steps: {
+        ...base.steps,
         review: {
+          kind: "wait.assistance",
           key: "review",
-          nodeId: "control.human-approval",
-          nodeVersion: "1.0.0",
-          definitionDigest: "sha256:human",
-          runtime: "human",
-          inputSchema: {
-            type: "object",
-            required: ["prompt"],
-            properties: { prompt: { type: "string" } }
-          },
-          outputSchema: { type: "object" },
-          input: { prompt: "确认" },
-          next: "finish",
-          on: { rejected: "finish" },
-          timeoutMs: 60_000,
-          retry: { maxAttempts: 1, backoffMs: 0, retryableErrors: [] }
+          taskKind: "human_confirm",
+          profile,
+          deadlineMs: 2_000,
+          onUnavailable: "fail",
+          blocking: true,
+          routes: {
+            resolved: "done",
+            escalated: "failed",
+            expired: "failed",
+            unavailable: "failed"
+          }
         }
       }
     };
-    const waiting = engine.start(humanWorkflow, {});
-    expect(waiting.status).toBe("waiting_human");
-    const executionId = persistence
-      .listEvents(waiting.id)
-      .find((event) => event.type === "NODE_WAITING_HUMAN")!
-      .nodeExecutionId!;
-    const completed = engine.acceptHumanResult(
-      humanWorkflow,
-      executionId,
-      true,
-      { reviewer: "test" }
+    const engine = new DeterministicWorkflowEngine(
+      blocking,
+      dependencies()
     );
-    expect(completed.status).toBe("succeeded");
-    expect(completed.output).toEqual({ reviewer: "test" });
-    persistence.close();
-  });
-
-  it("rejects invalid workflow input before creating a run", () => {
-    const persistence = new SqlitePersistence({ path: ":memory:" });
-    const engine = new LocalWorkflowEngine(persistence);
-    expect(() =>
-      engine.start(
-        {
-          ...workflow,
-          inputSchema: {
-            type: "object",
-            additionalProperties: false,
-            required: ["shop_id"],
-            properties: { shop_id: { type: "string" } }
-          }
-        },
-        { unexpected: true }
-      )
-    ).toThrow(/Workflow input is invalid/);
-    persistence.close();
-  });
-
-  it("resolves bindings and executes the default data nodes", () => {
-    const persistence = new SqlitePersistence({ path: ":memory:" });
-    const engine = new LocalWorkflowEngine(persistence);
-    const dataWorkflow: CompiledWorkflow = {
-      ...workflow,
-      inputSchema: {
-        type: "object",
-        required: ["payload"],
-        properties: { payload: { type: "string" } }
-      },
-      outputSchema: { type: "string" },
-      nodes: {
-        start: { ...workflow.nodes.start!, next: "constant" },
-        constant: {
-          key: "constant",
-          nodeId: "data.constant",
-          nodeVersion: "1.0.0",
-          definitionDigest: "sha256:constant",
-          runtime: "engine_builtin",
-          inputSchema: {
-            type: "object",
-            required: ["value"],
-            properties: { value: {} }
-          },
-          outputSchema: {},
-          input: { value: "${input.payload}" },
-          next: "finish",
-          on: {},
-          timeoutMs: 1000,
-          retry: { maxAttempts: 1, backoffMs: 0, retryableErrors: [] }
-        },
-        finish: {
-          ...workflow.nodes.finish!,
-          inputSchema: {
-            type: "object",
-            properties: { output: {} }
-          },
-          input: { output: "${previous}" }
-        }
-      }
-    };
-    const completed = engine.start(dataWorkflow, { payload: "selected" });
-    expect(completed.status).toBe("succeeded");
-    expect(completed.output).toBe("selected");
-    expect(
-      persistence
-        .listEvents(completed.id)
-        .filter((event) => event.type === "NODE_SUCCEEDED")
-        .map((event) => (event.payload as { builtin?: string }).builtin)
-    ).toContain("data.constant");
-    persistence.close();
-  });
-
-  it("turns invalid browser output into an auditable non-retryable failure", () => {
-    const persistence = new SqlitePersistence({ path: ":memory:" });
-    const engine = new LocalWorkflowEngine(persistence);
-    const { next: _next, ...terminalObserve } = workflow.nodes.observe!;
-    const strictWorkflow: CompiledWorkflow = {
-      ...workflow,
-      nodes: {
-        ...workflow.nodes,
-        observe: {
-          ...terminalObserve,
-          outputSchema: {
-            type: "object",
-            required: ["supported"],
-            properties: { supported: { const: true } }
-          }
-        }
-      }
-    };
-    const waiting = engine.start(strictWorkflow, {});
-    const executionId = persistence
-      .listEvents(waiting.id)
-      .find((event) => event.type === "NODE_DISPATCHED")!.nodeExecutionId!;
-    const failed = engine.acceptBrowserResult(strictWorkflow, executionId, {
-      status: "succeeded",
-      output: { supported: false },
-      fencingToken: 1
+    const waiting = engine.start("run-assistance", {});
+    expect(waiting.state.status).toBe("waiting_assistance");
+    const active = waiting.state.active;
+    if (active?.kind !== "assistance") throw new Error("fixture changed");
+    const completed = engine.acceptAssistanceOutcome({
+      state: waiting.state,
+      taskId: active.request.taskId,
+      fencingToken: 1,
+      outcome: { status: "resolved", output: { approved: true } }
     });
-    expect(failed.status).toBe("failed");
-    expect(persistence.getNodeExecution(executionId)?.error?.code).toBe(
-      "OUTPUT_SCHEMA_INVALID"
+    expect(completed.state.status).toBe("succeeded");
+    expect(completed.state.output).toEqual({ approved: true });
+    expect(
+      engine.acceptAssistanceOutcome({
+        state: completed.state,
+        taskId: active.request.taskId,
+        fencingToken: 1,
+        outcome: { status: "resolved", output: null }
+      }).disposition
+    ).toBe("duplicate");
+  });
+
+  it("evaluates decisions without executing arbitrary expressions", () => {
+    const base = planWithForeach();
+    const conditional: ExecutionPlan = {
+      ...base,
+      entry: "choose",
+      steps: {
+        choose: {
+          kind: "decision",
+          key: "choose",
+          branches: [
+            {
+              id: "ready",
+              condition: {
+                kind: "all",
+                conditions: [
+                  {
+                    kind: "compare",
+                    operator: "equals",
+                    left: {
+                      kind: "reference",
+                      source: "run_input",
+                      path: ["ready"]
+                    },
+                    right: { kind: "literal", value: true }
+                  },
+                  {
+                    kind: "not",
+                    condition: {
+                      kind: "compare",
+                      operator: "contains",
+                      left: {
+                        kind: "reference",
+                        source: "run_input",
+                        path: ["labels"]
+                      },
+                      right: { kind: "literal", value: "blocked" }
+                    }
+                  }
+                ]
+              },
+              target: "done"
+            }
+          ],
+          defaultTarget: "failed"
+        },
+        done: base.steps.done!,
+        failed: base.steps.failed!
+      }
+    };
+    const engine = new DeterministicWorkflowEngine(
+      conditional,
+      dependencies()
     );
-    persistence.close();
+    expect(
+      engine.start("run-decision", {
+        ready: true,
+        labels: ["safe"]
+      }).state.status
+    ).toBe("succeeded");
+    expect(
+      engine.start("run-decision-failed", {
+        ready: false,
+        labels: ["safe"]
+      }).state.status
+    ).toBe("failed");
+  });
+
+  it("collects item failures and rejects duplicate stable item keys", () => {
+    const engine = new DeterministicWorkflowEngine(
+      planWithForeach(),
+      dependencies()
+    );
+    let transition = engine.start("run-failure", {
+      items: [{ id: "a" }, { id: "b" }]
+    });
+    const first = transition.state.active;
+    if (first?.kind !== "call") throw new Error("fixture changed");
+    transition = engine.acceptRuntimeOutcome({
+      state: transition.state,
+      invocationId: first.invocation.invocationId,
+      fencingToken: 1,
+      outcome: {
+        status: "failed",
+        error: { code: "FINAL", message: "failed", retryable: false },
+        evidence: [],
+        riskSignals: []
+      }
+    });
+    const second = transition.state.active;
+    if (second?.kind !== "call") throw new Error("fixture changed");
+    transition = engine.acceptRuntimeOutcome({
+      state: transition.state,
+      invocationId: second.invocation.invocationId,
+      fencingToken: 1,
+      outcome: succeeded({ ok: true })
+    });
+    expect(transition.state.output).toMatchObject({
+      total: 2,
+      succeeded: { count: 1 },
+      failed: { count: 1 }
+    });
+
+    expect(
+      engine.start("run-duplicate", {
+        items: [{ id: "same" }, { id: "same" }]
+      }).state
+    ).toMatchObject({
+      status: "failed",
+      error: { code: "FOREACH_ITEM_KEY_DUPLICATE" }
+    });
+  });
+
+  it("routes assistance expiry and rejects snapshots from another plan", () => {
+    const base = planWithForeach();
+    const blocking: ExecutionPlan = {
+      ...base,
+      entry: "review",
+      steps: {
+        review: {
+          kind: "wait.assistance",
+          key: "review",
+          taskKind: "ai_review",
+          profile,
+          deadlineMs: 100,
+          onUnavailable: "fail",
+          blocking: true,
+          routes: {
+            resolved: "done",
+            escalated: "failed",
+            expired: "failed",
+            unavailable: "failed"
+          }
+        },
+        done: base.steps.done!,
+        failed: base.steps.failed!
+      }
+    };
+    const engine = new DeterministicWorkflowEngine(
+      blocking,
+      dependencies()
+    );
+    const waiting = engine.start("run-expired", {});
+    const active = waiting.state.active;
+    if (active?.kind !== "assistance") throw new Error("fixture changed");
+    const expired = engine.acceptAssistanceOutcome({
+      state: waiting.state,
+      taskId: active.request.taskId,
+      fencingToken: 1,
+      outcome: { status: "expired" }
+    });
+    expect(expired.state.status).toBe("failed");
+
+    const mismatched = {
+      ...waiting.state,
+      workflowDigest: "different"
+    } satisfies EngineState;
+    expect(() => engine.resume(mismatched)).toThrow(
+      "does not belong to this plan"
+    );
+  });
+
+  it("handles empty, oversized and invalid foreach inputs deterministically", () => {
+    const engine = new DeterministicWorkflowEngine(
+      planWithForeach(),
+      dependencies()
+    );
+    expect(engine.start("run-empty", { items: [] }).state).toMatchObject({
+      status: "succeeded",
+      output: { total: 0 }
+    });
+    expect(
+      engine.start("run-too-many", {
+        items: Array.from({ length: 501 }, (_, id) => ({
+          id: String(id)
+        }))
+      }).state.status
+    ).toBe("failed");
+    expect(
+      engine.start("run-wrong-key", {
+        items: [{ id: 1 }]
+      }).state
+    ).toMatchObject({
+      status: "failed",
+      error: { code: "FOREACH_ITEM_KEY_INVALID" }
+    });
+    expect(engine.start("run-not-array", { items: null }).state.status).toBe(
+      "failed"
+    );
+  });
+
+  it("stops foreach on item error or duration exhaustion", () => {
+    const baseStopPlan = planWithForeach();
+    const foreach = baseStopPlan.steps.items;
+    if (foreach?.kind !== "foreach") throw new Error("fixture changed");
+    const stopPlan: ExecutionPlan = {
+      ...baseStopPlan,
+      steps: {
+        ...baseStopPlan.steps,
+        items: { ...foreach, onItemError: "stop" }
+      }
+    };
+    const deps = dependencies();
+    const engine = new DeterministicWorkflowEngine(stopPlan, deps);
+    let waiting = engine.start("run-stop", { items: [{ id: "a" }] });
+    let active = waiting.state.active;
+    if (active?.kind !== "call") throw new Error("fixture changed");
+    expect(
+      engine.acceptRuntimeOutcome({
+        state: waiting.state,
+        invocationId: active.invocation.invocationId,
+        fencingToken: 1,
+        outcome: {
+          status: "failed",
+          error: { code: "FINAL", message: "failed", retryable: false },
+          evidence: [],
+          riskSignals: []
+        }
+      }).state.status
+    ).toBe("failed");
+
+    const baseDurationPlan = planWithForeach();
+    const durationForeach = baseDurationPlan.steps.items;
+    if (durationForeach?.kind !== "foreach") {
+      throw new Error("fixture changed");
+    }
+    const durationPlan: ExecutionPlan = {
+      ...baseDurationPlan,
+      steps: {
+        ...baseDurationPlan.steps,
+        items: {
+          ...durationForeach,
+          limits: { ...durationForeach.limits, maxDurationMs: 1 }
+        }
+      }
+    };
+    const durationEngine = new DeterministicWorkflowEngine(
+      durationPlan,
+      deps
+    );
+    waiting = durationEngine.start("run-duration", {
+      items: [{ id: "a" }]
+    });
+    active = waiting.state.active;
+    if (active?.kind !== "call") throw new Error("fixture changed");
+    deps.now.value += 2;
+    expect(
+      durationEngine.acceptRuntimeOutcome({
+        state: waiting.state,
+        invocationId: active.invocation.invocationId,
+        fencingToken: 1,
+        outcome: succeeded(null)
+      }).state.status
+    ).toBe("failed");
+  });
+
+  it("dispatches effects only through the provider registry", async () => {
+    const engine = new DeterministicWorkflowEngine(
+      planWithForeach(),
+      dependencies()
+    );
+    const waiting = engine.start("run-provider", {
+      items: [{ id: "a" }]
+    });
+    const effect = waiting.effects[0];
+    if (effect?.kind !== "runtime.invoke") throw new Error("fixture changed");
+    const registry = new RuntimeProviderRegistry();
+    registry.register({
+      id: "test",
+      supports: () => true,
+      invoke: async (invocation) =>
+        succeeded({ invocationId: invocation.invocationId })
+    });
+    await expect(
+      dispatchRuntimeEffect(
+        registry,
+        effect,
+        new AbortController().signal
+      )
+    ).resolves.toMatchObject({
+      status: "succeeded",
+      output: { invocationId: effect.invocation.invocationId }
+    });
+  });
+});
+
+describe("binding and condition helpers", () => {
+  it("resolves composed bindings and all deterministic comparisons", () => {
+    const state: EngineState = {
+      stateVersion: "bpa.engine-state/2",
+      runId: "run-bindings",
+      workflowDigest: digest("f"),
+      status: "running",
+      revision: 0,
+      input: { present: 4 },
+      cursor: undefined,
+      previousOutput: { count: 5 },
+      stepOutputs: {
+        "[]:source": { label: "ready" }
+      },
+      foreachStack: [],
+      active: undefined,
+      completedExternalIds: [],
+      output: undefined,
+      error: undefined
+    };
+
+    expect(
+      resolveBinding(
+        {
+          kind: "array",
+          items: [
+            {
+              kind: "reference",
+              source: "previous_output",
+              path: ["count"]
+            },
+            {
+              kind: "reference",
+              source: "step_output",
+              stepKey: "source",
+              path: ["label"]
+            }
+          ]
+        },
+        state
+      )
+    ).toEqual([5, "ready"]);
+    expect(() =>
+      resolveBinding(
+        { kind: "reference", source: "scope_item", path: [] },
+        state
+      )
+    ).toThrow("outside foreach");
+    expect(() =>
+      resolveBinding(
+        {
+          kind: "reference",
+          source: "step_output",
+          stepKey: "missing",
+          path: []
+        },
+        state
+      )
+    ).toThrow("unavailable");
+    expect(() =>
+      resolveBinding(
+        {
+          kind: "reference",
+          source: "run_input",
+          path: ["missing"]
+        },
+        state
+      )
+    ).toThrow("does not exist");
+
+    const compare = (
+      operator:
+        | "exists"
+        | "not_equals"
+        | "greater_than"
+        | "greater_than_or_equal"
+        | "less_than"
+        | "less_than_or_equal",
+      left: number,
+      right?: number
+    ) =>
+      evaluateCondition(
+        {
+          kind: "compare",
+          operator,
+          left: { kind: "literal", value: left },
+          ...(right === undefined
+            ? {}
+            : { right: { kind: "literal" as const, value: right } })
+        },
+        state
+      );
+
+    expect(compare("exists", 1)).toBe(true);
+    expect(compare("not_equals", 1, 2)).toBe(true);
+    expect(compare("greater_than", 2, 1)).toBe(true);
+    expect(compare("greater_than_or_equal", 2, 2)).toBe(true);
+    expect(compare("less_than", 1, 2)).toBe(true);
+    expect(compare("less_than_or_equal", 2, 2)).toBe(true);
+    expect(
+      evaluateCondition(
+        {
+          kind: "any",
+          conditions: [
+            {
+              kind: "compare",
+              operator: "equals",
+              left: { kind: "literal", value: 1 },
+              right: { kind: "literal", value: 2 }
+            },
+            {
+              kind: "compare",
+              operator: "equals",
+              left: { kind: "literal", value: 1 },
+              right: { kind: "literal", value: 1 }
+            }
+          ]
+        },
+        state
+      )
+    ).toBe(true);
   });
 });

@@ -9,6 +9,7 @@
   "dependencies": {
     "@bpa/node-runtime": "workspace:*",
     "@bpa/schemas": "workspace:*",
+    "@bpa/workflow-ir": "workspace:*",
     "yaml": "^2.8.1"
   }
 }

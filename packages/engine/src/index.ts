@@ -1,676 +1,1028 @@
-import { randomUUID } from "node:crypto";
-import { contentDigest, type CompiledNode, type CompiledWorkflow } from "@bpa/compiler";
 import {
-  computeDispatchDelayMs,
-  computeRetryDelayMs,
-  executeBuiltinNode,
-  resolveBindings
+  RuntimeProviderRegistry,
+  type RuntimeInvocation,
+  type RuntimeOutcome
 } from "@bpa/node-runtime";
-import type {
-  ExecutionEventRecord,
-  NodeExecutionRecord,
-  NodeExecutionStatus,
-  Persistence,
-  RunRecord,
-  RunStatus
-} from "@bpa/persistence";
 import {
-  compileDataValidator,
-  formatValidationErrors,
-  type RiskSignal
-} from "@bpa/schemas";
+  appendScope,
+  executionIdentityKey,
+  type BindingValue,
+  type CallStep,
+  type Condition,
+  type ExecutionBlock,
+  type ExecutionIdentity,
+  type ExecutionPlan,
+  type ForeachAggregationResult,
+  type ForeachStep,
+  type JsonValue,
+  type ScopePath,
+  type TerminalStep,
+  type WaitAssistanceStep
+} from "@bpa/workflow-ir";
 
-export interface BrowserNodeResult {
-  status: Extract<
-    NodeExecutionStatus,
-    "succeeded" | "rejected" | "failed" | "timed_out" | "cancelled" | "uncertain"
-  >;
-  output?: unknown;
-  error?: NodeExecutionRecord["error"];
-  riskSignals?: RiskSignal[];
-  timingObservation?: {
-    rate_limit_wait_ms: number;
-    readiness_wait_ms?: number;
-    stable_for_ms?: number;
-  };
-  fencingToken: number;
+export interface Clock {
+  now(): number;
 }
 
-export class LocalWorkflowEngine {
-  constructor(readonly persistence: Persistence) {}
+export interface IdSource {
+  next(kind: "invocation" | "trace" | "assistance"): string;
+}
 
-  start(workflow: CompiledWorkflow, input: unknown): RunRecord {
-    const inputIssues = this.#validationIssues(
-      workflow.inputSchema,
-      input,
-      "workflow input"
-    );
-    if (inputIssues.length > 0) {
-      throw new Error(`Workflow input is invalid: ${inputIssues.join("; ")}`);
-    }
-    const createdAt = new Date().toISOString();
-    const runId = randomUUID();
-    let sequence = 1;
-    let run = this.persistence.createRun({
-      run: {
-        id: runId,
-        workflowId: workflow.workflowId,
-        workflowVersion: workflow.workflowVersion,
-        workflowDigest: workflow.workflowDigest,
-        status: "queued",
-        revision: 0,
-        input,
-        createdAt,
-        updatedAt: createdAt
-      },
-      event: this.#event(runId, sequence++, "RUN_CREATED", {
-        workflowId: workflow.workflowId,
-        workflowVersion: workflow.workflowVersion,
-        workflowDigest: workflow.workflowDigest
-      })
-    });
-    run = this.persistence.commitRunTransition({
-      runId,
-      expectedRevision: run.revision,
-      nextStatus: "running",
-      event: this.#event(runId, sequence++, "RUN_STARTED", {})
-    });
-    return this.#schedule(workflow, run, workflow.start, sequence, undefined);
-  }
+export interface RandomSource {
+  next(): number;
+}
 
-  acceptBrowserResult(
-    workflow: CompiledWorkflow,
-    nodeExecutionId: string,
-    result: BrowserNodeResult
-  ): RunRecord {
-    const nodeExecution =
-      this.persistence.getNodeExecution(nodeExecutionId);
-    if (!nodeExecution) {
-      throw new Error(`Node execution not found: ${nodeExecutionId}`);
+export interface EngineDependencies {
+  readonly clock: Clock;
+  readonly ids: IdSource;
+  readonly random: RandomSource;
+}
+
+export interface Cursor {
+  readonly blockPath: readonly string[];
+  readonly stepKey: string;
+}
+
+export interface ForeachFrame {
+  readonly stepKey: string;
+  readonly parentBlockPath: readonly string[];
+  readonly items: readonly JsonValue[];
+  readonly itemKeys: readonly string[];
+  readonly index: number;
+  readonly startedAt: number;
+  readonly succeeded: ForeachAggregationResult["succeeded"]["items"];
+  readonly failed: ForeachAggregationResult["failed"]["items"];
+  readonly unresolved: ForeachAggregationResult["unresolved"]["items"];
+}
+
+export interface ActiveCall {
+  readonly kind: "call";
+  readonly invocation: RuntimeInvocation;
+  readonly notBefore: number;
+}
+
+export interface AssistanceRequest {
+  readonly taskId: string;
+  readonly identity: ExecutionIdentity;
+  readonly taskKind: WaitAssistanceStep["taskKind"];
+  readonly profile: WaitAssistanceStep["profile"];
+  readonly input: JsonValue;
+  readonly blocking: boolean;
+  readonly deadlineAt: number;
+  readonly onUnavailable: WaitAssistanceStep["onUnavailable"];
+  readonly fencingToken: number;
+}
+
+export interface ActiveAssistance {
+  readonly kind: "assistance";
+  readonly request: AssistanceRequest;
+}
+
+export type ActiveExternal = ActiveCall | ActiveAssistance;
+
+export type EngineStatus =
+  | "running"
+  | "waiting_runtime"
+  | "waiting_assistance"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "uncertain";
+
+/**
+ * Fully serializable interpreter state. The plan itself is persisted separately
+ * as the immutable Run plan snapshot.
+ */
+export interface EngineState {
+  readonly stateVersion: "bpa.engine-state/2";
+  readonly runId: string;
+  readonly workflowDigest: string;
+  readonly status: EngineStatus;
+  readonly revision: number;
+  readonly input: JsonValue;
+  readonly cursor: Cursor | undefined;
+  readonly previousOutput: JsonValue;
+  readonly stepOutputs: Readonly<Record<string, JsonValue>>;
+  readonly foreachStack: readonly ForeachFrame[];
+  readonly active: ActiveExternal | undefined;
+  readonly completedExternalIds: readonly string[];
+  readonly output: JsonValue | undefined;
+  readonly error:
+    | { readonly code: string; readonly message: string }
+    | undefined;
+}
+
+export type EngineEffect =
+  | {
+      readonly kind: "runtime.invoke";
+      readonly invocation: RuntimeInvocation;
+      readonly notBefore: number;
     }
-    if (nodeExecution.fencingToken !== result.fencingToken) {
-      throw new Error(
-        `Stale fencing token ${result.fencingToken}; expected ${nodeExecution.fencingToken}`
-      );
-    }
+  | {
+      readonly kind: "assistance.create";
+      readonly request: AssistanceRequest;
+    };
+
+export interface EngineTransition {
+  readonly state: EngineState;
+  readonly effects: readonly EngineEffect[];
+  readonly disposition: "advanced" | "duplicate" | "stale";
+}
+
+export type AssistanceOutcome =
+  | { readonly status: "resolved"; readonly output: JsonValue }
+  | {
+      readonly status: "escalated" | "expired" | "unavailable";
+      readonly output?: JsonValue;
+    };
+
+function clone<T>(value: T): T {
+  return structuredClone(value);
+}
+
+function valueAtPath(value: JsonValue, path: readonly string[]): JsonValue {
+  let current: JsonValue = value;
+  for (const segment of path) {
     if (
-      [
-        "succeeded",
-        "rejected",
-        "failed",
-        "timed_out",
-        "cancelled",
-        "uncertain"
-      ].includes(nodeExecution.status)
+      current === null ||
+      typeof current !== "object" ||
+      Array.isArray(current) ||
+      !(segment in current)
     ) {
-      return this.persistence.getRun(nodeExecution.runId)!;
+      throw new Error(`Binding path does not exist: ${path.join(".")}`);
     }
-    const run = this.persistence.getRun(nodeExecution.runId)!;
-    const compiledNode = workflow.nodes[nodeExecution.nodeKey];
-    if (!compiledNode) {
-      throw new Error(`Compiled node not found: ${nodeExecution.nodeKey}`);
-    }
-    let effectiveResult = result;
-    if (result.status === "succeeded") {
-      const outputIssues = this.#validationIssues(
-        compiledNode.outputSchema,
-        result.output,
-        `${compiledNode.nodeId} output`
+    current = (current as Readonly<Record<string, JsonValue>>)[segment]!;
+  }
+  return clone(current);
+}
+
+function scopeKey(scopePath: ScopePath): string {
+  return JSON.stringify(
+    scopePath.map((segment) => [segment.foreachStepKey, segment.itemKey])
+  );
+}
+
+function outputKey(scopePath: ScopePath, stepKey: string): string {
+  return `${scopeKey(scopePath)}:${stepKey}`;
+}
+
+function currentScope(state: EngineState): ScopePath {
+  let scope: ScopePath = [];
+  for (const frame of state.foreachStack) {
+    scope = appendScope(scope, frame.stepKey, frame.itemKeys[frame.index]!);
+  }
+  return scope;
+}
+
+function currentItem(state: EngineState): JsonValue {
+  const frame = state.foreachStack.at(-1);
+  if (!frame) throw new Error("scope_item binding used outside foreach");
+  return clone(frame.items[frame.index]!);
+}
+
+function resolveReference(
+  binding: Extract<BindingValue, { kind: "reference" }>,
+  state: EngineState
+): JsonValue {
+  if (binding.source === "run_input") {
+    return valueAtPath(state.input, binding.path);
+  }
+  if (binding.source === "previous_output") {
+    return valueAtPath(state.previousOutput, binding.path);
+  }
+  if (binding.source === "scope_item") {
+    return valueAtPath(currentItem(state), binding.path);
+  }
+  const scope = [...currentScope(state)];
+  while (true) {
+    const value = state.stepOutputs[outputKey(scope, binding.stepKey!)];
+    if (value !== undefined) return valueAtPath(value, binding.path);
+    if (scope.length === 0) break;
+    scope.pop();
+  }
+  throw new Error(`Step output is unavailable: ${binding.stepKey}`);
+}
+
+export function resolveBinding(
+  binding: BindingValue,
+  state: EngineState
+): JsonValue {
+  switch (binding.kind) {
+    case "literal":
+      return clone(binding.value);
+    case "reference":
+      return resolveReference(binding, state);
+    case "array":
+      return binding.items.map((item) => resolveBinding(item, state));
+    case "object":
+      return Object.fromEntries(
+        Object.entries(binding.entries).map(([key, value]) => [
+          key,
+          resolveBinding(value, state)
+        ])
       );
-      if (outputIssues.length > 0) {
-        effectiveResult = {
-          ...result,
-          status: "failed",
-          error: {
-            code: "OUTPUT_SCHEMA_INVALID",
-            message: outputIssues.join("; "),
-            retryable: false
-          }
-        };
-      }
+  }
+}
+
+function compare(
+  operator: Extract<Condition, { kind: "compare" }>["operator"],
+  left: JsonValue,
+  right: JsonValue | undefined
+): boolean {
+  switch (operator) {
+    case "exists":
+      return left !== null;
+    case "equals":
+      return JSON.stringify(left) === JSON.stringify(right);
+    case "not_equals":
+      return JSON.stringify(left) !== JSON.stringify(right);
+    case "greater_than":
+      return typeof left === "number" &&
+        typeof right === "number" &&
+        left > right;
+    case "greater_than_or_equal":
+      return typeof left === "number" &&
+        typeof right === "number" &&
+        left >= right;
+    case "less_than":
+      return typeof left === "number" &&
+        typeof right === "number" &&
+        left < right;
+    case "less_than_or_equal":
+      return typeof left === "number" &&
+        typeof right === "number" &&
+        left <= right;
+    case "contains":
+      return typeof left === "string" && typeof right === "string"
+        ? left.includes(right)
+        : Array.isArray(left)
+          ? left.some(
+              (item) => JSON.stringify(item) === JSON.stringify(right)
+            )
+          : false;
+  }
+}
+
+export function evaluateCondition(
+  condition: Condition,
+  state: EngineState
+): boolean {
+  switch (condition.kind) {
+    case "compare":
+      return compare(
+        condition.operator,
+        resolveBinding(condition.left, state),
+        condition.right
+          ? resolveBinding(condition.right, state)
+          : undefined
+      );
+    case "all":
+      return condition.conditions.every((entry) =>
+        evaluateCondition(entry, state)
+      );
+    case "any":
+      return condition.conditions.some((entry) =>
+        evaluateCondition(entry, state)
+      );
+    case "not":
+      return !evaluateCondition(condition.condition, state);
+  }
+}
+
+function blockAt(plan: ExecutionPlan, path: readonly string[]): ExecutionBlock {
+  let block: ExecutionBlock = { entry: plan.entry, steps: plan.steps };
+  for (const foreachKey of path) {
+    const step = block.steps[foreachKey];
+    if (step?.kind !== "foreach") {
+      throw new Error(`Foreach block not found: ${foreachKey}`);
     }
-    let sequence = this.#nextSequence(run.id);
-    this.persistence.commitNodeTransition({
-      nodeExecutionId,
-      expectedRevision: nodeExecution.revision,
-      nextStatus: effectiveResult.status,
-      ...(effectiveResult.output === undefined
-        ? {}
-        : { output: effectiveResult.output }),
-      ...(effectiveResult.error === undefined
-        ? {}
-        : { error: effectiveResult.error }),
-      event: this.#event(
-        run.id,
-        sequence++,
-        `NODE_${effectiveResult.status.toUpperCase()}`,
+    block = step.body;
+  }
+  return block;
+}
+
+function immutableState(
+  state: Omit<EngineState, "revision">,
+  previousRevision: number
+): EngineState {
+  return clone({ ...state, revision: previousRevision + 1 });
+}
+
+function executionIdentity(
+  state: EngineState,
+  stepKey: string,
+  attempt: number
+): ExecutionIdentity {
+  const scopePath = currentScope(state);
+  return {
+    runId: state.runId,
+    scopePath,
+    iterationKey: scopePath.at(-1)?.itemKey ?? "root",
+    stepKey,
+    attempt
+  };
+}
+
+function retryDelay(
+  step: CallStep,
+  attempt: number,
+  random: number
+): number {
+  const exponent =
+    step.retry.backoff.strategy === "exponential"
+      ? Math.max(0, attempt - 2)
+      : 0;
+  const uncapped = step.retry.backoff.baseDelayMs * 2 ** exponent;
+  const capped = Math.min(uncapped, step.retry.backoff.maxDelayMs);
+  const jitter =
+    1 + (random * 2 - 1) * step.retry.backoff.jitterRatio;
+  return Math.max(0, Math.round(capped * jitter));
+}
+
+function scheduleCall(
+  state: EngineState,
+  step: CallStep,
+  attempt: number,
+  fencingToken: number,
+  notBefore: number,
+  deps: EngineDependencies
+): EngineTransition {
+  const identity = executionIdentity(state, step.key, attempt);
+  const invocation: RuntimeInvocation = {
+    invocationId: deps.ids.next("invocation"),
+    identity,
+    node: step.node,
+    providerId: step.providerId,
+    input: step.input ? resolveBinding(step.input, state) : {},
+    permissionSnapshot: step.permissionSnapshot,
+    deadlineAt: notBefore + step.timeoutMs,
+    idempotencyKey: executionIdentityKey(identity),
+    fencingToken,
+    traceId: deps.ids.next("trace")
+  };
+  const nextState = immutableState(
+    {
+      ...state,
+      status: "waiting_runtime",
+      active: { kind: "call", invocation, notBefore }
+    },
+    state.revision
+  );
+  return {
+    state: nextState,
+    effects: [{ kind: "runtime.invoke", invocation, notBefore }],
+    disposition: "advanced"
+  };
+}
+
+function assistanceRequest(
+  state: EngineState,
+  step: WaitAssistanceStep,
+  deps: EngineDependencies
+): AssistanceRequest {
+  return {
+    taskId: deps.ids.next("assistance"),
+    identity: executionIdentity(state, step.key, 1),
+    taskKind: step.taskKind,
+    profile: step.profile,
+    input: step.input ? resolveBinding(step.input, state) : {},
+    blocking: step.blocking,
+    deadlineAt: deps.clock.now() + step.deadlineMs,
+    onUnavailable: step.onUnavailable,
+    fencingToken: 1
+  };
+}
+
+function itemKey(item: JsonValue, step: ForeachStep): string {
+  const value = valueAtPath(item, step.itemKey.path);
+  if (
+    (step.itemKey.valueType === "string" && typeof value !== "string") ||
+    (step.itemKey.valueType === "number" && typeof value !== "number")
+  ) {
+    throw new Error(`foreach ${step.key} itemKey has the wrong value type`);
+  }
+  return String(value);
+}
+
+function aggregate(frame: ForeachFrame): ForeachAggregationResult {
+  return {
+    total: frame.items.length,
+    succeeded: {
+      count: frame.succeeded.length,
+      items: frame.succeeded
+    },
+    failed: { count: frame.failed.length, items: frame.failed },
+    unresolved: {
+      count: frame.unresolved.length,
+      items: frame.unresolved
+    }
+  };
+}
+
+function failState(
+  state: EngineState,
+  code: string,
+  message: string
+): EngineState {
+  return immutableState(
+    {
+      ...state,
+      status: "failed",
+      cursor: undefined,
+      active: undefined,
+      error: { code, message }
+    },
+    state.revision
+  );
+}
+
+function completeItem(
+  plan: ExecutionPlan,
+  state: EngineState,
+  terminal: TerminalStep,
+  deps: EngineDependencies
+): EngineTransition {
+  if (terminal.status === "uncertain") {
+    return {
+      state: immutableState(
         {
-          fencingToken: effectiveResult.fencingToken,
-          ...(effectiveResult.error ? { error: effectiveResult.error } : {}),
-          ...(effectiveResult.riskSignals?.length
-            ? { riskSignals: effectiveResult.riskSignals }
-            : {}),
-          ...(effectiveResult.timingObservation
-            ? { timingObservation: effectiveResult.timingObservation }
-            : {})
+          ...state,
+          status: "uncertain",
+          cursor: undefined,
+          active: undefined,
+          error: {
+            code: terminal.errorCode ?? "ITEM_UNCERTAIN",
+            message: "An item outcome is uncertain."
+          }
         },
-        nodeExecutionId
+        state.revision
       ),
-      idempotencyResult: {
-        key: nodeExecution.idempotencyKey,
-        status: effectiveResult.status,
-        result: effectiveResult
-      }
-    });
-    const retryable =
-      nodeExecution.attempt < compiledNode.retry.maxAttempts &&
-      (effectiveResult.status === "timed_out" ||
-        (effectiveResult.status === "failed" &&
-          (effectiveResult.error?.retryable === true ||
-            (effectiveResult.error?.code != null &&
-              compiledNode.retry.retryableErrors.includes(
-                effectiveResult.error.code
-              )))));
-    if (retryable) {
-      const nextAttempt = nodeExecution.attempt + 1;
-      return this.#schedule(
-        workflow,
-        this.persistence.getRun(run.id)!,
-        nodeExecution.nodeKey,
-        sequence,
-        effectiveResult.output,
-        nextAttempt,
-        computeRetryDelayMs({
-          policy: compiledNode.timing,
-          nextAttempt,
-          seed: `${run.id}:${nodeExecution.nodeKey}:retry:${nextAttempt}`,
-          fallbackBaseMs: compiledNode.retry.backoffMs
-        })
-      );
-    }
-    let target: string | undefined;
-    if (effectiveResult.status === "succeeded") {
-      target = compiledNode.next ?? compiledNode.on.success;
-    } else {
-      const transitionKey:
-        | "failure"
-        | "timeout"
-        | "rejected"
-        | "cancelled"
-        | "uncertain" =
-        effectiveResult.status === "timed_out"
-          ? "timeout"
-          : effectiveResult.status === "failed"
-            ? "failure"
-            : effectiveResult.status;
-      target = compiledNode.on[transitionKey] ?? compiledNode.on.failure;
-    }
-    if (target) {
-      return this.#schedule(
-        workflow,
-        this.persistence.getRun(run.id)!,
-        target,
-        sequence,
-        effectiveResult.output
-      );
-    }
-    const terminalStatus: RunStatus =
-      effectiveResult.status === "uncertain"
-        ? "uncertain"
-        : effectiveResult.status === "cancelled"
-          ? "cancelled"
-          : effectiveResult.status === "succeeded"
-            ? "succeeded"
-            : "failed";
-    return this.#finishRun(
-      workflow,
-      this.persistence.getRun(run.id)!,
-      sequence,
-      terminalStatus,
-      effectiveResult.output,
-      nodeExecutionId,
-      effectiveResult.error
+      effects: [],
+      disposition: "advanced"
+    };
+  }
+  const frame = state.foreachStack.at(-1)!;
+  const block = blockAt(plan, frame.parentBlockPath);
+  const foreach = block.steps[frame.stepKey];
+  if (foreach?.kind !== "foreach") {
+    throw new Error(`Foreach frame step not found: ${frame.stepKey}`);
+  }
+  const output = terminal.output
+    ? resolveBinding(terminal.output, state)
+    : state.previousOutput;
+  const outcome = {
+    itemKey: frame.itemKeys[frame.index]!,
+    ...(terminal.status === "succeeded" ? { output } : {}),
+    ...(terminal.status === "failed"
+      ? {
+          error: {
+            code: terminal.errorCode ?? "ITEM_FAILED",
+            message: "The foreach item failed."
+          }
+        }
+      : {})
+  };
+  const updated: ForeachFrame = {
+    ...frame,
+    succeeded:
+      terminal.status === "succeeded"
+        ? [...frame.succeeded, outcome]
+        : frame.succeeded,
+    failed:
+      terminal.status === "failed"
+        ? [...frame.failed, outcome]
+        : frame.failed,
+    unresolved:
+      terminal.status === "unresolved"
+        ? [...frame.unresolved, outcome]
+        : frame.unresolved
+  };
+  const parentStack = state.foreachStack.slice(0, -1);
+  if (
+    terminal.status === "failed" &&
+    foreach.onItemError === "stop"
+  ) {
+    return drive(
+      plan,
+      immutableState(
+        {
+          ...state,
+          status: "running",
+          cursor: {
+            blockPath: frame.parentBlockPath,
+            stepKey: foreach.routes.stopped
+          },
+          foreachStack: parentStack,
+          previousOutput: aggregate(updated) as unknown as JsonValue
+        },
+        state.revision
+      ),
+      deps
     );
   }
-
-  acceptHumanResult(
-    workflow: CompiledWorkflow,
-    nodeExecutionId: string,
-    approved: boolean,
-    output?: unknown
-  ): RunRecord {
-    const execution = this.persistence.getNodeExecution(nodeExecutionId);
-    if (!execution) {
-      throw new Error(`Node execution not found: ${nodeExecutionId}`);
-    }
-    return this.acceptBrowserResult(workflow, nodeExecutionId, {
-      status: approved ? "succeeded" : "rejected",
-      ...(output === undefined ? {} : { output }),
-      ...(!approved
-        ? {
-            error: {
-              code: "HUMAN_REJECTED",
-              message: "A human reviewer rejected this step.",
-              retryable: false
-            }
-          }
-        : {}),
-      fencingToken: execution.fencingToken
-    });
+  if (deps.clock.now() - frame.startedAt > foreach.limits.maxDurationMs) {
+    return drive(
+      plan,
+      immutableState(
+        {
+          ...state,
+          status: "running",
+          cursor: {
+            blockPath: frame.parentBlockPath,
+            stepKey: foreach.routes.stopped
+          },
+          foreachStack: parentStack,
+          previousOutput: aggregate(updated) as unknown as JsonValue
+        },
+        state.revision
+      ),
+      deps
+    );
   }
+  if (frame.index + 1 < frame.items.length) {
+    const nextFrame = { ...updated, index: frame.index + 1 };
+    return drive(
+      plan,
+      immutableState(
+        {
+          ...state,
+          status: "running",
+          cursor: {
+            blockPath: [...frame.parentBlockPath, frame.stepKey],
+            stepKey: foreach.body.entry
+          },
+          foreachStack: [...parentStack, nextFrame],
+          previousOutput: null
+        },
+        state.revision
+      ),
+      deps
+    );
+  }
+  const summary = aggregate(updated) as unknown as JsonValue;
+  const parentScope = currentScope({ ...state, foreachStack: parentStack });
+  return drive(
+    plan,
+    immutableState(
+      {
+        ...state,
+        status: "running",
+        cursor: {
+          blockPath: frame.parentBlockPath,
+          stepKey: foreach.routes.completed
+        },
+        foreachStack: parentStack,
+        previousOutput: summary,
+        stepOutputs: {
+          ...state.stepOutputs,
+          [outputKey(parentScope, foreach.key)]: summary
+        }
+      },
+      state.revision
+    ),
+    deps
+  );
+}
 
-  #schedule(
-    workflow: CompiledWorkflow,
-    currentRun: RunRecord,
-    nodeKey: string,
-    initialSequence: number,
-    previousOutput: unknown,
-    attempt = 1,
-    delayMs?: number
-  ): RunRecord {
-    let run = currentRun;
-    let sequence = initialSequence;
-    const compiledNode = workflow.nodes[nodeKey];
-    if (!compiledNode) throw new Error(`Compiled node not found: ${nodeKey}`);
-    const scheduledDelayMs =
-      compiledNode.runtime === "browser"
-        ? delayMs ??
-          computeDispatchDelayMs(
-            compiledNode.timing,
-            `${currentRun.id}:${nodeKey}:dispatch:${attempt}`
-          )
-        : 0;
-    const createdAt = new Date().toISOString();
-    let resolvedInput: unknown = compiledNode.input;
-    let localInputError: NodeExecutionRecord["error"] | undefined;
-    try {
-      resolvedInput = resolveBindings(compiledNode.input, {
-        input: currentRun.input,
-        previous: previousOutput
-      });
-      const inputIssues = this.#validationIssues(
-        compiledNode.inputSchema,
-        resolvedInput,
-        `${compiledNode.nodeId} input`
-      );
-      if (inputIssues.length > 0) {
-        localInputError = {
-          code: "INPUT_SCHEMA_INVALID",
-          message: inputIssues.join("; "),
-          retryable: false
-        };
-      }
-    } catch (error) {
-      localInputError = {
-        code: "BINDING_RESOLUTION_FAILED",
-        message: error instanceof Error ? error.message : String(error),
-        retryable: false
+function drive(
+  plan: ExecutionPlan,
+  initial: EngineState,
+  deps: EngineDependencies,
+  initialEffects: readonly EngineEffect[] = []
+): EngineTransition {
+  let state = initial;
+  const effects = [...initialEffects];
+  while (state.status === "running" && state.cursor) {
+    const block = blockAt(plan, state.cursor.blockPath);
+    const step = block.steps[state.cursor.stepKey];
+    if (!step) {
+      return {
+        state: failState(
+          state,
+          "STEP_NOT_FOUND",
+          `Step not found: ${state.cursor.stepKey}`
+        ),
+        effects,
+        disposition: "advanced"
       };
     }
-    const nodeExecution: NodeExecutionRecord = {
-      id: randomUUID(),
-      runId: run.id,
-      nodeKey,
-      nodeId: compiledNode.nodeId,
-      nodeVersion: compiledNode.nodeVersion,
-      status: "scheduled",
-      revision: 0,
-      attempt,
-      idempotencyKey: contentDigest({
-        runId: run.id,
-        nodeKey,
-        attempt
-      }),
-      fencingToken: 1,
-      input: resolvedInput,
-      createdAt,
-      updatedAt: createdAt
-    };
-    this.persistence.createNodeExecution(
-      nodeExecution,
-      this.#event(
-        run.id,
-        sequence++,
-        "NODE_SCHEDULED",
+    if (step.kind === "call") {
+      const scheduled = scheduleCall(
+        state,
+        step,
+        1,
+        1,
+        deps.clock.now(),
+        deps
+      );
+      return {
+        ...scheduled,
+        effects: [...effects, ...scheduled.effects]
+      };
+    }
+    if (step.kind === "decision") {
+      const branch = step.branches.find((entry) =>
+        evaluateCondition(entry.condition, state)
+      );
+      state = immutableState(
         {
-          nodeKey,
-          nodeId: compiledNode.nodeId,
-          nodeVersion: compiledNode.nodeVersion,
-          attempt,
-          delayMs: scheduledDelayMs,
-          timingPolicy: compiledNode.timing
-        },
-        nodeExecution.id
-      )
-    );
-    run = this.persistence.commitRunTransition({
-      runId: run.id,
-      expectedRevision: run.revision,
-      nextStatus: "running",
-      currentNodeKey: nodeKey,
-      event: this.#event(run.id, sequence++, "RUN_NODE_SELECTED", { nodeKey })
-    });
-
-    if (localInputError) {
-      return this.#completeLocalFailure(
-        workflow,
-        run,
-        nodeExecution,
-        compiledNode,
-        sequence,
-        localInputError
-      );
-    }
-
-    if (compiledNode.runtime === "engine_builtin") {
-      return this.#executeBuiltin(
-        workflow,
-        run,
-        nodeExecution,
-        compiledNode,
-        sequence,
-        previousOutput
-      );
-    }
-    if (compiledNode.runtime === "browser") {
-      this.persistence.commitNodeTransition({
-        nodeExecutionId: nodeExecution.id,
-        expectedRevision: nodeExecution.revision,
-        nextStatus: "dispatched",
-        event: this.#event(
-          run.id,
-          sequence++,
-          "NODE_DISPATCHED",
-          { nodeKey, fencingToken: nodeExecution.fencingToken },
-          nodeExecution.id
-        ),
-        outbox: {
-          id: randomUUID(),
-          topic: "browser.command.requested",
-          aggregateId: nodeExecution.id,
-          payload: this.#browserCommandPayload(
-            workflow,
-            nodeExecution,
-            compiledNode
-          ),
-          createdAt: new Date(Date.now() + scheduledDelayMs).toISOString()
-        }
-      });
-      return this.persistence.commitRunTransition({
-        runId: run.id,
-        expectedRevision: run.revision,
-        nextStatus: "waiting_browser",
-        currentNodeKey: nodeKey,
-        event: this.#event(run.id, sequence, "RUN_WAITING_BROWSER", {
-          nodeExecutionId: nodeExecution.id
-        })
-      });
-    }
-    if (compiledNode.runtime === "human") {
-      this.persistence.commitNodeTransition({
-        nodeExecutionId: nodeExecution.id,
-        expectedRevision: nodeExecution.revision,
-        nextStatus: "accepted",
-        event: this.#event(
-          run.id,
-          sequence++,
-          "NODE_WAITING_HUMAN",
-          { nodeKey, input: nodeExecution.input },
-          nodeExecution.id
-        )
-      });
-      return this.persistence.commitRunTransition({
-        runId: run.id,
-        expectedRevision: run.revision,
-        nextStatus: "waiting_human",
-        currentNodeKey: nodeKey,
-        event: this.#event(run.id, sequence, "RUN_WAITING_HUMAN", {
-          nodeExecutionId: nodeExecution.id
-        })
-      });
-    }
-    throw new Error(
-      `Runtime ${compiledNode.runtime} is not enabled in the local milestone`
-    );
-  }
-
-  #executeBuiltin(
-    workflow: CompiledWorkflow,
-    run: RunRecord,
-    nodeExecution: NodeExecutionRecord,
-    node: CompiledNode,
-    sequence: number,
-    previousOutput: unknown
-  ): RunRecord {
-    let result = executeBuiltinNode({
-      nodeId: node.nodeId,
-      nodeInput: nodeExecution.input,
-      workflowInput: run.input,
-      previousOutput,
-      ...(node.condition ? { condition: node.condition } : {})
-    });
-    if (result.status === "succeeded") {
-      const outputIssues = this.#validationIssues(
-        node.outputSchema,
-        result.output,
-        `${node.nodeId} output`
-      );
-      if (outputIssues.length > 0) {
-        result = {
-          status: "failed",
-          error: {
-            code: "OUTPUT_SCHEMA_INVALID",
-            message: outputIssues.join("; "),
-            retryable: false
+          ...state,
+          cursor: {
+            ...state.cursor,
+            stepKey: branch?.target ?? step.defaultTarget
           }
-        };
-      }
-    }
-    this.persistence.commitNodeTransition({
-      nodeExecutionId: nodeExecution.id,
-      expectedRevision: nodeExecution.revision,
-      nextStatus: result.status,
-      ...("output" in result ? { output: result.output } : {}),
-      ...(result.status === "failed" ? { error: result.error } : {}),
-      event: this.#event(
-        run.id,
-        sequence++,
-        `NODE_${result.status.toUpperCase()}`,
-        {
-          builtin: node.nodeId,
-          ...(result.status === "failed" ? { error: result.error } : {})
         },
-        nodeExecution.id
-      ),
-      idempotencyResult: {
-        key: nodeExecution.idempotencyKey,
-        status: result.status,
-        result
-      }
-    });
-    if (result.status === "failed") {
-      const target = node.on.failure;
-      if (target) {
-        return this.#schedule(
-          workflow,
-          run,
-          target,
-          sequence,
-          "output" in result ? result.output : undefined
-        );
-      }
-      return this.#finishRun(
-        workflow,
-        run,
-        sequence,
-        "failed",
-        "output" in result ? result.output : undefined,
-        nodeExecution.id,
-        result.error
+        state.revision
       );
+      continue;
     }
-    const target =
-      result.branch === "failure"
-        ? node.on.failure
-        : node.next ?? node.on.success;
-    if (target) {
-      return this.#schedule(workflow, run, target, sequence, result.output);
-    }
-    return this.#finishRun(
-      workflow,
-      run,
-      sequence,
-      "succeeded",
-      result.output,
-      nodeExecution.id
-    );
-  }
-
-  #completeLocalFailure(
-    workflow: CompiledWorkflow,
-    run: RunRecord,
-    nodeExecution: NodeExecutionRecord,
-    node: CompiledNode,
-    sequence: number,
-    error: NonNullable<NodeExecutionRecord["error"]>
-  ): RunRecord {
-    this.persistence.commitNodeTransition({
-      nodeExecutionId: nodeExecution.id,
-      expectedRevision: nodeExecution.revision,
-      nextStatus: "failed",
-      error,
-      event: this.#event(
-        run.id,
-        sequence++,
-        "NODE_FAILED",
-        { error, localValidation: true },
-        nodeExecution.id
-      ),
-      idempotencyResult: {
-        key: nodeExecution.idempotencyKey,
-        status: "failed",
-        result: { status: "failed", error }
-      }
-    });
-    if (node.on.failure) {
-      return this.#schedule(
-        workflow,
-        run,
-        node.on.failure,
-        sequence,
-        undefined
-      );
-    }
-    return this.#finishRun(
-      workflow,
-      run,
-      sequence,
-      "failed",
-      undefined,
-      nodeExecution.id,
-      error
-    );
-  }
-
-  #browserCommandPayload(
-    workflow: CompiledWorkflow,
-    execution: NodeExecutionRecord,
-    node: CompiledNode
-  ): Record<string, unknown> {
-    return {
-      run_id: execution.runId,
-      workflow_id: workflow.workflowId,
-      workflow_version: workflow.workflowVersion,
-      node_execution_id: execution.id,
-      idempotency_key: execution.idempotencyKey,
-      fencing_token: execution.fencingToken,
-      attempt: execution.attempt,
-      node: { id: node.nodeId, version: node.nodeVersion },
-      input: execution.input,
-      timeout_ms: node.timeoutMs,
-      ...(node.timing ? { timing_policy: node.timing } : {})
-    };
-  }
-
-  #finishRun(
-    workflow: CompiledWorkflow,
-    run: RunRecord,
-    sequence: number,
-    requestedStatus: RunStatus,
-    output: unknown,
-    nodeExecutionId: string,
-    error?: NodeExecutionRecord["error"]
-  ): RunRecord {
-    let status = requestedStatus;
-    let terminalError = error;
-    if (status === "succeeded") {
-      const outputIssues = this.#validationIssues(
-        workflow.outputSchema,
-        output,
-        "workflow output"
-      );
-      if (outputIssues.length > 0) {
-        status = "failed";
-        terminalError = {
-          code: "WORKFLOW_OUTPUT_INVALID",
-          message: outputIssues.join("; "),
-          retryable: false
+    if (step.kind === "foreach") {
+      let items: JsonValue;
+      try {
+        items = resolveBinding(step.items, state);
+      } catch (error) {
+        return {
+          state: failState(
+            state,
+            "FOREACH_ITEMS_INVALID",
+            error instanceof Error ? error.message : String(error)
+          ),
+          effects,
+          disposition: "advanced"
         };
       }
+      if (!Array.isArray(items) || items.length > step.limits.maxItems) {
+        state = immutableState(
+          {
+            ...state,
+            cursor: {
+              ...state.cursor,
+              stepKey: step.routes.stopped
+            },
+            previousOutput: {
+              total: Array.isArray(items) ? items.length : 0,
+              succeeded: { count: 0, items: [] },
+              failed: { count: 0, items: [] },
+              unresolved: { count: 0, items: [] }
+            }
+          },
+          state.revision
+        );
+        continue;
+      }
+      const frozenItems = clone(items);
+      let keys: string[];
+      try {
+        keys = frozenItems.map((item) => itemKey(item, step));
+      } catch (error) {
+        return {
+          state: failState(
+            state,
+            "FOREACH_ITEM_KEY_INVALID",
+            error instanceof Error ? error.message : String(error)
+          ),
+          effects,
+          disposition: "advanced"
+        };
+      }
+      if (new Set(keys).size !== keys.length) {
+        return {
+          state: failState(
+            state,
+            "FOREACH_ITEM_KEY_DUPLICATE",
+            `foreach ${step.key} produced duplicate item keys`
+          ),
+          effects,
+          disposition: "advanced"
+        };
+      }
+      if (frozenItems.length === 0) {
+        const summary = {
+          total: 0,
+          succeeded: { count: 0, items: [] },
+          failed: { count: 0, items: [] },
+          unresolved: { count: 0, items: [] }
+        } as JsonValue;
+        state = immutableState(
+          {
+            ...state,
+            cursor: { ...state.cursor, stepKey: step.routes.completed },
+            previousOutput: summary,
+            stepOutputs: {
+              ...state.stepOutputs,
+              [outputKey(currentScope(state), step.key)]: summary
+            }
+          },
+          state.revision
+        );
+        continue;
+      }
+      const frame: ForeachFrame = {
+        stepKey: step.key,
+        parentBlockPath: state.cursor.blockPath,
+        items: frozenItems,
+        itemKeys: keys,
+        index: 0,
+        startedAt: deps.clock.now(),
+        succeeded: [],
+        failed: [],
+        unresolved: []
+      };
+      state = immutableState(
+        {
+          ...state,
+          cursor: {
+            blockPath: [...state.cursor.blockPath, step.key],
+            stepKey: step.body.entry
+          },
+          foreachStack: [...state.foreachStack, frame],
+          previousOutput: null
+        },
+        state.revision
+      );
+      continue;
     }
-    return this.persistence.commitRunTransition({
-      runId: run.id,
-      expectedRevision: this.persistence.getRun(run.id)!.revision,
-      nextStatus: status,
-      ...(output === undefined ? {} : { output }),
-      event: this.#event(run.id, sequence, `RUN_${status.toUpperCase()}`, {
-        nodeExecutionId,
-        ...(terminalError ? { error: terminalError } : {})
-      })
-    });
-  }
-
-  #validationIssues(
-    schema: Record<string, unknown>,
-    value: unknown,
-    label: string
-  ): string[] {
-    try {
-      const validate = compileDataValidator(schema);
-      return validate(value)
-        ? []
-        : formatValidationErrors(validate.errors).map(
-            (issue) => `${label}${issue}`
-          );
-    } catch (error) {
-      return [
-        `${label} schema cannot be compiled: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      ];
+    if (step.kind === "wait.assistance") {
+      const request = assistanceRequest(state, step, deps);
+      effects.push({ kind: "assistance.create", request });
+      if (step.blocking) {
+        return {
+          state: immutableState(
+            {
+              ...state,
+              status: "waiting_assistance",
+              active: { kind: "assistance", request }
+            },
+            state.revision
+          ),
+          effects,
+          disposition: "advanced"
+        };
+      }
+      state = immutableState(
+        {
+          ...state,
+          cursor: { ...state.cursor, stepKey: step.next }
+        },
+        state.revision
+      );
+      continue;
     }
-  }
-
-  #nextSequence(runId: string): number {
-    const events = this.persistence.listEvents(runId);
-    return (events.at(-1)?.sequence ?? 0) + 1;
-  }
-
-  #event(
-    runId: string,
-    sequence: number,
-    type: string,
-    payload: unknown,
-    nodeExecutionId?: string
-  ): ExecutionEventRecord {
+    if (state.foreachStack.length > 0) {
+      const completed = completeItem(plan, state, step, deps);
+      return {
+        ...completed,
+        effects: [...effects, ...completed.effects]
+      };
+    }
+    const output = step.output
+      ? resolveBinding(step.output, state)
+      : state.previousOutput;
     return {
-      id: randomUUID(),
-      runId,
-      ...(nodeExecutionId ? { nodeExecutionId } : {}),
-      sequence,
-      type,
-      payload,
-      occurredAt: new Date().toISOString()
+      state: immutableState(
+        {
+          ...state,
+          status: step.status as Exclude<EngineStatus, "running">,
+          cursor: undefined,
+          active: undefined,
+          output,
+          ...(step.status === "failed"
+            ? {
+                error: {
+                  code: step.errorCode ?? "WORKFLOW_FAILED",
+                  message: "Workflow reached a failed terminal."
+                }
+              }
+            : {})
+        },
+        state.revision
+      ),
+      effects,
+      disposition: "advanced"
     };
   }
+  return { state, effects, disposition: "advanced" };
+}
+
+export class DeterministicWorkflowEngine {
+  constructor(
+    readonly plan: ExecutionPlan,
+    readonly dependencies: EngineDependencies
+  ) {}
+
+  start(runId: string, input: JsonValue): EngineTransition {
+    const initial: EngineState = {
+      stateVersion: "bpa.engine-state/2",
+      runId,
+      workflowDigest: this.plan.workflow.digest,
+      status: "running",
+      revision: 0,
+      input: clone(input),
+      cursor: { blockPath: [], stepKey: this.plan.entry },
+      previousOutput: null,
+      stepOutputs: {},
+      foreachStack: [],
+      active: undefined,
+      completedExternalIds: [],
+      output: undefined,
+      error: undefined
+    };
+    return drive(this.plan, initial, this.dependencies);
+  }
+
+  resume(snapshot: EngineState): EngineTransition {
+    if (snapshot.workflowDigest !== this.plan.workflow.digest) {
+      throw new Error("Engine snapshot does not belong to this plan");
+    }
+    return drive(this.plan, clone(snapshot), this.dependencies);
+  }
+
+  acceptRuntimeOutcome(input: {
+    state: EngineState;
+    invocationId: string;
+    fencingToken: number;
+    outcome: RuntimeOutcome;
+  }): EngineTransition {
+    const state = clone(input.state);
+    const active = state.active;
+    if (
+      !active ||
+      active.kind !== "call" ||
+      active.invocation.invocationId !== input.invocationId ||
+      active.invocation.fencingToken !== input.fencingToken
+    ) {
+      return {
+        state,
+        effects: [],
+        disposition: state.completedExternalIds.includes(input.invocationId)
+          ? "duplicate"
+          : "stale"
+      };
+    }
+    const completedExternalIds = [
+      ...state.completedExternalIds,
+      input.invocationId
+    ];
+    if (input.outcome.status === "uncertain") {
+      return {
+        state: immutableState(
+          {
+            ...state,
+            status: "uncertain",
+            cursor: undefined,
+            active: undefined,
+            completedExternalIds,
+            error: {
+              code: input.outcome.error.code,
+              message: input.outcome.error.message
+            }
+          },
+          state.revision
+        ),
+        effects: [],
+        disposition: "advanced"
+      };
+    }
+    const block = blockAt(this.plan, state.cursor!.blockPath);
+    const step = block.steps[state.cursor!.stepKey];
+    if (step?.kind !== "call") {
+      throw new Error("Active call cursor does not reference a call step");
+    }
+    const retryable =
+      input.outcome.status !== "succeeded" &&
+      step.retry.retryableOutcomes.some(
+        (status) => status === input.outcome.status
+      ) &&
+      (step.retry.retryableErrorCodes.length === 0 ||
+        step.retry.retryableErrorCodes.includes(input.outcome.error.code)) &&
+      active.invocation.identity.attempt < step.retry.maxAttempts;
+    if (retryable) {
+      const nextAttempt = active.invocation.identity.attempt + 1;
+      const delay = retryDelay(
+        step,
+        nextAttempt,
+        this.dependencies.random.next()
+      );
+      const retryState = immutableState(
+        {
+          ...state,
+          status: "running",
+          active: undefined,
+          completedExternalIds
+        },
+        state.revision
+      );
+      return scheduleCall(
+        retryState,
+        step,
+        nextAttempt,
+        active.invocation.fencingToken + 1,
+        this.dependencies.clock.now() + delay,
+        this.dependencies
+      );
+    }
+    const route =
+      input.outcome.status === "succeeded"
+        ? step.routes.succeeded
+        : step.routes[input.outcome.status];
+    const scope = currentScope(state);
+    const output =
+      input.outcome.output ??
+      (input.outcome.status === "succeeded" ? null : state.previousOutput);
+    return drive(
+      this.plan,
+      immutableState(
+        {
+          ...state,
+          status: "running",
+          cursor: { ...state.cursor!, stepKey: route },
+          active: undefined,
+          completedExternalIds,
+          previousOutput: output,
+          ...(input.outcome.status === "succeeded"
+            ? {
+                stepOutputs: {
+                  ...state.stepOutputs,
+                  [outputKey(scope, step.key)]: output
+                }
+              }
+            : {})
+        },
+        state.revision
+      ),
+      this.dependencies
+    );
+  }
+
+  acceptAssistanceOutcome(input: {
+    state: EngineState;
+    taskId: string;
+    fencingToken: number;
+    outcome: AssistanceOutcome;
+  }): EngineTransition {
+    const state = clone(input.state);
+    const active = state.active;
+    if (
+      !active ||
+      active.kind !== "assistance" ||
+      active.request.taskId !== input.taskId ||
+      active.request.fencingToken !== input.fencingToken
+    ) {
+      return {
+        state,
+        effects: [],
+        disposition: state.completedExternalIds.includes(input.taskId)
+          ? "duplicate"
+          : "stale"
+      };
+    }
+    const block = blockAt(this.plan, state.cursor!.blockPath);
+    const step = block.steps[state.cursor!.stepKey];
+    if (step?.kind !== "wait.assistance" || !step.blocking) {
+      throw new Error(
+        "Active assistance cursor does not reference blocking assistance"
+      );
+    }
+    const output = input.outcome.output ?? null;
+    const scope = currentScope(state);
+    return drive(
+      this.plan,
+      immutableState(
+        {
+          ...state,
+          status: "running",
+          cursor: {
+            ...state.cursor!,
+            stepKey: step.routes[input.outcome.status]
+          },
+          active: undefined,
+          completedExternalIds: [
+            ...state.completedExternalIds,
+            input.taskId
+          ],
+          previousOutput: output,
+          ...(input.outcome.status === "resolved"
+            ? {
+                stepOutputs: {
+                  ...state.stepOutputs,
+                  [outputKey(scope, step.key)]: output
+                }
+              }
+            : {})
+        },
+        state.revision
+      ),
+      this.dependencies
+    );
+  }
+}
+
+export async function dispatchRuntimeEffect(
+  registry: RuntimeProviderRegistry,
+  effect: Extract<EngineEffect, { kind: "runtime.invoke" }>,
+  signal: AbortSignal
+): Promise<RuntimeOutcome> {
+  return registry
+    .resolve(effect.invocation.providerId, effect.invocation.node)
+    .invoke(effect.invocation, signal);
 }
