@@ -1,0 +1,902 @@
+import type {
+  ArtifactClosure,
+  ArtifactRef,
+  BindingValue,
+  Condition,
+  ExecutionBlock,
+  ExecutionLimits,
+  ExecutionPlan,
+  ExecutionStep,
+  ForeachStep,
+  JsonValue,
+  ValidationIssue,
+  ValueReference
+} from "./types.js";
+
+const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+const DIGEST_PATTERN = /^(?:sha256:)?[a-fA-F0-9]{64}$/;
+const UNSUPPORTED_STEP_KINDS = new Set(["parallel", "paginate", "poll"]);
+const FORBIDDEN_BINDING_KEYS = new Set([
+  "__proto__",
+  "prototype",
+  "constructor"
+]);
+
+function issue(
+  code: ValidationIssue["code"],
+  path: string,
+  message: string
+): ValidationIssue {
+  return { code, path, message };
+}
+
+function isPositiveSafeInteger(value: number): boolean {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function isNonNegativeSafeInteger(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function artifactKey(ref: ArtifactRef): string {
+  return `${ref.kind}\u0000${ref.id}\u0000${ref.version}\u0000${ref.digest}`;
+}
+
+function artifactIdentity(ref: ArtifactRef): string {
+  return `${ref.kind}\u0000${ref.id}\u0000${ref.version}`;
+}
+
+export function normalizeArtifactClosure(
+  closure: ArtifactClosure
+): ArtifactClosure {
+  return {
+    entries: [...closure.entries]
+      .map((entry) => ({
+        kind: entry.kind,
+        id: entry.id.trim(),
+        version: entry.version.trim(),
+        digest: entry.digest.trim().toLowerCase()
+      }))
+      .sort((left, right) => artifactKey(left).localeCompare(artifactKey(right)))
+  };
+}
+
+function normalizeJsonValue(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) {
+    return value.map(normalizeJsonValue);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, normalizeJsonValue(child)])
+    );
+  }
+  return value;
+}
+
+function normalizeReference(reference: ValueReference): ValueReference {
+  return {
+    kind: "reference",
+    source: reference.source,
+    path: reference.path.map((segment) => segment.trim()),
+    ...(reference.stepKey === undefined
+      ? {}
+      : { stepKey: reference.stepKey.trim() })
+  };
+}
+
+function normalizeBinding(binding: BindingValue): BindingValue {
+  switch (binding.kind) {
+    case "literal":
+      return { kind: "literal", value: normalizeJsonValue(binding.value) };
+    case "reference":
+      return normalizeReference(binding);
+    case "array":
+      return {
+        kind: "array",
+        items: binding.items.map(normalizeBinding)
+      };
+    case "object":
+      return {
+        kind: "object",
+        entries: Object.fromEntries(
+          Object.entries(binding.entries)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, value]) => [key, normalizeBinding(value)])
+        )
+      };
+  }
+}
+
+function normalizeCondition(condition: Condition): Condition {
+  switch (condition.kind) {
+    case "compare":
+      return {
+        kind: "compare",
+        operator: condition.operator,
+        left: normalizeBinding(condition.left),
+        ...(condition.right === undefined
+          ? {}
+          : { right: normalizeBinding(condition.right) })
+      };
+    case "all":
+    case "any":
+      return {
+        kind: condition.kind,
+        conditions: condition.conditions.map(normalizeCondition)
+      };
+    case "not":
+      return { kind: "not", condition: normalizeCondition(condition.condition) };
+  }
+}
+
+function normalizeStep(step: ExecutionStep): ExecutionStep {
+  switch (step.kind) {
+    case "call":
+      return {
+        kind: "call",
+        key: step.key.trim(),
+        node: normalizeArtifactClosure({ entries: [step.node] })
+          .entries[0]! as typeof step.node,
+        ...(step.input === undefined
+          ? {}
+          : { input: normalizeBinding(step.input) }),
+        ...(step.next === undefined ? {} : { next: step.next.trim() }),
+        ...(step.onError === undefined
+          ? {}
+          : { onError: step.onError.trim() })
+      };
+    case "decision":
+      return {
+        kind: "decision",
+        key: step.key.trim(),
+        branches: step.branches.map((branch) => ({
+          id: branch.id.trim(),
+          condition: normalizeCondition(branch.condition),
+          target: branch.target.trim()
+        })),
+        defaultTarget: step.defaultTarget.trim()
+      };
+    case "foreach":
+      return {
+        kind: "foreach",
+        key: step.key.trim(),
+        items: normalizeBinding(step.items),
+        itemKey: {
+          path: step.itemKey.path.map((segment) => segment.trim()),
+          valueType: step.itemKey.valueType
+        },
+        limits: { ...step.limits },
+        body: normalizeBlock(step.body),
+        aggregation: {
+          ...step.aggregation,
+          outputKey: step.aggregation.outputKey.trim()
+        },
+        ...(step.next === undefined ? {} : { next: step.next.trim() }),
+        ...(step.onError === undefined
+          ? {}
+          : { onError: step.onError.trim() })
+      };
+    case "wait.assistance":
+      return {
+        kind: "wait.assistance",
+        key: step.key.trim(),
+        taskKind: step.taskKind,
+        profile: normalizeArtifactClosure({ entries: [step.profile] })
+          .entries[0]! as typeof step.profile,
+        ...(step.input === undefined
+          ? {}
+          : { input: normalizeBinding(step.input) }),
+        onResolved: step.onResolved.trim(),
+        ...(step.onEscalated === undefined
+          ? {}
+          : { onEscalated: step.onEscalated.trim() }),
+        ...(step.onExpired === undefined
+          ? {}
+          : { onExpired: step.onExpired.trim() })
+      };
+    case "terminal":
+      return {
+        kind: "terminal",
+        key: step.key.trim(),
+        status: step.status,
+        ...(step.output === undefined
+          ? {}
+          : { output: normalizeBinding(step.output) }),
+        ...(step.errorCode === undefined
+          ? {}
+          : { errorCode: step.errorCode.trim() })
+      };
+  }
+}
+
+function normalizeBlock(block: ExecutionBlock): ExecutionBlock {
+  return {
+    entry: block.entry.trim(),
+    steps: Object.fromEntries(
+      Object.entries(block.steps)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, step]) => [key, normalizeStep(step)])
+    )
+  };
+}
+
+export function normalizeExecutionPlan(plan: ExecutionPlan): ExecutionPlan {
+  const normalizedBlock = normalizeBlock({
+    entry: plan.entry,
+    steps: plan.steps
+  });
+  return {
+    irVersion: "2.0",
+    workflow: {
+      id: plan.workflow.id.trim(),
+      version: plan.workflow.version.trim(),
+      digest: plan.workflow.digest.trim().toLowerCase()
+    },
+    artifactClosure: normalizeArtifactClosure(plan.artifactClosure),
+    riskSnapshot: plan.riskSnapshot
+      .map((entry) => ({
+        code: entry.code.trim(),
+        level: entry.level,
+        source: normalizeArtifactClosure({ entries: [entry.source] })
+          .entries[0]!,
+        ...(entry.details === undefined
+          ? {}
+          : { details: normalizeJsonValue(entry.details) })
+      }))
+      .sort((left, right) =>
+        `${left.level}\u0000${left.code}\u0000${artifactKey(left.source)}`.localeCompare(
+          `${right.level}\u0000${right.code}\u0000${artifactKey(right.source)}`
+        )
+      ),
+    limits: { ...plan.limits },
+    entry: normalizedBlock.entry,
+    steps: normalizedBlock.steps
+  };
+}
+
+function bindingIssues(binding: BindingValue, path: string): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  switch (binding.kind) {
+    case "literal":
+      break;
+    case "reference":
+      if (binding.path.some((segment) => !segment || FORBIDDEN_BINDING_KEYS.has(segment))) {
+        issues.push(
+          issue(
+            "INVALID_VALUE",
+            `${path}/path`,
+            "reference path contains an empty or forbidden segment"
+          )
+        );
+      }
+      if (binding.source === "step_output" && !binding.stepKey) {
+        issues.push(
+          issue(
+            "INVALID_VALUE",
+            `${path}/stepKey`,
+            "step_output references require stepKey"
+          )
+        );
+      }
+      if (binding.source !== "step_output" && binding.stepKey !== undefined) {
+        issues.push(
+          issue(
+            "INVALID_VALUE",
+            `${path}/stepKey`,
+            "stepKey is only valid for step_output references"
+          )
+        );
+      }
+      break;
+    case "array":
+      binding.items.forEach((child, index) => {
+        issues.push(...bindingIssues(child, `${path}/items/${index}`));
+      });
+      break;
+    case "object":
+      for (const [key, child] of Object.entries(binding.entries)) {
+        if (FORBIDDEN_BINDING_KEYS.has(key)) {
+          issues.push(
+            issue(
+              "INVALID_VALUE",
+              `${path}/entries/${key}`,
+              "binding object contains a forbidden key"
+            )
+          );
+        }
+        issues.push(...bindingIssues(child, `${path}/entries/${key}`));
+      }
+      break;
+    default:
+      issues.push(
+        issue(
+          "INVALID_VALUE",
+          path,
+          `unsupported binding kind ${String((binding as { kind?: unknown }).kind)}`
+        )
+      );
+  }
+  return issues;
+}
+
+function conditionIssues(condition: Condition, path: string): ValidationIssue[] {
+  switch (condition.kind) {
+    case "compare":
+      return [
+        ...bindingIssues(condition.left, `${path}/left`),
+        ...(condition.right
+          ? bindingIssues(condition.right, `${path}/right`)
+          : []),
+        ...(condition.operator !== "exists" && condition.right === undefined
+          ? [
+              issue(
+                "INVALID_VALUE" as const,
+                `${path}/right`,
+                `${condition.operator} requires a right operand`
+              )
+            ]
+          : []),
+        ...(condition.operator === "exists" && condition.right !== undefined
+          ? [
+              issue(
+                "INVALID_VALUE" as const,
+                `${path}/right`,
+                "exists does not accept a right operand"
+              )
+            ]
+          : [])
+      ];
+    case "all":
+    case "any":
+      if (condition.conditions.length === 0) {
+        return [
+          issue(
+            "INVALID_VALUE",
+            `${path}/conditions`,
+            `${condition.kind} requires at least one condition`
+          )
+        ];
+      }
+      return condition.conditions.flatMap((child, index) =>
+        conditionIssues(child, `${path}/conditions/${index}`)
+      );
+    case "not":
+      return conditionIssues(condition.condition, `${path}/condition`);
+    default:
+      return [
+        issue(
+          "INVALID_VALUE",
+          path,
+          `unsupported condition kind ${String((condition as { kind?: unknown }).kind)}`
+        )
+      ];
+  }
+}
+
+function stepTargets(step: ExecutionStep): readonly string[] {
+  switch (step.kind) {
+    case "call":
+      return [step.next, step.onError].filter(
+        (target): target is string => target !== undefined
+      );
+    case "decision":
+      return [...step.branches.map((branch) => branch.target), step.defaultTarget];
+    case "foreach":
+      return [step.next, step.onError].filter(
+        (target): target is string => target !== undefined
+      );
+    case "wait.assistance":
+      return [
+        step.onResolved,
+        step.onEscalated,
+        step.onExpired
+      ].filter((target): target is string => target !== undefined);
+    case "terminal":
+      return [];
+    default:
+      return [];
+  }
+}
+
+function validateLimits(
+  limits: ExecutionLimits,
+  path: string
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  if (!isNonNegativeSafeInteger(limits.maxDepth)) {
+    issues.push(
+      issue(
+        "INVALID_VALUE",
+        `${path}/maxDepth`,
+        "maxDepth must be a non-negative safe integer"
+      )
+    );
+  }
+  if (!isPositiveSafeInteger(limits.maxStepExecutions)) {
+    issues.push(
+      issue(
+        "INVALID_VALUE",
+        `${path}/maxStepExecutions`,
+        "maxStepExecutions must be a positive safe integer"
+      )
+    );
+  }
+  return issues;
+}
+
+function executionCost(block: ExecutionBlock): bigint {
+  let cost = 0n;
+  for (const step of Object.values(block.steps)) {
+    cost += 1n;
+    if (step.kind === "foreach") {
+      const maxItems = isPositiveSafeInteger(step.limits.maxItems)
+        ? BigInt(step.limits.maxItems)
+        : 0n;
+      cost += maxItems * executionCost(step.body);
+    }
+  }
+  return cost;
+}
+
+export function estimateMaxStepExecutions(plan: ExecutionPlan): bigint {
+  return executionCost({ entry: plan.entry, steps: plan.steps });
+}
+
+function maxForeachDepth(block: ExecutionBlock): number {
+  let depth = 0;
+  for (const step of Object.values(block.steps)) {
+    if (step.kind === "foreach") {
+      depth = Math.max(depth, 1 + maxForeachDepth(step.body));
+    }
+  }
+  return depth;
+}
+
+export function estimateMaxDepth(plan: ExecutionPlan): number {
+  return maxForeachDepth({ entry: plan.entry, steps: plan.steps });
+}
+
+function blockIssues(
+  block: ExecutionBlock,
+  path: string,
+  closure: ReadonlySet<string>,
+  closureIdentities: ReadonlyMap<string, string>,
+  ancestorStepKeys: ReadonlySet<string>
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const entries = Object.entries(block.steps);
+  const keys = new Set(entries.map(([key]) => key));
+
+  if (!keys.has(block.entry)) {
+    issues.push(
+      issue(
+        "MISSING_TARGET",
+        `${path}/entry`,
+        `entry step "${block.entry}" does not exist in this block`
+      )
+    );
+  }
+
+  for (const [recordKey, step] of entries) {
+    const stepPath = `${path}/steps/${recordKey}`;
+    const rawKind = (step as { kind?: unknown }).kind;
+    if (
+      typeof rawKind === "string" &&
+      (UNSUPPORTED_STEP_KINDS.has(rawKind) ||
+        ![
+          "call",
+          "decision",
+          "foreach",
+          "wait.assistance",
+          "terminal"
+        ].includes(rawKind))
+    ) {
+      issues.push(
+        issue(
+          "UNSUPPORTED_STEP_KIND",
+          `${stepPath}/kind`,
+          `step kind "${rawKind}" is not supported by IR 2.0`
+        )
+      );
+      continue;
+    }
+    if (!KEY_PATTERN.test(recordKey) || !KEY_PATTERN.test(step.key)) {
+      issues.push(
+        issue(
+          "INVALID_STEP",
+          stepPath,
+          "step keys must be 1-256 safe identifier characters"
+        )
+      );
+    }
+    if (recordKey !== step.key) {
+      issues.push(
+        issue(
+          "INVALID_STEP",
+          `${stepPath}/key`,
+          `record key "${recordKey}" must equal step.key "${step.key}"`
+        )
+      );
+    }
+    if (ancestorStepKeys.has(recordKey)) {
+      issues.push(
+        issue(
+          "INVALID_STEP",
+          stepPath,
+          `step key "${recordKey}" shadows an ancestor scope`
+        )
+      );
+    }
+
+    for (const target of stepTargets(step)) {
+      if (!keys.has(target)) {
+        issues.push(
+          issue(
+            "MISSING_TARGET",
+            stepPath,
+            `target step "${target}" does not exist in this block`
+          )
+        );
+      }
+    }
+
+    switch (step.kind) {
+      case "call":
+        issues.push(
+          ...(step.input
+            ? bindingIssues(step.input, `${stepPath}/input`)
+            : [])
+        );
+        if (!closure.has(artifactKey(step.node))) {
+          const closedDigest = closureIdentities.get(artifactIdentity(step.node));
+          issues.push(
+            issue(
+              "ARTIFACT_NOT_CLOSED",
+              `${stepPath}/node`,
+              closedDigest
+                ? `node digest does not match closed digest "${closedDigest}"`
+                : "node is absent from the artifact closure"
+            )
+          );
+        }
+        break;
+      case "decision": {
+        if (step.branches.length === 0) {
+          issues.push(
+            issue(
+              "INVALID_STEP",
+              `${stepPath}/branches`,
+              "decision requires at least one branch"
+            )
+          );
+        }
+        const branchIds = new Set<string>();
+        step.branches.forEach((branch, index) => {
+          if (!branch.id || branchIds.has(branch.id)) {
+            issues.push(
+              issue(
+                "INVALID_STEP",
+                `${stepPath}/branches/${index}/id`,
+                "decision branch IDs must be non-empty and unique"
+              )
+            );
+          }
+          branchIds.add(branch.id);
+          issues.push(
+            ...conditionIssues(
+              branch.condition,
+              `${stepPath}/branches/${index}/condition`
+            )
+          );
+        });
+        break;
+      }
+      case "foreach": {
+        issues.push(
+          ...bindingIssues(step.items, `${stepPath}/items`),
+          ...validateLimits(step.limits, `${stepPath}/limits`)
+        );
+        if (!isPositiveSafeInteger(step.limits.maxItems)) {
+          issues.push(
+            issue(
+              "INVALID_VALUE",
+              `${stepPath}/limits/maxItems`,
+              "maxItems must be a positive safe integer"
+            )
+          );
+        }
+        if (
+          step.itemKey.path.some(
+            (segment) => !segment || FORBIDDEN_BINDING_KEYS.has(segment)
+          )
+        ) {
+          issues.push(
+            issue(
+              "INVALID_VALUE",
+              `${stepPath}/itemKey/path`,
+              "itemKey path contains an empty or forbidden segment"
+            )
+          );
+        }
+        if (!step.aggregation.outputKey) {
+          issues.push(
+            issue(
+              "INVALID_VALUE",
+              `${stepPath}/aggregation/outputKey`,
+              "aggregation outputKey is required"
+            )
+          );
+        }
+        const bodyDepth = maxForeachDepth(step.body);
+        if (
+          isNonNegativeSafeInteger(step.limits.maxDepth) &&
+          bodyDepth > step.limits.maxDepth
+        ) {
+          issues.push(
+            issue(
+              "LIMIT_EXCEEDED",
+              `${stepPath}/limits/maxDepth`,
+              `body depth ${bodyDepth} exceeds local maxDepth ${step.limits.maxDepth}`
+            )
+          );
+        }
+        const bodyCost = executionCost(step.body);
+        const totalBodyCost = isPositiveSafeInteger(step.limits.maxItems)
+          ? BigInt(step.limits.maxItems) * bodyCost
+          : 0n;
+        if (
+          isPositiveSafeInteger(step.limits.maxStepExecutions) &&
+          totalBodyCost > BigInt(step.limits.maxStepExecutions)
+        ) {
+          issues.push(
+            issue(
+              "LIMIT_EXCEEDED",
+              `${stepPath}/limits/maxStepExecutions`,
+              `foreach body upper bound ${totalBodyCost} exceeds local maxStepExecutions ${step.limits.maxStepExecutions}`
+            )
+          );
+        }
+        issues.push(
+          ...blockIssues(
+            step.body,
+            `${stepPath}/body`,
+            closure,
+            closureIdentities,
+            new Set([...ancestorStepKeys, ...keys])
+          )
+        );
+        break;
+      }
+      case "wait.assistance":
+        issues.push(
+          ...(step.input
+            ? bindingIssues(step.input, `${stepPath}/input`)
+            : [])
+        );
+        if (!closure.has(artifactKey(step.profile))) {
+          issues.push(
+            issue(
+              "ARTIFACT_NOT_CLOSED",
+              `${stepPath}/profile`,
+              "assistance profile is absent from the artifact closure"
+            )
+          );
+        }
+        break;
+      case "terminal":
+        issues.push(
+          ...(step.output
+            ? bindingIssues(step.output, `${stepPath}/output`)
+            : [])
+        );
+        if (step.status === "failed" && !step.errorCode) {
+          issues.push(
+            issue(
+              "INVALID_STEP",
+              `${stepPath}/errorCode`,
+              "failed terminal steps require errorCode"
+            )
+          );
+        }
+        break;
+    }
+  }
+
+  // IR 2.0 deliberately accepts DAGs only. Any cycle is a forbidden back edge.
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const reachable = new Set<string>();
+  const visit = (key: string): void => {
+    if (!keys.has(key)) return;
+    reachable.add(key);
+    if (visiting.has(key)) {
+      issues.push(
+        issue(
+          "BACK_EDGE",
+          `${path}/steps/${key}`,
+          `back edge to "${key}" is not supported by IR 2.0`
+        )
+      );
+      return;
+    }
+    if (visited.has(key)) return;
+    visiting.add(key);
+    const step = block.steps[key];
+    if (step) {
+      for (const target of stepTargets(step)) visit(target);
+    }
+    visiting.delete(key);
+    visited.add(key);
+  };
+  visit(block.entry);
+
+  for (const key of keys) {
+    if (!reachable.has(key)) {
+      issues.push(
+        issue(
+          "UNREACHABLE_STEP",
+          `${path}/steps/${key}`,
+          `step "${key}" is unreachable from block entry`
+        )
+      );
+    }
+  }
+  return issues;
+}
+
+export function executionPlanIssues(plan: ExecutionPlan): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  if (plan.irVersion !== "2.0") {
+    issues.push(
+      issue("INVALID_VALUE", "/irVersion", 'irVersion must be "2.0"')
+    );
+  }
+  for (const [path, value] of [
+    ["/workflow/id", plan.workflow.id],
+    ["/workflow/version", plan.workflow.version]
+  ] as const) {
+    if (!value.trim()) {
+      issues.push(issue("INVALID_VALUE", path, "value must not be empty"));
+    }
+  }
+  if (!DIGEST_PATTERN.test(plan.workflow.digest)) {
+    issues.push(
+      issue(
+        "INVALID_VALUE",
+        "/workflow/digest",
+        "workflow digest must be a SHA-256 digest"
+      )
+    );
+  }
+  issues.push(...validateLimits(plan.limits, "/limits"));
+
+  const closure = normalizeArtifactClosure(plan.artifactClosure);
+  const closedKeys = new Set<string>();
+  const closedIdentities = new Map<string, string>();
+  closure.entries.forEach((entry, index) => {
+    const path = `/artifactClosure/entries/${index}`;
+    if (!entry.id || !entry.version || !DIGEST_PATTERN.test(entry.digest)) {
+      issues.push(
+        issue(
+          "INVALID_VALUE",
+          path,
+          "artifact requires non-empty id/version and a SHA-256 digest"
+        )
+      );
+    }
+    const identity = artifactIdentity(entry);
+    const existingDigest = closedIdentities.get(identity);
+    if (existingDigest !== undefined) {
+      issues.push(
+        issue(
+          "DUPLICATE_ARTIFACT",
+          path,
+          existingDigest === entry.digest
+            ? "artifact is duplicated"
+            : "artifact identity has conflicting digests"
+        )
+      );
+    }
+    closedIdentities.set(identity, entry.digest);
+    closedKeys.add(artifactKey(entry));
+  });
+
+  plan.riskSnapshot.forEach((risk, index) => {
+    if (!risk.code) {
+      issues.push(
+        issue(
+          "INVALID_VALUE",
+          `/riskSnapshot/${index}/code`,
+          "risk code must not be empty"
+        )
+      );
+    }
+    if (!closedKeys.has(artifactKey(risk.source))) {
+      issues.push(
+        issue(
+          "ARTIFACT_NOT_CLOSED",
+          `/riskSnapshot/${index}/source`,
+          "risk source is absent from the artifact closure"
+        )
+      );
+    }
+  });
+
+  issues.push(
+    ...blockIssues(
+      { entry: plan.entry, steps: plan.steps },
+      "",
+      closedKeys,
+      closedIdentities,
+      new Set()
+    )
+  );
+
+  for (const [key, step] of Object.entries(plan.steps)) {
+    const lacksSuccessTarget =
+      (step.kind === "call" || step.kind === "foreach") &&
+      step.next === undefined;
+    if (lacksSuccessTarget) {
+      issues.push(
+        issue(
+          "INVALID_STEP",
+          `/steps/${key}`,
+          "a top-level call or foreach success path must target an explicit terminal flow"
+        )
+      );
+    }
+  }
+
+  const depth = estimateMaxDepth(plan);
+  if (
+    isNonNegativeSafeInteger(plan.limits.maxDepth) &&
+    depth > plan.limits.maxDepth
+  ) {
+    issues.push(
+      issue(
+        "LIMIT_EXCEEDED",
+        "/limits/maxDepth",
+        `plan depth ${depth} exceeds maxDepth ${plan.limits.maxDepth}`
+      )
+    );
+  }
+  const cost = estimateMaxStepExecutions(plan);
+  if (
+    isPositiveSafeInteger(plan.limits.maxStepExecutions) &&
+    cost > BigInt(plan.limits.maxStepExecutions)
+  ) {
+    issues.push(
+      issue(
+        "LIMIT_EXCEEDED",
+        "/limits/maxStepExecutions",
+        `plan upper bound ${cost} exceeds maxStepExecutions ${plan.limits.maxStepExecutions}`
+      )
+    );
+  }
+  return issues;
+}
+
+export class InvalidExecutionPlanError extends Error {
+  readonly issues: readonly ValidationIssue[];
+
+  constructor(issues: readonly ValidationIssue[]) {
+    super(
+      `Invalid execution plan: ${issues
+        .map((entry) => `${entry.path || "/"}: ${entry.message}`)
+        .join("; ")}`
+    );
+    this.name = "InvalidExecutionPlanError";
+    this.issues = issues;
+  }
+}
+
+export function createExecutionPlan(plan: ExecutionPlan): ExecutionPlan {
+  const normalized = normalizeExecutionPlan(plan);
+  const issues = executionPlanIssues(normalized);
+  if (issues.length > 0) {
+    throw new InvalidExecutionPlanError(issues);
+  }
+  return normalized;
+}
