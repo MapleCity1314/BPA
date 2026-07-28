@@ -33,9 +33,27 @@ const server = new LocalControlServer(
   paths.socket,
   service
 );
+let drainingIr2 = false;
 const gatewayTimer = setInterval(() => {
   try {
     browserGateway.tick();
+    if (!drainingIr2) {
+      drainingIr2 = true;
+      void service.ir2Runtime
+        .drainOnce()
+        .catch((error: unknown) => {
+          process.stderr.write(
+            `[ir2-runtime] ${
+              error instanceof Error
+                ? error.stack ?? error.message
+                : String(error)
+            }\n`
+          );
+        })
+        .finally(() => {
+          drainingIr2 = false;
+        });
+    }
   } catch (error) {
     process.stderr.write(
       `[browser-gateway] ${

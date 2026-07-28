@@ -124,12 +124,18 @@ importers:
 
   apps/local-core:
     dependencies:
+      '@bpa/assistance-core':
+        specifier: workspace:*
+        version: link:../../packages/assistance-core
       '@bpa/compiler':
         specifier: workspace:*
         version: link:../../packages/compiler
       '@bpa/control-protocol':
         specifier: workspace:*
         version: link:../../packages/control-protocol
+      '@bpa/engine':
+        specifier: workspace:*
+        version: link:../../packages/engine
       '@bpa/gateway-core':
         specifier: workspace:*
         version: link:../../packages/gateway-core
@@ -145,6 +151,9 @@ importers:
       '@bpa/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
+      '@bpa/workflow-ir':
+        specifier: workspace:*
+        version: link:../../packages/workflow-ir
 
   apps/mcp-server:
     dependencies:

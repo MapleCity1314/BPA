@@ -2,7 +2,13 @@ import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { createServer, createConnection, type Server, type Socket } from "node:net";
 import { userInfo } from "node:os";
-import { compileWorkflow, contentDigest, MemoryNodeCatalog } from "@bpa/compiler";
+import {
+  compileCanonicalWorkflow,
+  compileWorkflow,
+  contentDigest,
+  MemoryNodeCatalog,
+  type CatalogResolver
+} from "@bpa/compiler";
 import {
   CONTROL_MAX_MESSAGE_BYTES as CONTROL_V1_MAX_MESSAGE_BYTES,
   encodeControlEnvelope,
@@ -14,6 +20,10 @@ import {
 import { LocalWorkflowEngine } from "./compatibility/local-workflow-engine.js";
 import type { ArtifactType, Persistence } from "@bpa/persistence";
 import {
+  BuiltinRuntimeProvider,
+  RuntimeProviderRegistry
+} from "@bpa/node-runtime";
+import {
   compileDataValidator,
   formatValidationErrors,
   validateJsonSchemaDefinition,
@@ -23,6 +33,7 @@ import {
   type WorkflowDefinition
 } from "@bpa/schemas";
 import type { LocalBrowserGateway } from "./browser-gateway.js";
+import { Ir2WorkflowRuntime } from "./ir2-workflow-runtime.js";
 
 export const CONTROL_MAX_MESSAGE_BYTES = 512 * 1024;
 
@@ -41,12 +52,19 @@ export interface ControlResponse {
 
 export class LocalCoreService {
   readonly engine: LocalWorkflowEngine;
+  readonly ir2Runtime: Ir2WorkflowRuntime;
 
   constructor(
     readonly persistence: Persistence,
-    readonly browserGateway?: LocalBrowserGateway
+    readonly browserGateway?: LocalBrowserGateway,
+    runtimeProviders?: RuntimeProviderRegistry
   ) {
     this.engine = new LocalWorkflowEngine(persistence);
+    const providers = runtimeProviders ?? new RuntimeProviderRegistry();
+    if (!providers.list().includes("builtin")) {
+      providers.register(new BuiltinRuntimeProvider());
+    }
+    this.ir2Runtime = new Ir2WorkflowRuntime(persistence, providers);
   }
 
   handle(request: ControlRequest): ControlResponse {
@@ -186,17 +204,29 @@ export class LocalCoreService {
       };
     }
     if (assetType === "workflow") {
-      if (!validateWorkflow(content)) {
+      const isV1Alpha2 =
+        content !== null &&
+        typeof content === "object" &&
+        (content as { apiVersion?: unknown }).apiVersion === "bpa/v1alpha2";
+      if (!isV1Alpha2 && !validateWorkflow(content)) {
         return {
           valid: false,
           errors: formatValidationErrors(validateWorkflow.errors)
         };
       }
-      const compiled = compileWorkflow(content, this.#nodeCatalog());
+      const compiled = isV1Alpha2
+        ? compileCanonicalWorkflow(content, this.#ir2Catalog())
+        : compileWorkflow(content, this.#nodeCatalog());
       return {
         valid: true,
-        digest: compiled.workflowDigest,
-        identity: `${compiled.workflowId}@${compiled.workflowVersion}`,
+        digest:
+          "workflowDigest" in compiled
+            ? compiled.workflowDigest
+            : compiled.workflow.digest,
+        identity:
+          "workflowId" in compiled
+            ? `${compiled.workflowId}@${compiled.workflowVersion}`
+            : `${compiled.workflow.id}@${compiled.workflow.version}`,
         compiled
       };
     }
@@ -218,10 +248,9 @@ export class LocalCoreService {
         `Asset validation failed: ${(validation.errors ?? []).join("; ")}`
       );
     }
-    const typed =
-      assetType === "node"
-        ? (content as NodeDefinition)
-        : (content as WorkflowDefinition);
+    const typed = content as {
+      metadata: { id: string; version: string };
+    };
     const input = {
       assetType: assetType as ArtifactType,
       assetId: typed.metadata.id,
@@ -300,6 +329,17 @@ export class LocalCoreService {
         `Published workflow not found: ${workflowId}@${workflowVersion}`
       );
     }
+    const isV1Alpha2 =
+      artifact.content !== null &&
+      typeof artifact.content === "object" &&
+      (artifact.content as { apiVersion?: unknown }).apiVersion ===
+        "bpa/v1alpha2";
+    if (isV1Alpha2) {
+      return this.ir2Runtime.start(
+        compileCanonicalWorkflow(artifact.content, this.#ir2Catalog()),
+        JSON.parse(JSON.stringify(input))
+      );
+    }
     const compiled = compileWorkflow(artifact.content, this.#nodeCatalog());
     const run = this.engine.start(compiled, input);
     this.browserGateway?.dispatchPending();
@@ -344,6 +384,76 @@ export class LocalCoreService {
         .listPublished("node")
         .map((artifact) => artifact.content as NodeDefinition)
     );
+  }
+
+  #ir2Catalog(): CatalogResolver {
+    const nodes = new Map(
+      this.persistence.listPublished("node").map((artifact) => [
+        `${artifact.assetId}@${artifact.version}`,
+        artifact.content as NodeDefinition
+      ])
+    );
+    const adapters = this.persistence.listPublished("adapter");
+    const policies = this.persistence.listPublished("policy");
+    return {
+      getNode: (id, version) => nodes.get(`${id}@${version}`),
+      getNodeExecution: (id, version) => {
+        const definition = nodes.get(`${id}@${version}`);
+        if (!definition) return undefined;
+        const adapter = definition.adapter
+          ? adapters
+              .filter(
+                (artifact) =>
+                  artifact.assetId === definition.adapter?.id &&
+                  definition.adapter.versions.includes(artifact.version)
+              )
+              .sort((left, right) =>
+                right.version.localeCompare(left.version, undefined, {
+                  numeric: true
+                })
+              )[0]
+          : undefined;
+        return {
+          providerId: definition.runtime.replace(/^engine_/, ""),
+          adapters: adapter
+            ? [
+                {
+                  kind: "adapter" as const,
+                  id: adapter.assetId,
+                  version: adapter.version,
+                  digest: adapter.digest
+                }
+              ]
+            : [],
+          policies: [],
+          datasetProfiles: []
+        };
+      },
+      getAssistanceProfile: (id, version) => {
+        const artifact = policies.find(
+          (candidate) =>
+            candidate.assetId === id && candidate.version === version
+        );
+        if (!artifact) return undefined;
+        const taskKind = (artifact.content as { taskKind?: unknown }).taskKind;
+        if (
+          taskKind !== "ai_review" &&
+          taskKind !== "human_confirm" &&
+          taskKind !== "human_action"
+        ) {
+          return undefined;
+        }
+        return {
+          artifact: {
+            kind: "assistance_profile",
+            id,
+            version,
+            digest: artifact.digest
+          },
+          taskKind
+        };
+      }
+    };
   }
 }
 
