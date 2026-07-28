@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { compileWorkflow, contentDigest, MemoryNodeCatalog } from "@bpa/compiler";
-import type { LocalWorkflowEngine } from "@bpa/engine";
+import type { LocalWorkflowEngine } from "./compatibility/local-workflow-engine.js";
 import {
   BROWSER_PROTOCOL,
   BROWSER_PROTOCOL_MAX_MESSAGE_BYTES,

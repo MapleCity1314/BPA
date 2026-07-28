@@ -2,7 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
-import { LocalWorkflowEngine } from "@bpa/engine";
+import { LocalWorkflowEngine } from "./compatibility/local-workflow-engine.js";
 import {
   DEFAULT_BPA_EXTENSION_ID,
   exportPublicKeySpkiBase64,

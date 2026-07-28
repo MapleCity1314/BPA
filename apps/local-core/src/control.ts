@@ -11,7 +11,7 @@ import {
   type ControlRequestEnvelope,
   type ControlResponseEnvelope
 } from "@bpa/control-protocol";
-import { LocalWorkflowEngine } from "@bpa/engine";
+import { LocalWorkflowEngine } from "./compatibility/local-workflow-engine.js";
 import type { ArtifactType, Persistence } from "@bpa/persistence";
 import {
   compileDataValidator,
