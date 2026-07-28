@@ -1,0 +1,80 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: packaging.products.normalize
+  version: 1.0.0
+  title: 规范化包装匹配商品输入
+  description: 将已确认店铺和完整采集的商品转换成包装匹配输入，同时保留只读编辑 URL；不执行匹配或页面检查。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - shopId
+    - products
+  properties:
+    shopId:
+      type: string
+      minLength: 1
+      maxLength: 200
+    products:
+      type: array
+      maxItems: 500
+      items:
+        type: object
+        additionalProperties: false
+        required:
+          - id
+          - title
+          - editorUrl
+        properties:
+          id:
+            type: string
+            minLength: 1
+            maxLength: 200
+          title:
+            type: string
+            minLength: 1
+            maxLength: 1000
+          editorUrl:
+            type: string
+            format: uri
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - products
+  properties:
+    products:
+      type: array
+      maxItems: 500
+      items:
+        type: object
+        additionalProperties: false
+        required:
+          - shopId
+          - productId
+          - title
+          - editorUrl
+        properties:
+          shopId:
+            type: string
+          productId:
+            type: string
+          title:
+            type: string
+          editorUrl:
+            type: string
+            format: uri
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 10s
+  idempotency: pure
+  cancellable: true
+errors:
+  - TEAM_HANDLER_INPUT_INVALID
+  - TEAM_HANDLER_RESULT_LIMIT_EXCEEDED
+  - TEAM_HANDLER_CANCELLED
+  - TEAM_HANDLER_TIMEOUT

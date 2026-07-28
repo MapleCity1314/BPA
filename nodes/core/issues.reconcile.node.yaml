@@ -9,8 +9,15 @@ runtime: engine_team
 inputSchema:
   type: object
   additionalProperties: false
-  required:
-    - inspections
+  oneOf:
+    - required:
+        - inspections
+      properties:
+        inspections: {}
+    - required:
+        - foreachOutcome
+      properties:
+        foreachOutcome: {}
   properties:
     inspections:
       type: array
@@ -98,6 +105,42 @@ inputSchema:
                 message:
                   type: string
                   maxLength: 300
+    foreachOutcome:
+      type: object
+      additionalProperties: false
+      required:
+        - total
+        - succeeded
+        - failed
+        - unresolved
+      properties:
+        total:
+          type: integer
+          minimum: 0
+          maximum: 500
+        succeeded:
+          $ref: "#/$defs/outcomeBucket"
+        failed:
+          $ref: "#/$defs/outcomeBucket"
+        unresolved:
+          $ref: "#/$defs/outcomeBucket"
+  $defs:
+    outcomeBucket:
+      type: object
+      additionalProperties: false
+      required:
+        - count
+        - items
+      properties:
+        count:
+          type: integer
+          minimum: 0
+          maximum: 500
+        items:
+          type: array
+          maxItems: 500
+          items:
+            type: object
 outputSchema:
   type: object
   additionalProperties: false

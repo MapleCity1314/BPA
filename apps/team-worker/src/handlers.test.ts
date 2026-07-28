@@ -3,7 +3,9 @@ import { createPackagingMasterRecord } from "@bpa/packaging-domain";
 import type { JsonValue } from "@bpa/workflow-ir";
 import {
   ISSUES_RECONCILE_HANDLER_REF,
+  PACKAGING_INSPECTION_MATCH_HANDLER_REF,
   PACKAGING_MATCH_HANDLER_REF,
+  PACKAGING_PRODUCTS_NORMALIZE_HANDLER_REF,
   REPORT_ISSUE_BUILD_HANDLER_REF,
   TEAM_WORKER_CODE_DIGEST,
   TEAM_WORKER_HANDLER_REFS,
@@ -25,6 +27,58 @@ async function invoke(
 }
 
 describe("trusted Team Worker handlers", () => {
+  it("normalizes collected scope products and keeps unmatched products inspectable", async () => {
+    const normalized = await invoke(PACKAGING_PRODUCTS_NORMALIZE_HANDLER_REF, {
+      shopId: "shop-1",
+      products: [
+        {
+          id: "10001",
+          title: "示例品牌 鲜炖燕窝 70g×6",
+          editorUrl:
+            "https://fxg.jinritemai.com/ffa/g/create?product_id=10001"
+        },
+        {
+          id: "10002",
+          title: "无关商品 100g",
+          editorUrl:
+            "https://fxg.jinritemai.com/ffa/g/create?product_id=10002"
+        }
+      ]
+    });
+    const record = createPackagingMasterRecord({
+      id: "record-1",
+      sourceRow: 2,
+      productName: "鲜炖燕窝",
+      brand: "示例品牌",
+      weight: "70g×6",
+      packagingShape: "盒",
+      recordDigest: `sha256:${"a".repeat(64)}`
+    });
+    const matched = await invoke(
+      PACKAGING_INSPECTION_MATCH_HANDLER_REF,
+      JSON.parse(
+        JSON.stringify({
+          products: (normalized as Record<string, JsonValue>).products!,
+          records: [record]
+        })
+      ) as JsonValue
+    );
+    expect(matched).toMatchObject({
+      matched: [{ product: { productId: "10001" } }],
+      unmatched: [{ product: { productId: "10002" } }],
+      inspectionQueue: [
+        {
+          product: { id: "10001" },
+          packagingMatch: { status: "matched", recordId: "record-1" }
+        },
+        {
+          product: { id: "10002" },
+          packagingMatch: { status: "unmatched" }
+        }
+      ]
+    });
+  });
+
   it("runs packaging.master.match.batch through packaging-domain", async () => {
     const record = createPackagingMasterRecord({
       id: "record-1",

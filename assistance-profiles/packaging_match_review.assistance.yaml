@@ -1,0 +1,48 @@
+apiVersion: bpa.assistance/v1alpha1
+kind: AssistanceProfile
+metadata:
+  id: packaging_match_review
+  version: 1.0.0
+  title: 包装匹配歧义批量复核
+  description: 一次批量分析当前范围内的包装匹配歧义，只提出候选和理由，不形成长期绑定。
+taskKind: ai_review
+riskLevel: R0
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - proposals
+    - unresolvedProductIds
+  properties:
+    proposals:
+      type: array
+      maxItems: 500
+      items:
+        type: object
+        additionalProperties: false
+        required:
+          - productId
+          - recordId
+          - rationale
+        properties:
+          productId:
+            type: string
+          recordId:
+            type: string
+          rationale:
+            type: string
+            maxLength: 500
+    unresolvedProductIds:
+      type: array
+      maxItems: 500
+      items:
+        type: string
+policySnapshot:
+  autoContinue: false
+  r1ProfileApproved: false
+  durableDecision: false
+  onUnavailable: continue_unresolved
+instructions:
+  - 仅分析任务中提供的候选，不推断或创建包装规则。
+  - confidence 只用于排序和审计，不能代替确定性验证。
+  - 无法确定时保留 unresolved，不能把未匹配标记为商品问题。

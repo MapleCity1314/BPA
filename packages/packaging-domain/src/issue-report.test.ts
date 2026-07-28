@@ -55,6 +55,60 @@ const structureAnomaly = {
 };
 
 describe("packaging issue reconciliation", () => {
+  it("unwraps fixed foreach aggregation and keeps failed items as diagnostics", () => {
+    const result = reconcilePriorityInspectionResults({
+      foreachOutcome: {
+        total: 3,
+        succeeded: {
+          count: 1,
+          items: [
+            {
+              itemKey: "product-1",
+              output: inspection("product-1", "unmatched")
+            }
+          ]
+        },
+        failed: {
+          count: 1,
+          items: [
+            {
+              itemKey: "product-2",
+              error: { code: "PAGE_LOADING", message: "页面未稳定" }
+            }
+          ]
+        },
+        unresolved: {
+          count: 1,
+          items: [{ itemKey: "product-3" }]
+        }
+      }
+    });
+    expect(result.summary).toMatchObject({
+      totalProducts: 3,
+      inspectedProducts: 1,
+      affectedProducts: 0,
+      inspectionAnomalyCount: 2,
+      matchStatusCounts: { unmatched: 1, not_provided: 2 }
+    });
+    expect(result.products).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          productId: "product-2",
+          baselineInspectionPerformed: false,
+          inspectionAnomalies: [
+            expect.objectContaining({ code: "PAGE_LOADING" })
+          ]
+        }),
+        expect.objectContaining({
+          productId: "product-3",
+          inspectionAnomalies: [
+            expect.objectContaining({ code: "FOREACH_ITEM_UNRESOLVED" })
+          ]
+        })
+      ])
+    );
+  });
+
   it("retains unmatched and ambiguous state without inventing product issues", () => {
     const result = reconcilePriorityInspectionResults({
       inspections: [

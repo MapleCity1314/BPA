@@ -7,6 +7,7 @@ import {
   validateJsonSchemaDefinition,
   validateNode,
   validateWorkflow,
+  validateWorkflowV1Alpha2,
   type NodeDefinition,
   type WorkflowDefinition
 } from "@bpa/schemas";
@@ -46,9 +47,23 @@ describe("published default asset sources", () => {
       .sort();
     expect(workflowFilenames.length).toBeGreaterThanOrEqual(2);
     for (const filename of workflowFilenames) {
-      const workflow = loadYaml<WorkflowDefinition>(
+      const candidate = loadYaml<unknown>(
         `workflows/examples/${filename}`
       );
+      if (
+        candidate !== null &&
+        typeof candidate === "object" &&
+        (candidate as { apiVersion?: unknown }).apiVersion === "bpa/v1alpha2"
+      ) {
+        expect(
+          validateWorkflowV1Alpha2(candidate),
+          `${filename}: ${formatValidationErrors(
+            validateWorkflowV1Alpha2.errors
+          ).join("; ")}`
+        ).toBe(true);
+        continue;
+      }
+      const workflow = candidate as WorkflowDefinition;
       expect(
         validateWorkflow(workflow),
         `${filename}: ${formatValidationErrors(validateWorkflow.errors).join(

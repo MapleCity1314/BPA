@@ -23,6 +23,32 @@ export interface PackagingProduct {
   readonly title: string;
 }
 
+export interface CollectedPackagingProduct {
+  readonly id: string;
+  readonly title: string;
+  readonly editorUrl: string;
+}
+
+export interface PackagingInspectionProduct extends PackagingProduct {
+  readonly editorUrl: string;
+}
+
+export interface PackagingInspectionQueueItem {
+  readonly product: {
+    readonly id: string;
+    readonly title: string;
+    readonly editorUrl: string;
+  };
+  readonly packagingMatch: {
+    readonly status: "matched" | "ambiguous" | "unmatched";
+    readonly recordId?: string;
+  };
+}
+
+export interface NormalizedPackagingProducts {
+  readonly products: readonly PackagingInspectionProduct[];
+}
+
 export interface PackagingBinding {
   readonly masterRecordId: string;
   readonly reuse: DecisionReuseContext;
@@ -84,6 +110,10 @@ export interface PackagingBatchResult {
     product: PackagingProduct;
     outcome: Extract<PackagingMatchOutcome, { status: "unmatched" }>;
   }[];
+}
+
+export interface PackagingInspectionBatchResult extends PackagingBatchResult {
+  readonly inspectionQueue: readonly PackagingInspectionQueueItem[];
 }
 
 function normalizeWhitespace(value: string): string {
@@ -483,6 +513,92 @@ export function matchPackagingBatch(
     matched,
     ambiguous,
     unmatched
+  });
+}
+
+export function normalizePackagingProducts(
+  shopId: string,
+  products: readonly CollectedPackagingProduct[]
+): NormalizedPackagingProducts {
+  const normalizedShopId = normalizeWhitespace(shopId);
+  if (!normalizedShopId || products.length > 500) {
+    throw new Error(
+      "Packaging product normalization requires a shop and at most 500 products"
+    );
+  }
+  const ids = new Set<string>();
+  const normalized = products.map((product, index) => {
+    const productId = normalizeWhitespace(product.id);
+    const title = normalizeWhitespace(product.title);
+    const editorUrl = normalizeWhitespace(product.editorUrl);
+    if (!productId || !title || !editorUrl) {
+      throw new Error(
+        `Packaging product ${index} requires id, title and editorUrl`
+      );
+    }
+    try {
+      const url = new URL(editorUrl);
+      if (url.protocol !== "https:") throw new Error("not https");
+    } catch {
+      throw new Error(`Packaging product ${productId} has an invalid editorUrl`);
+    }
+    if (ids.has(productId)) {
+      throw new Error(`Packaging products contain duplicate id ${productId}`);
+    }
+    ids.add(productId);
+    return Object.freeze({
+      shopId: normalizedShopId,
+      productId,
+      title,
+      editorUrl
+    });
+  });
+  return Object.freeze({ products: Object.freeze(normalized) });
+}
+
+export function matchPackagingInspectionBatch(
+  products: readonly PackagingInspectionProduct[],
+  records: readonly PackagingMasterRecord[],
+  bindings: ReadonlyMap<string, PackagingBinding> = new Map(),
+  reuseContexts: ReadonlyMap<string, DecisionReuseContext> = new Map()
+): PackagingInspectionBatchResult {
+  const result = matchPackagingBatch(
+    products,
+    records,
+    bindings,
+    reuseContexts
+  );
+  const byProduct = new Map(
+    [...result.matched, ...result.ambiguous, ...result.unmatched].map(
+      (entry) => [entry.product.productId, entry.outcome] as const
+    )
+  );
+  const inspectionQueue = products.map((product) => {
+    const outcome = byProduct.get(product.productId);
+    if (!outcome) {
+      throw new Error(
+        `Packaging match result is missing product ${product.productId}`
+      );
+    }
+    const resolved =
+      outcome.status === "matched" ||
+      outcome.status === "smart_matched" ||
+      outcome.status === "bound";
+    return Object.freeze({
+      product: Object.freeze({
+        id: product.productId,
+        title: product.title,
+        editorUrl: product.editorUrl
+      }),
+      packagingMatch: Object.freeze({
+        status: resolved ? ("matched" as const) : outcome.status,
+        ...(resolved ? { recordId: outcome.record.id } : {})
+      })
+    });
+  });
+  return Object.freeze({
+    ...result,
+    inspectionQueue: Object.freeze(inspectionQueue)
   });
 }
 

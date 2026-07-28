@@ -1,0 +1,44 @@
+apiVersion: bpa.assistance/v1alpha1
+kind: AssistanceProfile
+metadata:
+  id: binding_confirm
+  version: 1.0.0
+  title: 长期包装绑定批量确认
+  description: 对当前范围内确需长期复用的候选执行一次人工批量确认；任务本身不修改商品页面。
+taskKind: human_confirm
+riskLevel: R2
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - confirmedBindings
+    - rejectedProductIds
+  properties:
+    confirmedBindings:
+      type: array
+      maxItems: 500
+      items:
+        type: object
+        additionalProperties: false
+        required:
+          - productId
+          - recordId
+        properties:
+          productId:
+            type: string
+          recordId:
+            type: string
+    rejectedProductIds:
+      type: array
+      maxItems: 500
+      items:
+        type: string
+policySnapshot:
+  autoContinue: false
+  r1ProfileApproved: false
+  durableDecision: true
+  onUnavailable: continue_unresolved
+instructions:
+  - 只确认需要长期复用且候选证据充分的绑定。
+  - 未确认、歧义和未匹配不会阻止商品基础只读检查。
+  - 本任务不修改表单、不保存、不发布商品。

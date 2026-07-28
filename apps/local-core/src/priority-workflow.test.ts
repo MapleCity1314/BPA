@@ -1,0 +1,459 @@
+import { readdirSync, readFileSync } from "node:fs";
+import {
+  compileWorkflowV1Alpha2,
+  contentDigest,
+  parseWorkflowYaml,
+  type CatalogResolver
+} from "@bpa/compiler";
+import {
+  DeterministicWorkflowEngine,
+  type EngineDependencies,
+  type EngineTransition
+} from "@bpa/engine";
+import {
+  formatValidationErrors,
+  validateAssistanceProfile,
+  validateNode,
+  validateWorkflowV1Alpha2,
+  type AssistanceProfileDefinition,
+  type NodeDefinition
+} from "@bpa/schemas";
+import type { ArtifactRef, JsonValue } from "@bpa/workflow-ir";
+import { describe, expect, it } from "vitest";
+
+const root = new URL("../../../", import.meta.url);
+
+function loadYaml(path: string): unknown {
+  return parseWorkflowYaml(readFileSync(new URL(path, root), "utf8"));
+}
+
+function catalog(): CatalogResolver {
+  const nodes = new Map(
+    readdirSync(new URL("nodes/core/", root))
+      .filter((name) => name.endsWith(".node.yaml"))
+      .map((name) => {
+        const node = loadYaml(`nodes/core/${name}`) as NodeDefinition;
+        if (!validateNode(node)) {
+          throw new Error(
+            `${name}: ${formatValidationErrors(validateNode.errors).join("; ")}`
+          );
+        }
+        return [
+          `${node.metadata.id}@${node.metadata.version}`,
+          node
+        ] as const;
+      })
+  );
+  const doudianAdapter: ArtifactRef & { kind: "adapter" } = {
+    kind: "adapter",
+    id: "doudian",
+    version: "1.1.0",
+    digest: `sha256:${"a".repeat(64)}`
+  };
+  const packagingProfile: ArtifactRef & { kind: "dataset_profile" } = {
+    kind: "dataset_profile",
+    id: "packaging-master-v1",
+    version: "1.0.0",
+    digest: `sha256:${"b".repeat(64)}`
+  };
+  const assistanceProfiles = new Map(
+    [
+      "packaging_match_review.assistance.yaml",
+      "binding_confirm.assistance.yaml"
+    ].map((name) => {
+      const profile = loadYaml(
+        `assistance-profiles/${name}`
+      ) as AssistanceProfileDefinition;
+      if (!validateAssistanceProfile(profile)) {
+        throw new Error(
+          `${name}: ${formatValidationErrors(
+            validateAssistanceProfile.errors
+          ).join("; ")}`
+        );
+      }
+      return [
+        `${profile.metadata.id}@${profile.metadata.version}`,
+        profile
+      ] as const;
+    })
+  );
+  return {
+    getNode: (id, version) => nodes.get(`${id}@${version}`),
+    getNodeExecution: (id, version) => {
+      const node = nodes.get(`${id}@${version}`);
+      if (!node) return undefined;
+      return {
+        providerId:
+          id === "dataset.records.read"
+            ? "dataset"
+            : node.runtime.replace(/^engine_/, ""),
+        adapters: node.runtime === "browser" ? [doudianAdapter] : [],
+        policies: [],
+        datasetProfiles:
+          id === "dataset.records.read" ? [packagingProfile] : []
+      };
+    },
+    getAssistanceProfile: (id, version) => {
+      const profile = assistanceProfiles.get(`${id}@${version}`);
+      return profile
+        ? {
+            artifact: {
+              kind: "assistance_profile",
+              id,
+              version,
+              digest: contentDigest(profile)
+            },
+            taskKind: profile.taskKind
+          }
+        : undefined;
+    }
+  };
+}
+
+function compilePriorityWorkflow() {
+  const workflow = loadYaml(
+    "workflows/examples/doudian.priority-items-readonly-inspect.workflow.yaml"
+  );
+  expect(
+    validateWorkflowV1Alpha2(workflow),
+    formatValidationErrors(validateWorkflowV1Alpha2.errors).join("; ")
+  ).toBe(true);
+  return compileWorkflowV1Alpha2(workflow, catalog());
+}
+
+function dependencies(): EngineDependencies {
+  let sequence = 0;
+  return {
+    clock: { now: () => 1_000 },
+    ids: { next: (kind) => `${kind}-${++sequence}` },
+    random: { next: () => 0.5 }
+  };
+}
+
+function succeeded(output: JsonValue) {
+  return {
+    status: "succeeded" as const,
+    output,
+    evidence: [],
+    riskSignals: []
+  };
+}
+
+describe("priority-items readonly workflow asset", () => {
+  it("compiles into a closed IR2 plan with stable foreach aggregation", () => {
+    const plan = compilePriorityWorkflow();
+    expect(plan.workflow).toMatchObject({
+      id: "doudian.priority-items-readonly-inspect",
+      version: "0.2.0"
+    });
+    expect(plan.workflow.digest).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(plan.entry).toBe("read_shop");
+    expect(plan.artifactClosure.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "dataset_profile",
+          id: "packaging-master-v1"
+        }),
+        expect.objectContaining({ kind: "adapter", id: "doudian" }),
+        expect.objectContaining({
+          kind: "node",
+          id: "dataset.records.read"
+        }),
+        expect.objectContaining({
+          kind: "node",
+          id: "packaging.products.normalize"
+        }),
+        expect.objectContaining({
+          kind: "assistance_profile",
+          id: "packaging_match_review"
+        }),
+        expect.objectContaining({
+          kind: "assistance_profile",
+          id: "binding_confirm"
+        })
+      ])
+    );
+    const inspect = Object.values(plan.steps).find(
+      (step) => step.key === "inspect_products"
+    );
+    expect(inspect).toMatchObject({
+      kind: "foreach",
+      itemKey: { path: ["product", "id"], valueType: "string" },
+      onItemError: "collect",
+      aggregation: { mode: "outcome_summary" }
+    });
+    if (inspect?.kind !== "foreach") throw new Error("fixture changed");
+    expect(inspect.body.entry).toBe("open_editor");
+    expect(inspect.body.steps.open_editor).toMatchObject({
+      kind: "call",
+      routes: { succeeded: "inspect_priority" }
+    });
+    expect(inspect.routes.completed).toBe("reconcile_issues");
+    expect(plan.steps.ambiguity_tasks).toMatchObject({
+      kind: "decision",
+      branches: [{ target: "review_ambiguities" }],
+      defaultTarget: "no_ambiguities"
+    });
+    expect(plan.steps.review_ambiguities).toMatchObject({
+      kind: "wait.assistance",
+      taskKind: "ai_review",
+      blocking: false,
+      next: "confirm_bindings"
+    });
+    expect(plan.steps.confirm_bindings).toMatchObject({
+      kind: "wait.assistance",
+      taskKind: "human_confirm",
+      blocking: false,
+      next: "inspect_products"
+    });
+    const reconcile = plan.steps.reconcile_issues;
+    expect(reconcile).toMatchObject({
+      kind: "call",
+      input: {
+        kind: "object",
+        entries: {
+          foreachOutcome: {
+            kind: "reference",
+            source: "step_output",
+            stepKey: "inspect_products"
+          }
+        }
+      }
+    });
+  });
+
+  it("executes unmatched products through open, inspect, reconcile and report bindings", () => {
+    const plan = compilePriorityWorkflow();
+    expect(contentDigest(plan)).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    const engine = new DeterministicWorkflowEngine(plan, dependencies());
+    let transition = engine.start("run-priority", {
+      dataset: { id: "packaging-master", version: "2026.07.28" },
+      platformFillCheck: false
+    });
+    const complete = (
+      nodeId: string,
+      output: JsonValue,
+      inspectInput?: (input: JsonValue) => void
+    ): void => {
+      const active = transition.state.active;
+      if (active?.kind !== "call") {
+        throw new Error(`Expected active call ${nodeId}`);
+      }
+      expect(active.invocation.node.id).toBe(nodeId);
+      inspectInput?.(active.invocation.input);
+      transition = engine.acceptRuntimeOutcome({
+        state: transition.state,
+        invocationId: active.invocation.invocationId,
+        fencingToken: active.invocation.fencingToken,
+        outcome: succeeded(output)
+      });
+    };
+
+    const editorUrl =
+      "https://fxg.jinritemai.com/ffa/g/create?product_id=10001";
+    const collectedProduct = {
+      id: "10001",
+      title: "无包装主数据匹配的健康商品",
+      editorUrl
+    };
+    complete("doudian.shop.context.read", {
+      supported: true,
+      shop: { id: "shop-1", name: "测试店", identity_confirmed: true },
+      tab_ref: {
+        browser_instance_id: "browser-1",
+        tab_id: 1,
+        window_id: 1,
+        origin: "https://fxg.jinritemai.com"
+      },
+      page_epoch: "epoch-1"
+    });
+    complete("doudian.product.scope.collect", {
+      status: "complete",
+      collectorVersion: "1.0.0",
+      fingerprint: {
+        shopId: "shop-1",
+        shopName: "测试店",
+        filters: {},
+        statusTab: { id: "selling", label: "售卖中" },
+        digest: "scope-digest"
+      },
+      expectedCount: 1,
+      scanRounds: 1,
+      products: [collectedProduct],
+      inspectionQueue: [collectedProduct],
+      restore: { page: 1, scrollTop: 0, required: true },
+      diagnostics: []
+    });
+    complete(
+      "dataset.records.read",
+      {
+        dataset: {
+          id: "packaging-master",
+          version: "2026.07.28",
+          recordsDigest: `sha256:${"c".repeat(64)}`,
+          recordCount: 0
+        },
+        records: [],
+        hasMore: false
+      },
+      (input) =>
+        expect(input).toEqual({
+          id: "packaging-master",
+          version: "2026.07.28",
+          limit: 500
+        })
+    );
+    const normalizedProduct = {
+      shopId: "shop-1",
+      productId: "10001",
+      title: collectedProduct.title,
+      editorUrl
+    };
+    complete(
+      "packaging.products.normalize",
+      { products: [normalizedProduct] },
+      (input) =>
+        expect(input).toEqual({
+          shopId: "shop-1",
+          products: [collectedProduct]
+        })
+    );
+    const inspectionItem = {
+      product: collectedProduct,
+      packagingMatch: { status: "unmatched" }
+    };
+    complete(
+      "packaging.master.match.batch",
+      {
+        matcherVersion: "packaging-smart-v1",
+        matched: [],
+        ambiguous: [],
+        unmatched: [
+          {
+            product: normalizedProduct,
+            outcome: {
+              status: "unmatched",
+              reason: "没有候选",
+              evidence: [],
+              candidates: []
+            }
+          }
+        ],
+        inspectionQueue: [inspectionItem]
+      },
+      (input) =>
+        expect(input).toEqual({
+          products: [normalizedProduct],
+          records: []
+        })
+    );
+    expect(
+      transition.effects.filter((effect) => effect.kind === "assistance.create")
+    ).toEqual([]);
+    complete("control.noop", { status: "none" });
+    complete(
+      "doudian.product.editor.open",
+      {
+        status: "ready",
+        productId: "10001",
+        url: editorUrl,
+        readiness: {
+          stableSamples: 3,
+          visibleControls: 1,
+          knownAnchors: 1,
+          requiredMarkers: 1
+        },
+        tab_ref: {
+          browser_instance_id: "browser-1",
+          tab_id: 1,
+          window_id: 1,
+          origin: "https://fxg.jinritemai.com"
+        },
+        page_epoch: "epoch-2",
+        domMutations: 0
+      },
+      (input) =>
+        expect(input).toEqual({
+          productId: "10001",
+          editUrl: editorUrl
+        })
+    );
+    const inspection = {
+      status: "complete",
+      inspectorVersion: "1.0.0",
+      productId: "10001",
+      packagingMatchStatus: "unmatched",
+      baselineInspectionPerformed: true,
+      issues: [],
+      anomalies: [],
+      domMutations: 0
+    };
+    complete(
+      "doudian.editor.priority-items.inspect",
+      inspection,
+      (input) =>
+        expect(input).toEqual({
+          product: collectedProduct,
+          packagingMatch: { status: "unmatched" },
+          platformFillCheck: false
+        })
+    );
+    const reconciliation = {
+      reconciliationVersion: "1.0.0",
+      products: [],
+      summary: {
+        totalProducts: 1,
+        inspectedProducts: 1,
+        affectedProducts: 0,
+        pageIssueCount: 0,
+        platformReminderCount: 0,
+        inspectionAnomalyCount: 0,
+        matchStatusCounts: { unmatched: 1 }
+      }
+    };
+    complete("issues.reconcile", reconciliation, (input) => {
+      expect(input).toMatchObject({
+        foreachOutcome: {
+          total: 1,
+          succeeded: {
+            count: 1,
+            items: [{ itemKey: "10001", output: inspection }]
+          },
+          failed: { count: 0 },
+          unresolved: { count: 0 }
+        }
+      });
+    });
+    const report = {
+      schemaVersion: "bpa.issue-report/1",
+      issueFingerprint: `sha256:${"d".repeat(64)}`
+    };
+    complete("report.issue.build", report, (input) => {
+      expect(input).toMatchObject({
+        context: {
+          shopId: "shop-1",
+          shopName: "测试店",
+          scopeLabel: "售卖中"
+        },
+        reconciliation
+      });
+    });
+    expect(transition.state.status).toBe("succeeded");
+    expect(transition.state.output).toMatchObject({
+      report,
+      inspectionSummary: {
+        total: 1,
+        succeeded: { count: 1 }
+      }
+    });
+    expect(
+      (
+        transition.state.output as {
+          matching: { unmatched: readonly unknown[] };
+        }
+      ).matching.unmatched[0]
+    ).toMatchObject({
+      product: { productId: "10001" }
+    });
+  });
+});

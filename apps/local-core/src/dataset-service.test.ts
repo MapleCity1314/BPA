@@ -129,8 +129,8 @@ describe("PackagingDatasetService", () => {
         id: "packaging-master",
         version: "2026.07.28",
         limit: 1
-      }).records
-    ).toHaveLength(1);
+      })
+    ).toMatchObject({ hasMore: false, records: [expect.any(Object)] });
     expect(
       service.list({
         id: "packaging-master",

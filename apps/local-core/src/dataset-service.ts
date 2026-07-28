@@ -420,6 +420,7 @@ export class PackagingDatasetService {
   }): {
     readonly dataset: DatasetVersionDefinition;
     readonly records: readonly JsonValue[];
+    readonly hasMore: boolean;
     readonly nextRecordKey?: string;
   } {
     const dataset = this.get(input.id, input.version);
@@ -427,6 +428,7 @@ export class PackagingDatasetService {
     return {
       dataset,
       records: page.records,
+      hasMore: page.nextRecordKey !== undefined,
       ...(page.nextRecordKey === undefined
         ? {}
         : { nextRecordKey: page.nextRecordKey })

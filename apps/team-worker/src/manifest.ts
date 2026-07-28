@@ -14,10 +14,24 @@ function implementationDigest(ref: string, implementation: string): string {
 
 export const TEAM_WORKER_HANDLER_MANIFEST = [
   {
+    ref: "packaging.products.normalize@1.0.0",
+    implementationDigest: implementationDigest(
+      "packaging.products.normalize@1.0.0",
+      "scope-products-to-packaging-input:v1"
+    )
+  },
+  {
     ref: "packaging.master.match.batch@1.0.0",
     implementationDigest: implementationDigest(
       "packaging.master.match.batch@1.0.0",
       "packaging-smart-v1:trusted-static-v1"
+    )
+  },
+  {
+    ref: "packaging.master.match.batch@1.1.0",
+    implementationDigest: implementationDigest(
+      "packaging.master.match.batch@1.1.0",
+      "packaging-smart-v1:ordered-inspection-queue:v1"
     )
   },
   {

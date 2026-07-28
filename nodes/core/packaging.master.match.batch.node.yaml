@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha1
 kind: Node
 metadata:
   id: packaging.master.match.batch
-  version: 1.0.0
+  version: 1.1.0
   title: 批量匹配包装主数据
   description: 使用固定版本包装匹配器批量产生确定性匹配、歧义和未匹配结果；匹配结果不代表商品问题。
 runtime: engine_team
@@ -23,6 +23,7 @@ inputSchema:
           - shopId
           - productId
           - title
+          - editorUrl
         properties:
           shopId:
             type: string
@@ -36,6 +37,9 @@ inputSchema:
             type: string
             minLength: 1
             maxLength: 1000
+          editorUrl:
+            type: string
+            format: uri
     records:
       type: array
       maxItems: 500
@@ -53,6 +57,7 @@ outputSchema:
     - matched
     - ambiguous
     - unmatched
+    - inspectionQueue
   properties:
     matcherVersion:
       type: string
@@ -72,6 +77,45 @@ outputSchema:
       maxItems: 500
       items:
         type: object
+    inspectionQueue:
+      type: array
+      maxItems: 500
+      description: 按输入商品顺序生成；未匹配和歧义商品仍保留在基础只读检查队列中。
+      items:
+        type: object
+        additionalProperties: false
+        required:
+          - product
+          - packagingMatch
+        properties:
+          product:
+            type: object
+            additionalProperties: false
+            required:
+              - id
+              - title
+              - editorUrl
+            properties:
+              id:
+                type: string
+              title:
+                type: string
+              editorUrl:
+                type: string
+                format: uri
+          packagingMatch:
+            type: object
+            additionalProperties: false
+            required:
+              - status
+            properties:
+              status:
+                enum:
+                  - matched
+                  - ambiguous
+                  - unmatched
+              recordId:
+                type: string
 risk:
   level: R0
   permissions: []

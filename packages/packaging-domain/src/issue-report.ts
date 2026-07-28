@@ -282,6 +282,121 @@ function emptyMatchCounts(): Record<PackagingMatchStatus, number> {
   };
 }
 
+function inspectionsFromForeachOutcome(value: unknown): readonly unknown[] {
+  const outcome = objectValue(value, "foreachOutcome");
+  const total = outcome.total;
+  if (
+    !Number.isSafeInteger(total) ||
+    (total as number) < 0 ||
+    (total as number) > MAX_RECONCILE_PRODUCTS
+  ) {
+    throw new Error(
+      `foreachOutcome.total must be an integer between 0 and ${MAX_RECONCILE_PRODUCTS}`
+    );
+  }
+  const succeeded = objectValue(
+    outcome.succeeded,
+    "foreachOutcome.succeeded"
+  );
+  const failed = objectValue(outcome.failed, "foreachOutcome.failed");
+  const unresolved = objectValue(
+    outcome.unresolved,
+    "foreachOutcome.unresolved"
+  );
+  const succeededItems = arrayValue(
+    succeeded.items,
+    "foreachOutcome.succeeded.items",
+    MAX_RECONCILE_PRODUCTS
+  );
+  const failedItems = arrayValue(
+    failed.items,
+    "foreachOutcome.failed.items",
+    MAX_RECONCILE_PRODUCTS
+  );
+  const unresolvedItems = arrayValue(
+    unresolved.items,
+    "foreachOutcome.unresolved.items",
+    MAX_RECONCILE_PRODUCTS
+  );
+  const buckets = [
+    [succeeded, succeededItems, "succeeded"],
+    [failed, failedItems, "failed"],
+    [unresolved, unresolvedItems, "unresolved"]
+  ] as const;
+  for (const [bucket, items, label] of buckets) {
+    if (bucket.count !== items.length) {
+      throw new Error(`foreachOutcome.${label}.count does not match items`);
+    }
+  }
+  if (
+    succeededItems.length + failedItems.length + unresolvedItems.length !==
+    total
+  ) {
+    throw new Error("foreachOutcome.total does not match outcome buckets");
+  }
+  const synthetic = (
+    itemValue: unknown,
+    label: string,
+    code: string,
+    message: string
+  ): Record<string, unknown> => {
+    const item = objectValue(itemValue, label);
+    return {
+      productId: textValue(item.itemKey, `${label}.itemKey`, 200),
+      status: "structural_anomaly",
+      packagingMatchStatus: "not_provided",
+      baselineInspectionPerformed: false,
+      issues: [],
+      anomalies: [
+        {
+          code,
+          classification: "workflow",
+          retryable: false,
+          message
+        }
+      ]
+    };
+  };
+  return [
+    ...succeededItems.map(
+      (itemValue, index) =>
+        objectValue(
+          objectValue(
+            itemValue,
+            `foreachOutcome.succeeded.items[${index}]`
+          ).output,
+          `foreachOutcome.succeeded.items[${index}].output`
+        )
+    ),
+    ...failedItems.map((itemValue, index) => {
+      const label = `foreachOutcome.failed.items[${index}]`;
+      const item = objectValue(itemValue, label);
+      const error =
+        item.error === undefined
+          ? undefined
+          : objectValue(item.error, `${label}.error`);
+      return synthetic(
+        item,
+        label,
+        error?.code === undefined
+          ? "FOREACH_ITEM_FAILED"
+          : textValue(error.code, `${label}.error.code`, 200),
+        error?.message === undefined
+          ? "逐商品检查执行失败"
+          : textValue(error.message, `${label}.error.message`)
+      );
+    }),
+    ...unresolvedItems.map((itemValue, index) =>
+      synthetic(
+        itemValue,
+        `foreachOutcome.unresolved.items[${index}]`,
+        "FOREACH_ITEM_UNRESOLVED",
+        "逐商品检查未解析完成"
+      )
+    )
+  ];
+}
+
 /**
  * Reconciles only observations produced by the read-only editor inspector.
  * Packaging match state remains metadata and can never be converted into a
@@ -291,11 +406,22 @@ export function reconcilePriorityInspectionResults(
   input: unknown
 ): IssueReconciliationResult {
   const root = objectValue(input, "reconcile input");
-  const inspections = arrayValue(
-    root.inspections,
-    "inspections",
-    MAX_RECONCILE_PRODUCTS
-  );
+  if (
+    (root.inspections === undefined) ===
+    (root.foreachOutcome === undefined)
+  ) {
+    throw new Error(
+      "reconcile input requires exactly one of inspections or foreachOutcome"
+    );
+  }
+  const inspections =
+    root.inspections === undefined
+      ? inspectionsFromForeachOutcome(root.foreachOutcome)
+      : arrayValue(
+          root.inspections,
+          "inspections",
+          MAX_RECONCILE_PRODUCTS
+        );
   const products: ReconciledProductInspection[] = [];
   const productIds = new Set<string>();
   let findingCount = 0;

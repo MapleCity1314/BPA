@@ -6,7 +6,9 @@ import {
   extractWeightSignature,
   extractWeightSignatures,
   matchPackagingBatch,
+  matchPackagingInspectionBatch,
   matchPackagingProduct,
+  normalizePackagingProducts,
   normalizeProductName,
   packagingDecisionReuseContext,
   type PackagingMasterRecord
@@ -55,9 +57,83 @@ describe("packaging normalization", () => {
       })
     ).toBe("东北酸菜丝|榆园|500g");
   });
+
+  it("normalizes collected products into stable matcher and inspection identities", () => {
+    const normalized = normalizePackagingProducts(" shop-1 ", [
+      {
+        id: "10001",
+        title: " 【榆园】东北酸菜丝500g ",
+        editorUrl:
+          "https://fxg.jinritemai.com/ffa/g/create?product_id=10001"
+      }
+    ]);
+    expect(normalized.products).toEqual([
+      {
+        shopId: "shop-1",
+        productId: "10001",
+        title: "【榆园】东北酸菜丝500g",
+        editorUrl:
+          "https://fxg.jinritemai.com/ffa/g/create?product_id=10001"
+      }
+    ]);
+    expect(() =>
+      normalizePackagingProducts("shop-1", [
+        {
+          id: "10001",
+          title: "商品一",
+          editorUrl:
+            "https://fxg.jinritemai.com/ffa/g/create?product_id=10001"
+        },
+        {
+          id: "10001",
+          title: "商品二",
+          editorUrl:
+            "https://fxg.jinritemai.com/ffa/g/create?product_id=10001"
+        }
+      ])
+    ).toThrow(/duplicate id/);
+  });
 });
 
 describe("packaging matching", () => {
+  it("builds an ordered inspection queue that retains unmatched products", () => {
+    const products = normalizePackagingProducts("shop-1", [
+      {
+        id: "10001",
+        title: "【榆园】东北酸菜丝500g",
+        editorUrl:
+          "https://fxg.jinritemai.com/ffa/g/create?product_id=10001"
+      },
+      {
+        id: "10002",
+        title: "完全无关商品100g",
+        editorUrl:
+          "https://fxg.jinritemai.com/ffa/g/create?product_id=10002"
+      }
+    ]).products;
+    const result = matchPackagingInspectionBatch(products, [record()]);
+    expect(result.inspectionQueue).toEqual([
+      {
+        product: {
+          id: "10001",
+          title: "【榆园】东北酸菜丝500g",
+          editorUrl:
+            "https://fxg.jinritemai.com/ffa/g/create?product_id=10001"
+        },
+        packagingMatch: { status: "matched", recordId: "record-1" }
+      },
+      {
+        product: {
+          id: "10002",
+          title: "完全无关商品100g",
+          editorUrl:
+            "https://fxg.jinritemai.com/ffa/g/create?product_id=10002"
+        },
+        packagingMatch: { status: "unmatched" }
+      }
+    ]);
+  });
+
   it("keeps strict and conservative smart matches from the proven plugin", () => {
     const master = record();
     expect(

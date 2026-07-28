@@ -1,0 +1,79 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: dataset.records.read
+  version: 1.0.0
+  title: 读取不可变 Dataset 记录页
+  description: 按固定 Dataset id 和 version 读取有界规范记录页；不读取原始导入文件，不接受文件路径。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - id
+    - version
+  properties:
+    id:
+      type: string
+      minLength: 1
+      maxLength: 200
+    version:
+      type: string
+      minLength: 1
+      maxLength: 100
+    afterRecordKey:
+      type: string
+      minLength: 1
+      maxLength: 500
+    limit:
+      type: integer
+      minimum: 1
+      maximum: 500
+      default: 500
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - dataset
+    - records
+    - hasMore
+  properties:
+    dataset:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version
+        - recordsDigest
+        - recordCount
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        recordsDigest:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        recordCount:
+          type: integer
+          minimum: 0
+    records:
+      type: array
+      maxItems: 500
+      items: {}
+    hasMore:
+      type: boolean
+    nextRecordKey:
+      type: string
+risk:
+  level: R0
+  permissions:
+    - dataset.records.read
+execution:
+  timeoutDefault: 5s
+  idempotency: repeatable_read
+  cancellable: true
+errors:
+  - DATASET_NOT_FOUND
+  - DATASET_PAGE_INVALID
+  - DATASET_VERSION_CONFLICT

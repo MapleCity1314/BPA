@@ -1,0 +1,250 @@
+apiVersion: bpa/v1alpha2
+kind: Workflow
+metadata:
+  id: doudian.priority-items-readonly-inspect
+  version: 0.2.0
+  title: 抖店重点项只读检查
+  description: 从不可变包装主数据开始，完整采集当前范围，批量匹配，并逐商品打开编辑页执行只读重点项检查。
+spec:
+  riskLevel: R0
+  inputSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - dataset
+      - platformFillCheck
+    properties:
+      dataset:
+        type: object
+        additionalProperties: false
+        required:
+          - id
+          - version
+        properties:
+          id:
+            type: string
+            minLength: 1
+          version:
+            type: string
+            minLength: 1
+      platformFillCheck:
+        type: boolean
+  outputSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - report
+      - scope
+      - matching
+      - inspectionSummary
+    properties:
+      report:
+        type: object
+      scope:
+        type: object
+      matching:
+        type: object
+      inspectionSummary:
+        type: object
+  limits:
+    maxDepth: 3
+    maxStepExecutions: 5000
+  root:
+    kind: sequence
+    steps:
+      - key: read_shop
+        kind: call
+        use: doudian.shop.context.read@1.2.0
+        timeout: 15s
+        retry:
+          maxAttempts: 2
+          retryableErrors:
+            - PAGE_LOADING
+            - BROWSER_DISCONNECTED
+      - key: collect_scope
+        kind: call
+        use: doudian.product.scope.collect@1.0.0
+        timeout: 10m
+        retry:
+          maxAttempts: 2
+          retryableErrors:
+            - PAGE_LOADING
+            - BROWSER_DISCONNECTED
+            - TOTAL_CHANGED_DURING_ROUND
+            - COUNT_MISMATCH
+      - key: scope_complete
+        kind: decision
+        condition:
+          kind: compare
+          operator: equals
+          left:
+            kind: binding
+            binding: ${steps.collect_scope.output.status}
+          right:
+            kind: literal
+            value: complete
+        then:
+          kind: sequence
+          steps:
+            - key: read_dataset
+              kind: call
+              use: dataset.records.read@1.0.0
+              with:
+                id: ${input.dataset.id}
+                version: ${input.dataset.version}
+                limit: 500
+              timeout: 5s
+            - key: dataset_page_complete
+              kind: decision
+              condition:
+                kind: compare
+                operator: equals
+                left:
+                  kind: binding
+                  binding: ${steps.read_dataset.output.hasMore}
+                right:
+                  kind: literal
+                  value: true
+              then:
+                kind: sequence
+                steps:
+                  - key: dataset_too_large
+                    kind: terminal
+                    status: uncertain
+                    error:
+                      code: DATASET_REQUIRES_PAGINATION
+                      message: 当前包装主数据超过单次只读检查的 500 条确定性上限。
+              else:
+                kind: sequence
+                steps:
+                  - key: normalize_products
+                    kind: call
+                    use: packaging.products.normalize@1.0.0
+                    with:
+                      shopId: ${steps.read_shop.output.shop.id}
+                      products: ${steps.collect_scope.output.inspectionQueue}
+                    timeout: 10s
+                  - key: match_packaging
+                    kind: call
+                    use: packaging.master.match.batch@1.1.0
+                    with:
+                      products: ${steps.normalize_products.output.products}
+                      records: ${steps.read_dataset.output.records}
+                    timeout: 30s
+                  - key: ambiguity_tasks
+                    kind: decision
+                    condition:
+                      kind: compare
+                      operator: not_equals
+                      left:
+                        kind: binding
+                        binding: ${steps.match_packaging.output.ambiguous}
+                      right:
+                        kind: literal
+                        value: []
+                    then:
+                      kind: sequence
+                      steps:
+                        - key: review_ambiguities
+                          kind: wait.assistance
+                          use: packaging_match_review@1.0.0
+                          with:
+                            shopId: ${steps.read_shop.output.shop.id}
+                            dataset: ${steps.read_dataset.output.dataset}
+                            ambiguities: ${steps.match_packaging.output.ambiguous}
+                          blocking: false
+                          deadline: 10m
+                          onUnavailable: continue_unresolved
+                        - key: confirm_bindings
+                          kind: wait.assistance
+                          use: binding_confirm@1.0.0
+                          with:
+                            shopId: ${steps.read_shop.output.shop.id}
+                            matcherVersion: ${steps.match_packaging.output.matcherVersion}
+                            ambiguities: ${steps.match_packaging.output.ambiguous}
+                          blocking: false
+                          deadline: 24h
+                          onUnavailable: continue_unresolved
+                    else:
+                      kind: sequence
+                      steps:
+                        - key: no_ambiguities
+                          kind: call
+                          use: control.noop@1.0.0
+                          with:
+                            value:
+                              status: none
+                          timeout: 1s
+                  - key: inspect_products
+                    kind: foreach
+                    items: ${steps.match_packaging.output.inspectionQueue}
+                    itemName: inspection_item
+                    indexName: inspection_index
+                    itemKey: ${item.product.id}
+                    maxItems: 500
+                    maxDuration: 6h
+                    onItemError: collect
+                    body:
+                      kind: sequence
+                      steps:
+                        - key: open_editor
+                          kind: call
+                          use: doudian.product.editor.open@1.0.0
+                          with:
+                            productId: ${item.product.id}
+                            editUrl: ${item.product.editorUrl}
+                          timeout: 30s
+                          retry:
+                            maxAttempts: 2
+                            retryableErrors:
+                              - PAGE_LOADING
+                              - NAVIGATION_UNCERTAIN
+                              - BROWSER_DISCONNECTED
+                        - key: inspect_priority
+                          kind: call
+                          use: doudian.editor.priority-items.inspect@1.0.0
+                          with:
+                            product: ${item.product}
+                            packagingMatch: ${item.packagingMatch}
+                            platformFillCheck: ${input.platformFillCheck}
+                          timeout: 5m
+                          retry:
+                            maxAttempts: 2
+                            retryableErrors:
+                              - PAGE_LOADING
+                              - PAGE_NOT_STABLE
+                              - REQUIRED_EVIDENCE_MISSING
+                              - BROWSER_DISCONNECTED
+                  - key: reconcile_issues
+                    kind: call
+                    use: issues.reconcile@1.0.0
+                    with:
+                      foreachOutcome: ${steps.inspect_products.output}
+                    timeout: 15s
+                  - key: build_report
+                    kind: call
+                    use: report.issue.build@1.0.0
+                    with:
+                      context:
+                        shopId: ${steps.read_shop.output.shop.id}
+                        shopName: ${steps.read_shop.output.shop.name}
+                        scopeLabel: ${steps.collect_scope.output.fingerprint.statusTab.label}
+                      reconciliation: ${steps.reconcile_issues.output}
+                    timeout: 15s
+                  - key: completed
+                    kind: terminal
+                    status: succeeded
+                    output:
+                      report: ${steps.build_report.output}
+                      scope: ${steps.collect_scope.output}
+                      matching: ${steps.match_packaging.output}
+                      inspectionSummary: ${steps.inspect_products.output}
+        else:
+          kind: sequence
+          steps:
+            - key: scope_incomplete
+              kind: terminal
+              status: uncertain
+              error:
+                code: PRODUCT_SCOPE_INCOMPLETE
+                message: 商品范围数量对账未完成，未生成逐商品检查队列。

@@ -3,8 +3,12 @@ import {
   MAX_RECONCILE_PRODUCTS,
   PACKAGING_MATCHER_VERSION,
   matchPackagingBatch,
+  matchPackagingInspectionBatch,
+  normalizePackagingProducts,
   reconcilePriorityInspectionResults,
   type PackagingBinding,
+  type CollectedPackagingProduct,
+  type PackagingInspectionProduct,
   type PackagingMasterRecord,
   type PackagingProduct
 } from "@bpa/packaging-domain";
@@ -24,6 +28,10 @@ import {
 
 export const PACKAGING_MATCH_HANDLER_REF =
   "packaging.master.match.batch@1.0.0";
+export const PACKAGING_INSPECTION_MATCH_HANDLER_REF =
+  "packaging.master.match.batch@1.1.0";
+export const PACKAGING_PRODUCTS_NORMALIZE_HANDLER_REF =
+  "packaging.products.normalize@1.0.0";
 export const PACKAGING_DATASET_PARSE_HANDLER_REF =
   "packaging.dataset.parse@1.0.0";
 export const ISSUES_RECONCILE_HANDLER_REF =
@@ -170,6 +178,33 @@ const manifestDigest = (ref: string): string => {
 export const teamHandlerRegistry = new TeamHandlerRegistry([
   {
     node: {
+      id: "packaging.products.normalize",
+      version: "1.0.0"
+    },
+    implementationDigest: manifestDigest(
+      PACKAGING_PRODUCTS_NORMALIZE_HANDLER_REF
+    ),
+    invoke(input, signal) {
+      const candidate = inputObject(input, "Packaging products input");
+      if (
+        !Array.isArray(candidate.products) ||
+        candidate.products.length > MAX_RECONCILE_PRODUCTS
+      ) {
+        throw new TeamHandlerError(
+          "TEAM_HANDLER_INPUT_INVALID",
+          `Packaging product normalization requires at most ${MAX_RECONCILE_PRODUCTS} products`
+        );
+      }
+      return domainResult("Packaging product normalization", signal, () =>
+        normalizePackagingProducts(
+          boundedString(candidate.shopId, "shopId", 200),
+          candidate.products as unknown as CollectedPackagingProduct[]
+        )
+      );
+    }
+  },
+  {
+    node: {
       id: "packaging.master.match.batch",
       version: "1.0.0"
     },
@@ -190,6 +225,40 @@ export const teamHandlerRegistry = new TeamHandlerRegistry([
       return domainResult("Packaging match", signal, () =>
         matchPackagingBatch(
           candidate.products as PackagingProduct[],
+          candidate.records as PackagingMasterRecord[],
+          objectMap<PackagingBinding>(candidate.bindings, "bindings"),
+          objectMap<DecisionReuseContext>(
+            candidate.reuseContexts,
+            "reuseContexts"
+          )
+        )
+      );
+    }
+  },
+  {
+    node: {
+      id: "packaging.master.match.batch",
+      version: "1.1.0"
+    },
+    implementationDigest: manifestDigest(
+      PACKAGING_INSPECTION_MATCH_HANDLER_REF
+    ),
+    invoke(input, signal) {
+      const candidate = inputObject(input, "Packaging inspection match input");
+      if (
+        !Array.isArray(candidate.products) ||
+        !Array.isArray(candidate.records) ||
+        candidate.products.length > MAX_RECONCILE_PRODUCTS ||
+        candidate.records.length > MAX_TEAM_DATASET_RECORDS
+      ) {
+        throw new TeamHandlerError(
+          "TEAM_HANDLER_INPUT_INVALID",
+          `Packaging inspection match requires at most ${MAX_RECONCILE_PRODUCTS} products and ${MAX_TEAM_DATASET_RECORDS} records`
+        );
+      }
+      return domainResult("Packaging inspection match", signal, () =>
+        matchPackagingInspectionBatch(
+          candidate.products as PackagingInspectionProduct[],
           candidate.records as PackagingMasterRecord[],
           objectMap<PackagingBinding>(candidate.bindings, "bindings"),
           objectMap<DecisionReuseContext>(
