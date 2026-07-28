@@ -1,6 +1,6 @@
 # BPA v0.4 state machines
 
-Status: protocol candidate
+Status: accepted
 
 ## Run and execution
 

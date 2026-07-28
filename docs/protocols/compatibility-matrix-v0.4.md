@@ -1,6 +1,6 @@
 # BPA v0.4 compatibility matrix
 
-Status: protocol candidate
+Status: accepted
 
 | Producer | Accepted source | Frozen runtime form | Recovery rule |
 | --- | --- | --- | --- |

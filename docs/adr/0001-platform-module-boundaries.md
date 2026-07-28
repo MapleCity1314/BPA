@@ -1,6 +1,6 @@
 # ADR 0001: Platform module boundaries
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-28
 
 ## Context

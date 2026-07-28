@@ -1,6 +1,6 @@
 # ADR 0002: IR2, execution identity and recovery
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-28
 
 ## Context

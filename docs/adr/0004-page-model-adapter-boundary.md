@@ -1,6 +1,6 @@
 # ADR 0004: PageModel and Adapter boundary
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-28
 
 ## Context

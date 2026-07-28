@@ -1,6 +1,6 @@
 # ADR 0003: Assistance, datasets and atomic wake-up
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-28
 
 ## Context
