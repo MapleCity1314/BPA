@@ -239,6 +239,12 @@ importers:
         specifier: workspace:*
         version: link:../workflow-ir
 
+  packages/packaging-domain:
+    dependencies:
+      '@bpa/dataset-core':
+        specifier: workspace:*
+        version: link:../dataset-core
+
   packages/page-model:
     dependencies:
       '@bpa/schemas':
