@@ -67,7 +67,7 @@ export interface ForeachLimits extends ExecutionLimits {
 
 export interface RiskSnapshotEntry {
   readonly code: string;
-  readonly level: "R0" | "R1" | "R2" | "R3";
+  readonly level: "R0" | "R1" | "R2" | "R3" | "R4";
   readonly source: ArtifactRef;
   readonly details?: JsonValue;
 }
