@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/assistance-task/v1alpha1",
+  "title": "BPA Assistance Task v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "taskId",
+    "runId",
+    "stepInstanceId",
+    "profile",
+    "mode",
+    "riskLevel",
+    "status",
+    "revision",
+    "input",
+    "outputSchema",
+    "policySnapshot",
+    "contextRefs",
+    "deadline",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "apiVersion": { "const": "bpa.assistance/v1alpha1" },
+    "taskId": { "$ref": "#/$defs/id" },
+    "runId": { "$ref": "#/$defs/id" },
+    "stepInstanceId": { "$ref": "#/$defs/id" },
+    "profile": { "$ref": "#/$defs/assetRef" },
+    "mode": { "enum": ["ai_review", "human_confirm", "human_action"] },
+    "riskLevel": { "$ref": "#/$defs/riskLevel" },
+    "status": {
+      "enum": [
+        "queued",
+        "claimed",
+        "processing",
+        "awaiting_human",
+        "completed",
+        "expired",
+        "cancelled",
+        "failed"
+      ]
+    },
+    "revision": { "type": "integer", "minimum": 0 },
+    "input": {},
+    "outputSchema": { "type": "object" },
+    "policySnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "autoContinue",
+        "r1ProfileApproved",
+        "durableDecision",
+        "onUnavailable"
+      ],
+      "properties": {
+        "autoContinue": { "type": "boolean" },
+        "r1ProfileApproved": { "type": "boolean" },
+        "durableDecision": { "type": "boolean" },
+        "deterministicValidator": { "$ref": "#/$defs/assetRef" },
+        "onUnavailable": {
+          "enum": ["continue_unresolved", "human_action", "fail"]
+        }
+      }
+    },
+    "contextRefs": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidenceId", "classification", "digest"],
+        "properties": {
+          "evidenceId": { "$ref": "#/$defs/id" },
+          "classification": {
+            "enum": ["public", "internal", "sensitive"]
+          },
+          "digest": { "$ref": "#/$defs/digest" }
+        }
+      }
+    },
+    "lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ownerId", "fencingToken", "expiresAt"],
+      "properties": {
+        "ownerId": { "$ref": "#/$defs/id" },
+        "fencingToken": { "type": "integer", "minimum": 1 },
+        "expiresAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resolverType", "resolverId", "output", "submittedAt"],
+      "properties": {
+        "resolverType": { "enum": ["ai", "human", "human_ai"] },
+        "resolverId": { "$ref": "#/$defs/id" },
+        "provider": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "model": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "output": {},
+        "submittedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "deadline": { "$ref": "#/$defs/timestamp" },
+    "createdAt": { "$ref": "#/$defs/timestamp" },
+    "updatedAt": { "$ref": "#/$defs/timestamp" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "assetRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+        },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "riskLevel": { "enum": ["R0", "R1", "R2", "R3", "R4"] },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}

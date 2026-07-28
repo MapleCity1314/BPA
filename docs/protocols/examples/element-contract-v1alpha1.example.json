@@ -1,0 +1,45 @@
+{
+  "apiVersion": "bpa.page/v1alpha1",
+  "kind": "ElementContract",
+  "metadata": {
+    "id": "doudian.product-list.total-count",
+    "version": "0.1.0",
+    "title": "商品列表完整范围总数"
+  },
+  "intent": "读取当前店铺和筛选范围下的完整商品总数",
+  "scope": {
+    "origins": ["https://fxg.jinritemai.com"],
+    "pathPattern": "/ffa/g/list",
+    "pageState": "product-list-ready",
+    "frame": "top"
+  },
+  "expectedCount": {
+    "minimum": 1,
+    "maximum": 2
+  },
+  "candidates": [
+    {
+      "strategy": "business-id",
+      "value": "product-total-count"
+    },
+    {
+      "strategy": "role-name",
+      "role": "status",
+      "name": "商品总数"
+    },
+    {
+      "strategy": "css-diagnostic",
+      "selector": "[data-testid='product-total']"
+    }
+  ],
+  "preconditions": [
+    "page_identity_confirmed",
+    "shop_identity_confirmed"
+  ],
+  "postconditions": [],
+  "volatility": "medium",
+  "validatedSnapshots": [
+    "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  ]
+}

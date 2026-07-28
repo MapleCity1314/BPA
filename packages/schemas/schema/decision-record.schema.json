@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/decision-record/v1alpha1",
+  "title": "BPA Decision Record v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "decisionId",
+    "decisionType",
+    "status",
+    "scope",
+    "preconditions",
+    "value",
+    "confirmedBy",
+    "confirmedAt"
+  ],
+  "properties": {
+    "apiVersion": { "const": "bpa.decision/v1alpha1" },
+    "decisionId": { "$ref": "#/$defs/id" },
+    "decisionType": { "$ref": "#/$defs/id" },
+    "status": { "enum": ["active", "superseded", "revoked"] },
+    "scope": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 20,
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
+    },
+    "preconditions": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 50,
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/digest" }
+    },
+    "value": {},
+    "valueDigest": { "$ref": "#/$defs/digest" },
+    "confirmedBy": { "$ref": "#/$defs/id" },
+    "confirmedAt": { "$ref": "#/$defs/timestamp" },
+    "supersedes": { "$ref": "#/$defs/id" },
+    "revokedAt": { "$ref": "#/$defs/timestamp" },
+    "revokedBy": { "$ref": "#/$defs/id" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}

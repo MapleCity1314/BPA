@@ -1,0 +1,24 @@
+{
+  "apiVersion": "bpa.data/v1alpha1",
+  "kind": "DatasetVersion",
+  "metadata": {
+    "id": "packaging-master",
+    "version": "2026.7.28",
+    "title": "包装主数据 2026-07-28"
+  },
+  "profile": {
+    "id": "packaging-master",
+    "version": "1.0.0"
+  },
+  "source": {
+    "fileName": "产品索引_产品包装版本_2026-07-28.xlsx",
+    "mediaType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "size": 40960,
+    "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "recordSchema": {
+    "type": "object"
+  },
+  "recordCount": 35,
+  "recordsDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+}

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/dataset/v1alpha1",
+  "title": "BPA Dataset Version v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "profile",
+    "source",
+    "recordSchema",
+    "recordCount",
+    "recordsDigest"
+  ],
+  "properties": {
+    "apiVersion": { "const": "bpa.data/v1alpha1" },
+    "kind": { "const": "DatasetVersion" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "title"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/semver" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 4000 }
+      }
+    },
+    "profile": { "$ref": "#/$defs/versionedRef" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fileName", "mediaType", "size", "digest"],
+      "properties": {
+        "fileName": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "mediaType": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "size": { "type": "integer", "minimum": 1, "maximum": 1073741824 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "recordSchema": { "type": "object" },
+    "recordCount": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+    "recordsDigest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+      "maxLength": 160
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "versionedRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/semver" }
+      }
+    }
+  }
+}

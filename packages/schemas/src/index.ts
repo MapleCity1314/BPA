@@ -3,8 +3,14 @@ import { createRequire } from "node:module";
 import type { ErrorObject, ValidateFunction } from "ajv";
 import type {
   BrowserProtocolMessage,
+  AssistanceTaskDefinition,
+  DatasetVersionDefinition,
+  DecisionRecordDefinition,
+  ElementContractDefinition,
   NodeDefinition,
-  WorkflowDefinition
+  PageModelDefinition,
+  WorkflowDefinition,
+  WorkflowDefinitionV1Alpha2
 } from "./types.js";
 
 export * from "./types.js";
@@ -16,7 +22,17 @@ function loadSchema(name: string): Record<string, unknown> {
 }
 
 export const workflowSchema = loadSchema("workflow.schema.json");
+export const workflowV1Alpha2Schema = loadSchema(
+  "workflow-v1alpha2.schema.json"
+);
 export const nodeSchema = loadSchema("node.schema.json");
+export const assistanceTaskSchema = loadSchema("assistance-task.schema.json");
+export const datasetSchema = loadSchema("dataset.schema.json");
+export const decisionRecordSchema = loadSchema("decision-record.schema.json");
+export const elementContractSchema = loadSchema(
+  "element-contract.schema.json"
+);
+export const pageModelSchema = loadSchema("page-model.schema.json");
 export const eventSchema = loadSchema("event.schema.json");
 export const permissionSchema = loadSchema("permission.schema.json");
 export const evidenceSchema = loadSchema("evidence.schema.json");
@@ -52,9 +68,27 @@ ajv.addSchema(riskSignalSchema);
 export const validateWorkflow = ajv.compile(
   workflowSchema
 ) as ValidateFunction<WorkflowDefinition>;
+export const validateWorkflowV1Alpha2 = ajv.compile(
+  workflowV1Alpha2Schema
+) as ValidateFunction<WorkflowDefinitionV1Alpha2>;
 export const validateNode = ajv.compile(
   nodeSchema
 ) as ValidateFunction<NodeDefinition>;
+export const validateAssistanceTask = ajv.compile(
+  assistanceTaskSchema
+) as ValidateFunction<AssistanceTaskDefinition>;
+export const validateDataset = ajv.compile(
+  datasetSchema
+) as ValidateFunction<DatasetVersionDefinition>;
+export const validateDecisionRecord = ajv.compile(
+  decisionRecordSchema
+) as ValidateFunction<DecisionRecordDefinition>;
+export const validateElementContract = ajv.compile(
+  elementContractSchema
+) as ValidateFunction<ElementContractDefinition>;
+export const validatePageModel = ajv.compile(
+  pageModelSchema
+) as ValidateFunction<PageModelDefinition>;
 export const validateEvent = ajv.compile(eventSchema);
 export const validatePermission = ajv.compile(permissionSchema);
 export const validateEvidence = ajv.compile(evidenceSchema);

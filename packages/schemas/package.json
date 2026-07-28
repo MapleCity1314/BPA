@@ -7,6 +7,12 @@
     ".": "./src/index.ts",
     "./browser-protocol-v1.schema.json": "./schema/browser-protocol-v1.schema.json",
     "./browser-protocol-v1.validator": "./src/generated/browser_protocol_v1.validator.ts",
+    "./workflow-v1alpha2.schema.json": "./schema/workflow-v1alpha2.schema.json",
+    "./assistance-task.schema.json": "./schema/assistance-task.schema.json",
+    "./dataset.schema.json": "./schema/dataset.schema.json",
+    "./decision-record.schema.json": "./schema/decision-record.schema.json",
+    "./element-contract.schema.json": "./schema/element-contract.schema.json",
+    "./page-model.schema.json": "./schema/page-model.schema.json",
     "./permission.schema.json": "./schema/permission.schema.json"
   }
 }

@@ -1,0 +1,61 @@
+apiVersion: bpa/v1alpha2
+kind: Workflow
+metadata:
+  id: doudian.priority-items-readonly-inspect
+  version: 0.1.0
+  title: 抖店重点项只读检查
+  description: 完整采集当前商品范围，批量分析匹配歧义，并逐商品执行只读检查。
+spec:
+  riskLevel: R1
+  inputSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - packaging_dataset
+    properties:
+      packaging_dataset:
+        type: object
+  outputSchema:
+    type: object
+  limits:
+    maxDepth: 3
+    maxStepExecutions: 10000
+  root:
+    kind: sequence
+    steps:
+      - key: collect
+        kind: call
+        use: doudian.product.scope.collect@1.0.0
+        timeout: 10m
+      - key: inspect_products
+        kind: foreach
+        items: ${steps.collect.output.products}
+        itemName: product
+        indexName: product_index
+        itemKey: ${item.id}
+        maxItems: 500
+        maxDuration: 6h
+        onItemError: collect
+        body:
+          kind: sequence
+          steps:
+            - key: inspect
+              kind: call
+              use: doudian.editor.priority-items.inspect@1.0.0
+              with:
+                product: ${item}
+              timeout: 5m
+      - key: review_ambiguities
+        kind: wait.assistance
+        use: assist.packaging-match.review@1.0.0
+        with:
+          matches: ${steps.inspect_products.output}
+        blocking: true
+        deadline: 10m
+        onUnavailable: continue_unresolved
+      - key: finish
+        kind: terminal
+        status: succeeded
+        output:
+          inspections: ${steps.inspect_products.output}
+          review: ${steps.review_ambiguities.output}

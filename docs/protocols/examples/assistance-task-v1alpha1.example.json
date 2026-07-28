@@ -1,0 +1,50 @@
+{
+  "apiVersion": "bpa.assistance/v1alpha1",
+  "taskId": "task:packaging-review:001",
+  "runId": "run:priority-inspect:001",
+  "stepInstanceId": "step:review-ambiguities:001",
+  "profile": {
+    "id": "assist.packaging-match.review",
+    "version": "1.0.0",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "mode": "ai_review",
+  "riskLevel": "R0",
+  "status": "queued",
+  "revision": 0,
+  "input": {
+    "items": [
+      {
+        "product_id": "123456",
+        "product_title": "示例商品 500g×5袋",
+        "candidate_count": 2
+      }
+    ]
+  },
+  "outputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["recommendations"],
+    "properties": {
+      "recommendations": {
+        "type": "array"
+      }
+    }
+  },
+  "policySnapshot": {
+    "autoContinue": true,
+    "r1ProfileApproved": false,
+    "durableDecision": false,
+    "onUnavailable": "continue_unresolved"
+  },
+  "contextRefs": [
+    {
+      "evidenceId": "evidence:match-summary:001",
+      "classification": "internal",
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "deadline": "2026-07-28T09:10:00.000Z",
+  "createdAt": "2026-07-28T09:00:00.000Z",
+  "updatedAt": "2026-07-28T09:00:00.000Z"
+}
