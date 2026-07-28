@@ -1,6 +1,6 @@
 ---
 name: bpa-node-authoring
-description: 将 BPA Catalog 中缺失的稳定业务能力设计、生成或升级为最小权限 Node 候选。用于决定复用/组合/Browser Adapter/团队节点/人工节点，编写输入输出与错误契约，推导风险和权限，调用 node_gen/node_requirement_create，生成契约测试与实现边界。不要用于运行时执行任意代码、创建 control.* 或 data.* 内置节点、绕过浏览器 Bridge 或自动发布。
+description: 将 BPA Catalog 中缺失的稳定业务能力设计、生成或升级为最小权限 Node 候选。用于决定复用/组合/Browser Adapter/团队节点/人工节点，编写输入输出与错误契约，推导风险和权限，为 Browser Node 设计 PageModel 和 ElementContract 候选，调用 node_gen/node_requirement_create，并生成契约测试与实现边界。不要用于运行时执行任意代码、创建 control.* 或 data.* 内置节点、把临时选择器塞进 Workflow、绕过浏览器 Bridge 或自动发布。
 ---
 
 # BPA Node Authoring
@@ -23,7 +23,7 @@ description: 将 BPA Catalog 中缺失的稳定业务能力设计、生成或升
 3. 阅读 [node-contract.md](references/node-contract.md)，声明幂等、超时、取消点、错误码和证据。
 4. 阅读 [permission-and-risk.md](references/permission-and-risk.md)，声明最小权限、精确 Origin 和不低估的风险。
 5. 调用 `node_gen`。检查返回的最低风险、实现边界和契约测试。
-6. Browser Node 生成 Adapter 骨架和页面夹具测试；不得接收任意 JavaScript、远程脚本或页面指令。
+6. Browser Node 必须阅读 [page-discovery.md](references/page-discovery.md)，生成 Adapter 骨架、PageModel / ElementContract 候选和页面夹具测试；不得接收任意 JavaScript、远程脚本或页面指令。
 7. 通过 Schema、契约、重复投递、超时、取消、权限、页面变化和恢复测试后，交给人工发布。
 
 ## 固定边界
@@ -31,6 +31,7 @@ description: 将 BPA Catalog 中缺失的稳定业务能力设计、生成或升
 - `control.*`、`data.*` 由 BPA Core 维护，普通 `node_gen` 不得占用。
 - 权限不能靠运行时“需要时再申请”；缺权限应拒绝并升级 Candidate。
 - Domain 必须是精确 Origin，不得使用通配符、路径或宽泛站点授权。
+- 页面元素定位是 Adapter 的版本化契约，不得写入 Workflow；页面身份或元素唯一性无法确认时必须失败关闭。
 - 验证码、登录失效、平台风控和限流必须返回阻断信号，不得绕过。
 - `verified_write` 必须有写前状态、写后验证和补偿说明。
 - `non_repeatable` 不得自动重试；效果不明时返回 `uncertain`。

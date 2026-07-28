@@ -15,9 +15,7 @@ if [[ "$("$BUNDLED_NODE" -p 'process.platform + ":" + process.arch + ":" + proce
 fi
 
 cd "$PROJECT_ROOT"
-pnpm schema:check
-pnpm check
-pnpm build
+pnpm verify
 PACKAGE_ROOT="$(mktemp -d)"
 trap 'rm -rf "$PACKAGE_ROOT"' EXIT
 mkdir -p "$PACKAGE_ROOT/bpa/bundle/node/bin" "${OUTPUT:h}"

@@ -14,6 +14,8 @@
     "test:watch": "vitest",
     "schema:generate": "node scripts/generate-schema-types.mjs",
     "schema:check": "node scripts/generate-schema-types.mjs --check",
+    "repository:check": "node scripts/verify-repository.mjs",
+    "scripts:check": "zsh -n scripts/*.sh",
     "docs:dev": "pnpm --filter @bpa/docs dev",
     "docs:build": "pnpm --filter @bpa/docs build",
     "docs:preview": "pnpm --filter @bpa/docs preview",
@@ -22,7 +24,8 @@
     "core": "tsx apps/local-core/src/main.ts",
     "native-host": "tsx apps/native-host/src/main.ts",
     "mcp": "tsx apps/mcp-server/src/main.ts",
-    "check": "pnpm typecheck && pnpm test"
+    "check": "pnpm repository:check && pnpm scripts:check && pnpm typecheck && pnpm test",
+    "verify": "pnpm schema:check && pnpm check && pnpm build && pnpm docs:check"
   },
   "dependencies": {
     "@bpa/compiler": "workspace:*",

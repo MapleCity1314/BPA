@@ -19,7 +19,7 @@ BPA（Browser Process Assistance）把经过审核的浏览器流程编译成版
 
 当前仓库包含一条可运行的本地纵向链路：CLI、Local Core、Workflow Engine、Browser Gateway、Native Host、Chrome Extension、SQLite 状态与审计，以及用于创作 Workflow / Node 的 MCP 工具。
 
-2026-07-28 的代码实况、默认节点和 Skills 补强记录见 [BPA 当前实况与默认资产 v0.3](docs/current-state-and-default-assets-v0.3.md)。
+2026-07-28 的代码实况、默认节点和 Skills 补强记录见 [BPA 当前实况与默认资产 v0.3](docs/current-state-and-default-assets-v0.3.md)。单节点运行、人工步骤、结构化循环、工程闭环和 AI 页面预定位的候选设计见 [BPA 基础场景、工程闭环与 AI 创作设计 v0.4](docs/basic-scenarios-and-ai-authoring-v0.4.md)。
 
 ## 执行边界
 
@@ -89,11 +89,11 @@ Workflow 决定流程，Node 定义单步能力，Extension Bridge 校验页面�
 git clone https://github.com/MapleCity1314/BPA.git
 cd BPA
 pnpm install --frozen-lockfile
-pnpm schema:check
-pnpm typecheck
-pnpm test
-pnpm build
+pnpm verify
 ```
+
+`pnpm verify` 是本地、CI 和打包前的统一门禁，覆盖仓库资产一致性、脚本语法、
+Schema、类型、测试、构建和文档检查。
 
 启动 Local Core，并在另一个终端检查状态：
 
