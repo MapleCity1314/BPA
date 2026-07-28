@@ -40,7 +40,7 @@ BPA 已从单条 Browser 冒烟链路进入可恢复的本地平台阶段，并�
 
 ## 3. 当前正式源资产
 
-仓库包含 20 个 Node、3 个 Workflow、1 个 Doudian Adapter、2 个 Assistance Profile
+仓库包含 20 个 Node、3 个 Workflow、1 个 Doudian Adapter、5 个 Assistance Profile
 和 1 个确定性验证 Policy。关键业务能力如下：
 
 | 资产 | 作用 |
@@ -56,6 +56,9 @@ BPA 已从单条 Browser 冒烟链路进入可恢复的本地平台阶段，并�
 | `report.issue.build@1.0.0` | 生成稳定报告、问题指纹和摘要 |
 | `packaging_match_review@1.0.0` | R1 Codex 批量歧义审核 |
 | `binding_confirm@1.0.0` | R2 长期绑定人工批量确认 |
+| `scope_review@1.0.0` | R2 店铺与筛选范围人工确认 |
+| `auth_takeover@1.0.0` | R2 登录、验证码和风控人工接管 |
+| `adapter_anomaly_review@1.0.0` | R1 页面结构异常分类，仅生成建议或 Candidate |
 
 `doudian.priority-items-readonly-inspect@0.3.0` 已通过 Core 级端到端 fixture：
 健康但未匹配的商品仍完成打开、检查、归并和报告，结果为 0 商品问题、0 Assistance。
