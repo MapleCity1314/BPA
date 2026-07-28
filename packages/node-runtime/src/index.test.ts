@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AdaptiveReadinessGate,
+  BuiltinRuntimeProvider,
   computeDispatchDelayMs,
   computeRetryDelayMs,
   evaluateConditionExpression,
@@ -56,6 +57,51 @@ describe("runtime provider registry", () => {
     expect(() => registry.register(provider("browser"))).toThrow(
       "already registered"
     );
+  });
+
+  it("runs builtins through the same provider contract", async () => {
+    const provider = new BuiltinRuntimeProvider();
+    const invocation = {
+      invocationId: "invocation-1",
+      identity: {
+        runId: "run-1",
+        scopePath: [],
+        iterationKey: "root",
+        stepKey: "constant",
+        attempt: 1
+      },
+      node: {
+        kind: "node" as const,
+        id: "data.constant",
+        version: "1.0.0",
+        digest: "a".repeat(64)
+      },
+      providerId: "builtin",
+      input: { value: { ready: true } },
+      permissionSnapshot: {
+        riskLevel: "R0" as const,
+        permissions: [],
+        domains: []
+      },
+      deadlineAt: 1000,
+      idempotencyKey: "run-1:root:constant:1",
+      fencingToken: 1,
+      traceId: "trace-1"
+    };
+    await expect(
+      provider.invoke(invocation, new AbortController().signal)
+    ).resolves.toEqual({
+      status: "succeeded",
+      output: { ready: true },
+      evidence: [],
+      riskSignals: []
+    });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(provider.invoke(invocation, controller.signal)).resolves.toMatchObject({
+      status: "cancelled",
+      error: { code: "CANCELLED" }
+    });
   });
 
   it("rejects unknown and unsupported provider selections", () => {

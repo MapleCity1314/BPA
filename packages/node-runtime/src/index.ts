@@ -66,6 +66,56 @@ export interface RuntimeProvider {
   cancel?(invocationId: string, fencingToken: number): Promise<void>;
 }
 
+export class BuiltinRuntimeProvider implements RuntimeProvider {
+  readonly id = "builtin";
+
+  supports(node: ArtifactRef & { readonly kind: "node" }): boolean {
+    return SUPPORTED_BUILTIN_NODE_IDS.includes(
+      node.id as SupportedBuiltinNodeId
+    );
+  }
+
+  async invoke(
+    invocation: RuntimeInvocation,
+    signal: AbortSignal
+  ): Promise<RuntimeOutcome> {
+    if (signal.aborted) {
+      return {
+        status: "cancelled",
+        error: {
+          code: "CANCELLED",
+          message: "Builtin invocation was cancelled before execution.",
+          retryable: false
+        },
+        evidence: [],
+        riskSignals: []
+      };
+    }
+    const result = executeBuiltinNode({
+      nodeId: invocation.node.id,
+      nodeInput: invocation.input,
+      workflowInput: invocation.input,
+      previousOutput: invocation.input
+    });
+    return result.status === "succeeded"
+      ? {
+          status: "succeeded",
+          output: (result.output ?? null) as JsonValue,
+          evidence: [],
+          riskSignals: []
+        }
+      : {
+          status: "failed",
+          error: result.error,
+          ...(result.output === undefined
+            ? {}
+            : { output: result.output as JsonValue }),
+          evidence: [],
+          riskSignals: []
+        };
+  }
+}
+
 export class RuntimeProviderRegistry {
   readonly #providers = new Map<string, RuntimeProvider>();
 
