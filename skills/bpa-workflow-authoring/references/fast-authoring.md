@@ -31,14 +31,27 @@
 3. 检查输出 Schema 能否表达部分成功和人工修正。
 4. 输出执行图、CapabilityGap、风险和人工确认项。
 
-复杂流程应采用增量草稿：一次只增加或配置一个 Node/Edge/Test，并保留 revision
-和局部 diff。当前工具不支持增量操作时，用小型可验证片段组合，最后再生成完整
-Candidate。
+复杂流程必须采用增量草稿：一次只增加或配置一个 Step、绑定、Test 或异常策略，
+每次携带 `expectedRevision`。CAS 冲突时读取最新草稿并做语义合并，不能覆盖他人
+修改。完成后校验草稿并保存不可变 Candidate。
 
 ## 常见模式
 
-- 单节点临时调用：建议运行时生成受审计的 SingleNodeRun，不降低权限。
-- 需要人处理：选择 approval、input、action、review 或 takeover，不统一写成批准。
+- 单节点临时调用：当前主闭环不内联临时代码；使用已发布 Node 组成最小 Workflow Candidate。
+- 需要协助：选择 `ai_review`、`human_confirm` 或 `human_action`，不统一写成批准。
 - 等待外部变化：使用持久化 wait/poll，不使用长 sleep。
-- 集合处理：使用未来的结构化 foreach，不创建图回边。
+- 集合处理：使用顺序 foreach，设置稳定 `itemKey`、上限、总时限和错误聚合策略。
 - 页面定位缺失：创建 NodeRequirement 和 ElementContract 候选，不污染 Workflow。
+
+## v1alpha2 绑定
+
+```text
+${input.dataset}
+${steps.shop_context.output.shop.id}
+${steps.collect_products.output.products}
+${item.id}
+${index}
+```
+
+只允许从输入、已完成 Step 输出和当前 foreach 作用域读取。不要使用
+`${previous}`、CSS、XPath、坐标、函数、模板表达式或 JavaScript。

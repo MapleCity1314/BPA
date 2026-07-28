@@ -3,7 +3,10 @@
 - 输入和输出 Schema 可用代表性样例验证，未知字段策略明确。
 - 每个 Node 使用已发布的精确版本。
 - Workflow 风险不低于任何 Node，权限并集符合业务目标。
-- 只有一个 `control.start`，成功和失败终点语义分离。
+- 每个 Step key 在其作用域唯一；`terminal` 的成功、失败、取消和不确定语义分离。
+- foreach 有稳定 `itemKey`、`maxItems`、`maxDuration` 和明确 `onItemError`。
+- 所有绑定只读取输入、已完成 Step 或当前 foreach 作用域，不引用未来输出。
+- 每个 `wait.assistance` 引用精确、已发布的 Profile；R1 自动继续有确定性验证器。
 - 每个外部动作都有超时、取消和结果验证。
 - 重试次数有限，且只覆盖声明为可重试的错误。
 - `rejected`、`cancelled`、`uncertain` 没有被误记成成功。

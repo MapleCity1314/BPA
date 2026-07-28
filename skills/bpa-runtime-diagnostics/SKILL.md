@@ -10,7 +10,7 @@ description: 诊断 BPA 本地 Core、SQLite、Native Host、Browser Protocol、
 ## 诊断顺序
 
 1. 运行 `bpa doctor`，确认 Persistence、Core PID、Browser Session、协议和能力数量。
-2. 运行 `bpa inspect <run-id>` 与 `bpa events <run-id>`，按 sequence 重建最后一个确定状态。
+2. 运行 `bpa inspect <run-id>` 与 `bpa events <run-id>`，按 sequence 重建最后一个确定状态，并核对 frozen IR2、scopePath、iterationKey、stepKey 和 attempt。
 3. 读取 [triage-map.md](references/triage-map.md)，把故障定位到 Compiler、Engine、Gateway、Native Host、Extension、Adapter 或页面。
 4. 对照 Node 的幂等类别、错误码、Fencing Token、Deadline、风险信号和 Timing Observation 判断是否能重试。
 5. 只执行最小恢复动作：重新连接、恢复 ACK、人工继续或发布修复版本。保留原 Run 和 Audit。
@@ -22,7 +22,7 @@ description: 诊断 BPA 本地 Core、SQLite、Native Host、Browser Protocol、
 - CAPTCHA、登录失效、风控和限流是阻断，不是需要规避的故障。
 - 不直接编辑 SQLite，不删除 Inbox/Outbox，不伪造 Result 或提升 Fencing Token。
 - 不用重启掩盖 Schema、版本、权限或输出契约错误。
-- 重复消息本身不是失败；先确认 Inbox/幂等记录是否已吸收。
+- 重复消息本身不是失败；先确认 Inbox/幂等记录是否已吸收，迟到 Result 是否被 fencing/checkpoint 拒绝。
 - Core、Host 或 Chrome 重启后，以未确认 Command/Result 的恢复状态为准。
 - 修复稳定逻辑时发布新 Node/Workflow 版本，不覆盖已发布资产。
 
