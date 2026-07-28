@@ -27,6 +27,8 @@ const manifest = JSON.parse(
 );
 if (
   manifest.schemaVersion !== 1 ||
+  !Number.isSafeInteger(manifest.databaseSchemaVersion) ||
+  manifest.databaseSchemaVersion < 1 ||
   manifest.platform !== "darwin" ||
   manifest.architecture !== "arm64" ||
   !Array.isArray(manifest.files)
@@ -37,6 +39,10 @@ if (
 const expected = new Set([
   "runtime-manifest.json",
   "node/bin/node",
+  "bin/bpa",
+  "bin/bpa-core",
+  "bin/bpa-native-host",
+  "bin/bpa-mcp",
   ...manifest.files.map((file) => String(file.path))
 ]);
 const actual = await collect(root);
@@ -46,7 +52,12 @@ for (const path of actual) {
   }
 }
 for (const path of expected) {
-  if (!actual.includes(path)) {
+  if (
+    !actual.includes(path) &&
+    !["bin/bpa", "bin/bpa-core", "bin/bpa-native-host", "bin/bpa-mcp"].includes(
+      path
+    )
+  ) {
     throw new Error(`Runtime closure file is missing: ${path}`);
   }
 }

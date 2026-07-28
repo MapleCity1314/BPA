@@ -161,6 +161,18 @@ const fileUriToPath = await copyRuntimeDependency(
 const rootPackage = JSON.parse(
   await readFile(join(repositoryRoot, "package.json"), "utf8")
 );
+const migrationSource = await readFile(
+  join(repositoryRoot, "packages/persistence-sqlite/src/migrations.ts"),
+  "utf8"
+);
+const databaseSchemaVersion = Math.max(
+  ...[...migrationSource.matchAll(/\bversion:\s*([0-9]+)/g)].map((match) =>
+    Number(match[1])
+  )
+);
+if (!Number.isSafeInteger(databaseSchemaVersion) || databaseSchemaVersion < 1) {
+  throw new Error("Could not derive the packaged SQLite Schema version");
+}
 await writeFile(
   join(outputRoot, "package.json"),
   `${JSON.stringify(
@@ -246,6 +258,7 @@ await writeFile(
     {
       schemaVersion: 1,
       runtimeVersion: rootPackage.version,
+      databaseSchemaVersion,
       platform: "darwin",
       architecture: "arm64",
       totalBytes,

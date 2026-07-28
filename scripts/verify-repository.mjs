@@ -1,5 +1,6 @@
 import { access, readdir, readFile, stat } from "node:fs/promises";
 import { constants } from "node:fs";
+import { createHash } from "node:crypto";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { parse } from "yaml";
 
@@ -132,12 +133,104 @@ async function verifyAssets() {
     }
   }
 
+  const canonicalJson = (value) => {
+    if (value === null || typeof value !== "object") {
+      return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) {
+      return `[${value.map(canonicalJson).join(",")}]`;
+    }
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
+      .join(",")}}`;
+  };
+  const contentDigest = (value) =>
+    `sha256:${createHash("sha256").update(canonicalJson(value)).digest("hex")}`;
+  const parseSourceAsset = async (path) => {
+    const source = await readFile(path, "utf8");
+    return extname(path) === ".json" ? JSON.parse(source) : parse(source);
+  };
+  const policyDirectory = join(root, "policies/core");
+  const policies = new Map();
+  for (const filename of (await readdir(policyDirectory)).sort()) {
+    if (!filename.endsWith(".policy.json")) continue;
+    const path = join(policyDirectory, filename);
+    const policy = await parseSourceAsset(path);
+    const reference = `${policy?.metadata?.id}@${policy?.metadata?.version}`;
+    if (
+      policy?.kind !== "DeterministicResultValidatorPolicy" ||
+      !policy?.metadata?.id ||
+      !policy?.metadata?.version
+    ) {
+      issues.push(`Malformed Policy asset: ${relative(root, path)}`);
+      continue;
+    }
+    if (filename !== `${policy.metadata.id}.policy.json`) {
+      issues.push(
+        `Policy filename ${filename} must match identity ${policy.metadata.id}.policy.json`
+      );
+    }
+    if (policies.has(reference)) {
+      issues.push(`Duplicate Policy source identity: ${reference}`);
+    }
+    policies.set(reference, {
+      definition: policy,
+      digest: contentDigest(policy)
+    });
+  }
+  const assistanceDirectory = join(root, "assistance-profiles/core");
+  const assistanceProfiles = new Map();
+  for (const filename of (await readdir(assistanceDirectory)).sort()) {
+    if (
+      !filename.endsWith(".assistance-profile.json") &&
+      !filename.endsWith(".assistance-profile.yaml")
+    ) {
+      continue;
+    }
+    const path = join(assistanceDirectory, filename);
+    const profile = await parseSourceAsset(path);
+    const reference = `${profile?.metadata?.id}@${profile?.metadata?.version}`;
+    if (
+      profile?.kind !== "AssistanceProfile" ||
+      !profile?.metadata?.id ||
+      !profile?.metadata?.version
+    ) {
+      issues.push(`Malformed Assistance Profile asset: ${relative(root, path)}`);
+      continue;
+    }
+    const suffix = extname(filename);
+    if (
+      filename !==
+      `${profile.metadata.id}.assistance-profile${suffix}`
+    ) {
+      issues.push(
+        `Assistance Profile filename ${filename} does not match ${profile.metadata.id}`
+      );
+    }
+    if (assistanceProfiles.has(reference)) {
+      issues.push(`Duplicate Assistance Profile source identity: ${reference}`);
+    }
+    assistanceProfiles.set(reference, profile);
+    const validator = profile.policySnapshot?.deterministicValidator;
+    if (validator) {
+      const policy = policies.get(`${validator.id}@${validator.version}`);
+      if (!policy || policy.digest !== validator.digest) {
+        issues.push(
+          `${reference} does not pin an exact source deterministic validator Policy`
+        );
+      }
+    }
+  }
+
   const workflowDirectory = join(root, "workflows/examples");
   const workflowFiles = (await readdir(workflowDirectory))
     .filter((name) => name.endsWith(".workflow.yaml"))
     .sort();
   const workflowRefs = new Set();
-  function verifyStructuredBlock(reference, block, path) {
+  const riskScore = (risk) =>
+    ["R0", "R1", "R2", "R3", "R4"].indexOf(String(risk));
+  function verifyStructuredBlock(reference, workflowRisk, block, path) {
     for (const step of block?.steps ?? []) {
       const stepPath = `${path}.${String(step?.key ?? "?")}`;
       if (step?.kind === "call") {
@@ -148,17 +241,58 @@ async function verifyAssets() {
             )}`
           );
         }
+        const node = nodesByRef.get(step.use);
+        if (
+          node &&
+          riskScore(workflowRisk) < riskScore(node.risk?.level)
+        ) {
+          issues.push(
+            `${reference} risk ${workflowRisk} is below ${step.use} risk ${node.risk?.level}`
+          );
+        }
+      }
+      if (step?.kind === "wait.assistance") {
+        const profile = assistanceProfiles.get(step.use);
+        if (!profile) {
+          issues.push(
+            `${reference} step ${stepPath} references missing Assistance Profile ${String(
+              step.use
+            )}`
+          );
+        } else if (
+          riskScore(workflowRisk) < riskScore(profile.riskLevel)
+        ) {
+          issues.push(
+            `${reference} risk ${workflowRisk} is below ${step.use} risk ${profile.riskLevel}`
+          );
+        }
       }
       if (step?.kind === "decision") {
-        verifyStructuredBlock(reference, step.then, `${stepPath}.then`);
-        verifyStructuredBlock(reference, step.else, `${stepPath}.else`);
+        verifyStructuredBlock(
+          reference,
+          workflowRisk,
+          step.then,
+          `${stepPath}.then`
+        );
+        verifyStructuredBlock(
+          reference,
+          workflowRisk,
+          step.else,
+          `${stepPath}.else`
+        );
       }
       if (step?.kind === "foreach") {
-        verifyStructuredBlock(reference, step.body, `${stepPath}.body`);
+        verifyStructuredBlock(
+          reference,
+          workflowRisk,
+          step.body,
+          `${stepPath}.body`
+        );
       }
       for (const [outcome, handler] of Object.entries(step?.handlers ?? {})) {
         verifyStructuredBlock(
           reference,
+          workflowRisk,
           handler,
           `${stepPath}.handlers.${outcome}`
         );
@@ -188,7 +322,12 @@ async function verifyAssets() {
     }
     workflowRefs.add(reference);
     if (workflow.apiVersion === "bpa/v1alpha2") {
-      verifyStructuredBlock(reference, workflow.spec?.root, "root");
+      verifyStructuredBlock(
+        reference,
+        workflow.spec?.riskLevel,
+        workflow.spec?.root,
+        "root"
+      );
     } else {
       for (const [key, step] of Object.entries(workflow.spec?.nodes ?? {})) {
         if (typeof step?.use !== "string" || !nodeRefs.has(step.use)) {
@@ -279,7 +418,9 @@ async function verifyAssets() {
   return {
     nodeCount: nodeRefs.size,
     workflowCount: workflowRefs.size,
-    adapterCount: adapterRefs.size
+    adapterCount: adapterRefs.size,
+    assistanceProfileCount: assistanceProfiles.size,
+    policyCount: policies.size
   };
 }
 
@@ -479,6 +620,6 @@ if (issues.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    `Repository verified: Runtime ${runtimeVersion}, ${assets.nodeCount} Nodes, ${assets.workflowCount} Workflows, ${assets.adapterCount} Adapters, ${skillCount} Skills, ${shellScriptCount} shell scripts, ${sourceFileCount} dependency-checked source files.\n`
+    `Repository verified: Runtime ${runtimeVersion}, ${assets.nodeCount} Nodes, ${assets.workflowCount} Workflows, ${assets.adapterCount} Adapters, ${assets.assistanceProfileCount} Assistance Profiles, ${assets.policyCount} Policies, ${skillCount} Skills, ${shellScriptCount} shell scripts, ${sourceFileCount} dependency-checked source files.\n`
   );
 }
