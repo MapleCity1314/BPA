@@ -24,6 +24,11 @@ export type TaskQueueCommitResult =
   | { status: "duplicate"; task: AssistanceTask }
   | { status: "conflict"; current?: AssistanceTask };
 
+export interface AssistanceRunOutcome {
+  readonly status: "resolved" | "escalated";
+  readonly reason: AutoContinueDecision["reason"];
+}
+
 /**
  * Provider-neutral persistence boundary. Implementations may use SQLite,
  * Postgres, or a remote queue, but must atomically combine revision CAS and
@@ -39,7 +44,7 @@ export interface TaskQueuePort {
     expectedRevision: number;
     requestId: string;
     next: AssistanceTask;
-    wakeRun?: boolean;
+    runOutcome?: AssistanceRunOutcome;
   }): Promise<TaskQueueCommitResult>;
 }
 
@@ -296,10 +301,15 @@ export class AssistanceTaskService {
       expectedRevision: current.revision,
       requestId: input.requestId,
       next: transitioned.task,
-      wakeRun:
-        input.resolverType === "human" ||
-        input.resolverType === "human_ai" ||
-        autoContinue.allowed
+      runOutcome: {
+        status:
+          input.resolverType === "human" ||
+          input.resolverType === "human_ai" ||
+          autoContinue.allowed
+            ? "resolved"
+            : "escalated",
+        reason: autoContinue.reason
+      }
     });
     if (committed.status === "conflict") {
       return {
@@ -368,7 +378,7 @@ export class MemoryTaskQueue implements TaskQueuePort {
     expectedRevision: number;
     requestId: string;
     next: AssistanceTask;
-    wakeRun?: boolean;
+    runOutcome?: AssistanceRunOutcome;
   }): Promise<TaskQueueCommitResult> {
     const duplicate = this.#requests.get(input.requestId);
     if (duplicate) return { status: "duplicate", task: duplicate };

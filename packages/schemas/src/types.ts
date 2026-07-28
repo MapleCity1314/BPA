@@ -22,6 +22,9 @@ import type {
   BPAAssistanceProfileV1Alpha1
 } from "./generated/assistance_profile.js";
 import type {
+  BPADeterministicResultValidatorPolicyV1Alpha1
+} from "./generated/deterministic_result_validator_policy.js";
+import type {
   BPADatasetVersionV1Alpha1
 } from "./generated/dataset.js";
 import type {
@@ -39,6 +42,7 @@ export type {
   BPAAdapterManifestV1Alpha1,
   BPAAssistanceProfileV1Alpha1,
   BPAAssistanceTaskV1Alpha1,
+  BPADeterministicResultValidatorPolicyV1Alpha1,
   BPADatasetVersionV1Alpha1,
   BPADecisionRecordV1Alpha1,
   BPAElementContractV1Alpha1,
@@ -63,6 +67,8 @@ export type BrowserProtocolMessage = BPABrowserProtocolV1Message;
 export type AssistanceTaskDefinition = BPAAssistanceTaskV1Alpha1;
 export type AdapterManifestDefinition = BPAAdapterManifestV1Alpha1;
 export type AssistanceProfileDefinition = BPAAssistanceProfileV1Alpha1;
+export type DeterministicResultValidatorPolicyDefinition =
+  BPADeterministicResultValidatorPolicyV1Alpha1;
 export type DatasetVersionDefinition = BPADatasetVersionV1Alpha1;
 export type DecisionRecordDefinition = BPADecisionRecordV1Alpha1;
 export type ElementContractDefinition = BPAElementContractV1Alpha1;

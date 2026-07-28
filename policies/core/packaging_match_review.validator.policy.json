@@ -1,0 +1,22 @@
+{
+  "apiVersion": "bpa.policy/v1alpha1",
+  "kind": "DeterministicResultValidatorPolicy",
+  "metadata": {
+    "id": "packaging_match_review.validator",
+    "version": "1.0.0",
+    "title": "Packaging match review deterministic validator"
+  },
+  "implementation": {
+    "provider": "builtin",
+    "validator": "packaging_match_review",
+    "maxBatchItems": 500,
+    "maxCandidatesPerItem": 10,
+    "constraints": [
+      "exact-profile-version",
+      "exact-validator-digest",
+      "opaque-reference-membership",
+      "unique-product-decision",
+      "candidate-range-only"
+    ]
+  }
+}

@@ -11,6 +11,7 @@
     "./adapter-manifest.schema.json": "./schema/adapter-manifest.schema.json",
     "./assistance-profile.schema.json": "./schema/assistance-profile.schema.json",
     "./assistance-task.schema.json": "./schema/assistance-task.schema.json",
+    "./deterministic-result-validator-policy.schema.json": "./schema/deterministic-result-validator-policy.schema.json",
     "./dataset.schema.json": "./schema/dataset.schema.json",
     "./decision-record.schema.json": "./schema/decision-record.schema.json",
     "./element-contract.schema.json": "./schema/element-contract.schema.json",

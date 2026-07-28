@@ -15,6 +15,7 @@ const schemas = [
   "adapter-manifest.schema.json",
   "assistance-profile.schema.json",
   "assistance-task.schema.json",
+  "deterministic-result-validator-policy.schema.json",
   "dataset.schema.json",
   "decision-record.schema.json",
   "element-contract.schema.json",

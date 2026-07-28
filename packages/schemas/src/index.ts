@@ -9,6 +9,7 @@ import type {
   AssistanceTaskDefinition,
   DatasetVersionDefinition,
   DecisionRecordDefinition,
+  DeterministicResultValidatorPolicyDefinition,
   ElementContractDefinition,
   NodeDefinition,
   PageModelDefinition,
@@ -36,6 +37,9 @@ export const assistanceProfileSchema = loadSchema(
   "assistance-profile.schema.json"
 );
 export const assistanceTaskSchema = loadSchema("assistance-task.schema.json");
+export const deterministicResultValidatorPolicySchema = loadSchema(
+  "deterministic-result-validator-policy.schema.json"
+);
 export const datasetSchema = loadSchema("dataset.schema.json");
 export const decisionRecordSchema = loadSchema("decision-record.schema.json");
 export const elementContractSchema = loadSchema(
@@ -87,6 +91,9 @@ export const validateAssistanceProfile = ajv.compile(
 export const validateAssistanceTask = ajv.compile(
   assistanceTaskSchema
 ) as ValidateFunction<AssistanceTaskDefinition>;
+export const validateDeterministicResultValidatorPolicy = ajv.compile(
+  deterministicResultValidatorPolicySchema
+) as ValidateFunction<DeterministicResultValidatorPolicyDefinition>;
 export const validateDataset = ajv.compile(
   datasetSchema
 ) as ValidateFunction<DatasetVersionDefinition>;

@@ -5,6 +5,8 @@ import { userInfo } from "node:os";
 import { resolve } from "node:path";
 import {
   AssistanceTaskService,
+  PACKAGING_MATCH_REVIEW_VALIDATOR_REF,
+  validatePackagingMatchReviewResult,
   type AssistanceResultValidator,
   type TaskQueueFilter
 } from "@bpa/assistance-core";
@@ -36,12 +38,14 @@ import {
   formatValidationErrors,
   validateAdapterManifest,
   validateAssistanceProfile,
+  validateDeterministicResultValidatorPolicy,
   validateJsonSchemaDefinition,
   validateNode,
   validateWorkflow,
   type NodeDefinition,
   type AdapterManifestDefinition,
   type AssistanceProfileDefinition,
+  type DeterministicResultValidatorPolicyDefinition,
   type WorkflowDefinition
 } from "@bpa/schemas";
 import type { LocalBrowserGateway } from "./browser-gateway.js";
@@ -130,12 +134,21 @@ export class LocalCoreService {
           };
         }
       },
-      // R1 automatic continuation is denied until the referenced, audited
-      // deterministic validator is installed in a dedicated registry.
-      validateDeterministicResult() {
+      validateDeterministicResult(task, output) {
+        const reference = task.policySnapshot.deterministicValidator;
+        const key = reference
+          ? `${reference.id}@${reference.version}#${reference.digest}`
+          : "";
+        const packagingKey =
+          `${PACKAGING_MATCH_REVIEW_VALIDATOR_REF.id}` +
+          `@${PACKAGING_MATCH_REVIEW_VALIDATOR_REF.version}` +
+          `#${PACKAGING_MATCH_REVIEW_VALIDATOR_REF.digest}`;
+        if (key === packagingKey) {
+          return validatePackagingMatchReviewResult(task, output);
+        }
         return {
           valid: false,
-          errors: ["No audited deterministic validator is registered"]
+          errors: ["No exact audited deterministic validator is registered"]
         };
       }
     };
@@ -675,6 +688,21 @@ export class LocalCoreService {
             identity: `${content.metadata.id}@${content.metadata.version}`
           };
     }
+    if (assetType === "policy") {
+      if (!validateDeterministicResultValidatorPolicy(content)) {
+        return {
+          valid: false,
+          errors: formatValidationErrors(
+            validateDeterministicResultValidatorPolicy.errors
+          )
+        };
+      }
+      return {
+        valid: true,
+        digest: contentDigest(content),
+        identity: `${content.metadata.id}@${content.metadata.version}`
+      };
+    }
     throw new Error(`Unsupported asset type: ${assetType}`);
   }
 
@@ -771,7 +799,8 @@ export class LocalCoreService {
       assetType === "workflow" ||
       assetType === "node" ||
       assetType === "adapter" ||
-      assetType === "assistance_profile"
+      assetType === "assistance_profile" ||
+      assetType === "policy"
     ) {
       const validation = this.#validateAsset(assetType, content) as {
         valid: boolean;
@@ -787,7 +816,8 @@ export class LocalCoreService {
         | NodeDefinition
         | WorkflowDefinition
         | AdapterManifestDefinition
-        | AssistanceProfileDefinition;
+        | AssistanceProfileDefinition
+        | DeterministicResultValidatorPolicyDefinition;
       return this.persistence.saveCandidate({
         assetType,
         assetId: typed.metadata.id,
@@ -797,26 +827,7 @@ export class LocalCoreService {
         actor
       });
     }
-    if (!["policy"].includes(assetType)) {
-      throw new Error(`Unsupported candidate type: ${assetType}`);
-    }
-    const assetId = String(
-      (content as { metadata?: { id?: string } })?.metadata?.id
-    );
-    const version = String(
-      (content as { metadata?: { version?: string } })?.metadata?.version
-    );
-    if (!assetId || assetId === "undefined" || !version || version === "undefined") {
-      throw new Error("Candidate metadata.id and metadata.version are required");
-    }
-    return this.persistence.saveCandidate({
-      assetType: assetType as ArtifactType,
-      assetId,
-      version,
-      digest: contentDigest(content),
-      content,
-      actor
-    });
+    throw new Error(`Unsupported candidate type: ${assetType}`);
   }
 
   #createRun(

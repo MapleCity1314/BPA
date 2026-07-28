@@ -350,6 +350,158 @@ describe("Local Core IR2 runtime", () => {
     persistence.close();
   });
 
+  it("atomically routes a denied AI result to human confirmation", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const runtime = new Ir2WorkflowRuntime(
+      persistence,
+      new RuntimeProviderRegistry(),
+      {
+        now: () => 1_000,
+        id: ids(),
+        random: () => 0.5
+      }
+    );
+    const aiProfile = {
+      kind: "assistance_profile" as const,
+      id: "packaging_match_review",
+      version: "1.0.0",
+      digest: `sha256:${digest("7")}`
+    };
+    const humanProfile = {
+      kind: "assistance_profile" as const,
+      id: "binding_confirm",
+      version: "1.0.0",
+      digest: `sha256:${digest("8")}`
+    };
+    const assistancePlan: ExecutionPlan = {
+      irVersion: "bpa.workflow-ir/2",
+      workflow: {
+        id: "test.ai-safe-escalation",
+        version: "1.0.0",
+        digest: `sha256:${digest("9")}`
+      },
+      artifactClosure: { entries: [aiProfile, humanProfile] },
+      riskSnapshot: [],
+      limits: { maxDepth: 1, maxStepExecutions: 10 },
+      entry: "review",
+      steps: {
+        review: {
+          kind: "wait.assistance",
+          key: "review",
+          taskKind: "ai_review",
+          profile: aiProfile,
+          deadlineMs: 60_000,
+          onUnavailable: "human_action",
+          blocking: true,
+          routes: {
+            resolved: "done",
+            escalated: "confirm",
+            expired: "failed",
+            unavailable: "confirm"
+          }
+        },
+        confirm: {
+          kind: "wait.assistance",
+          key: "confirm",
+          taskKind: "human_confirm",
+          profile: humanProfile,
+          deadlineMs: 60_000,
+          onUnavailable: "fail",
+          blocking: true,
+          routes: {
+            resolved: "done",
+            escalated: "failed",
+            expired: "failed",
+            unavailable: "failed"
+          }
+        },
+        done: { kind: "terminal", key: "done", status: "succeeded" },
+        failed: {
+          kind: "terminal",
+          key: "failed",
+          status: "failed",
+          errorCode: "REVIEW_FAILED"
+        }
+      }
+    };
+    const run = runtime.start(assistancePlan, {});
+    const queuedRecord = persistence
+      .listAssistanceTasks({ modes: ["ai_review"], limit: 1 })[0];
+    if (!queuedRecord) throw new Error("AI review fixture was not created");
+    const queued = fromAssistanceTaskPersistenceAggregate({
+      definition: queuedRecord.task,
+      privateState: queuedRecord.privateState
+    });
+    const claimed = claimAssistanceTask(queued, {
+      leaseId: "lease-ai",
+      ownerId: "codex",
+      ownerType: "ai",
+      now: "1970-01-01T00:00:01.100Z",
+      leaseDurationMs: 10_000
+    });
+    if (!claimed.ok) throw new Error(claimed.error);
+    expect(
+      persistence.commitAssistanceTask({
+        task: taskRecord(claimed.task),
+        expectedRevision: 0,
+        expectedFencingCounter: 0
+      }).status
+    ).toBe("accepted");
+    const completed = submitAssistanceTask(claimed.task, {
+      leaseId: "lease-ai",
+      ownerId: "codex",
+      fencingToken: 1,
+      now: "1970-01-01T00:00:01.200Z",
+      output: { review: "invalid-for-auto-continue" },
+      resolverType: "ai",
+      resolverId: "codex"
+    });
+    if (!completed.ok) throw new Error(completed.error);
+    expect(
+      runtime.commitAssistanceTask({
+        requestId: "submit-ai-escalated",
+        task: taskRecord(completed.task),
+        expectedRevision: 1,
+        expectedFencingCounter: 1,
+        runOutcome: {
+          status: "escalated",
+          reason: "R1_RESULT_VALIDATION_REQUIRED"
+        }
+      })
+    ).toMatchObject({ status: "accepted" });
+    expect(persistence.getRun(run.id)).toMatchObject({
+      status: "waiting_human",
+      currentNodeKey: "confirm"
+    });
+    expect(
+      persistence.listAssistanceTasks({ limit: 10 }).map((entry) => ({
+        mode: entry.task.mode,
+        status: entry.task.status
+      }))
+    ).toEqual([
+      { mode: "ai_review", status: "completed" },
+      { mode: "human_confirm", status: "queued" }
+    ]);
+    expect(
+      persistence.getEngineCheckpoint(run.id)?.state
+    ).toMatchObject({
+      status: "waiting_assistance",
+      cursor: { stepKey: "confirm" },
+      active: {
+        kind: "assistance",
+        request: { taskKind: "human_confirm" }
+      }
+    });
+    expect(persistence.listEvents(run.id).at(-1)).toMatchObject({
+      type: "ASSISTANCE_RESULT_APPLIED",
+      payload: {
+        outcome: "escalated",
+        reason: "R1_RESULT_VALIDATION_REQUIRED"
+      }
+    });
+    persistence.close();
+  });
+
   it("atomically resumes a waiting Run after a reclaimed human task completes", () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const runtime = new Ir2WorkflowRuntime(
@@ -471,7 +623,10 @@ describe("Local Core IR2 runtime", () => {
         task: taskRecord(completed.task),
         expectedRevision: 3,
         expectedFencingCounter: 2,
-        wakeRun: true
+        runOutcome: {
+          status: "resolved",
+          reason: "MODE_REQUIRES_HUMAN"
+        }
       })
     ).toMatchObject({ status: "accepted" });
     expect(persistence.getRun(run.id)).toMatchObject({
@@ -490,7 +645,10 @@ describe("Local Core IR2 runtime", () => {
         task: taskRecord(completed.task),
         expectedRevision: 3,
         expectedFencingCounter: 2,
-        wakeRun: true
+        runOutcome: {
+          status: "resolved",
+          reason: "MODE_REQUIRES_HUMAN"
+        }
       }).status
     ).toBe("duplicate");
     persistence.close();

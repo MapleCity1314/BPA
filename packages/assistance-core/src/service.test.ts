@@ -356,8 +356,22 @@ describe("provider-neutral AssistanceTaskService", () => {
   it("safely denies auto-continue when validation dependencies fail before commit", async () => {
     const queue = new MemoryTaskQueue();
     await queue.create(task(), "create-1");
+    let committedRunOutcome:
+      | { status: "resolved" | "escalated"; reason: string }
+      | undefined;
+    const observingQueue: TaskQueuePort = {
+      list: (filter) => queue.list(filter),
+      get: (taskId) => queue.get(taskId),
+      getRequestResult: (requestId) =>
+        queue.getRequestResult(requestId),
+      create: (next, requestId) => queue.create(next, requestId),
+      compareAndSet: (input) => {
+        committedRunOutcome = input.runOutcome;
+        return queue.compareAndSet(input);
+      }
+    };
     const subject = new AssistanceTaskService({
-      queue,
+      queue: observingQueue,
       validator: {
         ...validator,
         validateDeterministicResult: () => {
@@ -397,6 +411,10 @@ describe("provider-neutral AssistanceTaskService", () => {
     });
     await expect(queue.get("task-1")).resolves.toMatchObject({
       status: "completed"
+    });
+    expect(committedRunOutcome).toEqual({
+      status: "escalated",
+      reason: "PROFILE_NOT_PUBLISHED"
     });
   });
 

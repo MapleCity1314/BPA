@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   createAssistanceTask,
-  toAssistanceTaskPersistenceAggregate
+  toAssistanceTaskPersistenceAggregate,
+  type AssistanceRunOutcome
 } from "@bpa/assistance-core";
 import {
   DeterministicWorkflowEngine,
@@ -283,13 +284,13 @@ export class Ir2WorkflowRuntime {
     task: AssistanceTaskRecord;
     expectedRevision: number;
     expectedFencingCounter: number;
-    wakeRun: boolean;
+    runOutcome?: AssistanceRunOutcome;
   }): CommitAssistanceTaskRequestResult {
     const duplicate = this.#persistence.getAssistanceRequestResult(
       input.requestId
     );
     if (duplicate) return { status: "duplicate", task: duplicate };
-    if (!input.wakeRun) {
+    if (!input.runOutcome) {
       return this.#persistence.commitAssistanceTaskRequest({
         requestId: input.requestId,
         task: input.task,
@@ -323,7 +324,7 @@ export class Ir2WorkflowRuntime {
       // keeps its original token.
       fencingToken: active.request.fencingToken,
       outcome: {
-        status: "resolved",
+        status: input.runOutcome.status,
         output: jsonValue(input.task.task.resolution?.output ?? null)
       }
     });
@@ -355,6 +356,8 @@ export class Ir2WorkflowRuntime {
         "ASSISTANCE_RESULT_APPLIED",
         {
           taskId: input.task.task.taskId,
+          outcome: input.runOutcome.status,
+          reason: input.runOutcome.reason,
           stateRevision: transition.state.revision
         },
         timestamp

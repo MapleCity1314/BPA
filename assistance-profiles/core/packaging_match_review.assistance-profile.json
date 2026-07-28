@@ -1,0 +1,115 @@
+{
+  "apiVersion": "bpa.assistance/v1alpha1",
+  "kind": "AssistanceProfile",
+  "metadata": {
+    "id": "packaging_match_review",
+    "version": "1.0.0",
+    "title": "Packaging master-data ambiguity review",
+    "description": "Reviews one bounded batch of ambiguous packaging matches. Unresolved products remain eligible for the independent read-only product inspection."
+  },
+  "taskKind": "ai_review",
+  "riskLevel": "R1",
+  "outputSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["batchRef", "decisions"],
+    "properties": {
+      "batchRef": {
+        "type": "string",
+        "pattern": "^sha256:[a-f0-9]{64}$"
+      },
+      "decisions": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 500,
+        "items": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "productRef",
+                "productId",
+                "status",
+                "candidateRef",
+                "recordId",
+                "recordDigest"
+              ],
+              "properties": {
+                "productRef": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "productId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "status": { "const": "selected" },
+                "candidateRef": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "recordId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "recordDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "productRef",
+                "productId",
+                "status",
+                "reasonCode"
+              ],
+              "properties": {
+                "productRef": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "productId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "status": { "const": "unresolved" },
+                "reasonCode": {
+                  "enum": [
+                    "no_confident_candidate",
+                    "insufficient_evidence",
+                    "conflicting_evidence"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "policySnapshot": {
+    "autoContinue": true,
+    "r1ProfileApproved": true,
+    "durableDecision": false,
+    "deterministicValidator": {
+      "id": "packaging_match_review.validator",
+      "version": "1.0.0",
+      "digest": "sha256:5a453421f758af8e8ad145dcf9d23e5a4470877efa28fff5276cce98a5f38f92"
+    },
+    "onUnavailable": "human_action"
+  },
+  "instructions": [
+    "Return exactly one decision for every input product and preserve batchRef, productRef, productId, candidateRef, recordId, and recordDigest byte-for-byte.",
+    "Select only from the supplied candidate range. Use unresolved when the evidence is insufficient or conflicting.",
+    "Do not infer a long-term binding and do not treat an unresolved match as a product issue."
+  ]
+}

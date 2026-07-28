@@ -8,6 +8,7 @@ import {
   validateBrowserProtocolMessage,
   validateDataset,
   validateDecisionRecord,
+  validateDeterministicResultValidatorPolicy,
   validateElementContract,
   validateRiskSignal,
   validateTimingPolicy,
@@ -25,6 +26,28 @@ const examples = JSON.parse(
 ) as Array<Record<string, any>>;
 
 describe("timing and risk schemas", () => {
+  it("accepts bounded deterministic validator policies", () => {
+    const policy = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../../policies/core/packaging_match_review.validator.policy.json",
+          import.meta.url
+        ),
+        "utf8"
+      )
+    );
+    expect(validateDeterministicResultValidatorPolicy(policy)).toBe(true);
+    expect(
+      validateDeterministicResultValidatorPolicy({
+        ...policy,
+        implementation: {
+          ...policy.implementation,
+          provider: "dynamic-module"
+        }
+      })
+    ).toBe(false);
+  });
+
   it("accepts bounded policies and rejects unbounded values", () => {
     expect(
       validateTimingPolicy({

@@ -2,6 +2,7 @@ import {
   fromAssistanceTaskPersistenceAggregate,
   toAssistanceTaskPersistenceAggregate,
   type AssistanceTask,
+  type AssistanceRunOutcome,
   type TaskQueueCommitResult,
   type TaskQueueFilter,
   type TaskQueuePort
@@ -71,7 +72,7 @@ export class PersistenceTaskQueue implements TaskQueuePort {
     expectedRevision: number;
     requestId: string;
     next: AssistanceTask;
-    wakeRun?: boolean;
+    runOutcome?: AssistanceRunOutcome;
   }): Promise<TaskQueueCommitResult> {
     const duplicate = this.persistence.getAssistanceRequestResult(
       input.requestId
@@ -92,7 +93,7 @@ export class PersistenceTaskQueue implements TaskQueuePort {
       task: next,
       expectedRevision: input.expectedRevision,
       expectedFencingCounter: current.fencingCounter,
-      wakeRun: input.wakeRun === true
+      ...(input.runOutcome ? { runOutcome: input.runOutcome } : {})
     });
     if (committed.status === "accepted") {
       return { status: "saved", task: domainTask(committed.task) };
