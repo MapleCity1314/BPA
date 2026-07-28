@@ -23,7 +23,7 @@ zsh scripts/verify-package-macos-arm64.sh \
   artifacts/bpa-local-v<version>-rc.<commit12>-macos-arm64.tar.gz
 ```
 
-打包器只接受精确 RC 文件名，并拒绝覆盖已有归档或 checksum。验包器要求同名 `.sha256` sidecar，检查归档路径安全、生产闭包 allowlist、Manifest 摘要、版本一致性、内容级敏感信息、SQLite Migration、Core Socket/CLI 健康和 Extension。
+打包器只接受精确 RC 文件名，并拒绝覆盖已有归档或 checksum。验包器要求同名 `.sha256` sidecar，检查归档路径安全、生产闭包 allowlist、Manifest 摘要、版本一致性、内容级敏感信息、SQLite Migration、Core Socket/CLI 健康、独立 Team Worker 真实调用和 Extension。
 
 CI 在 macOS arm64、Node.js 24 上重新执行完整打包和验包，并只上传已经通过相同门禁的 tar 与 checksum。Runner 若不是 `arm64` 会直接失败，避免生成原生 ABI 错误的 `better-sqlite3` 包。
 
