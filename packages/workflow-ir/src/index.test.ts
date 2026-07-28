@@ -693,6 +693,13 @@ describe("execution plan", () => {
     const plan = mutablePlan();
     const call = plan.steps.collect;
     if (call?.kind !== "call") throw new Error("test fixture changed");
+    call.providerId = "";
+    call.permissionSnapshot.permissions = [
+      "browser.dom.read",
+      "browser.dom.read"
+    ];
+    call.permissionSnapshot.domains = ["https://example.com/path"];
+    call.permissionSnapshot.grantDigest = "not-a-digest";
     call.timeoutMs = 0;
     call.retry.maxAttempts = 0;
     call.retry.retryableOutcomes.push("uncertain" as never);
@@ -715,6 +722,16 @@ describe("execution plan", () => {
 
     expect(executionPlanIssues(plan)).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({ path: "/steps/collect/providerId" }),
+        expect.objectContaining({
+          path: "/steps/collect/permissionSnapshot/permissions"
+        }),
+        expect.objectContaining({
+          path: "/steps/collect/permissionSnapshot/domains"
+        }),
+        expect.objectContaining({
+          path: "/steps/collect/permissionSnapshot/grantDigest"
+        }),
         expect.objectContaining({ path: "/steps/collect/timeoutMs" }),
         expect.objectContaining({
           path: "/steps/collect/retry/maxAttempts"
