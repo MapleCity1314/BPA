@@ -481,6 +481,15 @@ describe("recoverable execution persistence", () => {
       run,
       planSnapshot: planSnapshot(run.id),
       checkpoint: checkpoint(run.id),
+      outbox: [
+        {
+          id: "previous-runtime-effect",
+          topic: "runtime.invoke",
+          aggregateId: run.id,
+          payload: {},
+          createdAt: timestamp
+        }
+      ],
       event: event(run.id, 1, "RUN_CREATED")
     });
     const next = checkpoint(run.id, 4);
@@ -492,6 +501,17 @@ describe("recoverable execution persistence", () => {
         nextStatus: "running",
         checkpoint: next,
         expectedCheckpointRevision: 1,
+        acknowledgeOutboxIds: ["previous-runtime-effect"],
+        inbox: [
+          {
+            id: "runtime-result-1",
+            topic: "runtime.result",
+            aggregateId: run.id,
+            payload: {},
+            receivedAt: timestamp,
+            appliedAt: timestamp
+          }
+        ],
         outbox: [
           {
             id: "checkpoint-effect",
@@ -506,7 +526,10 @@ describe("recoverable execution persistence", () => {
     ).toThrow("crash");
     expect(store.getRun(run.id)?.revision).toBe(0);
     expect(store.getEngineCheckpoint(run.id)?.stateRevision).toBe(1);
-    expect(store.listPendingEngineOutbox()).toEqual([]);
+    expect(store.listPendingEngineOutbox()).toMatchObject([
+      { id: "previous-runtime-effect" }
+    ]);
+    expect(store.getInboxMessage("runtime-result-1")).toBeUndefined();
     expect(store.listEvents(run.id)).toHaveLength(1);
 
     crash = false;
@@ -517,6 +540,17 @@ describe("recoverable execution persistence", () => {
         nextStatus: "running",
         checkpoint: next,
         expectedCheckpointRevision: 1,
+        acknowledgeOutboxIds: ["previous-runtime-effect"],
+        inbox: [
+          {
+            id: "runtime-result-1",
+            topic: "runtime.result",
+            aggregateId: run.id,
+            payload: {},
+            receivedAt: timestamp,
+            appliedAt: timestamp
+          }
+        ],
         outbox: [
           {
             id: "checkpoint-effect",
@@ -533,6 +567,9 @@ describe("recoverable execution persistence", () => {
     expect(store.listPendingEngineOutbox()).toMatchObject([
       { id: "checkpoint-effect" }
     ]);
+    expect(store.getInboxMessage("runtime-result-1")).toMatchObject({
+      appliedAt: timestamp
+    });
     expect(() =>
       store.commitRecoverableTransition({
         runId: run.id,

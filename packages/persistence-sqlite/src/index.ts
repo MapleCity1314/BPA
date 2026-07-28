@@ -424,6 +424,8 @@ export class SqlitePersistence implements Persistence {
       expectedCheckpointRevision: number;
       outbox?: readonly OutboxMessage[];
       assistanceTasks?: readonly AssistanceTaskRecord[];
+      inbox?: readonly InboxMessageRecord[];
+      acknowledgeOutboxIds?: readonly string[];
     }
   ): RunRecord {
     return this.#db.transaction(() => {
@@ -476,8 +478,24 @@ export class SqlitePersistence implements Persistence {
         }
         this.#insertAssistanceTask(task);
       }
+      for (const message of input.inbox ?? []) {
+        this.#insertInbox(message);
+      }
       for (const message of input.outbox ?? []) {
         this.#insertOutbox("engine_outbox", message);
+      }
+      for (const outboxId of input.acknowledgeOutboxIds ?? []) {
+        const acknowledged = this.#db
+          .prepare(
+            `UPDATE engine_outbox SET acknowledged_at = ?
+             WHERE id = ? AND acknowledged_at IS NULL`
+          )
+          .run(input.checkpoint.updatedAt, outboxId);
+        if (acknowledged.changes !== 1) {
+          throw new RevisionConflictError(
+            `Engine outbox ${outboxId} is missing or already acknowledged`
+          );
+        }
       }
       this.#insertEvent(input.event);
       this.#inject("recoverable_transition.after_effects");

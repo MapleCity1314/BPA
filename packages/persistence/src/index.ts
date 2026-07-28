@@ -263,6 +263,8 @@ export interface ExecutionUnitOfWork {
       expectedCheckpointRevision: number;
       outbox?: readonly OutboxMessage[];
       assistanceTasks?: readonly AssistanceTaskRecord[];
+      inbox?: readonly InboxMessageRecord[];
+      acknowledgeOutboxIds?: readonly string[];
     }
   ): RunRecord;
   commitRunTransition(input: RunTransitionInput): RunRecord;
