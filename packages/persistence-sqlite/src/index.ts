@@ -912,7 +912,7 @@ export class SqlitePersistence implements Persistence {
     expectedState: "validated";
     dataset: DatasetVersionDefinition;
     normalizedRecords: readonly JsonValue[];
-    event: ExecutionEventRecord;
+    audit: AuditRecord;
   }): DatasetVersionDefinition {
     return this.#db.transaction(() => {
       if (input.dataset.recordCount !== input.normalizedRecords.length) {
@@ -939,7 +939,7 @@ export class SqlitePersistence implements Persistence {
           input.dataset.recordsDigest,
           json(input.dataset),
           input.stagingId,
-          input.event.occurredAt
+          input.audit.occurredAt
         );
       this.#inject("publish_dataset.after_version");
       const insertRecord = this.#db.prepare(
@@ -947,11 +947,29 @@ export class SqlitePersistence implements Persistence {
           dataset_id, version, record_key, ordinal, record_digest, record_json
         ) VALUES (?, ?, ?, ?, ?, ?)`
       );
+      const recordKeys = new Set<string>();
       input.normalizedRecords.forEach((record, ordinal) => {
+        const recordObject =
+          record !== null && typeof record === "object" && !Array.isArray(record)
+            ? (record as Readonly<Record<string, JsonValue>>)
+            : undefined;
+        const candidateId =
+          recordObject &&
+          (typeof recordObject.id === "string" ||
+            typeof recordObject.id === "number")
+            ? String(recordObject.id).trim()
+            : "";
+        const recordKey = candidateId
+          ? `id:${candidateId}`
+          : `ordinal:${String(ordinal).padStart(12, "0")}`;
+        if (recordKeys.has(recordKey)) {
+          throw new Error(`Duplicate dataset record key: ${recordKey}`);
+        }
+        recordKeys.add(recordKey);
         insertRecord.run(
           input.dataset.metadata.id,
           input.dataset.metadata.version,
-          String(ordinal).padStart(12, "0"),
+          recordKey,
           ordinal,
           digest(record),
           json(record)
@@ -960,15 +978,15 @@ export class SqlitePersistence implements Persistence {
       const update = this.#db
         .prepare(
           `UPDATE dataset_staging
-           SET state = 'published', updated_at = ?
+          SET state = 'published', updated_at = ?
            WHERE staging_id = ? AND state = ?`
         )
-        .run(input.event.occurredAt, input.stagingId, input.expectedState);
+        .run(input.audit.occurredAt, input.stagingId, input.expectedState);
       if (update.changes !== 1) {
         throw new RevisionConflictError("Dataset staging changed concurrently");
       }
-      this.#insertEvent(input.event);
-      this.#inject("publish_dataset.after_event");
+      this.#insertAuditRecord(input.audit);
+      this.#inject("publish_dataset.after_audit");
       return input.dataset;
     })();
   }
@@ -1716,6 +1734,23 @@ export class SqlitePersistence implements Persistence {
         ) VALUES (?, ?, ?, ?, ?, ?)`
       )
       .run(randomUUID(), action, actor, target, json(detail), now());
+  }
+
+  #insertAuditRecord(record: AuditRecord): void {
+    this.#db
+      .prepare(
+        `INSERT INTO audit_records(
+          id, action, actor, target, detail_json, occurred_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        record.id,
+        record.action,
+        record.actor,
+        record.target,
+        json(record.detail),
+        record.occurredAt
+      );
   }
 
   #insertDecision(record: DecisionRecordDefinition): void {

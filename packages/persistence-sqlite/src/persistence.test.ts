@@ -8,6 +8,7 @@ import {
   ArtifactConflictError,
   RevisionConflictError,
   type AssistanceTaskRecord,
+  type AuditRecord,
   type DatasetStagingRecord,
   type ExecutionEventRecord,
   type ExecutionScopeRecord,
@@ -38,6 +39,17 @@ function event(
     sequence,
     type,
     payload: {},
+    occurredAt: timestamp
+  };
+}
+
+function audit(target: string): AuditRecord {
+  return {
+    id: randomUUID(),
+    action: "dataset.published",
+    actor: "test",
+    target,
+    detail: {},
     occurredAt: timestamp
   };
 }
@@ -731,7 +743,6 @@ describe("assistance unit of work", () => {
 describe("dataset and decision persistence", () => {
   it("publishes immutable normalized records from validated staging", () => {
     const store = new SqlitePersistence({ path: ":memory:" });
-    const run = createRun(store);
     const staging: DatasetStagingRecord = {
       stagingId: "staging-1",
       profileId: "profile-1",
@@ -771,7 +782,7 @@ describe("dataset and decision persistence", () => {
       expectedState: "validated",
       dataset,
       normalizedRecords: [{ id: 1 }, { id: 2 }, { id: 3 }],
-      event: event(run.id, 2, "DATASET_PUBLISHED")
+      audit: audit("dataset:dataset-1@1.0.0")
     });
     expect(store.getDataset("dataset-1", "1.0.0")).toEqual(dataset);
     expect(
@@ -782,23 +793,24 @@ describe("dataset and decision persistence", () => {
       })
     ).toEqual({
       records: [{ id: 1 }, { id: 2 }],
-      nextRecordKey: "000000000001"
+      nextRecordKey: "id:2"
     });
     expect(
       store.readDatasetRecords({
         id: "dataset-1",
         version: "1.0.0",
-        afterRecordKey: "000000000001",
+        afterRecordKey: "id:2",
         limit: 2
       })
     ).toEqual({ records: [{ id: 3 }] });
     expect(store.getDatasetStaging(staging.stagingId)?.state).toBe(
       "published"
     );
+    expect(store.listAudit("dataset:dataset-1@1.0.0")).toHaveLength(1);
     store.close();
   });
 
-  it("rolls back dataset version, index, staging and event on crash", () => {
+  it("rolls back dataset version, index, staging and audit on crash", () => {
     let crash = false;
     const store = new SqlitePersistence({
       path: ":memory:",
@@ -808,7 +820,6 @@ describe("dataset and decision persistence", () => {
         }
       }
     });
-    const run = createRun(store);
     const staging: DatasetStagingRecord = {
       stagingId: "staging-crash",
       profileId: "profile-1",
@@ -845,14 +856,14 @@ describe("dataset and decision persistence", () => {
           recordsDigest: "sha256:records"
         },
         normalizedRecords: [{ id: 1 }],
-        event: event(run.id, 2, "DATASET_PUBLISHED")
+        audit: audit("dataset:dataset-crash@1.0.0")
       })
     ).toThrow("crash");
     expect(store.getDataset("dataset-crash", "1.0.0")).toBeUndefined();
     expect(store.getDatasetStaging(staging.stagingId)?.state).toBe(
       "validated"
     );
-    expect(store.listEvents(run.id)).toHaveLength(1);
+    expect(store.listAudit("dataset:dataset-crash@1.0.0")).toHaveLength(0);
     store.close();
   });
 

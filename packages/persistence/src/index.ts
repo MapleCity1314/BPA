@@ -346,7 +346,7 @@ export interface DatasetPublicationUnitOfWork {
     expectedState: "validated";
     dataset: DatasetVersionDefinition;
     normalizedRecords: readonly JsonValue[];
-    event: ExecutionEventRecord;
+    audit: AuditRecord;
   }): DatasetVersionDefinition;
   getDataset(id: string, version: string): DatasetVersionDefinition | undefined;
   readDatasetRecords(input: {
