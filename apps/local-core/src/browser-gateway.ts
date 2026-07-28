@@ -19,6 +19,12 @@ import type {
   Persistence
 } from "@bpa/persistence";
 import type {
+  RuntimeInvocation,
+  RuntimeOutcome,
+  RuntimeProvider
+} from "@bpa/node-runtime";
+import type { ArtifactRef, JsonValue } from "@bpa/workflow-ir";
+import type {
   BrowserProtocolMessage,
   NodeDefinition,
   RiskSignal,
@@ -51,7 +57,8 @@ interface ActiveSession {
   capabilities: BrowserCapabilityRecord[];
 }
 
-export class LocalBrowserGateway {
+export class LocalBrowserGateway implements RuntimeProvider {
+  readonly id = "browser";
   readonly #extensionId: string;
   #send: ((message: Message) => void) | undefined;
   #session: ActiveSession | undefined;
@@ -103,6 +110,88 @@ export class LocalBrowserGateway {
       capabilityCount: this.#session?.capabilities.length ?? 0,
       ...(this.#lastError ? { lastError: this.#lastError } : {})
     };
+  }
+
+  supports(node: ArtifactRef & { readonly kind: "node" }): boolean {
+    const published = this.persistence.getPublished(
+      "node",
+      node.id,
+      node.version
+    );
+    return (
+      published !== undefined &&
+      published.digest === node.digest &&
+      (published.content as { runtime?: unknown }).runtime === "browser"
+    );
+  }
+
+  invoke(
+    invocation: RuntimeInvocation,
+    signal: AbortSignal
+  ): Promise<RuntimeOutcome> {
+    if (!this.supports(invocation.node)) {
+      return Promise.resolve({
+        status: "rejected",
+        error: {
+          code: "BROWSER_NODE_NOT_PUBLISHED",
+          message: `Published browser Node is unavailable: ${invocation.node.id}@${invocation.node.version}`,
+          retryable: false
+        },
+        evidence: [],
+        riskSignals: []
+      });
+    }
+    const commandId = this.#runtimeCommandId(invocation.invocationId);
+    if (!this.persistence.getGatewayCommand(commandId)) {
+      this.#enqueueRuntimeInvocation(commandId, invocation);
+    }
+    this.dispatchPending();
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer: NodeJS.Timeout | undefined;
+      const finish = (outcome: RuntimeOutcome) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        resolve(outcome);
+      };
+      const onAbort = () => {
+        this.#cancelRuntimeCommand(commandId);
+        finish({
+          status: "timed_out",
+          error: {
+            code: "BROWSER_DEADLINE_EXCEEDED",
+            message: "Browser invocation exceeded its frozen deadline.",
+            retryable: true
+          },
+          evidence: [],
+          riskSignals: []
+        });
+      };
+      const poll = () => {
+        const command = this.persistence.getGatewayCommand(commandId);
+        if (command?.state === "terminal" && command.result !== undefined) {
+          finish(this.#runtimeOutcome(command.result));
+          return;
+        }
+        if (signal.aborted || Date.now() >= invocation.deadlineAt) {
+          onAbort();
+          return;
+        }
+        timer = setTimeout(poll, 50);
+        timer.unref();
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      poll();
+    });
+  }
+
+  async cancel(
+    invocationId: string,
+    _fencingToken: number
+  ): Promise<void> {
+    this.#cancelRuntimeCommand(this.#runtimeCommandId(invocationId));
   }
 
   handle(message: unknown): void {
@@ -477,6 +566,9 @@ export class LocalBrowserGateway {
     if (outcome === "stale") return outcome;
     const command = this.persistence.getGatewayCommand(commandId);
     if (!command) throw new Error(`Gateway command not found: ${commandId}`);
+    if (command.id.startsWith("ir2:")) {
+      return outcome;
+    }
     const execution = this.persistence.getNodeExecution(
       command.nodeExecutionId
     );
@@ -612,6 +704,178 @@ export class LocalBrowserGateway {
         now.toISOString()
       );
     }
+  }
+
+  #enqueueRuntimeInvocation(
+    commandId: string,
+    invocation: RuntimeInvocation
+  ): void {
+    const published = this.persistence.getPublished(
+      "node",
+      invocation.node.id,
+      invocation.node.version
+    );
+    if (
+      !published ||
+      published.digest !== invocation.node.digest ||
+      (published.content as { runtime?: unknown }).runtime !== "browser"
+    ) {
+      throw new Error(
+        `Published browser Node missing or drifted: ${invocation.node.id}@${invocation.node.version}`
+      );
+    }
+    const run = this.persistence.getRun(invocation.identity.runId);
+    if (!run) {
+      throw new Error(`IR2 Run not found: ${invocation.identity.runId}`);
+    }
+    const commandSeq = this.persistence.nextGatewayCommandSequence();
+    const now = new Date();
+    const deadline = new Date(invocation.deadlineAt).toISOString();
+    const definition = published.content as NodeDefinition;
+    const protocolIdempotencyKey = `ir2-${createHash("sha256")
+      .update(invocation.idempotencyKey)
+      .digest("hex")}`;
+    const grantBody: PermissionGrantBody = {
+      grant_id: randomUUID(),
+      permissions: [...invocation.permissionSnapshot.permissions],
+      domains: [...invocation.permissionSnapshot.domains],
+      risk_level: invocation.permissionSnapshot.riskLevel,
+      expires_at: deadline,
+      run_id: invocation.identity.runId,
+      node_execution_id: invocation.invocationId,
+      node_id: invocation.node.id,
+      node_version: invocation.node.version,
+      fencing_token: invocation.fencingToken
+    };
+    const permissionGrant = signPermissionGrant(
+      grantBody,
+      this.signingKey.keyId,
+      this.signingKey.privateKey
+    );
+    const payload = {
+      command_seq: commandSeq,
+      run_id: invocation.identity.runId,
+      workflow_id: run.workflowId,
+      workflow_version: run.workflowVersion,
+      node_execution_id: invocation.invocationId,
+      command_id: commandId,
+      idempotency_key: protocolIdempotencyKey,
+      fencing_token: invocation.fencingToken,
+      attempt: invocation.identity.attempt,
+      node: {
+        id: invocation.node.id,
+        version: invocation.node.version
+      },
+      input: invocation.input,
+      ...((definition.execution as { timingPolicy?: unknown } | undefined)
+        ?.timingPolicy === undefined
+        ? {}
+        : {
+            timing_policy: (
+              definition.execution as { timingPolicy: unknown }
+            ).timingPolicy
+          }),
+      permission_grant: permissionGrant,
+      deadline
+    };
+    this.persistence.enqueueCommand(
+      {
+        id: commandId,
+        nodeExecutionId: invocation.invocationId,
+        commandSeq,
+        idempotencyKey: protocolIdempotencyKey,
+        fencingToken: invocation.fencingToken,
+        state: "queued",
+        payload,
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString()
+      },
+      {
+        id: `gateway:${commandId}`,
+        topic: "command.dispatch",
+        aggregateId: commandId,
+        payload,
+        createdAt: now.toISOString()
+      }
+    );
+  }
+
+  #cancelRuntimeCommand(commandId: string): void {
+    const command = this.persistence.getGatewayCommand(commandId);
+    if (!command || command.state === "terminal") return;
+    if (command.state === "queued") {
+      this.#commitResult(`cancel-${commandId}-${randomUUID()}`, {
+        command_seq: command.commandSeq,
+        command_id: command.id,
+        node_execution_id: command.nodeExecutionId,
+        idempotency_key: command.idempotencyKey,
+        fencing_token: command.fencingToken,
+        status: "cancelled"
+      });
+      return;
+    }
+    if (this.#session?.ready) {
+      this.#sendMessage(
+        "cancel.request",
+        {
+          command_id: command.id,
+          node_execution_id: command.nodeExecutionId,
+          fencing_token: command.fencingToken,
+          reason_code: "RUNTIME_CANCELLED"
+        },
+        `trace-${command.nodeExecutionId}`
+      );
+    }
+  }
+
+  #runtimeCommandId(invocationId: string): string {
+    return `ir2:${invocationId}`;
+  }
+
+  #runtimeOutcome(result: unknown): RuntimeOutcome {
+    const payload = result as Record<string, unknown>;
+    // Browser Protocol v1 carries evidence ids only, while RuntimeOutcome
+    // requires verified digest-bearing refs. Evidence transport is disabled in
+    // this milestone, so ids are not promoted into trusted Runtime evidence.
+    const evidence: RuntimeOutcome["evidence"] = [];
+    const riskSignals = Array.isArray(payload.risk_signals)
+      ? (payload.risk_signals as RiskSignal[])
+      : [];
+    if (payload.status === "succeeded") {
+      return {
+        status: "succeeded",
+        output: (payload.output ?? null) as JsonValue,
+        evidence,
+        riskSignals
+      };
+    }
+    const status = [
+      "failed",
+      "rejected",
+      "timed_out",
+      "cancelled",
+      "uncertain"
+    ].includes(String(payload.status))
+      ? (payload.status as Exclude<RuntimeOutcome["status"], "succeeded">)
+      : "failed";
+    const error = payload.error as
+      | { code?: unknown; message?: unknown; retryable?: unknown }
+      | undefined;
+    return {
+      status,
+      error: {
+        code: String(error?.code ?? "BROWSER_COMMAND_FAILED"),
+        message: String(
+          error?.message ?? "Browser command returned a terminal failure."
+        ),
+        retryable: error?.retryable === true
+      },
+      ...(payload.output === undefined
+        ? {}
+        : { output: payload.output as JsonValue }),
+      evidence,
+      riskSignals
+    };
   }
 
   #supports(command: GatewayCommandRecord): boolean {

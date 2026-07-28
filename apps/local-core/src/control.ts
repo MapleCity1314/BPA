@@ -77,6 +77,9 @@ export class LocalCoreService {
     if (!providers.list().includes("builtin")) {
       providers.register(new BuiltinRuntimeProvider());
     }
+    if (browserGateway && !providers.list().includes("browser")) {
+      providers.register(browserGateway);
+    }
     if (!providers.list().includes("team")) {
       registerTeamRuntimeProvider(providers, {
         process: {
