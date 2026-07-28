@@ -22,6 +22,7 @@ import {
   type CreateBlockingAssistanceInput,
   type CommitAssistanceTaskRequestInput,
   type CommitAssistanceTaskRequestResult,
+  type CompleteDetachedAssistanceInput,
   type DatasetStagingRecord,
   type DatasetVersionDefinition,
   type DecisionRecordDefinition,
@@ -1228,6 +1229,131 @@ export class SqlitePersistence implements Persistence {
           input.recordedAt
         );
       this.#inject("assistance_request.after_result");
+      return {
+        status: "accepted" as const,
+        task: input.task
+      };
+    }).immediate();
+  }
+
+  completeDetachedAssistanceTask(
+    input: CompleteDetachedAssistanceInput
+  ): CommitAssistanceTaskRequestResult {
+    return this.#db.transaction(() => {
+      if (
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input.requestId) ||
+        input.inbox.id !== input.requestId ||
+        input.inbox.aggregateId !== input.task.task.taskId ||
+        input.event.runId !== input.task.task.runId ||
+        input.task.task.status !== "completed" ||
+        input.task.privateState.blocking !== false ||
+        input.task.task.revision !== input.expectedRevision + 1 ||
+        input.task.fencingCounter !== input.expectedFencingCounter ||
+        !assistanceFencingConsistent(input.task) ||
+        !Number.isFinite(Date.parse(input.inbox.receivedAt)) ||
+        (input.inbox.appliedAt !== undefined &&
+          !Number.isFinite(Date.parse(input.inbox.appliedAt))) ||
+        !Number.isFinite(Date.parse(input.event.occurredAt))
+      ) {
+        return { status: "stale" as const };
+      }
+      const duplicate = this.getAssistanceRequestResult(input.requestId);
+      if (duplicate) {
+        return {
+          status: "duplicate" as const,
+          task: duplicate
+        };
+      }
+      const currentTask = this.getAssistanceTask(input.task.task.taskId);
+      if (
+        !currentTask ||
+        !this.getRun(input.task.task.runId) ||
+        currentTask.task.revision !== input.expectedRevision ||
+        currentTask.fencingCounter !== input.expectedFencingCounter ||
+        (currentTask.privateState.blocking !== false &&
+          currentTask.privateState.blocking !== undefined) ||
+        !assistanceFencingConsistent(currentTask) ||
+        this.getInboxMessage(input.inbox.id)
+      ) {
+        return { status: "stale" as const };
+      }
+      for (const outboxId of input.acknowledgeOutboxIds ?? []) {
+        const row = this.#db
+          .prepare(
+            `SELECT acknowledged_at
+             FROM engine_outbox
+             WHERE id = ?`
+          )
+          .get(outboxId) as { acknowledged_at: string | null } | undefined;
+        if (!row || row.acknowledged_at !== null) {
+          return { status: "stale" as const };
+        }
+      }
+
+      this.#insertInbox(input.inbox);
+      const update = this.#db
+        .prepare(
+          `UPDATE assistance_tasks
+           SET status = ?, revision = ?, fencing_counter = ?,
+               canonical_json = ?, private_state_json = ?, updated_at = ?
+           WHERE task_id = ? AND revision = ? AND fencing_counter = ?`
+        )
+        .run(
+          input.task.task.status,
+          input.task.task.revision,
+          input.task.fencingCounter,
+          json(input.task.task),
+          json(input.task.privateState),
+          input.task.task.updatedAt,
+          input.task.task.taskId,
+          input.expectedRevision,
+          input.expectedFencingCounter
+        );
+      if (update.changes !== 1) {
+        throw new RevisionConflictError("Detached assistance task CAS failed");
+      }
+      this.#inject("detached_assistance.after_task");
+      this.#db
+        .prepare(
+          `INSERT INTO assistance_task_request_results(
+            request_id, task_id, expected_revision, expected_fencing_counter,
+            result_json, recorded_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          input.requestId,
+          input.task.task.taskId,
+          input.expectedRevision,
+          input.expectedFencingCounter,
+          json(input.task),
+          input.event.occurredAt
+        );
+      const sequenceRow = this.#db
+        .prepare(
+          `SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
+           FROM execution_events
+           WHERE run_id = ?`
+        )
+        .get(input.event.runId) as { next_sequence: number };
+      this.#insertEvent({
+        ...input.event,
+        sequence: sequenceRow.next_sequence
+      });
+      for (const outboxId of input.acknowledgeOutboxIds ?? []) {
+        const acknowledged = this.#db
+          .prepare(
+            `UPDATE engine_outbox
+             SET acknowledged_at = ?
+             WHERE id = ? AND acknowledged_at IS NULL`
+          )
+          .run(input.event.occurredAt, outboxId);
+        if (acknowledged.changes !== 1) {
+          throw new RevisionConflictError(
+            `Engine outbox ${outboxId} detached acknowledgement failed`
+          );
+        }
+      }
+      this.#inject("detached_assistance.after_audit");
       return {
         status: "accepted" as const,
         task: input.task

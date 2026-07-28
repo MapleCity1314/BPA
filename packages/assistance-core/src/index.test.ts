@@ -35,7 +35,7 @@ const defaultPolicy = {
   onUnavailable: "continue_unresolved" as const
 };
 
-function queued() {
+function queued(blocking = true) {
   return createAssistanceTask({
     taskId: "task-1",
     runId: "run-1",
@@ -57,6 +57,7 @@ function queued() {
         digest: digestC
       }
     ],
+    blocking,
     deadline: "2026-07-29T00:00:00.000Z",
     now: t0
   });
@@ -325,6 +326,37 @@ describe("canonical assistance aggregate", () => {
     expect(
       awaitHumanAssistanceTask(task, { ...proof, now: t2 })
     ).toEqual({ ok: false, error: "INVALID_TRANSITION" });
+    const longLease = claimAssistanceTask(queued(false), {
+      leaseId: "long-lease",
+      ownerId: "codex-1",
+      ownerType: "ai",
+      now: t0,
+      leaseDurationMs: 2 * 24 * 60 * 60 * 1_000
+    });
+    if (!longLease.ok) throw new Error("Long lease fixture failed");
+    expect(longLease.task.lease.expiresAt).toBe(
+      "2026-07-29T00:00:00.000Z"
+    );
+    expect(
+      submitAssistanceTask(longLease.task, {
+        leaseId: "long-lease",
+        ownerId: "codex-1",
+        fencingToken: 1,
+        now: "2026-07-29T00:00:00.000Z",
+        output: {},
+        resolverType: "ai",
+        resolverId: "codex-1"
+      })
+    ).toEqual({ ok: false, error: "LEASE_EXPIRED" });
+    expect(
+      claimAssistanceTask(queued(false), {
+        leaseId: "late-lease",
+        ownerId: "codex-1",
+        ownerType: "ai",
+        now: "2026-07-29T00:00:00.000Z",
+        leaseDurationMs: 1_000
+      })
+    ).toEqual({ ok: false, error: "LEASE_EXPIRED" });
   });
 
   it("round-trips through an explicit canonical/private persistence boundary", () => {
@@ -333,9 +365,25 @@ describe("canonical assistance aggregate", () => {
     expect(persisted.definition.lease).not.toHaveProperty("leaseId");
     expect(persisted.privateState).toMatchObject({
       leaseId: proof.leaseId,
-      fencingCounter: 1
+      fencingCounter: 1,
+      blocking: true
     });
     expect(fromAssistanceTaskPersistenceAggregate(persisted)).toEqual(task);
+    const detached = queued(false);
+    const detachedPersisted =
+      toAssistanceTaskPersistenceAggregate(detached);
+    expect(detachedPersisted.privateState.blocking).toBe(false);
+    expect(
+      fromAssistanceTaskPersistenceAggregate(detachedPersisted)
+    ).toEqual(detached);
+    const { blocking: _legacyMarker, ...legacyPrivateState } =
+      persisted.privateState;
+    expect(
+      fromAssistanceTaskPersistenceAggregate({
+        definition: persisted.definition,
+        privateState: legacyPrivateState
+      }).blocking
+    ).toBeUndefined();
     expect(() =>
       fromAssistanceTaskPersistenceAggregate({
         definition: persisted.definition,

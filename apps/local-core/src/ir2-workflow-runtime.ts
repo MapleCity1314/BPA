@@ -322,6 +322,62 @@ export class Ir2WorkflowRuntime {
     if (input.task.task.status !== "completed") {
       return { status: "stale" };
     }
+    const persistedTask = this.#persistence.getAssistanceTask(
+      input.task.task.taskId
+    );
+    if (!persistedTask) return { status: "stale" };
+    let detached = persistedTask.privateState.blocking === false;
+    if (persistedTask.privateState.blocking === undefined) {
+      const legacyCheckpoint = this.#persistence.getEngineCheckpoint(
+        input.task.task.runId
+      );
+      const legacyActive = (
+        legacyCheckpoint?.state as unknown as EngineState | undefined
+      )?.active;
+      detached = !(
+        legacyActive?.kind === "assistance" &&
+        legacyActive.request.taskId === input.task.task.taskId
+      );
+    }
+    if (detached) {
+      const timestamp = new Date(this.#now()).toISOString();
+      const detachedTask = {
+        ...input.task,
+        privateState: {
+          ...input.task.privateState,
+          blocking: false
+        }
+      };
+      return this.#persistence.completeDetachedAssistanceTask({
+        requestId: input.requestId,
+        task: detachedTask,
+        expectedRevision: input.expectedRevision,
+        expectedFencingCounter: input.expectedFencingCounter,
+        inbox: {
+          id: input.requestId,
+          topic: "assistance.detached.result",
+          aggregateId: input.task.task.taskId,
+          payload: jsonValue({
+            task: detachedTask,
+            outcome: input.runOutcome
+          }),
+          receivedAt: timestamp,
+          appliedAt: timestamp
+        },
+        event: {
+          id: this.#id(),
+          runId: input.task.task.runId,
+          type: "ASSISTANCE_DETACHED_RESULT_RECORDED",
+          payload: {
+            taskId: input.task.task.taskId,
+            outcome: input.runOutcome.status,
+            reason: input.runOutcome.reason
+          },
+          occurredAt: timestamp
+        },
+        acknowledgeOutboxIds: [`effect:${input.task.task.taskId}`]
+      });
+    }
     const run = this.#persistence.getRun(input.task.task.runId);
     const plan = this.#persistence.getRunPlanSnapshot(input.task.task.runId);
     const checkpoint = this.#persistence.getEngineCheckpoint(
@@ -543,6 +599,7 @@ export class Ir2WorkflowRuntime {
           durableDecision: false,
           onUnavailable: effect.request.onUnavailable
         },
+        blocking: effect.request.blocking,
         deadline: new Date(effect.request.deadlineAt).toISOString(),
         now: timestamp
       });

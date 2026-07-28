@@ -72,6 +72,11 @@ interface AssistanceTaskBase<TInput> {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly fencingCounter: number;
+  /**
+   * Execution coupling is durable, but intentionally private to Core. Detached
+   * tasks complete independently and must never drive a Run transition.
+   */
+  readonly blocking?: boolean;
   readonly terminalReason?: string;
 }
 
@@ -121,6 +126,7 @@ export interface CreateAssistanceTaskInput<TInput> {
   readonly outputSchema: AssistanceTaskDefinition["outputSchema"];
   readonly policySnapshot: AssistancePolicySnapshot;
   readonly contextRefs?: Readonly<AssistanceTaskDefinition["contextRefs"]>;
+  readonly blocking?: boolean;
   readonly deadline: string;
   readonly now: string;
 }
@@ -157,6 +163,7 @@ export interface AssistanceTaskPrivateState {
   readonly heartbeatAt?: string;
   readonly ownerType?: "ai" | "human";
   readonly fencingCounter: number;
+  readonly blocking?: boolean;
   readonly terminalReason?: string;
 }
 
@@ -229,7 +236,8 @@ function nextBase<TInput>(
     deadline: task.deadline,
     createdAt: task.createdAt,
     updatedAt: now,
-    fencingCounter: task.fencingCounter
+    fencingCounter: task.fencingCounter,
+    ...(task.blocking === undefined ? {} : { blocking: task.blocking })
   };
 }
 
@@ -269,6 +277,7 @@ export function createAssistanceTask<TInput>(
     createdAt: input.now,
     updatedAt: input.now,
     fencingCounter: 0,
+    blocking: input.blocking ?? true,
     status: "queued"
   });
 }
@@ -308,6 +317,10 @@ export function claimAssistanceTask<TInput, TResult>(
     return { ok: false, error: "CLAIMANT_NOT_AUTHORIZED" };
   }
   if (terminal(task)) return { ok: false, error: "TASK_TERMINAL" };
+  const deadline = timestampMs(task.deadline);
+  if (deadline === undefined || now >= deadline) {
+    return { ok: false, error: "LEASE_EXPIRED" };
+  }
   if (
     (task.status === "claimed" || task.status === "processing") &&
     now < (timestampMs(task.lease.expiresAt) ?? Number.POSITIVE_INFINITY)
@@ -336,7 +349,9 @@ export function claimAssistanceTask<TInput, TResult>(
         fencingToken,
         claimedAt: input.now,
         heartbeatAt: input.now,
-        expiresAt: new Date(now + input.leaseDurationMs).toISOString()
+        expiresAt: new Date(
+          Math.min(now + input.leaseDurationMs, deadline)
+        ).toISOString()
       }
     })
   };
@@ -366,7 +381,12 @@ function validateLease<TInput>(
   }
   if (proof.leaseId !== task.lease.leaseId) return "LEASE_ID_MISMATCH";
   if (proof.ownerId !== task.lease.ownerId) return "OWNER_MISMATCH";
-  if (now >= (timestampMs(task.lease.expiresAt) ?? 0)) return "LEASE_EXPIRED";
+  if (
+    now >= (timestampMs(task.lease.expiresAt) ?? 0) ||
+    now >= (timestampMs(task.deadline) ?? 0)
+  ) {
+    return "LEASE_EXPIRED";
+  }
   return undefined;
 }
 
@@ -417,7 +437,12 @@ export function heartbeatAssistanceTask<TInput>(
       lease: {
         ...task.lease,
         heartbeatAt: input.now,
-        expiresAt: new Date(now + input.leaseDurationMs).toISOString()
+        expiresAt: new Date(
+          Math.min(
+            now + input.leaseDurationMs,
+            timestampMs(task.deadline) ?? 0
+          )
+        ).toISOString()
       }
     })
   };
@@ -599,6 +624,7 @@ export function toAssistanceTaskPersistenceAggregate(
     definition: toAssistanceTaskDefinition(task),
     privateState: {
       fencingCounter: task.fencingCounter,
+      ...(task.blocking === undefined ? {} : { blocking: task.blocking }),
       ...("lease" in task
         ? {
             leaseId: task.lease.leaseId,
@@ -637,6 +663,9 @@ export function fromAssistanceTaskPersistenceAggregate(
     createdAt: dto.createdAt,
     updatedAt: dto.updatedAt,
     fencingCounter: persisted.privateState.fencingCounter,
+    ...(persisted.privateState.blocking === undefined
+      ? {}
+      : { blocking: persisted.privateState.blocking }),
     ...(persisted.privateState.terminalReason === undefined
       ? {}
       : { terminalReason: persisted.privateState.terminalReason })

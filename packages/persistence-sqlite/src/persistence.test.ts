@@ -128,6 +128,7 @@ function canonicalTask(
     mode?: AssistanceTaskRecord["task"]["mode"];
     ownerType?: "ai" | "human";
     createdAt?: string;
+    blocking?: boolean;
   } = {}
 ): AssistanceTaskRecord {
   const leaseBearing = status === "claimed" || status === "processing";
@@ -183,13 +184,21 @@ function canonicalTask(
     fencingCounter: fencingToken ?? 0,
     privateState:
       !leaseBearing || fencingToken === undefined
-        ? { fencingCounter: fencingToken ?? 0 }
+        ? {
+            fencingCounter: fencingToken ?? 0,
+            ...(options.blocking === undefined
+              ? {}
+              : { blocking: options.blocking })
+          }
         : {
             leaseId: "lease-1",
             claimedAt: timestamp,
             heartbeatAt: timestamp,
             ownerType: options.ownerType ?? "ai",
-            fencingCounter: fencingToken
+            fencingCounter: fencingToken,
+            ...(options.blocking === undefined
+              ? {}
+              : { blocking: options.blocking })
           }
   };
 }
@@ -1174,6 +1183,201 @@ describe("assistance unit of work", () => {
       })
     ).toEqual({ status: "stale" });
     expect(store.listEvents(run.id)).toHaveLength(3);
+    store.close();
+  });
+
+  it.each(["running", "succeeded"] as const)(
+    "atomically records a detached result without changing a %s Run",
+    (runStatus) => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    const run: RunRecord = {
+      id: `run-detached-result-${runStatus}`,
+      workflowId: "test.workflow",
+      workflowVersion: "1.0.0",
+      workflowDigest: "sha256:workflow",
+      status: runStatus,
+      revision: 4,
+      input: {},
+      output: { completed: true },
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    const terminalCheckpoint: EngineCheckpointRecord = {
+      ...checkpoint(run.id, 9),
+      state: {
+        stateVersion: "bpa.engine-state/2",
+        runId: run.id,
+        revision: 9,
+        status: runStatus === "running" ? "waiting_runtime" : "succeeded"
+      }
+    };
+    const claimed = canonicalTask(
+      run.id,
+      "claimed",
+      1,
+      1,
+      runStatus === "running" ? { blocking: false } : {}
+    );
+    store.createRecoverableRun({
+      run,
+      planSnapshot: planSnapshot(run.id),
+      checkpoint: terminalCheckpoint,
+      assistanceTasks: [claimed],
+      outbox: [
+        {
+          id: `effect:${claimed.task.taskId}`,
+          topic: "assistance.requested",
+          aggregateId: claimed.task.taskId,
+          payload: {},
+          createdAt: timestamp
+        }
+      ],
+      event: event(run.id, 1, `RUN_${runStatus.toUpperCase()}`)
+    });
+    const completed = canonicalTask(run.id, "completed", 2, 1, {
+      blocking: false
+    });
+    const detachedEvent = event(
+      run.id,
+      999,
+      "ASSISTANCE_DETACHED_RESULT_RECORDED"
+    );
+    const { sequence: _ignored, ...eventWithoutSequence } = detachedEvent;
+    const submission = {
+      requestId: "submit-detached-1",
+      task: completed,
+      expectedRevision: 1,
+      expectedFencingCounter: 1,
+      inbox: {
+        id: "submit-detached-1",
+        topic: "assistance.detached.result",
+        aggregateId: completed.task.taskId,
+        payload: {},
+        receivedAt: timestamp,
+        appliedAt: timestamp
+      },
+      event: eventWithoutSequence,
+      acknowledgeOutboxIds: [`effect:${completed.task.taskId}`]
+    };
+
+    expect(store.completeDetachedAssistanceTask(submission)).toEqual({
+      status: "accepted",
+      task: completed
+    });
+    expect(store.getRun(run.id)).toEqual(run);
+    expect(store.getEngineCheckpoint(run.id)).toEqual(terminalCheckpoint);
+    expect(store.getInboxMessage("submit-detached-1")).toMatchObject({
+      appliedAt: timestamp
+    });
+    expect(store.listEvents(run.id)).toMatchObject([
+      { sequence: 1, type: `RUN_${runStatus.toUpperCase()}` },
+      { sequence: 2, type: "ASSISTANCE_DETACHED_RESULT_RECORDED" }
+    ]);
+    expect(store.listPendingEngineOutbox()).toEqual([]);
+    expect(store.completeDetachedAssistanceTask(submission)).toEqual({
+      status: "duplicate",
+      task: completed
+    });
+    expect(
+      store.completeDetachedAssistanceTask({
+        ...submission,
+        requestId: "submit-detached-stale-lease",
+        inbox: {
+          ...submission.inbox,
+          id: "submit-detached-stale-lease"
+        },
+        expectedFencingCounter: 0,
+        task: {
+          ...completed,
+          fencingCounter: 0,
+          privateState: {
+            ...completed.privateState,
+            fencingCounter: 0
+          }
+        }
+      })
+    ).toEqual({ status: "stale" });
+    expect(store.listEvents(run.id)).toHaveLength(2);
+    store.close();
+    }
+  );
+
+  it("rolls back every detached-result record on an injected crash", () => {
+    let crash = false;
+    const store = new SqlitePersistence({
+      path: ":memory:",
+      failureInjector(point) {
+        if (crash && point === "detached_assistance.after_task") {
+          throw new Error("detached crash");
+        }
+      }
+    });
+    const run: RunRecord = {
+      id: "run-detached-crash",
+      workflowId: "test.workflow",
+      workflowVersion: "1.0.0",
+      workflowDigest: "sha256:workflow",
+      status: "succeeded",
+      revision: 1,
+      input: {},
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    const claimed = canonicalTask(run.id, "claimed", 1, 1, {
+      blocking: false
+    });
+    store.createRecoverableRun({
+      run,
+      planSnapshot: planSnapshot(run.id),
+      checkpoint: checkpoint(run.id),
+      assistanceTasks: [claimed],
+      outbox: [
+        {
+          id: `effect:${claimed.task.taskId}`,
+          topic: "assistance.requested",
+          aggregateId: claimed.task.taskId,
+          payload: {},
+          createdAt: timestamp
+        }
+      ],
+      event: event(run.id, 1, "RUN_SUCCEEDED")
+    });
+    const completed = canonicalTask(run.id, "completed", 2, 1, {
+      blocking: false
+    });
+    const detachedEvent = event(
+      run.id,
+      2,
+      "ASSISTANCE_DETACHED_RESULT_RECORDED"
+    );
+    const { sequence: _ignored, ...eventWithoutSequence } = detachedEvent;
+    crash = true;
+    expect(() =>
+      store.completeDetachedAssistanceTask({
+        requestId: "submit-detached-crash",
+        task: completed,
+        expectedRevision: 1,
+        expectedFencingCounter: 1,
+        inbox: {
+          id: "submit-detached-crash",
+          topic: "assistance.detached.result",
+          aggregateId: completed.task.taskId,
+          payload: {},
+          receivedAt: timestamp,
+          appliedAt: timestamp
+        },
+        event: eventWithoutSequence,
+        acknowledgeOutboxIds: [`effect:${completed.task.taskId}`]
+      })
+    ).toThrow("detached crash");
+    expect(store.getAssistanceTask(claimed.task.taskId)).toEqual(claimed);
+    expect(store.getInboxMessage("submit-detached-crash")).toBeUndefined();
+    expect(
+      store.getAssistanceRequestResult("submit-detached-crash")
+    ).toBeUndefined();
+    expect(store.listEvents(run.id)).toHaveLength(1);
+    expect(store.listPendingEngineOutbox()).toHaveLength(1);
+    expect(store.getRun(run.id)).toEqual(run);
     store.close();
   });
 

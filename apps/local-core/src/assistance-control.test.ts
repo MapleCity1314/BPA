@@ -249,6 +249,178 @@ describe("Local Core assistance control", () => {
     persistence.close();
   });
 
+  it("records a detached ambiguous-product review without regressing its terminal Run", async () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const service = new LocalCoreService(persistence);
+    for (const [assetType, path] of [
+      [
+        "policy",
+        "policies/core/packaging_match_review.validator.policy.json"
+      ],
+      [
+        "assistance_profile",
+        "assistance-profiles/core/packaging_match_review.assistance-profile.json"
+      ]
+    ] as const) {
+      expect(
+        service.handle({
+          id: `publish-detached-${assetType}`,
+          method: "asset.publish",
+          params: {
+            assetType,
+            content: readAsset(path),
+            actor: "test"
+          }
+        })
+      ).toMatchObject({ ok: true });
+    }
+    const published = persistence.getPublished(
+      "assistance_profile",
+      "packaging_match_review",
+      "1.0.0"
+    );
+    if (!published) throw new Error("Profile fixture was not published");
+    const profile = {
+      kind: "assistance_profile" as const,
+      id: published.assetId,
+      version: published.version,
+      digest: published.digest
+    };
+    const batchRef = `sha256:${digest("5")}`;
+    const productRef = `sha256:${digest("6")}`;
+    const candidateRef = `sha256:${digest("7")}`;
+    const recordDigest = `sha256:${digest("8")}`;
+    const plan: ExecutionPlan = {
+      irVersion: "bpa.workflow-ir/2",
+      workflow: {
+        id: "test.detached-packaging-review",
+        version: "1.0.0",
+        digest: `sha256:${digest("d")}`
+      },
+      artifactClosure: { entries: [profile] },
+      riskSnapshot: [],
+      limits: { maxDepth: 1, maxStepExecutions: 10 },
+      entry: "review",
+      steps: {
+        review: {
+          kind: "wait.assistance",
+          key: "review",
+          taskKind: "ai_review",
+          profile,
+          deadlineMs: 60_000,
+          onUnavailable: "continue_unresolved",
+          blocking: false,
+          input: {
+            kind: "literal",
+            value: {
+              batchRef,
+              items: [
+                {
+                  productRef,
+                  productId: "ambiguous-product-1",
+                  candidates: [
+                    {
+                      candidateRef,
+                      recordId: "record-1",
+                      recordDigest
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          next: "done"
+        },
+        done: { kind: "terminal", key: "done", status: "succeeded" }
+      }
+    };
+    const run = service.ir2Runtime.start(plan, {});
+    const terminalRun = persistence.getRun(run.id);
+    const terminalCheckpoint = persistence.getEngineCheckpoint(run.id);
+    expect(terminalRun).toMatchObject({ status: "succeeded" });
+    const queued = persistence.listAssistanceTasks({ limit: 1 })[0];
+    if (!queued) throw new Error("Detached review task was not created");
+    expect(
+      await service.assistance.claim({
+        taskId: queued.task.taskId,
+        requestId: "claim-detached-packaging-review",
+        leaseId: "lease-detached-packaging-review",
+        actorId: "codex",
+        actorType: "ai",
+        now: "2026-07-28T00:00:01.000Z",
+        leaseDurationMs: 10_000
+      })
+    ).toMatchObject({ ok: true });
+
+    const submitInput = {
+      taskId: queued.task.taskId,
+      requestId: "submit-detached-packaging-review",
+      proof: {
+        leaseId: "lease-detached-packaging-review",
+        ownerId: "codex",
+        fencingToken: 1
+      },
+      now: "2026-07-28T00:00:02.000Z",
+      output: {
+        batchRef,
+        decisions: [
+          {
+            productRef,
+            productId: "ambiguous-product-1",
+            status: "selected" as const,
+            candidateRef,
+            recordId: "record-1",
+            recordDigest
+          }
+        ]
+      },
+      resolverType: "ai" as const,
+      resolverId: "codex"
+    };
+    const submitted = await service.assistance.submit(submitInput);
+    expect(submitted).toMatchObject({
+      ok: true,
+      duplicate: false,
+      task: { status: "completed" },
+      autoContinue: {
+        allowed: true,
+        reason: "R1_POLICY_APPROVED_AND_VALIDATED"
+      }
+    });
+    expect(persistence.getRun(run.id)).toEqual(terminalRun);
+    expect(persistence.getEngineCheckpoint(run.id)).toEqual(terminalCheckpoint);
+    expect(
+      persistence.getInboxMessage("submit-detached-packaging-review")
+    ).toMatchObject({
+      topic: "assistance.detached.result",
+      aggregateId: queued.task.taskId
+    });
+    expect(
+      persistence
+        .listEvents(run.id)
+        .filter((event) => event.type === "ASSISTANCE_DETACHED_RESULT_RECORDED")
+    ).toHaveLength(1);
+
+    expect(await service.assistance.submit(submitInput)).toMatchObject({
+      ok: true,
+      duplicate: true,
+      task: {
+        status: "completed",
+        resolution: {
+          output: {
+            decisions: [{ productId: "ambiguous-product-1" }]
+          }
+        }
+      }
+    });
+    expect(
+      persistence
+        .listEvents(run.id)
+        .filter((event) => event.type === "ASSISTANCE_DETACHED_RESULT_RECORDED")
+    ).toHaveLength(1);
+    persistence.close();
+  });
+
   it("lists, claims and submits a human task through the control boundary", async () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const service = new LocalCoreService(persistence);

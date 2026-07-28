@@ -290,6 +290,7 @@ export interface AssistanceTaskPrivateStateRecord {
   heartbeatAt?: string;
   ownerType?: "ai" | "human";
   fencingCounter: number;
+  blocking?: boolean;
   terminalReason?: string;
 }
 
@@ -341,6 +342,16 @@ export interface CommitAssistanceTaskRequestInput {
   recordedAt: string;
 }
 
+export interface CompleteDetachedAssistanceInput {
+  requestId: string;
+  task: AssistanceTaskRecord;
+  expectedRevision: number;
+  expectedFencingCounter: number;
+  inbox: InboxMessageRecord;
+  event: Omit<ExecutionEventRecord, "sequence">;
+  acknowledgeOutboxIds?: readonly string[];
+}
+
 export type CommitAssistanceTaskRequestResult =
   | {
       status: "accepted" | "duplicate";
@@ -372,6 +383,9 @@ export interface AssistanceUnitOfWork {
   }): { status: "accepted"; task: AssistanceTaskRecord } | { status: "stale" };
   commitAssistanceTaskRequest(
     input: CommitAssistanceTaskRequestInput
+  ): CommitAssistanceTaskRequestResult;
+  completeDetachedAssistanceTask(
+    input: CompleteDetachedAssistanceInput
   ): CommitAssistanceTaskRequestResult;
   getAssistanceTask(taskId: string): AssistanceTaskRecord | undefined;
   listAssistanceTasks(
