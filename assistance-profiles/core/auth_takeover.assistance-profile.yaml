@@ -1,0 +1,36 @@
+apiVersion: bpa.assistance/v1alpha1
+kind: AssistanceProfile
+metadata:
+  id: auth_takeover
+  version: 1.0.0
+  title: 浏览器登录与风控人工接管
+  description: 当抖店出现登录、验证码或平台风控时暂停自动执行，由当前用户在受控标签页内处理。
+taskKind: human_action
+riskLevel: R2
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - resolved
+    - action
+  properties:
+    resolved:
+      type: boolean
+    action:
+      enum:
+        - login
+        - captcha
+        - risk_control
+        - session_refresh
+    note:
+      type: string
+      maxLength: 1000
+policySnapshot:
+  autoContinue: false
+  r1ProfileApproved: false
+  durableDecision: false
+  onUnavailable: fail
+instructions:
+  - 只在 Extension 显示的固定标签页和 Origin 内处理登录、验证码或风险提示。
+  - 不修改商品字段、不保存、不发布。
+  - 页面恢复正常后再提交；无法确认时保持 unresolved 并取消当前 Run。

@@ -1,0 +1,38 @@
+apiVersion: bpa.assistance/v1alpha1
+kind: AssistanceProfile
+metadata:
+  id: scope_review
+  version: 1.0.0
+  title: 店铺与商品范围批量确认
+  description: 在店铺稳定 ID、筛选条件或数量指纹无法自动确认时，由用户一次确认当前只读检查范围。
+taskKind: human_confirm
+riskLevel: R2
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - approved
+    - shopId
+    - scopeDigest
+  properties:
+    approved:
+      type: boolean
+    shopId:
+      type: string
+      minLength: 1
+      maxLength: 200
+    scopeDigest:
+      type: string
+      pattern: ^sha256:[a-f0-9]{64}$
+    note:
+      type: string
+      maxLength: 1000
+policySnapshot:
+  autoContinue: false
+  r1ProfileApproved: false
+  durableDecision: false
+  onUnavailable: fail
+instructions:
+  - 对照当前店铺、状态页签、筛选条件、顶部和底部总数后一次确认。
+  - shopId 与 scopeDigest 必须逐字保留任务输入中的引用。
+  - 任一信息不一致时拒绝确认，不能猜测或自动换店。

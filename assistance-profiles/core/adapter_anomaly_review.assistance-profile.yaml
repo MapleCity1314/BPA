@@ -1,0 +1,47 @@
+apiVersion: bpa.assistance/v1alpha1
+kind: AssistanceProfile
+metadata:
+  id: adapter_anomaly_review
+  version: 1.0.0
+  title: 页面结构异常分析
+  description: 汇总只读 Adapter 的结构异常，供 Codex 或人工判断是页面未稳定、页面升级还是能力缺口。
+taskKind: ai_review
+riskLevel: R1
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - classification
+    - recommendedAction
+    - evidenceRefs
+  properties:
+    classification:
+      enum:
+        - page_not_stable
+        - adapter_drift
+        - unsupported_page
+        - insufficient_evidence
+    recommendedAction:
+      enum:
+        - retry_later
+        - request_human
+        - create_adapter_candidate
+        - keep_unresolved
+    evidenceRefs:
+      type: array
+      maxItems: 100
+      items:
+        type: string
+        pattern: ^sha256:[a-f0-9]{64}$
+    explanation:
+      type: string
+      maxLength: 2000
+policySnapshot:
+  autoContinue: false
+  r1ProfileApproved: false
+  durableDecision: false
+  onUnavailable: human_action
+instructions:
+  - 只能依据任务提供的脱敏快照、错误码和已发布 Adapter 版本判断。
+  - 不得生成 selector、XPath、JavaScript、坐标或写页面动作。
+  - 结论只创建 Candidate 或人工任务，不能自动发布 Adapter。
