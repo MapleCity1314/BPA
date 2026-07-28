@@ -41,6 +41,13 @@ function call(key: string, routes: CallRoutes): ExecutionStep {
     kind: "call",
     key,
     node,
+    schemaContract: {
+      nodeDigest: node.digest,
+      inputSchema: { type: "object" },
+      inputSchemaDigest: digest("1"),
+      outputSchema: { type: "object" },
+      outputSchemaDigest: digest("2")
+    },
     providerId: "test",
     permissionSnapshot: permissions,
     dependencies: {
@@ -299,6 +306,11 @@ describe("deterministic IR2 engine", () => {
       stepKey: "inspect",
       attempt: 1
     });
+    expect(first.invocation.schemaContract).toMatchObject({
+      nodeDigest: node.digest,
+      inputSchemaDigest: digest("1"),
+      outputSchemaDigest: digest("2")
+    });
 
     transition = engine.acceptRuntimeOutcome({
       state: transition.state,
@@ -401,6 +413,42 @@ describe("deterministic IR2 engine", () => {
         outcome: succeeded(null)
       }).disposition
     ).toBe("stale");
+  });
+
+  it("never retries a failed outcome marked non-retryable", () => {
+    const engine = new DeterministicWorkflowEngine(
+      planWithForeach(),
+      dependencies()
+    );
+    const waiting = engine.start("run-fail-closed", {
+      items: [{ id: "a" }]
+    });
+    const active = waiting.state.active;
+    if (active?.kind !== "call") throw new Error("fixture changed");
+
+    const failed = engine.acceptRuntimeOutcome({
+      state: waiting.state,
+      invocationId: active.invocation.invocationId,
+      fencingToken: active.invocation.fencingToken,
+      outcome: {
+        status: "failed",
+        error: {
+          code: "RETRY",
+          message: "contract failure",
+          retryable: false
+        },
+        evidence: [],
+        riskSignals: []
+      }
+    });
+
+    expect(failed.state.status).toBe("succeeded");
+    expect(failed.state.completedExternalIds).toEqual([
+      active.invocation.invocationId
+    ]);
+    expect(
+      failed.effects.filter((effect) => effect.kind === "runtime.invoke")
+    ).toEqual([]);
   });
 
   it("caps an in-flight first item at the earliest ancestor foreach deadline", () => {

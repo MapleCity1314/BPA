@@ -176,6 +176,27 @@ function normalizeStep(step: ExecutionStep): ExecutionStep {
         key: step.key.trim(),
         node: normalizeArtifactClosure({ entries: [step.node] })
           .entries[0]! as typeof step.node,
+        ...(step.schemaContract === undefined
+          ? {}
+          : {
+              schemaContract: {
+                nodeDigest: step.schemaContract.nodeDigest
+                  .trim()
+                  .toLowerCase(),
+                inputSchema: normalizeJsonValue(
+                  step.schemaContract.inputSchema
+                ) as Readonly<Record<string, JsonValue>>,
+                inputSchemaDigest: step.schemaContract.inputSchemaDigest
+                  .trim()
+                  .toLowerCase(),
+                outputSchema: normalizeJsonValue(
+                  step.schemaContract.outputSchema
+                ) as Readonly<Record<string, JsonValue>>,
+                outputSchemaDigest: step.schemaContract.outputSchemaDigest
+                  .trim()
+                  .toLowerCase()
+              }
+            }),
         providerId: step.providerId.trim(),
         permissionSnapshot: {
           riskLevel: step.permissionSnapshot.riskLevel,
@@ -903,6 +924,31 @@ function blockIssues(
               "providerId must be a non-empty stable identifier"
             )
           );
+        }
+        if (step.schemaContract) {
+          if (step.schemaContract.nodeDigest !== step.node.digest) {
+            issues.push(
+              issue(
+                "INVALID_VALUE",
+                `${stepPath}/schemaContract/nodeDigest`,
+                "Schema contract must be bound to the exact Call Node digest"
+              )
+            );
+          }
+          for (const [name, digest] of [
+            ["inputSchemaDigest", step.schemaContract.inputSchemaDigest],
+            ["outputSchemaDigest", step.schemaContract.outputSchemaDigest]
+          ] as const) {
+            if (!DIGEST_PATTERN.test(digest)) {
+              issues.push(
+                issue(
+                  "INVALID_VALUE",
+                  `${stepPath}/schemaContract/${name}`,
+                  `${name} must be a SHA-256 digest`
+                )
+              );
+            }
+          }
         }
         if (
           new Set(step.permissionSnapshot.permissions).size !==

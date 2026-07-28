@@ -166,6 +166,13 @@ describe("IR2 compiler", () => {
     expect(collect).toMatchObject({
       kind: "call",
       providerId: "browser",
+      schemaContract: {
+        nodeDigest: contentDigest(browserNode("scope.collect")),
+        inputSchema: { type: "object" },
+        inputSchemaDigest: contentDigest({ type: "object" }),
+        outputSchema: { type: "object" },
+        outputSchemaDigest: contentDigest({ type: "object" })
+      },
       timeoutMs: 120_000,
       permissionSnapshot: {
         riskLevel: "R1",
@@ -295,6 +302,11 @@ describe("IR2 compiler", () => {
         start: {
           kind: "call",
           providerId: "builtin",
+          schemaContract: {
+            nodeDigest: contentDigest(builtin("control.start")),
+            inputSchemaDigest: contentDigest({ type: "object" }),
+            outputSchemaDigest: contentDigest({ type: "object" })
+          },
           routes: { succeeded: "finish" }
         },
         finish: { kind: "terminal", status: "succeeded" }

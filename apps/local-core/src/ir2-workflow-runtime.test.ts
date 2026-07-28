@@ -15,10 +15,17 @@ import {
   RuntimeProviderRegistry,
   type RuntimeProvider
 } from "@bpa/node-runtime";
+import { contentDigest } from "@bpa/compiler";
 import type { EngineState, TimerRequest } from "@bpa/engine";
 import type { AssistanceTaskRecord } from "@bpa/persistence";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
-import type { ArtifactRef, ExecutionPlan } from "@bpa/workflow-ir";
+import type {
+  ArtifactRef,
+  ExecutionPlan,
+  JsonValue,
+  RuntimeNodeSchemaContract
+} from "@bpa/workflow-ir";
+import type { NodeDefinition } from "@bpa/schemas";
 import { Ir2WorkflowRuntime } from "./ir2-workflow-runtime.js";
 
 const digest = (character: string): string => character.repeat(64);
@@ -29,7 +36,45 @@ const node: ArtifactRef & { kind: "node" } = {
   digest: digest("a")
 };
 
-function plan(providerId = "builtin"): ExecutionPlan {
+const validInputSchema = {
+  type: "object",
+  required: ["value"],
+  additionalProperties: false,
+  properties: {
+    value: {
+      type: "object",
+      required: ["recovered"],
+      properties: { recovered: { type: "boolean" } }
+    }
+  }
+} as const;
+const validOutputSchema = {
+  type: "object",
+  required: ["recovered"],
+  additionalProperties: false,
+  properties: { recovered: { type: "boolean" } }
+} as const;
+
+function contract(
+  inputSchema: Readonly<Record<string, JsonValue>> = validInputSchema,
+  outputSchema: Readonly<Record<string, JsonValue>> = validOutputSchema
+): RuntimeNodeSchemaContract {
+  return {
+    nodeDigest: node.digest,
+    inputSchema,
+    inputSchemaDigest: contentDigest(inputSchema),
+    outputSchema,
+    outputSchemaDigest: contentDigest(outputSchema)
+  };
+}
+
+function plan(
+  providerId = "builtin",
+  options: {
+    schemaContract?: RuntimeNodeSchemaContract;
+    maxAttempts?: number;
+  } = {}
+): ExecutionPlan {
   return {
     irVersion: "bpa.workflow-ir/2",
     workflow: {
@@ -46,6 +91,7 @@ function plan(providerId = "builtin"): ExecutionPlan {
         kind: "call",
         key: "constant",
         node,
+        schemaContract: options.schemaContract ?? contract(),
         providerId,
         permissionSnapshot: {
           riskLevel: "R0",
@@ -68,8 +114,8 @@ function plan(providerId = "builtin"): ExecutionPlan {
         },
         timeoutMs: 1_000,
         retry: {
-          maxAttempts: 1,
-          retryableOutcomes: [],
+          maxAttempts: options.maxAttempts ?? 1,
+          retryableOutcomes: ["failed"],
           retryableErrorCodes: [],
           backoff: {
             strategy: "fixed",
@@ -100,6 +146,47 @@ function plan(providerId = "builtin"): ExecutionPlan {
         key: "uncertain",
         status: "uncertain"
       }
+    }
+  };
+}
+
+const legacyNodeDefinition: NodeDefinition = {
+  apiVersion: "bpa/v1alpha1",
+  kind: "Node",
+  metadata: {
+    id: "data.constant",
+    version: "1.0.0",
+    title: "Legacy constant"
+  },
+  runtime: "engine_builtin",
+  inputSchema: validInputSchema,
+  outputSchema: validOutputSchema,
+  risk: { level: "R0", permissions: [] },
+  execution: {
+    timeoutDefault: "1s",
+    idempotency: "pure",
+    cancellable: true
+  },
+  errors: []
+};
+
+function legacyPlan(providerId = "builtin"): ExecutionPlan {
+  const current = plan(providerId);
+  const call = current.steps.constant;
+  if (call?.kind !== "call") throw new Error("fixture changed");
+  const { schemaContract: _schemaContract, ...legacyCall } = call;
+  const legacyNode = {
+    kind: "node" as const,
+    id: legacyNodeDefinition.metadata.id,
+    version: legacyNodeDefinition.metadata.version,
+    digest: contentDigest(legacyNodeDefinition)
+  };
+  return {
+    ...current,
+    artifactClosure: { entries: [legacyNode] },
+    steps: {
+      ...current.steps,
+      constant: { ...legacyCall, node: legacyNode }
     }
   };
 }
@@ -220,6 +307,234 @@ describe("Local Core IR2 runtime", () => {
     await expect(restarted.drainOnce()).resolves.toBe(0);
     persistence.close();
   });
+
+  it.each(["builtin", "team", "browser"])(
+    "rejects invalid frozen input before invoking the %s provider",
+    async (providerId) => {
+      const persistence = new SqlitePersistence({ path: ":memory:" });
+      let invocations = 0;
+      const providers = new RuntimeProviderRegistry();
+      providers.register({
+        id: providerId,
+        supports: () => true,
+        invoke: async () => {
+          invocations += 1;
+          return {
+            status: "succeeded",
+            output: { recovered: true },
+            evidence: [],
+            riskSignals: []
+          };
+        }
+      });
+      const invalidInputSchema = {
+        type: "object",
+        required: ["value"],
+        properties: { value: { type: "string" } }
+      } as const;
+      const runtime = new Ir2WorkflowRuntime(persistence, providers, {
+        now: () => 1_000,
+        id: ids(),
+        random: () => 0.5
+      });
+      const run = runtime.start(
+        plan(providerId, {
+          schemaContract: contract(
+            invalidInputSchema,
+            validOutputSchema
+          ),
+          maxAttempts: 3
+        }),
+        {}
+      );
+      const active = (
+        persistence.getEngineCheckpoint(run.id)?.state as unknown as EngineState
+      ).active;
+      if (active?.kind !== "call") throw new Error("fixture changed");
+
+      await expect(runtime.drainOnce()).resolves.toBe(1);
+      expect(invocations).toBe(0);
+      expect(persistence.getRun(run.id)).toMatchObject({
+        status: "failed",
+        revision: 1
+      });
+      expect(persistence.listPendingEngineOutbox()).toEqual([]);
+      expect(persistence.listEvents(run.id).at(-1)).toMatchObject({
+        type: "RUNTIME_SCHEMA_VALIDATION_FAILED",
+        payload: { errorCode: "RUNTIME_INPUT_SCHEMA_INVALID" }
+      });
+      expect(
+        persistence.getInboxMessage(
+          `result:${active.invocation.invocationId}`
+        )?.payload
+      ).toMatchObject({
+        status: "failed",
+        error: {
+          code: "RUNTIME_INPUT_SCHEMA_INVALID",
+          retryable: false
+        }
+      });
+      persistence.close();
+    }
+  );
+
+  it("fails closed and audits an invalid successful provider output", async () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    let invocations = 0;
+    const providers = new RuntimeProviderRegistry();
+    providers.register({
+      id: "team",
+      supports: () => true,
+      invoke: async () => {
+        invocations += 1;
+        return {
+          status: "succeeded",
+          output: { recovered: "not-a-boolean" },
+          evidence: [],
+          riskSignals: []
+        };
+      }
+    });
+    const runtime = new Ir2WorkflowRuntime(persistence, providers, {
+      now: () => 1_000,
+      id: ids(),
+      random: () => 0.5
+    });
+    const run = runtime.start(plan("team", { maxAttempts: 3 }), {});
+    const active = (
+      persistence.getEngineCheckpoint(run.id)?.state as unknown as EngineState
+    ).active;
+    if (active?.kind !== "call") throw new Error("fixture changed");
+
+    await expect(runtime.drainOnce()).resolves.toBe(1);
+    expect(invocations).toBe(1);
+    expect(persistence.getRun(run.id)).toMatchObject({
+      status: "failed",
+      revision: 1
+    });
+    expect(persistence.listPendingEngineOutbox()).toEqual([]);
+    expect(
+      persistence.getInboxMessage(
+        `result:${active.invocation.invocationId}`
+      )?.payload
+    ).toMatchObject({
+      status: "failed",
+      output: { recovered: "not-a-boolean" },
+      error: {
+        code: "RUNTIME_OUTPUT_SCHEMA_INVALID",
+        retryable: false,
+        details: {
+          schemaDigest: contract().outputSchemaDigest,
+          valueDigest: expect.stringMatching(/^sha256:/)
+        }
+      }
+    });
+    expect(persistence.listEvents(run.id).at(-1)).toMatchObject({
+      type: "RUNTIME_SCHEMA_VALIDATION_FAILED",
+      payload: { errorCode: "RUNTIME_OUTPUT_SCHEMA_INVALID" }
+    });
+    persistence.close();
+  });
+
+  it("backfills a pre-contract snapshot only from an exact published Node after restart", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "bpa-ir2-contract-"));
+    const databasePath = join(directory, "core.db");
+    try {
+      const firstPersistence = new SqlitePersistence({ path: databasePath });
+      firstPersistence.publish({
+        assetType: "node",
+        assetId: legacyNodeDefinition.metadata.id,
+        version: legacyNodeDefinition.metadata.version,
+        digest: contentDigest(legacyNodeDefinition),
+        content: legacyNodeDefinition,
+        actor: "test"
+      });
+      const first = new Ir2WorkflowRuntime(
+        firstPersistence,
+        new RuntimeProviderRegistry(),
+        { now: () => 1_000, id: ids(), random: () => 0.5 }
+      );
+      const run = first.start(legacyPlan(), {});
+      expect(
+        (
+          firstPersistence.getRunPlanSnapshot(run.id)?.planJson.steps
+            .constant as { schemaContract?: unknown }
+        ).schemaContract
+      ).toBeUndefined();
+      firstPersistence.close();
+
+      const reopened = new SqlitePersistence({ path: databasePath });
+      const providers = new RuntimeProviderRegistry();
+      providers.register(new BuiltinRuntimeProvider());
+      const restarted = new Ir2WorkflowRuntime(reopened, providers, {
+        now: () => 1_001,
+        id: ids(),
+        random: () => 0.5
+      });
+      expect(restarted.recover(run.id)).toMatchObject({
+        status: "waiting_runtime"
+      });
+      await expect(restarted.drainOnce()).resolves.toBe(1);
+      expect(reopened.getRun(run.id)).toMatchObject({
+        status: "succeeded",
+        output: { recovered: true }
+      });
+      reopened.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["missing", "drifted"] as const)(
+    "fails closed when a pre-contract snapshot Node is %s",
+    async (mode) => {
+      const persistence = new SqlitePersistence({ path: ":memory:" });
+      if (mode === "drifted") {
+        const drifted = {
+          ...legacyNodeDefinition,
+          outputSchema: { type: "string" }
+        };
+        persistence.publish({
+          assetType: "node",
+          assetId: drifted.metadata.id,
+          version: drifted.metadata.version,
+          digest: contentDigest(drifted),
+          content: drifted,
+          actor: "test"
+        });
+      }
+      let invocations = 0;
+      const providers = new RuntimeProviderRegistry();
+      providers.register({
+        id: "builtin",
+        supports: () => true,
+        invoke: async () => {
+          invocations += 1;
+          return {
+            status: "succeeded",
+            output: { recovered: true },
+            evidence: [],
+            riskSignals: []
+          };
+        }
+      });
+      const runtime = new Ir2WorkflowRuntime(persistence, providers, {
+        now: () => 1_000,
+        id: ids(),
+        random: () => 0.5
+      });
+      const run = runtime.start(legacyPlan(), {});
+      await expect(runtime.drainOnce()).resolves.toBe(1);
+
+      expect(invocations).toBe(0);
+      expect(persistence.getRun(run.id)).toMatchObject({ status: "failed" });
+      expect(persistence.listEvents(run.id).at(-1)).toMatchObject({
+        type: "RUNTIME_SCHEMA_VALIDATION_FAILED",
+        payload: { errorCode: "RUNTIME_NODE_CONTRACT_UNAVAILABLE" }
+      });
+      persistence.close();
+    }
+  );
 
   it("times out an expired persisted invocation without calling its provider", async () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });

@@ -26,6 +26,7 @@ import {
   type PermissionSnapshot,
   type ResolvedRetryPolicy,
   type ResolvedTimingPolicy,
+  type RuntimeNodeSchemaContract,
   type TerminalStep
 } from "@bpa/workflow-ir";
 import {
@@ -103,6 +104,29 @@ function toArtifact(
     id: definition.metadata.id,
     version: definition.metadata.version,
     digest: contentDigest(definition)
+  };
+}
+
+function jsonSchema(
+  value: Record<string, unknown>
+): Readonly<Record<string, JsonValue>> {
+  return JSON.parse(JSON.stringify(value)) as Readonly<
+    Record<string, JsonValue>
+  >;
+}
+
+function schemaContract(
+  definition: NodeDefinition,
+  artifact: ArtifactRef & { kind: "node" }
+): RuntimeNodeSchemaContract {
+  const inputSchema = jsonSchema(definition.inputSchema);
+  const outputSchema = jsonSchema(definition.outputSchema);
+  return {
+    nodeDigest: artifact.digest,
+    inputSchema,
+    inputSchemaDigest: contentDigest(inputSchema),
+    outputSchema,
+    outputSchemaDigest: contentDigest(outputSchema)
   };
 }
 
@@ -780,6 +804,10 @@ class IrBuilder {
       kind: "call",
       key,
       node: resolved.artifact,
+      schemaContract: schemaContract(
+        resolved.definition,
+        resolved.artifact
+      ),
       providerId: resolved.execution.providerId,
       permissionSnapshot: permissionSnapshot(
         resolved.definition,
@@ -1131,6 +1159,7 @@ export function compileWorkflowV1Alpha1ToIr2(
       kind: "call",
       key,
       node: artifact,
+      schemaContract: schemaContract(definition, artifact),
       providerId: execution.providerId,
       permissionSnapshot: permissionSnapshot(definition, execution),
       dependencies: {

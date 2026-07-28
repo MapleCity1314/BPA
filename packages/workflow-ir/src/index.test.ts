@@ -72,6 +72,13 @@ function callStep(
     kind: "call",
     key,
     node,
+    schemaContract: {
+      nodeDigest: node.digest,
+      inputSchema: { type: "object" },
+      inputSchemaDigest: digest("1"),
+      outputSchema: { type: "object" },
+      outputSchemaDigest: digest("2")
+    },
     providerId: "browser",
     permissionSnapshot: {
       riskLevel: "R0",
@@ -515,6 +522,27 @@ describe("execution plan", () => {
         }),
         expect.objectContaining({
           path: "/steps/collect/input/entries/run/stepKey"
+        })
+      ])
+    );
+  });
+
+  it("binds frozen Runtime Schemas to the exact Call Node digest", () => {
+    const plan = mutablePlan();
+    const call = plan.steps.collect;
+    if (call?.kind !== "call" || !call.schemaContract) {
+      throw new Error("test fixture changed");
+    }
+    call.schemaContract.nodeDigest = digest("9");
+    call.schemaContract.outputSchemaDigest = "not-a-digest";
+
+    expect(executionPlanIssues(plan)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "/steps/collect/schemaContract/nodeDigest"
+        }),
+        expect.objectContaining({
+          path: "/steps/collect/schemaContract/outputSchemaDigest"
         })
       ])
     );

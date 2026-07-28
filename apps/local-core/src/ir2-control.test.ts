@@ -190,6 +190,18 @@ describe("Local Core IR2 control integration", () => {
       result: { status: "running" }
     });
     const runId = (created.result as { id: string }).id;
+    expect(
+      persistence.getRunPlanSnapshot(runId)?.planJson.steps.invoke
+    ).toMatchObject({
+      kind: "call",
+      schemaContract: {
+        nodeDigest: contentDigest(constantNode),
+        inputSchema: constantNode.inputSchema,
+        inputSchemaDigest: contentDigest(constantNode.inputSchema),
+        outputSchema: constantNode.outputSchema,
+        outputSchemaDigest: contentDigest(constantNode.outputSchema)
+      }
+    });
     await expect(service.ir2Runtime.drainOnce()).resolves.toBe(1);
     expect(persistence.getRun(runId)).toMatchObject({
       status: "succeeded",

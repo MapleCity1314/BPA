@@ -202,6 +202,15 @@ export interface CallRoutes {
   readonly uncertain: StepKey;
 }
 
+export interface RuntimeNodeSchemaContract {
+  /** Binds the copied Schemas to the exact immutable Node artifact. */
+  readonly nodeDigest: string;
+  readonly inputSchema: Readonly<Record<string, JsonValue>>;
+  readonly inputSchemaDigest: string;
+  readonly outputSchema: Readonly<Record<string, JsonValue>>;
+  readonly outputSchemaDigest: string;
+}
+
 export interface PermissionSnapshot {
   readonly riskLevel: "R0" | "R1" | "R2" | "R3" | "R4";
   readonly permissions: readonly string[];
@@ -213,6 +222,11 @@ export interface PermissionSnapshot {
 export interface CallStep extends StepBase {
   readonly kind: "call";
   readonly node: ArtifactRef & { readonly kind: "node" };
+  /**
+   * New compilers always freeze this contract. It remains optional only so
+   * persisted pre-contract IR2 plans can recover through exact Node backfill.
+   */
+  readonly schemaContract?: RuntimeNodeSchemaContract;
   readonly providerId: string;
   readonly permissionSnapshot: PermissionSnapshot;
   readonly dependencies: CallDependencies;

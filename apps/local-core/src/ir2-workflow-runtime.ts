@@ -35,6 +35,11 @@ import type {
   RunStatus
 } from "@bpa/persistence";
 import type { ExecutionPlan, JsonValue } from "@bpa/workflow-ir";
+import {
+  resolveRuntimeNodeSchemaContract,
+  runtimeSchemaErrors,
+  runtimeSchemaFailure
+} from "./runtime-schema-contract.js";
 
 export interface Ir2RuntimeOptions {
   now?: () => number;
@@ -286,31 +291,68 @@ export class Ir2WorkflowRuntime {
           riskSignals: []
         };
       } else {
-        const timeoutMs =
-          effect.invocation.deadlineAt - dispatchStartedAt;
-        const controller = new AbortController();
-        const timer = this.#schedule(() => controller.abort(), timeoutMs);
-        try {
-          outcome = await dispatchRuntimeEffect(
-            this.#providers,
-            effect,
-            controller.signal
-          );
-        } catch (error) {
-          outcome = {
-            status: controller.signal.aborted ? "timed_out" : "failed",
-            error: {
-              code: controller.signal.aborted
-                ? "RUNTIME_DEADLINE_EXCEEDED"
-                : "RUNTIME_PROVIDER_FAILED",
-              message: error instanceof Error ? error.message : String(error),
-              retryable: !controller.signal.aborted
-            },
-            evidence: [],
-            riskSignals: []
+        const resolved = resolveRuntimeNodeSchemaContract(
+          this.#persistence,
+          effect.invocation
+        );
+        if (!resolved.ok) {
+          outcome = runtimeSchemaFailure({
+            code: "RUNTIME_NODE_CONTRACT_UNAVAILABLE",
+            message:
+              "The frozen Runtime Node Schema contract is unavailable or invalid.",
+            invocation: effect.invocation,
+            errors: resolved.errors
+          });
+        } else {
+          const invocation = {
+            ...effect.invocation,
+            schemaContract: resolved.contract
           };
-        } finally {
-          this.#cancelScheduled(timer);
+          const inputErrors = runtimeSchemaErrors(
+            resolved.contract.inputSchema,
+            invocation.input
+          );
+          if (inputErrors.length > 0) {
+            outcome = runtimeSchemaFailure({
+              code: "RUNTIME_INPUT_SCHEMA_INVALID",
+              message:
+                "Runtime invocation input does not satisfy the frozen Node Schema.",
+              invocation,
+              schemaDigest: resolved.contract.inputSchemaDigest,
+              errors: inputErrors
+            });
+          } else {
+            const timeoutMs =
+              invocation.deadlineAt - dispatchStartedAt;
+            const controller = new AbortController();
+            const timer = this.#schedule(
+              () => controller.abort(),
+              timeoutMs
+            );
+            try {
+              outcome = await dispatchRuntimeEffect(
+                this.#providers,
+                { ...effect, invocation },
+                controller.signal
+              );
+            } catch (error) {
+              outcome = {
+                status: controller.signal.aborted ? "timed_out" : "failed",
+                error: {
+                  code: controller.signal.aborted
+                    ? "RUNTIME_DEADLINE_EXCEEDED"
+                    : "RUNTIME_PROVIDER_FAILED",
+                  message:
+                    error instanceof Error ? error.message : String(error),
+                  retryable: !controller.signal.aborted
+                },
+                evidence: [],
+                riskSignals: []
+              };
+            } finally {
+              this.#cancelScheduled(timer);
+            }
+          }
         }
       }
       const disposition = this.acceptRuntimeResult({
@@ -341,25 +383,83 @@ export class Ir2WorkflowRuntime {
     const plan = this.#persistence.getRunPlanSnapshot(input.runId);
     const checkpoint = this.#persistence.getEngineCheckpoint(input.runId);
     if (!run || !plan || !checkpoint) return "stale";
+    const state = checkpoint.state as unknown as EngineState;
+    const active = state.active;
+    let outcome = input.outcome;
+    if (
+      active?.kind === "call" &&
+      active.invocation.invocationId === input.invocationId &&
+      active.invocation.fencingToken === input.fencingToken &&
+      outcome.status === "succeeded"
+    ) {
+      const resolved = resolveRuntimeNodeSchemaContract(
+        this.#persistence,
+        active.invocation
+      );
+      if (!resolved.ok) {
+        outcome = runtimeSchemaFailure({
+          code: "RUNTIME_NODE_CONTRACT_UNAVAILABLE",
+          message:
+            "The frozen Runtime Node Schema contract is unavailable or invalid.",
+          invocation: active.invocation,
+          errors: resolved.errors,
+          output: outcome.output
+        });
+      } else {
+        const outputErrors = runtimeSchemaErrors(
+          resolved.contract.outputSchema,
+          outcome.output
+        );
+        if (outputErrors.length > 0) {
+          outcome = runtimeSchemaFailure({
+            code: "RUNTIME_OUTPUT_SCHEMA_INVALID",
+            message:
+              "Runtime provider output does not satisfy the frozen Node Schema.",
+            invocation: active.invocation,
+            schemaDigest: resolved.contract.outputSchemaDigest,
+            errors: outputErrors,
+            output: outcome.output
+          });
+        }
+      }
+    }
     const transition = this.#engine(plan.planJson).acceptRuntimeOutcome({
-      state: checkpoint.state as unknown as EngineState,
+      state,
       invocationId: input.invocationId,
       fencingToken: input.fencingToken,
-      outcome: input.outcome
+      outcome
     });
     if (transition.disposition !== "advanced") return transition.disposition;
+    const schemaFailureCode =
+      outcome.status !== "succeeded" &&
+      outcome.error.code.startsWith("RUNTIME_") &&
+      (outcome.error.code.includes("_SCHEMA_") ||
+        outcome.error.code === "RUNTIME_NODE_CONTRACT_UNAVAILABLE")
+        ? outcome.error.code
+        : undefined;
+    const timestamp = new Date(this.#now()).toISOString();
     this.#commitTransition({
       run,
       checkpoint,
       transition,
-      eventType: "RUNTIME_RESULT_APPLIED",
+      eventType: schemaFailureCode
+        ? "RUNTIME_SCHEMA_VALIDATION_FAILED"
+        : "RUNTIME_RESULT_APPLIED",
+      ...(schemaFailureCode
+        ? {
+            eventPayload: {
+              invocationId: input.invocationId,
+              errorCode: schemaFailureCode
+            }
+          }
+        : {}),
       inbox: {
         id: input.inboxMessageId,
         topic: "runtime.result",
         aggregateId: input.invocationId,
-        payload: jsonValue(input.outcome),
-        receivedAt: new Date(this.#now()).toISOString(),
-        appliedAt: new Date(this.#now()).toISOString()
+        payload: jsonValue(outcome),
+        receivedAt: timestamp,
+        appliedAt: timestamp
       },
       acknowledgeOutboxIds: [input.outboxId]
     });

@@ -221,9 +221,19 @@ describe("IR2 browser provider", () => {
         fencing_token: command.payload.fencing_token,
         status: "succeeded",
         output: {
-          shopId: "shop-1",
-          shopName: "测试店铺",
-          pageEpoch: "epoch-1"
+          supported: true,
+          shop: {
+            id: "shop-1",
+            name: "测试店铺",
+            identity_confirmed: true
+          },
+          tab_ref: {
+            browser_instance_id: "browser-ir2",
+            tab_id: 10,
+            window_id: 20,
+            origin: "https://fxg.jinritemai.com"
+          },
+          page_epoch: "epoch-1"
         },
         evidence_refs: []
       }
@@ -239,9 +249,19 @@ describe("IR2 browser provider", () => {
     expect(persistence.getRun(run.id)).toMatchObject({
       status: "succeeded",
       output: {
-        shopId: "shop-1",
-        shopName: "测试店铺",
-        pageEpoch: "epoch-1"
+        supported: true,
+        shop: {
+          id: "shop-1",
+          name: "测试店铺",
+          identity_confirmed: true
+        },
+        tab_ref: {
+          browser_instance_id: "browser-ir2",
+          tab_id: 10,
+          window_id: 20,
+          origin: "https://fxg.jinritemai.com"
+        },
+        page_epoch: "epoch-1"
       }
     });
     expect(persistence.listPendingEngineOutbox()).toEqual([]);

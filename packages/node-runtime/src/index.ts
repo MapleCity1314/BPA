@@ -3,7 +3,8 @@ import type {
   ArtifactRef,
   ExecutionIdentity,
   JsonValue,
-  PermissionSnapshot
+  PermissionSnapshot,
+  RuntimeNodeSchemaContract
 } from "@bpa/workflow-ir";
 
 /**
@@ -14,6 +15,7 @@ export interface RuntimeInvocation {
   readonly invocationId: string;
   readonly identity: ExecutionIdentity;
   readonly node: ArtifactRef & { readonly kind: "node" };
+  readonly schemaContract?: RuntimeNodeSchemaContract;
   readonly providerId: string;
   readonly input: JsonValue;
   readonly permissionSnapshot: PermissionSnapshot;

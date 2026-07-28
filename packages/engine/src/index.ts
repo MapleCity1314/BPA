@@ -369,6 +369,9 @@ function scheduleCall(
     invocationId: deps.ids.next("invocation"),
     identity,
     node: step.node,
+    ...(step.schemaContract
+      ? { schemaContract: step.schemaContract }
+      : {}),
     providerId: step.providerId,
     input: step.input ? resolveBinding(step.input, state) : {},
     permissionSnapshot: step.permissionSnapshot,
@@ -1029,6 +1032,7 @@ export class DeterministicWorkflowEngine {
     }
     const retryable =
       input.outcome.status !== "succeeded" &&
+      input.outcome.error.retryable &&
       step.retry.retryableOutcomes.some(
         (status) => status === input.outcome.status
       ) &&
