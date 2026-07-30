@@ -8,8 +8,12 @@
     "node": ">=24 <25"
   },
   "scripts": {
+    "runtime:check": "node scripts/assert-node24.mjs",
+    "prebuild": "pnpm runtime:check",
     "build": "tsc -p tsconfig.build.json && pnpm --filter @bpa/extension build",
+    "pretypecheck": "pnpm runtime:check",
     "typecheck": "tsc --noEmit && pnpm --filter @bpa/extension typecheck",
+    "pretest": "pnpm runtime:check",
     "test": "vitest run",
     "test:watch": "vitest",
     "schema:generate": "node scripts/generate-schema-types.mjs",
@@ -20,9 +24,13 @@
     "docs:build": "pnpm --filter @bpa/docs build",
     "docs:preview": "pnpm --filter @bpa/docs preview",
     "docs:check": "pnpm --filter @bpa/docs check",
+    "prebpa": "pnpm runtime:check",
     "bpa": "tsx apps/cli/src/main.ts",
+    "precore": "pnpm runtime:check",
     "core": "tsx apps/local-core/src/main.ts",
+    "prenative-host": "pnpm runtime:check",
     "native-host": "tsx apps/native-host/src/main.ts",
+    "premcp": "pnpm runtime:check",
     "mcp": "tsx apps/mcp-server/src/main.ts",
     "check": "pnpm repository:check && pnpm scripts:check && pnpm typecheck && pnpm test",
     "verify": "pnpm schema:check && pnpm check && pnpm build && pnpm docs:check"
