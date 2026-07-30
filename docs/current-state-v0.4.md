@@ -42,6 +42,9 @@ Session、查看 Run/Task/证据血缘，并通过独立安全通道上传文件
   v8 增加 Run Resource Binding、Browser Session Observation、Export 和血缘索引。
 - 大文件不经过 Control。工作台正文通过权限 `0600` 的独立 Unix Socket，使用
   一次性租约、SHA-256、MIME、大小限制和内容寻址落盘。
+- 包装主数据上传后会建立 `user_file Source → restricted Asset → CAS Blob`
+  血缘，再由 Core 以内存字节解析、校验并原子发布 Dataset；不接受浏览器提交的
+  本地路径，Core 重启后仍可凭不可变上传回执继续导入。
 - Console 已接入真实 Browser Session 列表、运行向导、任务中心、Run 时间线、
   Evidence 血缘和 Export 元数据查询。
 
@@ -59,7 +62,7 @@ Session、查看 Run/Task/证据血缘，并通过独立安全通道上传文件
 
 ## 验证基线
 
-- 整仓 `pnpm verify`：79 个测试文件、524 项测试通过。
+- 整仓 `pnpm verify`：79 个测试文件、526 项测试通过。
 - Schema drift、依赖边界、TypeScript strict、Extension MV3、React Console 和协议
   文档构建全部通过。
 - 当前验证的生产闭包为 105 个文件、128,174,457 bytes；包含固定 Node.js 24、
