@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/evidence-link/v1alpha1",
+  "title": "BPA Evidence Link v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "linkId",
+    "evidenceId",
+    "relation",
+    "sourceIds",
+    "createdAt"
+  ],
+  "properties": {
+    "apiVersion": { "const": "bpa.evidence/v1alpha1" },
+    "kind": { "const": "EvidenceLink" },
+    "linkId": { "$ref": "#/$defs/id" },
+    "evidenceId": { "$ref": "#/$defs/id" },
+    "relation": {
+      "enum": [
+        "captures",
+        "supports",
+        "contradicts",
+        "derived_from",
+        "references"
+      ]
+    },
+    "sourceIds": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/id" }
+    },
+    "assetIds": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/id" }
+    },
+    "claimRef": { "$ref": "#/$defs/id" },
+    "createdAt": { "$ref": "#/$defs/timestamp" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}

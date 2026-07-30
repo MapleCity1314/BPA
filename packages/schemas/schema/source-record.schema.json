@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/source-record/v1alpha1",
+  "title": "BPA Source Record v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "sourceId",
+    "sourceType",
+    "locator",
+    "observedAt",
+    "classification"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": { "sourceType": { "const": "platform_page" } },
+        "required": ["sourceType"]
+      },
+      "then": {
+        "properties": { "locator": { "$ref": "#/$defs/platformPage" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "sourceType": { "const": "public_url" } },
+        "required": ["sourceType"]
+      },
+      "then": {
+        "properties": { "locator": { "$ref": "#/$defs/publicUrl" } }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "sourceType": { "const": "third_party_estimate" }
+        },
+        "required": ["sourceType"]
+      },
+      "then": {
+        "properties": {
+          "locator": { "$ref": "#/$defs/thirdPartyEstimate" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "sourceType": { "const": "user_file" } },
+        "required": ["sourceType"]
+      },
+      "then": {
+        "properties": { "locator": { "$ref": "#/$defs/userFile" } }
+      }
+    }
+  ],
+  "properties": {
+    "apiVersion": { "const": "bpa.source/v1alpha1" },
+    "kind": { "const": "SourceRecord" },
+    "sourceId": { "$ref": "#/$defs/id" },
+    "sourceType": {
+      "enum": [
+        "platform_page",
+        "public_url",
+        "third_party_estimate",
+        "user_file"
+      ]
+    },
+    "locator": { "type": "object" },
+    "observedAt": { "$ref": "#/$defs/timestamp" },
+    "recordedAt": { "$ref": "#/$defs/timestamp" },
+    "classification": {
+      "enum": ["public", "internal", "confidential", "restricted"]
+    },
+    "title": { "type": "string", "minLength": 1, "maxLength": 500 }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "httpsUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://",
+      "maxLength": 4096
+    },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "platformPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "url"],
+      "properties": {
+        "platform": { "$ref": "#/$defs/id" },
+        "url": { "$ref": "#/$defs/httpsUrl" },
+        "pageIdentity": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    },
+    "publicUrl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": { "$ref": "#/$defs/httpsUrl" }
+      }
+    },
+    "thirdPartyEstimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "metricDefinition",
+        "windowStart",
+        "windowEnd",
+        "estimated"
+      ],
+      "properties": {
+        "provider": { "$ref": "#/$defs/id" },
+        "url": { "$ref": "#/$defs/httpsUrl" },
+        "metricDefinition": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "windowStart": { "$ref": "#/$defs/timestamp" },
+        "windowEnd": { "$ref": "#/$defs/timestamp" },
+        "estimated": { "const": true }
+      }
+    },
+    "userFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["originalFileName", "mediaType", "size", "digest"],
+      "properties": {
+        "originalFileName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "^[^/\\\\\\u0000]+$"
+        },
+        "mediaType": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 26214400
+        },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

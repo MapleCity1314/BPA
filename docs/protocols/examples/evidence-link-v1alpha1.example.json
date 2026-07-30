@@ -1,0 +1,15 @@
+{
+  "apiVersion": "bpa.evidence/v1alpha1",
+  "kind": "EvidenceLink",
+  "linkId": "link:evidence-1001:source-1001",
+  "evidenceId": "evidence:run-001:inspect-1001",
+  "relation": "supports",
+  "sourceIds": [
+    "source:chanmama:product-1001:20260730"
+  ],
+  "assetIds": [
+    "asset:product-image:1001:01"
+  ],
+  "claimRef": "claim:product-1001:sales-window",
+  "createdAt": "2026-07-30T08:00:03.000Z"
+}

@@ -2,6 +2,18 @@ import type {
   BPABrowserProtocolV1Message
 } from "./generated/browser_protocol_v1.js";
 import type { BPANodeDefinition } from "./generated/node.js";
+import type {
+  BPANodeDefinitionV1Alpha2
+} from "./generated/node_v1alpha2.js";
+import type {
+  BPASourceRecordV1Alpha1
+} from "./generated/source_record.js";
+import type {
+  BPAAssetRecordV1Alpha1
+} from "./generated/asset_record.js";
+import type {
+  BPAEvidenceLinkV1Alpha1
+} from "./generated/evidence_link.js";
 import type { BPARiskSignalV1 } from "./generated/risk_signal.js";
 import type { BPATimingPolicyV1 } from "./generated/timing_policy.js";
 import type { BPASignedPermissionGrant } from "./generated/permission.js";
@@ -12,6 +24,9 @@ import type {
 import type {
   BPAWorkflowV1Alpha2
 } from "./generated/workflow_v1alpha2.js";
+import type {
+  BPAWorkflowV1Alpha3
+} from "./generated/workflow_v1alpha3.js";
 import type {
   BPAAssistanceTaskV1Alpha1
 } from "./generated/assistance_task.js";
@@ -47,10 +62,15 @@ export type {
   BPADecisionRecordV1Alpha1,
   BPAElementContractV1Alpha1,
   BPANodeDefinition,
+  BPANodeDefinitionV1Alpha2,
   BPAPageModelV1Alpha1,
+  BPASourceRecordV1Alpha1,
+  BPAAssetRecordV1Alpha1,
+  BPAEvidenceLinkV1Alpha1,
   BPASignedPermissionGrant,
   BPAWorkflow,
-  BPAWorkflowV1Alpha2
+  BPAWorkflowV1Alpha2,
+  BPAWorkflowV1Alpha3
 };
 export type { BPARiskSignalV1, BPATimingPolicyV1 };
 
@@ -60,9 +80,14 @@ export type { BPARiskSignalV1, BPATimingPolicyV1 };
  */
 export type WorkflowDefinition = BPAWorkflow;
 export type WorkflowDefinitionV1Alpha2 = BPAWorkflowV1Alpha2;
+export type WorkflowDefinitionV1Alpha3 = BPAWorkflowV1Alpha3;
 export type WorkflowMetadata = BPAWorkflow["metadata"];
 export type WorkflowNode = GeneratedWorkflowNode;
 export type NodeDefinition = BPANodeDefinition;
+export type NodeDefinitionV1Alpha2 = BPANodeDefinitionV1Alpha2;
+export type SourceRecordDefinition = BPASourceRecordV1Alpha1;
+export type AssetRecordDefinition = BPAAssetRecordV1Alpha1;
+export type EvidenceLinkDefinition = BPAEvidenceLinkV1Alpha1;
 export type BrowserProtocolMessage = BPABrowserProtocolV1Message;
 export type AssistanceTaskDefinition = BPAAssistanceTaskV1Alpha1;
 export type AdapterManifestDefinition = BPAAdapterManifestV1Alpha1;

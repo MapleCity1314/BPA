@@ -1,0 +1,47 @@
+apiVersion: bpa/v1alpha3
+kind: Workflow
+metadata:
+  id: ecommerce.product-evidence-observe
+  version: 0.1.0
+  title: Product evidence observation
+spec:
+  riskLevel: R1
+  inputSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - productId
+    properties:
+      productId:
+        type: string
+        minLength: 1
+  outputSchema:
+    type: object
+  limits:
+    maxDepth: 2
+    maxStepExecutions: 100
+  resourceSlots:
+    metrics_source:
+      kind: browser
+      capabilities:
+        - browser.dom.read
+        - browser.tabs.read
+      allowedOrigins:
+        - https://www.chanmama.com
+      authentication: membership
+      purpose: Read metrics from the operator's authenticated Chanmama session.
+  root:
+    kind: sequence
+    steps:
+      - key: read_metrics
+        kind: call
+        use: chanmama.product.metrics.read@1.0.0
+        with:
+          productId: ${input.productId}
+        resourceMappings:
+          page: metrics_source
+      - key: done
+        kind: terminal
+        status: succeeded
+        output:
+          metrics: ${steps.read_metrics.output}

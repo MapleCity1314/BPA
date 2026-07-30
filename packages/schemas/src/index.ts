@@ -12,9 +12,14 @@ import type {
   DeterministicResultValidatorPolicyDefinition,
   ElementContractDefinition,
   NodeDefinition,
+  NodeDefinitionV1Alpha2,
   PageModelDefinition,
+  SourceRecordDefinition,
+  AssetRecordDefinition,
+  EvidenceLinkDefinition,
   WorkflowDefinition,
-  WorkflowDefinitionV1Alpha2
+  WorkflowDefinitionV1Alpha2,
+  WorkflowDefinitionV1Alpha3
 } from "./types.js";
 
 export * from "./types.js";
@@ -29,7 +34,14 @@ export const workflowSchema = loadSchema("workflow.schema.json");
 export const workflowV1Alpha2Schema = loadSchema(
   "workflow-v1alpha2.schema.json"
 );
+export const workflowV1Alpha3Schema = loadSchema(
+  "workflow-v1alpha3.schema.json"
+);
 export const nodeSchema = loadSchema("node.schema.json");
+export const nodeV1Alpha2Schema = loadSchema("node-v1alpha2.schema.json");
+export const sourceRecordSchema = loadSchema("source-record.schema.json");
+export const assetRecordSchema = loadSchema("asset-record.schema.json");
+export const evidenceLinkSchema = loadSchema("evidence-link.schema.json");
 export const adapterManifestSchema = loadSchema(
   "adapter-manifest.schema.json"
 );
@@ -79,9 +91,24 @@ export const validateWorkflow = ajv.compile(
 export const validateWorkflowV1Alpha2 = ajv.compile(
   workflowV1Alpha2Schema
 ) as ValidateFunction<WorkflowDefinitionV1Alpha2>;
+export const validateWorkflowV1Alpha3 = ajv.compile(
+  workflowV1Alpha3Schema
+) as ValidateFunction<WorkflowDefinitionV1Alpha3>;
 export const validateNode = ajv.compile(
   nodeSchema
 ) as ValidateFunction<NodeDefinition>;
+export const validateNodeV1Alpha2 = ajv.compile(
+  nodeV1Alpha2Schema
+) as ValidateFunction<NodeDefinitionV1Alpha2>;
+export const validateSourceRecord = ajv.compile(
+  sourceRecordSchema
+) as ValidateFunction<SourceRecordDefinition>;
+export const validateAssetRecord = ajv.compile(
+  assetRecordSchema
+) as ValidateFunction<AssetRecordDefinition>;
+export const validateEvidenceLink = ajv.compile(
+  evidenceLinkSchema
+) as ValidateFunction<EvidenceLinkDefinition>;
 export const validateAdapterManifest = ajv.compile(
   adapterManifestSchema
 ) as ValidateFunction<AdapterManifestDefinition>;

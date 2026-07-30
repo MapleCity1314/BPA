@@ -11,7 +11,12 @@ const outputDirectory = join(root, "packages", "schemas", "src", "generated");
 const schemas = [
   "workflow.schema.json",
   "workflow-v1alpha2.schema.json",
+  "workflow-v1alpha3.schema.json",
   "node.schema.json",
+  "node-v1alpha2.schema.json",
+  "source-record.schema.json",
+  "asset-record.schema.json",
+  "evidence-link.schema.json",
   "adapter-manifest.schema.json",
   "assistance-profile.schema.json",
   "assistance-task.schema.json",
@@ -37,8 +42,10 @@ for (const filename of schemas) {
   );
   if (
     filename === "node.schema.json" ||
+    filename === "node-v1alpha2.schema.json" ||
     filename === "workflow.schema.json" ||
     filename === "workflow-v1alpha2.schema.json" ||
+    filename === "workflow-v1alpha3.schema.json" ||
     filename === "browser-protocol-v1.schema.json"
   ) {
     const timingPolicySchema = JSON.parse(

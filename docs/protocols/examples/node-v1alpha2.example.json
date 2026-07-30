@@ -1,0 +1,67 @@
+{
+  "apiVersion": "bpa/v1alpha2",
+  "kind": "Node",
+  "metadata": {
+    "id": "chanmama.product.metrics.read",
+    "version": "1.0.0",
+    "title": "Read Chanmama product metrics"
+  },
+  "runtime": "browser",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["productId"],
+    "properties": {
+      "productId": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object"
+  },
+  "risk": {
+    "level": "R0",
+    "permissions": [
+      "browser.dom.read",
+      "browser.tabs.read"
+    ],
+    "domains": [
+      "https://www.chanmama.com"
+    ]
+  },
+  "execution": {
+    "timeoutDefault": "30s",
+    "idempotency": "repeatable_read",
+    "retryableErrors": [
+      "PAGE_NOT_READY"
+    ],
+    "cancellable": true
+  },
+  "errors": [
+    "AUTHENTICATION_REQUIRED",
+    "PAGE_NOT_READY",
+    "UNAVAILABLE_MEMBERSHIP"
+  ],
+  "adapter": {
+    "id": "chanmama",
+    "versions": [
+      "1.0.0"
+    ]
+  },
+  "resources": {
+    "page": {
+      "kind": "browser",
+      "capabilities": [
+        "browser.dom.read",
+        "browser.tabs.read"
+      ],
+      "allowedOrigins": [
+        "https://www.chanmama.com"
+      ],
+      "authentication": "membership",
+      "purpose": "Read product metrics visible in the authenticated Chanmama page."
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "apiVersion": "bpa.source/v1alpha1",
+  "kind": "SourceRecord",
+  "sourceId": "source:chanmama:product-1001:20260730",
+  "sourceType": "third_party_estimate",
+  "locator": {
+    "provider": "chanmama",
+    "url": "https://www.chanmama.com/product/1001",
+    "metricDefinition": "Platform-estimated paid order count for the selected 30-day window.",
+    "windowStart": "2026-06-30T00:00:00.000Z",
+    "windowEnd": "2026-07-30T00:00:00.000Z",
+    "estimated": true
+  },
+  "observedAt": "2026-07-30T08:00:00.000Z",
+  "recordedAt": "2026-07-30T08:00:01.000Z",
+  "classification": "internal",
+  "title": "Chanmama product metrics for product 1001"
+}

@@ -1,0 +1,18 @@
+{
+  "apiVersion": "bpa.asset/v1alpha1",
+  "kind": "AssetRecord",
+  "assetId": "asset:product-image:1001:01",
+  "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "size": 128000,
+  "mediaType": "image/jpeg",
+  "storageRef": "asset-store:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "classification": "public",
+  "sourceIds": [
+    "source:chanmama:product-1001:20260730"
+  ],
+  "createdAt": "2026-07-30T08:00:02.000Z",
+  "retention": {
+    "policy": "public_30d",
+    "retainUntil": "2026-08-29T08:00:02.000Z"
+  }
+}

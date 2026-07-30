@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   validateAdapterManifest,
+  validateAssetRecord,
   validateAssistanceProfile,
   validateAssistanceTask,
   validateBrowserProtocolMessage,
@@ -10,9 +11,13 @@ import {
   validateDecisionRecord,
   validateDeterministicResultValidatorPolicy,
   validateElementContract,
+  validateEvidenceLink,
+  validateNodeV1Alpha2,
   validateRiskSignal,
+  validateSourceRecord,
   validateTimingPolicy,
-  validateWorkflowV1Alpha2
+  validateWorkflowV1Alpha2,
+  validateWorkflowV1Alpha3
 } from "./index.js";
 
 const examples = JSON.parse(
@@ -323,5 +328,153 @@ describe("strong iteration contract schemas", () => {
         confirmedAt: "2026-07-28T09:00:00.000Z"
       })
     ).toBe(true);
+  });
+});
+
+describe("0.5 source, asset, and resource contract candidates", () => {
+  it("accepts exact SourceRecord variants and rejects locator confusion", () => {
+    const source = protocolExample(
+      "source-record-v1alpha1.example.json"
+    ) as Record<string, any>;
+    expect(validateSourceRecord(source)).toBe(true);
+
+    const wrongLocator = structuredClone(source);
+    wrongLocator.sourceType = "public_url";
+    expect(validateSourceRecord(wrongLocator)).toBe(false);
+
+    const unsafeFile = {
+      ...source,
+      sourceType: "user_file",
+      locator: {
+        originalFileName: "../master.xlsx",
+        mediaType:
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        size: 1024,
+        digest: `sha256:${"a".repeat(64)}`
+      }
+    };
+    expect(validateSourceRecord(unsafeFile)).toBe(false);
+  });
+
+  it("accepts immutable AssetRecord metadata and enforces object limits", () => {
+    const asset = protocolExample(
+      "asset-record-v1alpha1.example.json"
+    ) as Record<string, any>;
+    expect(validateAssetRecord(asset)).toBe(true);
+
+    const oversized = structuredClone(asset);
+    oversized.size = 26214401;
+    expect(validateAssetRecord(oversized)).toBe(false);
+
+    const callerPath = structuredClone(asset);
+    callerPath.storageRef = "/tmp/caller-selected.jpg";
+    expect(validateAssetRecord(callerPath)).toBe(false);
+
+    const manualRetentionWithDeadline = structuredClone(asset);
+    manualRetentionWithDeadline.retention = {
+      policy: "manual",
+      retainUntil: "2026-08-29T08:00:02.000Z"
+    };
+    expect(validateAssetRecord(manualRetentionWithDeadline)).toBe(false);
+  });
+
+  it("accepts EvidenceLink lineage and rejects empty or extended records", () => {
+    const link = protocolExample(
+      "evidence-link-v1alpha1.example.json"
+    ) as Record<string, any>;
+    expect(validateEvidenceLink(link)).toBe(true);
+
+    const noSource = structuredClone(link);
+    noSource.sourceIds = [];
+    expect(validateEvidenceLink(noSource)).toBe(false);
+
+    const extended = structuredClone(link);
+    extended.rawDom = "<html />";
+    expect(validateEvidenceLink(extended)).toBe(false);
+  });
+
+  it("requires bounded browser resources on Node v1alpha2", () => {
+    const node = protocolExample(
+      "node-v1alpha2.example.json"
+    ) as Record<string, any>;
+    expect(validateNodeV1Alpha2(node)).toBe(true);
+
+    const withoutResource = structuredClone(node);
+    delete withoutResource.resources;
+    expect(validateNodeV1Alpha2(withoutResource)).toBe(false);
+
+    const insecureOrigin = structuredClone(node);
+    insecureOrigin.resources.page.allowedOrigins = [
+      "http://www.chanmama.com"
+    ];
+    expect(validateNodeV1Alpha2(insecureOrigin)).toBe(false);
+
+    const nonBrowserWithResource = structuredClone(node);
+    nonBrowserWithResource.runtime = "engine_team";
+    delete nonBrowserWithResource.risk.domains;
+    expect(validateNodeV1Alpha2(nonBrowserWithResource)).toBe(false);
+
+    const tooManyCapabilities = structuredClone(node);
+    tooManyCapabilities.resources.page.capabilities = Array.from(
+      { length: 33 },
+      (_, index) => `browser.capability_${index}`
+    );
+    expect(validateNodeV1Alpha2(tooManyCapabilities)).toBe(false);
+  });
+
+  it("accepts Workflow v1alpha3 slots and per-call mappings", () => {
+    const workflow = parse(
+      readFileSync(
+        new URL(
+          "../../../docs/protocols/examples/workflow-v1alpha3.example.yaml",
+          import.meta.url
+        ),
+        "utf8"
+      )
+    ) as Record<string, any>;
+    expect(validateWorkflowV1Alpha3(workflow)).toBe(true);
+
+    const insecureOrigin = structuredClone(workflow);
+    insecureOrigin.spec.resourceSlots.metrics_source.allowedOrigins = [
+      "http://www.chanmama.com"
+    ];
+    expect(validateWorkflowV1Alpha3(insecureOrigin)).toBe(false);
+
+    const invalidMapping = structuredClone(workflow);
+    invalidMapping.spec.root.steps[0].resourceMappings = {
+      "not-a-requirement": "metrics_source"
+    };
+    expect(validateWorkflowV1Alpha3(invalidMapping)).toBe(false);
+
+    const unexpectedField = structuredClone(workflow);
+    unexpectedField.spec.resourceSlots.metrics_source.sessionId =
+      "browser-session-1";
+    expect(validateWorkflowV1Alpha3(unexpectedField)).toBe(false);
+  });
+
+  it("keeps old Workflow v1alpha2 compatible and versions disjoint", () => {
+    const legacy = parse(
+      readFileSync(
+        new URL(
+          "../../../docs/protocols/examples/workflow-v1alpha2.example.yaml",
+          import.meta.url
+        ),
+        "utf8"
+      )
+    );
+    expect(validateWorkflowV1Alpha2(legacy)).toBe(true);
+    expect(validateWorkflowV1Alpha3(legacy)).toBe(false);
+
+    const current = parse(
+      readFileSync(
+        new URL(
+          "../../../docs/protocols/examples/workflow-v1alpha3.example.yaml",
+          import.meta.url
+        ),
+        "utf8"
+      )
+    );
+    expect(validateWorkflowV1Alpha3(current)).toBe(true);
+    expect(validateWorkflowV1Alpha2(current)).toBe(false);
   });
 });
