@@ -22,6 +22,7 @@
     "@bpa/packaging-dataset": "workspace:*",
     "@bpa/persistence": "workspace:*",
     "@bpa/persistence-sqlite": "workspace:*",
+    "@bpa/resource-binding": "workspace:*",
     "@bpa/schemas": "workspace:*",
     "@bpa/team-runtime": "workspace:*",
     "@bpa/workflow-ir": "workspace:*"

@@ -21,6 +21,7 @@ import { ConsoleUserFacingError } from "./user-facing-error.js";
 
 export const CONSOLE_CONTROL_METHODS = {
   doctor: "doctor",
+  browserSessionList: "browser.session.list",
   catalogList: "catalog.list",
   runCreate: "run.create",
   runInspect: "run.inspect",
@@ -272,7 +273,7 @@ export class UdsControlBackend implements ControlBackend {
   async getDashboard(): Promise<DashboardSnapshot> {
     const observedAt = this.#now().toISOString();
     try {
-      const [doctorValue, taskValue] = await Promise.all([
+      const [doctorValue, taskValue, sessionValue] = await Promise.all([
         this.#client.request<unknown>(CONSOLE_CONTROL_METHODS.doctor),
         this.#client
           .request<unknown>(CONSOLE_CONTROL_METHODS.taskList, {
@@ -285,6 +286,11 @@ export class UdsControlBackend implements ControlBackend {
             modes: ["human_confirm", "human_action"],
             limit: 100
           })
+          .catch(() => []),
+        this.#client
+          .request<unknown>(CONSOLE_CONTROL_METHODS.browserSessionList, {
+            limit: 100
+          })
           .catch(() => [])
       ]);
       const doctor = record(doctorValue) ?? {};
@@ -292,8 +298,40 @@ export class UdsControlBackend implements ControlBackend {
       const browser = record(doctor.browser) ?? {};
       const browserReady = boolean(browser.ready);
       const browserConnected = boolean(browser.connected);
-      const browserSessions: BrowserSessionView[] = browserConnected
-        ? [
+      const persistedSessions = records(sessionValue);
+      const browserSessions: BrowserSessionView[] =
+        persistedSessions.length > 0
+          ? persistedSessions.slice(-20).map((session) => {
+              const observationState = text(
+                session.observationState,
+                "unknown"
+              );
+              const disconnected = typeof session.disconnectedAt === "string";
+              return {
+                id: text(session.id),
+                label:
+                  text(session.role, "general") === "general"
+                    ? "Chrome 业务会话"
+                    : `Chrome · ${text(session.role)}`,
+                status:
+                  disconnected || observationState === "revoked"
+                    ? "offline"
+                    : observationState === "available"
+                      ? "ready"
+                      : "attention",
+                origin: text(session.observedOrigin, "等待选择业务来源"),
+                role: text(session.role, "浏览器自动化"),
+                authenticated: ["authenticated", "membership"].includes(
+                  text(session.observedAuthentication)
+                ),
+                lastSeenAt: safeTimestamp(
+                  session.observedAt,
+                  safeTimestamp(session.connectedAt, observedAt)
+                )
+              };
+            })
+          : browserConnected
+            ? [
             {
               id: text(browser.sessionId, "browser-pending"),
               label: browserReady ? "已连接的 Chrome" : "Chrome 正在准备",
@@ -306,8 +344,8 @@ export class UdsControlBackend implements ControlBackend {
               authenticated: browserReady,
               lastSeenAt: observedAt
             }
-          ]
-        : [];
+              ]
+            : [];
       const pendingTaskCount = records(taskValue).length;
       return {
         attention:

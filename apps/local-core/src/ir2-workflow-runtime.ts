@@ -153,9 +153,11 @@ export class Ir2WorkflowRuntime {
   start(
     plan: ExecutionPlan,
     input: JsonValue,
-    startMetadata?: JsonValue
+    startMetadata?: JsonValue,
+    bindResources?: (runId: string) => ResourceBindingSnapshot
   ): RunRecord {
     const runId = this.#id();
+    const resourceBindingSnapshot = bindResources?.(runId);
     const transition = this.#engine(plan).start(runId, input);
     const timestamp = new Date(this.#now()).toISOString();
     const effects = this.#persistableEffects(transition.effects, timestamp);
@@ -188,6 +190,9 @@ export class Ir2WorkflowRuntime {
         createdAt: timestamp
       },
       checkpoint: this.#checkpoint(transition.state, timestamp),
+      ...(resourceBindingSnapshot
+        ? { resourceBindingSnapshot }
+        : {}),
       outbox: effects.outbox,
       assistanceTasks: effects.tasks,
       event: this.#event(runId, 1, "RUN_IR2_STARTED", {

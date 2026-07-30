@@ -206,6 +206,9 @@ importers:
       '@bpa/persistence-sqlite':
         specifier: workspace:*
         version: link:../../packages/persistence-sqlite
+      '@bpa/resource-binding':
+        specifier: workspace:*
+        version: link:../../packages/resource-binding
       '@bpa/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas

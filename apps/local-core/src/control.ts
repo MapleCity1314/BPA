@@ -78,6 +78,8 @@ import {
   TEAM_WORKER_HANDLER_REFS
 } from "../../team-worker/src/manifest.js";
 import type { JsonValue } from "@bpa/workflow-ir";
+import { RuntimeResourceBindingService } from "./runtime-resource-bindings.js";
+import { TrustedEvidenceQueryService } from "./trusted-evidence-queries.js";
 
 export const CONTROL_MAX_MESSAGE_BYTES = 512 * 1024;
 
@@ -102,6 +104,8 @@ export class LocalCoreService {
   readonly assistance: AssistanceTaskService;
   readonly authoring: LocalAuthoringService;
   readonly datasets: PackagingDatasetService;
+  readonly #resourceBindings: RuntimeResourceBindingService;
+  readonly #trustedEvidence: TrustedEvidenceQueryService;
 
   constructor(
     readonly persistence: Persistence,
@@ -110,6 +114,8 @@ export class LocalCoreService {
   ) {
     this.engine = new LocalWorkflowEngine(persistence);
     this.datasets = new PackagingDatasetService(persistence);
+    this.#resourceBindings = new RuntimeResourceBindingService(persistence);
+    this.#trustedEvidence = new TrustedEvidenceQueryService(persistence);
     const providers = runtimeProviders ?? new RuntimeProviderRegistry();
     if (!providers.list().includes("builtin")) {
       providers.register(new BuiltinRuntimeProvider());
@@ -145,7 +151,14 @@ export class LocalCoreService {
         expectedHandlerRefs: TEAM_WORKER_HANDLER_REFS
       });
     }
-    this.ir2Runtime = new Ir2WorkflowRuntime(persistence, providers);
+    this.ir2Runtime = new Ir2WorkflowRuntime(persistence, providers, {
+      resolveResourceBindingSnapshot: (runId) =>
+        persistence.getRunResourceBindingSnapshot(runId),
+      browserSessions: {
+        getBrowserSession: (sessionId) =>
+          this.#resourceBindings.resolveBrowserSession(sessionId)
+      }
+    });
     const assistanceValidator: AssistanceResultValidator = {
       validateOutput(schema, output) {
         try {
@@ -509,6 +522,21 @@ export class LocalCoreService {
         return this.persistence.listAudit(
           params.target == null ? undefined : String(params.target)
         );
+      case "browser.session.list":
+        return this.persistence.listBrowserSessions({
+          limit: Math.min(
+            200,
+            Math.max(1, Number(params.limit) || 100)
+          )
+        }).records;
+      case "evidence.lineage.get":
+        return this.#trustedEvidence.lineage(String(params.runId));
+      case "download.list":
+        return this.#trustedEvidence.listDownloads(
+          params.runId === undefined ? undefined : String(params.runId)
+        );
+      case "download.get":
+        return this.#trustedEvidence.download(String(params.downloadId));
       case "asset.validate":
         return this.#validateAsset(
           String(params.assetType),
@@ -530,7 +558,9 @@ export class LocalCoreService {
         return this.#createRun(
           String(params.workflowId),
           String(params.workflowVersion),
-          params.input ?? {}
+          params.input ?? {},
+          params.resourceBindings,
+          String(params.actor || userInfo().username)
         );
       case "run.node.preview":
         return this.#previewSingleNode(
@@ -978,7 +1008,9 @@ export class LocalCoreService {
   #createRun(
     workflowId: string,
     workflowVersion: string,
-    input: unknown
+    input: unknown,
+    resourceBindings: unknown,
+    actor: string
   ): unknown {
     const artifact = this.persistence.getPublished(
       "workflow",
@@ -1014,9 +1046,34 @@ export class LocalCoreService {
         String((artifact.content as { apiVersion?: unknown }).apiVersion)
       );
     if (isCanonical) {
+      const plan = compileCanonicalWorkflow(
+        artifact.content,
+        this.#ir2Catalog()
+      );
+      const bindResources = this.#resourceBindings.prepare(
+        plan,
+        resourceBindings,
+        actor
+      );
       return this.ir2Runtime.start(
-        compileCanonicalWorkflow(artifact.content, this.#ir2Catalog()),
-        safeInput
+        plan,
+        safeInput,
+        {
+          actor,
+          resourceSlots: Object.keys(plan.resourceSlots ?? {}).sort()
+        },
+        bindResources
+      );
+    }
+    if (
+      resourceBindings !== undefined &&
+      resourceBindings !== null &&
+      (typeof resourceBindings !== "object" ||
+        Array.isArray(resourceBindings) ||
+        Object.keys(resourceBindings).length > 0)
+    ) {
+      throw new Error(
+        "Legacy Workflows do not accept Browser Resource Bindings"
       );
     }
     const compiled = compileWorkflow(artifact.content, this.#nodeCatalog());

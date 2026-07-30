@@ -68,7 +68,8 @@ describe("UdsControlBackend", () => {
       })
       .respond(CONSOLE_CONTROL_METHODS.taskList, [
         { taskId: "task-1" }
-      ]);
+      ])
+      .respond(CONSOLE_CONTROL_METHODS.browserSessionList, []);
     const result = await backend(client).getDashboard();
     expect(result).toMatchObject({
       attention: "attention",
@@ -95,6 +96,10 @@ describe("UdsControlBackend", () => {
           modes: ["human_confirm", "human_action"],
           limit: 100
         }
+      },
+      {
+        method: "browser.session.list",
+        params: { limit: 100 }
       }
     ]);
   });

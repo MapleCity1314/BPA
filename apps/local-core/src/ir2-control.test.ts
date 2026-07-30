@@ -173,6 +173,100 @@ describe("Local Core IR2 control integration", () => {
         }
       }
     });
+    expect(
+      service.handle({
+        id: "publish-resource-workflow",
+        method: "asset.publish",
+        params: {
+          assetType: "workflow",
+          content: resourceWorkflow,
+          actor: "test"
+        }
+      })
+    ).toMatchObject({ ok: true });
+    expect(
+      service.handle({
+        id: "create-resource-run-without-binding",
+        method: "run.create",
+        params: {
+          workflowId: resourceWorkflow.metadata.id,
+          workflowVersion: resourceWorkflow.metadata.version,
+          input: {},
+          resourceBindings: {},
+          actor: "operator"
+        }
+      })
+    ).toMatchObject({
+      ok: false,
+      error: {
+        message: expect.stringContaining(
+          "must cover the exact Workflow resource slots"
+        )
+      }
+    });
+    persistence.openBrowserSession({
+      session: {
+        id: "session-resource",
+        browserInstanceId: "browser-test",
+        extensionId: "extension-test",
+        extensionVersion: "0.4.0",
+        protocolVersion: "1.0.0",
+        incomingSeq: 0,
+        outgoingSeq: 0,
+        lastAckedCommandSeq: 0,
+        capabilityDigest: `sha256:${"a".repeat(64)}`,
+        resumeTokenDigest: `sha256:${"b".repeat(64)}`,
+        resumeTokenExpiresAt: "2026-07-30T12:00:00.000Z",
+        connectedAt: "2026-07-30T11:00:00.000Z"
+      },
+      now: "2026-07-30T11:00:00.000Z"
+    });
+    persistence.replaceBrowserCapabilities("session-resource", [
+      {
+        nodeId: resourceNode.metadata.id,
+        nodeVersion: resourceNode.metadata.version,
+        riskLevel: resourceNode.risk.level,
+        permissions: [...resourceNode.risk.permissions]
+      }
+    ]);
+    const created = service.handle({
+      id: "create-resource-run",
+      method: "run.create",
+      params: {
+        workflowId: resourceWorkflow.metadata.id,
+        workflowVersion: resourceWorkflow.metadata.version,
+        input: {},
+        resourceBindings: { source: "session-resource" },
+        actor: "operator"
+      }
+    });
+    expect(created).toMatchObject({
+      ok: true,
+      result: {
+        workflowId: resourceWorkflow.metadata.id,
+        status: "waiting_browser"
+      }
+    });
+    const runId = (created.result as { id: string }).id;
+    expect(persistence.getRunResourceBindingSnapshot(runId)).toMatchObject({
+      snapshotVersion: "bpa.resource-binding/1",
+      runId,
+      resourceSlots: resourceWorkflow.spec.resourceSlots,
+      bindings: {
+        source: {
+          sessionId: "session-resource",
+          origin: "https://example.com",
+          authentication: "authenticated",
+          approvedBy: "operator"
+        }
+      }
+    });
+    expect(persistence.getBrowserSession("session-resource")).toMatchObject({
+      observationRevision: 1,
+      observationState: "available",
+      observedOrigin: "https://example.com",
+      observedAuthentication: "authenticated"
+    });
     persistence.close();
   });
 
