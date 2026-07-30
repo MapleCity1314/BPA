@@ -9,6 +9,8 @@
     "kind",
     "linkId",
     "evidenceId",
+    "runId",
+    "nodeExecutionId",
     "relation",
     "sourceIds",
     "createdAt"
@@ -18,6 +20,8 @@
     "kind": { "const": "EvidenceLink" },
     "linkId": { "$ref": "#/$defs/id" },
     "evidenceId": { "$ref": "#/$defs/id" },
+    "runId": { "$ref": "#/$defs/id" },
+    "nodeExecutionId": { "$ref": "#/$defs/id" },
     "relation": {
       "enum": [
         "captures",

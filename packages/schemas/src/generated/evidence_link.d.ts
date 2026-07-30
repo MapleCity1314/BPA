@@ -8,6 +8,8 @@ export interface BPAEvidenceLinkV1Alpha1 {
   kind: "EvidenceLink";
   linkId: Id;
   evidenceId: Id;
+  runId: Id;
+  nodeExecutionId: Id;
   relation: "captures" | "supports" | "contradicts" | "derived_from" | "references";
   /**
    * @minItems 1

@@ -3,6 +3,8 @@
   "kind": "EvidenceLink",
   "linkId": "link:evidence-1001:source-1001",
   "evidenceId": "evidence:run-001:inspect-1001",
+  "runId": "run:ecommerce-research:001",
+  "nodeExecutionId": "node-execution:metrics:1001",
   "relation": "supports",
   "sourceIds": [
     "source:chanmama:product-1001:20260730"

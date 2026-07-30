@@ -342,6 +342,15 @@ describe("0.5 source, asset, and resource contract candidates", () => {
     wrongLocator.sourceType = "public_url";
     expect(validateSourceRecord(wrongLocator)).toBe(false);
 
+    const missingProvenance = structuredClone(source);
+    delete missingProvenance.adapter;
+    delete missingProvenance.rawDigest;
+    expect(validateSourceRecord(missingProvenance)).toBe(false);
+
+    const missingAccess = structuredClone(source);
+    delete missingAccess.accessScope;
+    expect(validateSourceRecord(missingAccess)).toBe(false);
+
     const unsafeFile = {
       ...source,
       sourceType: "user_file",
@@ -354,6 +363,10 @@ describe("0.5 source, asset, and resource contract candidates", () => {
       }
     };
     expect(validateSourceRecord(unsafeFile)).toBe(false);
+
+    const dotFile = structuredClone(unsafeFile);
+    dotFile.locator.originalFileName = "..";
+    expect(validateSourceRecord(dotFile)).toBe(false);
   });
 
   it("accepts immutable AssetRecord metadata and enforces object limits", () => {
@@ -376,6 +389,7 @@ describe("0.5 source, asset, and resource contract candidates", () => {
       retainUntil: "2026-08-29T08:00:02.000Z"
     };
     expect(validateAssetRecord(manualRetentionWithDeadline)).toBe(false);
+
   });
 
   it("accepts EvidenceLink lineage and rejects empty or extended records", () => {
@@ -387,6 +401,11 @@ describe("0.5 source, asset, and resource contract candidates", () => {
     const noSource = structuredClone(link);
     noSource.sourceIds = [];
     expect(validateEvidenceLink(noSource)).toBe(false);
+
+    const detachedFromExecution = structuredClone(link);
+    delete detachedFromExecution.runId;
+    delete detachedFromExecution.nodeExecutionId;
+    expect(validateEvidenceLink(detachedFromExecution)).toBe(false);
 
     const extended = structuredClone(link);
     extended.rawDom = "<html />";

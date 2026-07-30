@@ -13,6 +13,13 @@
   },
   "observedAt": "2026-07-30T08:00:00.000Z",
   "recordedAt": "2026-07-30T08:00:01.000Z",
+  "accessScope": "membership",
+  "adapter": {
+    "id": "chanmama",
+    "version": "1.0.0",
+    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "rawDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "classification": "internal",
   "title": "Chanmama product metrics for product 1001"
 }

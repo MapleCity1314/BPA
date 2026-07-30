@@ -11,6 +11,8 @@
     "sourceType",
     "locator",
     "observedAt",
+    "recordedAt",
+    "accessScope",
     "classification"
   ],
   "allOf": [
@@ -20,7 +22,12 @@
         "required": ["sourceType"]
       },
       "then": {
-        "properties": { "locator": { "$ref": "#/$defs/platformPage" } }
+        "required": ["adapter", "rawDigest"],
+        "properties": {
+          "locator": { "$ref": "#/$defs/platformPage" },
+          "adapter": { "$ref": "#/$defs/adapterRef" },
+          "rawDigest": { "$ref": "#/$defs/digest" }
+        }
       }
     },
     {
@@ -40,8 +47,11 @@
         "required": ["sourceType"]
       },
       "then": {
+        "required": ["adapter", "rawDigest"],
         "properties": {
-          "locator": { "$ref": "#/$defs/thirdPartyEstimate" }
+          "locator": { "$ref": "#/$defs/thirdPartyEstimate" },
+          "adapter": { "$ref": "#/$defs/adapterRef" },
+          "rawDigest": { "$ref": "#/$defs/digest" }
         }
       }
     },
@@ -70,6 +80,11 @@
     "locator": { "type": "object" },
     "observedAt": { "$ref": "#/$defs/timestamp" },
     "recordedAt": { "$ref": "#/$defs/timestamp" },
+    "accessScope": {
+      "enum": ["public", "authenticated", "membership", "user_provided"]
+    },
+    "adapter": { "$ref": "#/$defs/adapterRef" },
+    "rawDigest": { "$ref": "#/$defs/digest" },
     "classification": {
       "enum": ["public", "internal", "confidential", "restricted"]
     },
@@ -90,6 +105,20 @@
       "maxLength": 4096
     },
     "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "adapterRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$",
+          "maxLength": 100
+        },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
     "platformPage": {
       "type": "object",
       "additionalProperties": false,
@@ -140,7 +169,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 500,
-          "pattern": "^[^/\\\\\\u0000]+$"
+          "pattern": "^(?!\\.{1,2}$)[^/\\\\\\u0000]+$"
         },
         "mediaType": { "type": "string", "minLength": 1, "maxLength": 200 },
         "size": {
