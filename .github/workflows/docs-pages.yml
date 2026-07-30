@@ -5,7 +5,9 @@ on:
     branches: [main]
     paths:
       - "apps/docs/**"
-      - "docs/protocols/**"
+      - "docs/**"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
       - "packages/schemas/schema/**"
       - "packages/gateway-core/src/protocol.test.ts"
       - "package.json"
@@ -15,7 +17,9 @@ on:
   pull_request:
     paths:
       - "apps/docs/**"
-      - "docs/protocols/**"
+      - "docs/**"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
       - "packages/schemas/schema/**"
       - "packages/gateway-core/src/protocol.test.ts"
       - "package.json"
@@ -60,6 +64,9 @@ jobs:
 
       - name: Verify protocol examples
         run: pnpm vitest run packages/gateway-core/src/protocol.test.ts
+
+      - name: Verify machine-readable documentation
+        run: pnpm vitest run apps/docs/scripts/prepare-public-docs.test.ts
 
       - name: Build and validate docs
         run: pnpm docs:check

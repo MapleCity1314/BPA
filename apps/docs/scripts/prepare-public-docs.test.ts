@@ -39,6 +39,13 @@ describe("public documentation artifacts", () => {
       expect(left).not.toContain("docs/archive/");
     }
 
+    const rawHome = await readFile(join(first, "raw/index.md"), "utf8");
+    expect(rawHome).not.toMatch(/^---$/m);
+    expect(rawHome).not.toMatch(/^import\s/m);
+    expect(rawHome).not.toContain("<HomeMetrics");
+    expect(rawHome).toContain("Authority: tutorial");
+    expect(rawHome).toContain("一条不会在重启后失忆的执行链");
+
     const index = JSON.parse(
       await readFile(join(first, "docs-index.json"), "utf8")
     ) as {
@@ -54,5 +61,8 @@ describe("public documentation artifacts", () => {
     expect(
       index.entries.every((entry) => /^sha256:[a-f0-9]{64}$/.test(entry.digest))
     ).toBe(true);
+    expect(new Set(index.entries.map((entry) => entry.url)).size).toBe(
+      index.entries.length
+    );
   });
 });

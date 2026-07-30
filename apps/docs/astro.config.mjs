@@ -36,11 +36,12 @@ const isUserSite = repositoryName?.toLowerCase() === `${owner?.toLowerCase()}.gi
 const site =
   process.env.DOCS_SITE ??
   (owner ? `https://${owner.toLowerCase()}.github.io` : "http://localhost:4321");
-const base =
+const configuredBase =
   process.env.DOCS_BASE ??
   (process.env.GITHUB_ACTIONS === "true" && repositoryName && !isUserSite
     ? `/${repositoryName}`
     : "/");
+const base = configuredBase.endsWith("/") ? configuredBase : `${configuredBase}/`;
 const ogImage = new URL(`${base.replace(/\/$/, "")}/og-v3.png`, site).toString();
 
 export default defineConfig({

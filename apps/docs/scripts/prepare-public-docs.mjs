@@ -46,6 +46,7 @@ function machineMarkdown(document, site, base) {
   return [
     `# ${document.title}`,
     "",
+    `> Summary: ${document.summary}`,
     `> Authority: ${document.authority}`,
     `> Implementation: ${document.implementation}`,
     `> Canonical: ${routeUrl}`,
