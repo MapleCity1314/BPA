@@ -84,6 +84,12 @@ export class LocalBrowserGateway implements RuntimeProvider {
 
   attach(origin: string, send: (message: Message) => void): string {
     assertNativeHostOrigin(origin, this.#extensionId);
+    if (this.#session) {
+      this.persistence.updateBrowserSession({
+        id: this.#session.id,
+        disconnectedAt: new Date().toISOString()
+      });
+    }
     const connectionId = randomUUID();
     this.#connectionId = connectionId;
     this.#send = send;
@@ -144,6 +150,26 @@ export class LocalBrowserGateway implements RuntimeProvider {
         error: {
           code: "BROWSER_NODE_NOT_PUBLISHED",
           message: `Published browser Node is unavailable: ${invocation.node.id}@${invocation.node.version}`,
+          retryable: false
+        },
+        evidence: [],
+        riskSignals: []
+      });
+    }
+    const boundSessionIds = [
+      ...new Set(
+        Object.values(invocation.resourceBindings ?? {}).map(
+          (resource) => resource.binding.sessionId
+        )
+      )
+    ];
+    if (boundSessionIds.length > 1) {
+      return Promise.resolve({
+        status: "rejected",
+        error: {
+          code: "BROWSER_MULTI_SESSION_NODE_UNSUPPORTED",
+          message:
+            "One Browser Node invocation cannot span multiple Browser Sessions.",
           retryable: false
         },
         evidence: [],
@@ -267,6 +293,15 @@ export class LocalBrowserGateway implements RuntimeProvider {
       session.lastAckedCommandSeq
     )) {
       if (this.#runIsCancelled(command)) continue;
+      const requiredSessionIds = this.#requiredSessionIds(command);
+      if (
+        requiredSessionIds === undefined ||
+        requiredSessionIds.length > 1 ||
+        (requiredSessionIds.length === 1 &&
+          requiredSessionIds[0] !== session.id)
+      ) {
+        continue;
+      }
       if (!this.#supports(command)) continue;
       this.#sendMessage(
         "command.dispatch",
@@ -394,9 +429,10 @@ export class LocalBrowserGateway implements RuntimeProvider {
         : {}),
       now: now.toISOString()
     });
-    guard.establish(sessionId, 0);
+    const activeSessionId = opened.session.id;
+    guard.establish(activeSessionId, 0);
     this.#session = {
-      id: sessionId,
+      id: activeSessionId,
       browserInstanceId: opened.session.browserInstanceId,
       incoming: guard,
       incomingSeq: 0,
@@ -909,6 +945,50 @@ export class LocalBrowserGateway implements RuntimeProvider {
   #runId(command: GatewayCommandRecord): string | undefined {
     const runId = (command.payload as Record<string, unknown>).run_id;
     return typeof runId === "string" && runId.length > 0 ? runId : undefined;
+  }
+
+  #requiredSessionIds(
+    command: GatewayCommandRecord
+  ): readonly string[] | undefined {
+    const runId = this.#runId(command);
+    if (!runId) return [];
+    const snapshot =
+      this.persistence.getRunResourceBindingSnapshot(runId);
+    if (!snapshot) return [];
+    const checkpoint = this.persistence.getEngineCheckpoint(runId);
+    const state = checkpoint?.state as
+      | {
+          active?: {
+            kind?: unknown;
+            invocation?: {
+              invocationId?: unknown;
+              resourceMappings?: Record<
+                string,
+                { slotName?: unknown }
+              >;
+            };
+          };
+        }
+      | undefined;
+    const invocation =
+      state?.active?.kind === "call"
+        ? state.active.invocation
+        : undefined;
+    if (
+      !invocation ||
+      invocation.invocationId !== command.nodeExecutionId ||
+      !invocation.resourceMappings
+    ) {
+      return undefined;
+    }
+    const sessionIds = new Set<string>();
+    for (const mapping of Object.values(invocation.resourceMappings)) {
+      if (typeof mapping.slotName !== "string") return undefined;
+      const binding = snapshot.bindings[mapping.slotName];
+      if (!binding) return undefined;
+      sessionIds.add(binding.sessionId);
+    }
+    return [...sessionIds].sort();
   }
 
   #runIsCancelled(command: GatewayCommandRecord): boolean {

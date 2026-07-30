@@ -398,4 +398,88 @@ describe("local browser gateway", () => {
     persistence.close();
     rmSync(dataDirectory, { recursive: true, force: true });
   });
+
+  it("resumes the same Browser Session identity after reconnect", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const gateway = new LocalBrowserGateway(
+      persistence,
+      new LocalWorkflowEngine(persistence),
+      {
+        keyId: "core-resume-key",
+        privateKey,
+        publicKey,
+        publicKeySpkiBase64: exportPublicKeySpkiBase64(publicKey)
+      }
+    );
+    const outgoing: Array<Record<string, any>> = [];
+    const firstConnection = gateway.attach(
+      `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      (message) => outgoing.push(message)
+    );
+    gateway.handle({
+      protocol: "bpa.browser/1",
+      version: "1.0.0",
+      message_id: "hello-resume-first",
+      session_id: "new",
+      seq: 0,
+      sent_at: new Date().toISOString(),
+      type: "session.hello",
+      trace_id: "trace-resume",
+      payload: {
+        browser_instance_id: "browser-resume",
+        extension_id: DEFAULT_BPA_EXTENSION_ID,
+        extension_version: "0.4.0",
+        supported_protocols: ["bpa.browser/1"],
+        last_acked_command_seq: 0
+      }
+    });
+    const firstWelcome = outgoing.find(
+      (message) => message.type === "session.welcome"
+    )!;
+    const firstSessionId = String(firstWelcome.session_id);
+    const resumeToken = String(firstWelcome.payload.resume_token);
+    gateway.detach(firstConnection);
+
+    const marker = outgoing.length;
+    gateway.attach(
+      `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      (message) => outgoing.push(message)
+    );
+    gateway.handle({
+      protocol: "bpa.browser/1",
+      version: "1.0.0",
+      message_id: "hello-resume-second",
+      session_id: "new",
+      seq: 0,
+      sent_at: new Date().toISOString(),
+      type: "session.hello",
+      trace_id: "trace-resume",
+      payload: {
+        browser_instance_id: "browser-resume",
+        extension_id: DEFAULT_BPA_EXTENSION_ID,
+        extension_version: "0.4.0",
+        supported_protocols: ["bpa.browser/1"],
+        last_acked_command_seq: 0,
+        resume_token: resumeToken
+      }
+    });
+    const resumedMessages = outgoing.slice(marker);
+    expect(
+      resumedMessages.find((message) => message.type === "session.welcome")
+        ?.session_id
+    ).toBe(firstSessionId);
+    expect(resumedMessages).toContainEqual(
+      expect.objectContaining({
+        type: "session.resume",
+        session_id: firstSessionId,
+        payload: expect.objectContaining({ accepted: true })
+      })
+    );
+    expect(gateway.status().sessionId).toBe(firstSessionId);
+    expect(persistence.listBrowserSessions({ limit: 10 }).records).toHaveLength(
+      1
+    );
+    persistence.close();
+  });
 });

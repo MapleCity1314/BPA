@@ -239,6 +239,39 @@ describe("SQLite v8 Resource Binding and Session observation", () => {
     ).toThrow("cursor is invalid");
   });
 
+  it("resumes the same observed Session identity for frozen bindings", () => {
+    const database = new SqlitePersistence({ path: ":memory:" });
+    const observed = openObservedSession(database);
+    database.updateBrowserSession({
+      id: observed.id,
+      disconnectedAt: "2026-07-30T00:01:00.000Z"
+    });
+    const replacement = {
+      ...browserSession("session:new-connection"),
+      resumeTokenDigest: `sha256:${"c".repeat(64)}`,
+      connectedAt: "2026-07-30T00:02:00.000Z"
+    };
+    const resumed = database.openBrowserSession({
+      session: replacement,
+      presentedResumeTokenDigest: browserSession().resumeTokenDigest,
+      now: "2026-07-30T00:02:00.000Z"
+    });
+    expect(resumed.resumedFrom?.id).toBe("session:v8");
+    expect(resumed.session).toMatchObject({
+      id: "session:v8",
+      observationRevision: 1,
+      observationState: "available",
+      observedOrigin: "https://www.chanmama.com",
+      observedAuthentication: "membership",
+      resumeTokenDigest: replacement.resumeTokenDigest,
+      connectedAt: replacement.connectedAt
+    });
+    expect(resumed.session.disconnectedAt).toBeUndefined();
+    expect(
+      database.getBrowserSession("session:new-connection")
+    ).toBeUndefined();
+  });
+
   it("rolls Run, plan, checkpoint and bindings back together", () => {
     let inject = false;
     const database = new SqlitePersistence({

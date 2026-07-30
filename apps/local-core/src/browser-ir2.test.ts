@@ -121,6 +121,40 @@ function plan(node: NodeDefinition): ExecutionPlan {
   };
 }
 
+function boundPlan(node: NodeDefinition): ExecutionPlan {
+  const source = plan(node);
+  const observe = source.steps.observe;
+  if (!observe || observe.kind !== "call") {
+    throw new Error("Browser plan fixture must start with a Call");
+  }
+  const requirement = {
+    kind: "browser" as const,
+    capabilities: ["browser.dom.read"],
+    allowedOrigins: ["https://fxg.jinritemai.com"],
+    authentication: "authenticated" as const,
+    purpose: "Read the selected Doudian page"
+  };
+  return {
+    ...source,
+    resourceSlots: { shop_source: requirement },
+    steps: {
+      ...source.steps,
+      observe: {
+        ...observe,
+        resourceRequirements: { page_session: requirement },
+        resourceMappings: {
+          page_session: {
+            requirementName: "page_session",
+            slotName: "shop_source",
+            requirement,
+            requirementDigest: contentDigest(requirement)
+          }
+        }
+      }
+    }
+  };
+}
+
 describe("IR2 browser provider", () => {
   it("durably bridges a frozen invocation through Browser Protocol v1", async () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
@@ -191,8 +225,41 @@ describe("IR2 browser provider", () => {
         manifest_digest: `sha256:${"c".repeat(64)}`
       }
     });
-    const run = service.ir2Runtime.start(plan(node), {});
+    persistence.updateBrowserSessionObservation({
+      id: sessionId,
+      expectedRevision: 0,
+      role: "general",
+      observedOrigin: "https://fxg.jinritemai.com",
+      observedAuthentication: "authenticated",
+      observationState: "available",
+      observedAt: new Date().toISOString()
+    });
+    const executionPlan = boundPlan(node);
+    const run = service.ir2Runtime.start(
+      executionPlan,
+      {},
+      undefined,
+      (runId) => ({
+        snapshotVersion: "bpa.resource-binding/1",
+        runId,
+        resourceSlots: executionPlan.resourceSlots!,
+        bindings: {
+          shop_source: {
+            bindingId: `binding:${runId}:shop_source`,
+            revision: 1,
+            slotName: "shop_source",
+            sessionId,
+            capabilityDigest: `sha256:${"c".repeat(64)}`,
+            origin: "https://fxg.jinritemai.com",
+            authentication: "authenticated",
+            frozenAt: 1,
+            approvedBy: "test"
+          }
+        }
+      })
+    );
     const draining = service.ir2Runtime.drainOnce();
+    await new Promise<void>((resolve) => setImmediate(resolve));
     const command = outgoing.find(
       (message) => message.type === "command.dispatch"
     );

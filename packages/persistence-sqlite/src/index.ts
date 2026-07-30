@@ -2430,12 +2430,32 @@ export class SqlitePersistence implements Persistence {
           this.#db
             .prepare(
               `UPDATE browser_sessions
-               SET resume_token_digest = NULL,
-                   resume_token_expires_at = NULL,
-                   disconnected_at = COALESCE(disconnected_at, ?)
+               SET extension_version = ?,
+                   protocol_version = ?,
+                   last_seq = ?,
+                   outgoing_seq = ?,
+                   last_acked_command_seq = ?,
+                   resume_token_digest = ?,
+                   resume_token_expires_at = ?,
+                   connected_at = ?,
+                   disconnected_at = NULL
                WHERE id = ?`
             )
-            .run(input.now, resumedFrom.id);
+            .run(
+              input.session.extensionVersion,
+              input.session.protocolVersion,
+              input.session.incomingSeq,
+              input.session.outgoingSeq,
+              resumedFrom.lastAckedCommandSeq,
+              input.session.resumeTokenDigest,
+              input.session.resumeTokenExpiresAt,
+              input.session.connectedAt,
+              resumedFrom.id
+            );
+          return {
+            session: this.#getBrowserSession(resumedFrom.id)!,
+            resumedFrom
+          };
         }
       }
       const session = input.session;
