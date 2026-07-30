@@ -47,16 +47,20 @@ import {
   validateDeterministicResultValidatorPolicy,
   validateJsonSchemaDefinition,
   validateNode,
+  validateNodeV1Alpha2,
   validatePageModel,
   validateWorkflow,
+  validateWorkflowV1Alpha3,
   type NodeDefinition,
+  type NodeDefinitionV1Alpha2,
   type AdapterManifestDefinition,
   type AssistanceProfileDefinition,
   type ElementContractDefinition,
   type PageModelDefinition,
   type DeterministicResultValidatorPolicyDefinition,
   type WorkflowDefinition,
-  type WorkflowDefinitionV1Alpha2
+  type WorkflowDefinitionV1Alpha2,
+  type WorkflowDefinitionV1Alpha3
 } from "@bpa/schemas";
 import {
   validateElementContractDefinition,
@@ -76,6 +80,8 @@ import {
 import type { JsonValue } from "@bpa/workflow-ir";
 
 export const CONTROL_MAX_MESSAGE_BYTES = 512 * 1024;
+
+type PublishedNodeDefinition = NodeDefinition | NodeDefinitionV1Alpha2;
 
 export interface ControlRequest {
   id: string;
@@ -579,18 +585,26 @@ export class LocalCoreService {
 
   #validateAsset(assetType: string, content: unknown): unknown {
     if (assetType === "node") {
-      if (!validateNode(content)) {
+      const isV1Alpha2 =
+        content !== null &&
+        typeof content === "object" &&
+        (content as { apiVersion?: unknown }).apiVersion === "bpa/v1alpha2";
+      const validatePublishedNode = isV1Alpha2
+        ? validateNodeV1Alpha2
+        : validateNode;
+      if (!validatePublishedNode(content)) {
         return {
           valid: false,
-          errors: formatValidationErrors(validateNode.errors)
+          errors: formatValidationErrors(validatePublishedNode.errors)
         };
       }
+      const node = content as PublishedNodeDefinition;
       const schemaErrors: string[] = [];
       for (const [name, schema] of [
-        ["inputSchema", content.inputSchema],
-        ["outputSchema", content.outputSchema],
-        ...(content.configSchema
-          ? ([["configSchema", content.configSchema]] as const)
+        ["inputSchema", node.inputSchema],
+        ["outputSchema", node.outputSchema],
+        ...(node.configSchema
+          ? ([["configSchema", node.configSchema]] as const)
           : [])
       ] as const) {
         const schemaValidation = validateJsonSchemaDefinition(schema);
@@ -617,22 +631,35 @@ export class LocalCoreService {
       }
       return {
         valid: true,
-        digest: contentDigest(content),
-        identity: `${content.metadata.id}@${content.metadata.version}`
+        digest: contentDigest(node),
+        identity: `${node.metadata.id}@${node.metadata.version}`
       };
     }
     if (assetType === "workflow") {
-      const isV1Alpha2 =
+      const apiVersion =
         content !== null &&
         typeof content === "object" &&
-        (content as { apiVersion?: unknown }).apiVersion === "bpa/v1alpha2";
-      if (!isV1Alpha2 && !validateWorkflow(content)) {
+        typeof (content as { apiVersion?: unknown }).apiVersion === "string"
+          ? (content as { apiVersion: string }).apiVersion
+          : undefined;
+      const isCanonical =
+        apiVersion === "bpa/v1alpha2" || apiVersion === "bpa/v1alpha3";
+      if (
+        apiVersion === "bpa/v1alpha3" &&
+        !validateWorkflowV1Alpha3(content)
+      ) {
+        return {
+          valid: false,
+          errors: formatValidationErrors(validateWorkflowV1Alpha3.errors)
+        };
+      }
+      if (!isCanonical && !validateWorkflow(content)) {
         return {
           valid: false,
           errors: formatValidationErrors(validateWorkflow.errors)
         };
       }
-      const compiled = isV1Alpha2
+      const compiled = isCanonical
         ? compileCanonicalWorkflow(content, this.#ir2Catalog())
         : compileWorkflow(content, this.#nodeCatalog());
       return {
@@ -834,7 +861,9 @@ export class LocalCoreService {
           capability.nodeId,
           version
         );
-        const node = published?.content as NodeDefinition | undefined;
+        const node = published?.content as
+          | PublishedNodeDefinition
+          | undefined;
         if (!node || node.runtime !== "browser") {
           issues.push(`Published Browser Node is missing: ${identity}`);
           continue;
@@ -925,7 +954,10 @@ export class LocalCoreService {
       }
       const typed = content as
         | NodeDefinition
+        | NodeDefinitionV1Alpha2
         | WorkflowDefinition
+        | WorkflowDefinitionV1Alpha2
+        | WorkflowDefinitionV1Alpha3
         | AdapterManifestDefinition
         | AssistanceProfileDefinition
         | DeterministicResultValidatorPolicyDefinition
@@ -975,12 +1007,13 @@ export class LocalCoreService {
         ).join("; ")}`
       );
     }
-    const isV1Alpha2 =
+    const isCanonical =
       artifact.content !== null &&
       typeof artifact.content === "object" &&
-      (artifact.content as { apiVersion?: unknown }).apiVersion ===
-        "bpa/v1alpha2";
-    if (isV1Alpha2) {
+      ["bpa/v1alpha2", "bpa/v1alpha3"].includes(
+        String((artifact.content as { apiVersion?: unknown }).apiVersion)
+      );
+    if (isCanonical) {
       return this.ir2Runtime.start(
         compileCanonicalWorkflow(artifact.content, this.#ir2Catalog()),
         safeInput
@@ -997,7 +1030,7 @@ export class LocalCoreService {
     nodeVersion: string,
     input: unknown
   ): {
-    node: NodeDefinition;
+    node: PublishedNodeDefinition;
     input: JsonValue;
     plan: ReturnType<typeof compileCanonicalWorkflow>;
     previewDigest: string;
@@ -1010,7 +1043,7 @@ export class LocalCoreService {
     if (!artifact) {
       throw new Error(`Published Node not found: ${nodeId}@${nodeVersion}`);
     }
-    const node = artifact.content as NodeDefinition;
+    const node = artifact.content as PublishedNodeDefinition;
     if (
       node.risk.level === "R2" ||
       node.risk.level === "R3" ||
@@ -1018,6 +1051,15 @@ export class LocalCoreService {
     ) {
       throw new Error(
         "SingleNodeRun is limited to R0/R1; use a published Workflow with the formal approval path for R2+"
+      );
+    }
+    if (
+      node.apiVersion === "bpa/v1alpha2" &&
+      node.resources &&
+      Object.keys(node.resources).length > 0
+    ) {
+      throw new Error(
+        "SingleNodeRun cannot invent Browser Resource Bindings; use a published v1alpha3 Workflow"
       );
     }
     const safeInput = JSON.parse(JSON.stringify(input)) as JsonValue;
@@ -1177,6 +1219,11 @@ export class LocalCoreService {
     return new MemoryNodeCatalog(
       this.persistence
         .listPublished("node")
+        .filter(
+          (artifact) =>
+            (artifact.content as { apiVersion?: unknown }).apiVersion ===
+            "bpa/v1alpha1"
+        )
         .map((artifact) => artifact.content as NodeDefinition)
     );
   }
@@ -1185,7 +1232,7 @@ export class LocalCoreService {
     const nodes = new Map(
       this.persistence.listPublished("node").map((artifact) => [
         `${artifact.assetId}@${artifact.version}`,
-        artifact.content as NodeDefinition
+        artifact.content as PublishedNodeDefinition
       ])
     );
     const adapters = this.persistence.listPublished("adapter");

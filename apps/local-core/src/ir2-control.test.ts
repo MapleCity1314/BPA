@@ -3,7 +3,9 @@ import { contentDigest } from "@bpa/compiler";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import type {
   NodeDefinition,
-  WorkflowDefinitionV1Alpha2
+  NodeDefinitionV1Alpha2,
+  WorkflowDefinitionV1Alpha2,
+  WorkflowDefinitionV1Alpha3
 } from "@bpa/schemas";
 import { LocalCoreService } from "./control.js";
 
@@ -64,7 +66,116 @@ const workflow: WorkflowDefinitionV1Alpha2 = {
   }
 };
 
+const resourceNode: NodeDefinitionV1Alpha2 = {
+  apiVersion: "bpa/v1alpha2",
+  kind: "Node",
+  metadata: {
+    id: "browser.resource.read",
+    version: "1.0.0",
+    title: "Resource read"
+  },
+  runtime: "browser",
+  inputSchema: { type: "object" },
+  outputSchema: { type: "object" },
+  risk: {
+    level: "R1",
+    permissions: ["browser.dom.read"],
+    domains: ["https://example.com"]
+  },
+  execution: {
+    timeoutDefault: "10s",
+    idempotency: "repeatable_read"
+  },
+  errors: [],
+  resources: {
+    page_session: {
+      kind: "browser",
+      capabilities: ["browser.dom.read"],
+      allowedOrigins: ["https://example.com"],
+      authentication: "authenticated",
+      purpose: "Read the bound authenticated page"
+    }
+  }
+};
+
+const resourceWorkflow: WorkflowDefinitionV1Alpha3 = {
+  apiVersion: "bpa/v1alpha3",
+  kind: "Workflow",
+  metadata: {
+    id: "test.resource-control",
+    version: "1.0.0",
+    title: "Resource control"
+  },
+  spec: {
+    riskLevel: "R1",
+    inputSchema: { type: "object" },
+    outputSchema: { type: "object" },
+    limits: { maxDepth: 1, maxStepExecutions: 10 },
+    resourceSlots: {
+      source: {
+        kind: "browser",
+        capabilities: ["browser.dom.read"],
+        allowedOrigins: ["https://example.com"],
+        authentication: "authenticated",
+        purpose: "Bound source page"
+      }
+    },
+    root: {
+      kind: "sequence",
+      steps: [
+        {
+          kind: "call",
+          key: "read",
+          use: "browser.resource.read@1.0.0",
+          resourceMappings: { page_session: "source" }
+        },
+        {
+          kind: "terminal",
+          key: "done",
+          status: "succeeded",
+          output: "${steps.read.output}"
+        }
+      ]
+    }
+  }
+};
+
 describe("Local Core IR2 control integration", () => {
+  it("publishes Node v1alpha2 and validates Workflow v1alpha3 assets", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const service = new LocalCoreService(persistence);
+
+    expect(
+      service.handle({
+        id: "publish-resource-node",
+        method: "asset.publish",
+        params: {
+          assetType: "node",
+          content: resourceNode,
+          actor: "test"
+        }
+      })
+    ).toMatchObject({ ok: true });
+    expect(
+      service.handle({
+        id: "validate-resource-workflow",
+        method: "asset.validate",
+        params: { assetType: "workflow", content: resourceWorkflow }
+      })
+    ).toMatchObject({
+      ok: true,
+      result: {
+        valid: true,
+        identity: "test.resource-control@1.0.0",
+        compiled: {
+          irVersion: "bpa.workflow-ir/2",
+          resourceSlots: resourceWorkflow.spec.resourceSlots
+        }
+      }
+    });
+    persistence.close();
+  });
+
   it("validates, publishes, starts and completes a v1alpha2 workflow", async () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
     persistence.publish({
