@@ -4,7 +4,7 @@ import {
   teamCodeDigest
 } from "@bpa/team-runtime";
 
-export const TEAM_WORKER_VERSION = "0.3.0";
+export const TEAM_WORKER_VERSION = "0.4.0";
 
 function implementationDigest(ref: string, implementation: string): string {
   return `sha256:${createHash("sha256")

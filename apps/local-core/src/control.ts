@@ -1589,7 +1589,7 @@ export class LocalControlServer {
               const hello = parseControlHelloRequest(message);
               const response = negotiateControlHello(hello, {
                 supportedApplicationProtocols: [CONTROL_PROTOCOL_VERSION],
-                runtime: { name: "bpa-core", version: "0.3.0" },
+                runtime: { name: "bpa-core", version: "0.4.0" },
                 maxFrameBytes: CONTROL_V1_MAX_MESSAGE_BYTES,
                 features: [
                   "control_error_isolation",

@@ -113,13 +113,13 @@ pnpm mcp
 ## 4. 安装、升级与回滚
 
 发布包携带经过 SHA-256 校验的 Node.js 24 macOS arm64 Runtime。
-当前版本为 BPA Runtime `0.3.0`、Doudian Adapter `1.1.0`、重点项只读 Workflow `0.3.0`。
+当前版本为 BPA Runtime `0.4.0`、Doudian Adapter `1.1.0`、重点项只读 Workflow `0.3.0`。
 旧 Runtime 与已发布资产继续保留，不执行覆盖升级。
 
 ```bash
 BPA_BUNDLED_NODE=/absolute/path/to/node24 \
   ./scripts/package-macos-arm64.sh
-tar -xzf artifacts/bpa-local-v0.3.0-macos-arm64.tar.gz
+tar -xzf artifacts/bpa-local-v0.4.0-rc.<commit>-macos-arm64.tar.gz
 cd bpa
 ./install.sh
 ./rollback.sh

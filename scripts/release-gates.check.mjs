@@ -16,23 +16,23 @@ const commit = "45012e05d9326bc96156c10d43c7614e7600fb28";
 
 test("derives one deterministic RC identity from exact release inputs", () => {
   const release = createReleaseMetadata({
-    runtimeVersion: "0.3.0",
+    runtimeVersion: "0.4.0",
     gitCommit: commit,
     nodeVersion: "24.18.0",
     platform: "darwin",
     architecture: "arm64"
   });
   assert.deepEqual(validateReleaseMetadata(release), release);
-  assert.equal(release.identity, "v0.3.0-rc.45012e05d932");
+  assert.equal(release.identity, "v0.4.0-rc.45012e05d932");
   assert.equal(
     expectedArchiveBasename(release),
-    "bpa-local-v0.3.0-rc.45012e05d932-macos-arm64.tar.gz"
+    "bpa-local-v0.4.0-rc.45012e05d932-macos-arm64.tar.gz"
   );
 });
 
 test("rejects legacy names and metadata drift", () => {
   const release = createReleaseMetadata({
-    runtimeVersion: "0.3.0",
+    runtimeVersion: "0.4.0",
     gitCommit: commit,
     nodeVersion: "24.18.0",
     platform: "darwin",
@@ -41,7 +41,7 @@ test("rejects legacy names and metadata drift", () => {
   assert.throws(
     () =>
       assertArchiveBasename(
-        "bpa-local-v0.3.0-macos-arm64.tar.gz",
+        "bpa-local-v0.4.0-macos-arm64.tar.gz",
         release
       ),
     /refusing legacy or mismatched archive/u
@@ -51,7 +51,7 @@ test("rejects legacy names and metadata drift", () => {
     /Node\.js version is invalid/u
   );
   assert.throws(
-    () => validateReleaseMetadata({ ...release, identity: "v0.3.0-rc.bad" }),
+    () => validateReleaseMetadata({ ...release, identity: "v0.4.0-rc.bad" }),
     /Release identity/u
   );
 });
