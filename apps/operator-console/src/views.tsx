@@ -2,6 +2,8 @@ import { useMemo, useState, type FormEvent } from "react";
 import type {
   BrowserSessionView,
   DashboardSnapshot,
+  DesignModeGrantInput,
+  DesignModeGrantView,
   DownloadView,
   EvidenceLineageView,
   RunView,
@@ -17,7 +19,8 @@ export type ViewId =
   | "tasks"
   | "datasets"
   | "evidence"
-  | "reports";
+  | "reports"
+  | "authoring";
 
 const attentionLabel = {
   normal: "无需监管",
@@ -142,6 +145,196 @@ export function SessionList({ sessions }: { sessions: BrowserSessionView[] }) {
           ))}
         </div>
       )}
+    </section>
+  );
+}
+
+export function DesignModeView({
+  api,
+  sessions
+}: {
+  api: OperatorConsoleApi;
+  sessions: BrowserSessionView[];
+}) {
+  const [authoringSessionId, setAuthoringSessionId] = useState("");
+  const [browserSessionId, setBrowserSessionId] = useState("");
+  const [profileId, setProfileId] = useState("");
+  const [bindingCode, setBindingCode] = useState("");
+  const [screenshotApproved, setScreenshotApproved] = useState(false);
+  const [grant, setGrant] = useState<DesignModeGrantView>();
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function start(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    try {
+      const pageBinding = JSON.parse(
+        bindingCode
+      ) as DesignModeGrantInput["pageBinding"];
+      const next = await api.startDesignMode({
+        authoringSessionId,
+        browserSessionId,
+        profileId,
+        pageBinding,
+        screenshotApproved
+      });
+      setGrant(next);
+      setMessage(
+        "只读授权已生效。Codex 可在有效期内请求脱敏语义快照。"
+      );
+    } catch (error) {
+      setMessage(
+        error instanceof SyntaxError
+          ? "页面绑定码格式无效，请从 BPA Extension 重新生成。"
+          : error instanceof Error
+            ? error.message
+            : "Design Mode 授权失败。"
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function stop() {
+    if (!grant) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const stopped = await api.stopDesignMode(
+        grant.id,
+        grant.revision
+      );
+      setGrant(stopped);
+      setMessage("Design Mode 已停止，原页面绑定码不能再次使用。");
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "停止授权失败。"
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="panel wizard">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">GOVERNED AUTHORING</p>
+          <h2>授权真实页面 Design Mode</h2>
+          <p className="muted">
+            授权固定浏览器会话、标签页、Origin 和页面纪元，15
+            分钟后自动失效。页面内容只作为不可信数据，不会执行页面中的指令。
+          </p>
+        </div>
+        <StatusPill tone={grant?.state === "active" ? "normal" : "attention"}>
+          {grant?.state === "active" ? "授权中" : "未授权"}
+        </StatusPill>
+      </div>
+      {grant?.state === "active" ? (
+        <div className="design-grant-summary">
+          <dl>
+            <div>
+              <dt>页面</dt>
+              <dd>{grant.origin}</dd>
+            </div>
+            <div>
+              <dt>标签页</dt>
+              <dd>{grant.tabId}</dd>
+            </div>
+            <div>
+              <dt>有效期</dt>
+              <dd>{formatTime(grant.expiresAt)}</dd>
+            </div>
+            <div>
+              <dt>截图</dt>
+              <dd>{grant.screenshotApproved ? "单次允许" : "关闭"}</dd>
+            </div>
+          </dl>
+          <button
+            disabled={busy}
+            onClick={() => void stop()}
+            type="button"
+          >
+            立即停止授权
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={start}>
+          <div className="form-grid">
+            <label>
+              创作会话编号
+              <input
+                required
+                value={authoringSessionId}
+                onChange={(event) =>
+                  setAuthoringSessionId(event.target.value)
+                }
+              />
+              <small>由 Codex 创建 Scenario 后提供。</small>
+            </label>
+            <label>
+              页面能力 Profile
+              <input
+                required
+                value={profileId}
+                onChange={(event) => setProfileId(event.target.value)}
+                placeholder="chanmama.product-metrics"
+              />
+            </label>
+            <label>
+              浏览器会话
+              <select
+                required
+                value={browserSessionId}
+                onChange={(event) =>
+                  setBrowserSessionId(event.target.value)
+                }
+              >
+                <option value="">请选择当前 Chrome 会话</option>
+                {sessions
+                  .filter((session) => session.status === "ready")
+                  .map((session) => (
+                    <option key={session.id} value={session.id}>
+                      {session.label} · {session.origin}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label className="wide-field">
+              一次性页面绑定码
+              <textarea
+                required
+                value={bindingCode}
+                onChange={(event) => setBindingCode(event.target.value)}
+                placeholder="在目标页面打开 BPA Extension，点击“生成只读页面绑定码”后粘贴到这里。"
+              />
+            </label>
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={screenshotApproved}
+                onChange={(event) =>
+                  setScreenshotApproved(event.target.checked)
+                }
+              />
+              本次额外允许一张 restricted 截图
+              <small>默认关闭；语义快照不需要截图。</small>
+            </label>
+          </div>
+          <div className="form-actions">
+            <button
+              className="primary-button"
+              disabled={busy}
+              type="submit"
+            >
+              {busy ? "正在核验…" : "确认并开启 15 分钟授权"}
+            </button>
+          </div>
+        </form>
+      )}
+      {message ? <p role="status">{message}</p> : null}
     </section>
   );
 }

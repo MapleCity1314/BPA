@@ -6,9 +6,11 @@ import {
   formatValidationErrors,
   validateJsonSchemaDefinition,
   validateNode,
+  validateNodeV1Alpha2,
   validateWorkflow,
   validateWorkflowV1Alpha2,
   type NodeDefinition,
+  type NodeDefinitionV1Alpha2,
   type WorkflowDefinition
 } from "@bpa/schemas";
 import { compileWorkflow, MemoryNodeCatalog } from "./index.js";
@@ -25,13 +27,19 @@ describe("published default asset sources", () => {
       .filter((name) => name.endsWith(".node.yaml"))
       .sort();
     const nodes = filenames.map((filename) =>
-      loadYaml<NodeDefinition>(`nodes/core/${filename}`)
+      loadYaml<NodeDefinition | NodeDefinitionV1Alpha2>(
+        `nodes/core/${filename}`
+      )
     );
     expect(nodes.length).toBeGreaterThanOrEqual(11);
     for (const node of nodes) {
+      const validator =
+        node.apiVersion === "bpa/v1alpha2"
+          ? validateNodeV1Alpha2
+          : validateNode;
       expect(
-        validateNode(node),
-        `${node.metadata.id}: ${formatValidationErrors(validateNode.errors).join(
+        validator(node),
+        `${node.metadata.id}: ${formatValidationErrors(validator.errors).join(
           "; "
         )}`
       ).toBe(true);
@@ -40,6 +48,10 @@ describe("published default asset sources", () => {
         expect(() => compileDataValidator(schema)).not.toThrow();
       }
     }
+    const legacyNodes = nodes.filter(
+      (node): node is NodeDefinition =>
+        node.apiVersion === "bpa/v1alpha1"
+    );
     const workflowFilenames = readdirSync(
       new URL("workflows/examples/", root)
     )
@@ -72,7 +84,7 @@ describe("published default asset sources", () => {
       ).toBe(true);
       const compiled = compileWorkflow(
         workflow,
-        new MemoryNodeCatalog(nodes)
+        new MemoryNodeCatalog(legacyNodes)
       );
       expect(compiled.workflowVersion).toBe(workflow.metadata.version);
     }
@@ -82,7 +94,7 @@ describe("published default asset sources", () => {
     );
     const doudianCompiled = compileWorkflow(
       doudianWorkflow,
-      new MemoryNodeCatalog(nodes)
+      new MemoryNodeCatalog(legacyNodes)
     );
     expect(doudianCompiled.workflowVersion).toBe("1.2.0");
     expect(doudianCompiled.nodes.observe_shop?.nodeVersion).toBe("1.2.0");

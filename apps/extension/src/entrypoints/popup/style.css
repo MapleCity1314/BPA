@@ -18,12 +18,45 @@ h1 {
   font-size: 17px;
 }
 
-.assistance {
+.assistance,
+.design-mode {
   margin: 0 0 16px;
   padding: 12px;
   border: 1px solid #d8e0da;
   border-radius: 10px;
   background: #fff;
+}
+
+.design-mode h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.design-mode p {
+  margin: 8px 0;
+  color: #66736b;
+}
+
+.design-mode button {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #17211b;
+  border-radius: 8px;
+  color: #fff;
+  background: #17211b;
+  cursor: pointer;
+}
+
+.design-mode textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 78px;
+  margin-top: 8px;
+  padding: 8px;
+  resize: vertical;
+  border: 1px solid #d8e0da;
+  border-radius: 8px;
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .assistance header {

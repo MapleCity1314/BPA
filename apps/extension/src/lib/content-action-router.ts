@@ -32,6 +32,10 @@ export interface ContentActionResult {
 }
 
 export interface ContentActionHandlers {
+  readonly "browser.design.snapshot.capture": (
+    input: Readonly<Record<string, unknown>>,
+    request: ContentActionRequest
+  ) => Promise<ContentActionResult>;
   readonly "doudian.shop.context.read": (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
@@ -176,6 +180,35 @@ function scopeRestoreIdentityMatches(
   }
 }
 
+function designCaptureInputValid(
+  input: Readonly<Record<string, unknown>>,
+  requestPageEpoch: string
+): boolean {
+  const allowed = new Set([
+    "authoringSessionId",
+    "designGrantId",
+    "pageState",
+    "profileId",
+    "pageEpoch"
+  ]);
+  return (
+    Object.keys(input).every((key) => allowed.has(key)) &&
+    ["authoringSessionId", "designGrantId", "pageState"].every(
+      (key) =>
+        typeof input[key] === "string" &&
+        /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u.test(
+          input[key] as string
+        )
+    ) &&
+    typeof input.profileId === "string" &&
+    input.profileId.length > 0 &&
+    input.profileId.length <= 300 &&
+    typeof input.pageEpoch === "string" &&
+    validPageEpoch(input.pageEpoch) &&
+    input.pageEpoch === requestPageEpoch
+  );
+}
+
 export async function routeContentAction(input: {
   readonly request: ContentActionRequest;
   readonly currentUrl: string;
@@ -232,11 +265,22 @@ export async function routeContentAction(input: {
       "doudian.editor.priority-items.inspect" &&
     route.capability.nodeId !== "doudian.product.editor.open" &&
     route.capability.nodeId !== "doudian.product.scope.restore" &&
+    route.capability.nodeId !== "browser.design.snapshot.capture" &&
     Object.keys(actionInput).length > 0
   ) {
     return failure(
       "INPUT_INVALID",
       "该只读页面动作不接受额外输入。",
+      request.pageEpoch
+    );
+  }
+  if (
+    route.capability.nodeId === "browser.design.snapshot.capture" &&
+    !designCaptureInputValid(actionInput, request.pageEpoch)
+  ) {
+    return failure(
+      "DESIGN_CAPTURE_INPUT_INVALID",
+      "Design Mode 捕获输入与授权身份不完整。",
       request.pageEpoch
     );
   }

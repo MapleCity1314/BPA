@@ -62,6 +62,97 @@ interface ActiveSession {
   capabilities: BrowserCapabilityRecord[];
 }
 
+function rejectDesignCapture(
+  code: string,
+  message: string
+): RuntimeOutcome {
+  return {
+    status: "rejected",
+    error: { code, message, retryable: false },
+    evidence: [],
+    riskSignals: []
+  };
+}
+
+export function validateDesignCaptureInvocation(
+  persistence: Pick<Persistence, "getDesignModeGrant">,
+  invocation: RuntimeInvocation
+): RuntimeOutcome | undefined {
+  if (invocation.node.id !== "browser.design.snapshot.capture") {
+    return undefined;
+  }
+  const input =
+    invocation.input !== null &&
+    typeof invocation.input === "object" &&
+    !Array.isArray(invocation.input)
+      ? (invocation.input as Record<string, JsonValue>)
+      : undefined;
+  if (!input) {
+    return rejectDesignCapture(
+      "DESIGN_GRANT_INVALID",
+      "Design capture requires a governed object input."
+    );
+  }
+  const grantId = input.designGrantId;
+  const grant =
+    typeof grantId === "string"
+      ? persistence.getDesignModeGrant(grantId)
+      : undefined;
+  if (!grant) {
+    return rejectDesignCapture(
+      "DESIGN_GRANT_MISSING",
+      "The exact Design Mode Grant is unavailable."
+    );
+  }
+  if (
+    grant.state !== "active" ||
+    Date.parse(grant.expiresAt) <= Date.now()
+  ) {
+    return rejectDesignCapture(
+      "DESIGN_GRANT_INACTIVE",
+      "The Design Mode Grant is inactive or expired."
+    );
+  }
+  const boundSessionIds = [
+    ...new Set(
+      Object.values(invocation.resourceBindings ?? {}).map(
+        (resource) => resource.binding.sessionId
+      )
+    )
+  ];
+  const boundOrigins = [
+    ...new Set(
+      Object.values(invocation.resourceBindings ?? {}).map(
+        (resource) => resource.binding.origin
+      )
+    )
+  ];
+  if (
+    boundSessionIds.length !== 1 ||
+    boundSessionIds[0] !== grant.browserSessionId ||
+    boundOrigins.length !== 1 ||
+    boundOrigins[0] !== grant.origin
+  ) {
+    return rejectDesignCapture(
+      "DESIGN_GRANT_RESOURCE_MISMATCH",
+      "The frozen Browser Resource differs from the Design Mode Grant."
+    );
+  }
+  if (
+    input.authoringSessionId !== grant.authoringSessionId ||
+    input.profileId !== grant.profileId ||
+    input.pageEpoch !== grant.pageEpoch ||
+    !grant.pageEpoch.startsWith(`tab-${grant.tabId}:`) ||
+    !grant.allowedOperations.includes("semantic_snapshot")
+  ) {
+    return rejectDesignCapture(
+      "DESIGN_GRANT_CONTEXT_MISMATCH",
+      "Session, profile, tab, page epoch, or operation differs from the grant."
+    );
+  }
+  return undefined;
+}
+
 export class LocalBrowserGateway implements RuntimeProvider {
   readonly id = "browser";
   readonly #extensionId: string;
@@ -156,6 +247,11 @@ export class LocalBrowserGateway implements RuntimeProvider {
         riskSignals: []
       });
     }
+    const designRejection = validateDesignCaptureInvocation(
+      this.persistence,
+      invocation
+    );
+    if (designRejection) return Promise.resolve(designRejection);
     const boundSessionIds = [
       ...new Set(
         Object.values(invocation.resourceBindings ?? {}).map(

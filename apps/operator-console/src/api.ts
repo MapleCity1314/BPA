@@ -3,6 +3,8 @@ import type {
   CreateRunResult,
   DashboardSnapshot,
   DatasetImportResult,
+  DesignModeGrantInput,
+  DesignModeGrantView,
   DownloadView,
   EvidenceLineageView,
   RunView,
@@ -30,6 +32,13 @@ export interface OperatorConsoleApi {
   getEvidenceLineage(runId: string): Promise<EvidenceLineageView>;
   listDownloads(runId?: string): Promise<DownloadView[]>;
   downloadUrl(downloadId: string): string;
+  startDesignMode(
+    input: DesignModeGrantInput
+  ): Promise<DesignModeGrantView>;
+  stopDesignMode(
+    grantId: string,
+    expectedRevision: number
+  ): Promise<DesignModeGrantView>;
 }
 
 interface SessionResponse {
@@ -191,5 +200,24 @@ export class HttpOperatorConsoleApi implements OperatorConsoleApi {
 
   downloadUrl(downloadId: string) {
     return `/api/downloads/${encodeURIComponent(downloadId)}`;
+  }
+
+  startDesignMode(input: DesignModeGrantInput) {
+    return this.#request<DesignModeGrantView>(
+      "/api/authoring/design-mode/grants",
+      { method: "POST", body: JSON.stringify(input) },
+      true
+    );
+  }
+
+  stopDesignMode(grantId: string, expectedRevision: number) {
+    return this.#request<DesignModeGrantView>(
+      `/api/authoring/design-mode/grants/${encodeURIComponent(grantId)}/stop`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expectedRevision })
+      },
+      true
+    );
   }
 }

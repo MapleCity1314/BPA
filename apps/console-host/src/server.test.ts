@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type {
   ControlBackend,
   CreateRunInput,
+  DesignModeGrantInput,
   StagingLeaseRequest,
   StagedDatasetImportInput,
   SubmitTaskInput
@@ -37,6 +38,36 @@ class RecordingBackend implements ControlBackend {
       recordCount: 12,
       warnings: [],
       errors: []
+    })
+  );
+  readonly startDesignMode = vi.fn(
+    async (input: DesignModeGrantInput) => ({
+      id: "design.grant-1",
+      authoringSessionId: input.authoringSessionId,
+      browserSessionId: input.browserSessionId,
+      profileId: input.profileId,
+      state: "active" as const,
+      origin: input.pageBinding.origin,
+      tabId: input.pageBinding.tabId,
+      pageEpoch: input.pageBinding.pageEpoch,
+      expiresAt: "2030-01-01T00:15:00.000Z",
+      screenshotApproved: input.screenshotApproved,
+      revision: 1
+    })
+  );
+  readonly stopDesignMode = vi.fn(
+    async (grantId: string, expectedRevision: number) => ({
+      id: grantId,
+      authoringSessionId: "authoring.session-1",
+      browserSessionId: "browser-session-1",
+      profileId: "chanmama.product-metrics",
+      state: "stopped" as const,
+      origin: "https://www.chanmama.com",
+      tabId: 7,
+      pageEpoch: "tab-7:1999999999999:design-1",
+      expiresAt: "2030-01-01T00:15:00.000Z",
+      screenshotApproved: false,
+      revision: expectedRevision + 1
     })
   );
 
@@ -264,6 +295,79 @@ describe("Console Host security boundary", () => {
     });
     expect(pathAttempt.status).toBe(400);
     expect(backend.createStagingLease).not.toHaveBeenCalled();
+  });
+
+  it("requires CSRF and a closed Design Mode page-binding shape", async () => {
+    const { handle, cookie, csrf, backend } = await launch();
+    const input = {
+      authoringSessionId: "authoring.session-1",
+      browserSessionId: "browser-session-1",
+      profileId: "chanmama.product-metrics",
+      screenshotApproved: false,
+      pageBinding: {
+        version: "bpa.design-page-binding/1",
+        tabId: 7,
+        origin: "https://www.chanmama.com",
+        pageEpoch: "tab-7:1999999999999:design-1",
+        issuedAt: new Date().toISOString()
+      }
+    };
+    const started = await fetch(
+      `${handle.origin}/api/authoring/design-mode/grants`,
+      {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: handle.origin,
+          "X-BPA-CSRF-Token": csrf,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(input)
+      }
+    );
+    expect(started.status).toBe(201);
+    expect(backend.startDesignMode).toHaveBeenCalledWith(input);
+
+    const injected = await fetch(
+      `${handle.origin}/api/authoring/design-mode/grants`,
+      {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: handle.origin,
+          "X-BPA-CSRF-Token": csrf,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          ...input,
+          pageBinding: {
+            ...input.pageBinding,
+            script: "return document.cookie"
+          }
+        })
+      }
+    );
+    expect(injected.status).toBe(400);
+    expect(backend.startDesignMode).toHaveBeenCalledTimes(1);
+
+    const stopped = await fetch(
+      `${handle.origin}/api/authoring/design-mode/grants/design.grant-1/stop`,
+      {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: handle.origin,
+          "X-BPA-CSRF-Token": csrf,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ expectedRevision: 1 })
+      }
+    );
+    expect(stopped.status).toBe(200);
+    expect(backend.stopDesignMode).toHaveBeenCalledWith(
+      "design.grant-1",
+      1
+    );
   });
 
   it("uses a lease before accepting bytes and consumes it after upload", async () => {

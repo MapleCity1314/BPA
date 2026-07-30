@@ -5,6 +5,8 @@ import type {
   CreateRunInput,
   DashboardSnapshot,
   DatasetImportResult,
+  DesignModeGrantInput,
+  DesignModeGrantView,
   DownloadPayload,
   DownloadView,
   EvidenceLineageView,
@@ -36,7 +38,10 @@ export const CONSOLE_CONTROL_METHODS = {
   datasetImportStaged: "dataset.import.staged",
   evidenceLineageGet: "evidence.lineage.get",
   downloadList: "download.list",
-  downloadGet: "download.get"
+  downloadGet: "download.get",
+  authoringDesignModeRequest: "authoring.design-mode.request",
+  authoringDesignModeActivate: "authoring.design-mode.activate",
+  authoringDesignModeStop: "authoring.design-mode.stop"
 } as const;
 
 export interface ConsoleControlRequester {
@@ -259,6 +264,30 @@ function taskOutput(
   return {
     decision: input.decision,
     ...(input.note ? { note: input.note } : {})
+  };
+}
+
+function designGrantView(value: unknown): DesignModeGrantView {
+  const grant = record(value);
+  if (
+    !grant ||
+    (grant.state !== "active" && grant.state !== "stopped")
+  ) {
+    throw new Error("invalid Design Mode Grant");
+  }
+  const allowedOperations = stringList(grant.allowedOperations);
+  return {
+    id: text(grant.grantId),
+    authoringSessionId: text(grant.authoringSessionId),
+    browserSessionId: text(grant.browserSessionId),
+    profileId: text(grant.profileId),
+    state: grant.state,
+    origin: text(grant.origin),
+    tabId: integer(grant.tabId, -1),
+    pageEpoch: text(grant.pageEpoch),
+    expiresAt: safeTimestamp(grant.expiresAt, new Date(0).toISOString()),
+    screenshotApproved: allowedOperations.includes("screenshot_once"),
+    revision: integer(grant.revision)
   };
 }
 
@@ -876,6 +905,103 @@ export class UdsControlBackend implements ControlBackend {
       });
     } catch {
       return [];
+    }
+  }
+
+  async startDesignMode(
+    input: DesignModeGrantInput
+  ): Promise<DesignModeGrantView> {
+    const now = this.#now();
+    const binding = input.pageBinding;
+    if (
+      binding.version !== "bpa.design-page-binding/1" ||
+      !Number.isSafeInteger(binding.tabId) ||
+      binding.tabId < 0 ||
+      !binding.pageEpoch.startsWith(`tab-${binding.tabId}:`) ||
+      !Number.isFinite(Date.parse(binding.issuedAt)) ||
+      now.getTime() - Date.parse(binding.issuedAt) > 5 * 60 * 1000 ||
+      Date.parse(binding.issuedAt) - now.getTime() > 30_000
+    ) {
+      throw new ConsoleUserFacingError(
+        "页面绑定码已失效，请在目标页面重新生成。"
+      );
+    }
+    let origin: URL;
+    try {
+      origin = new URL(binding.origin);
+    } catch {
+      throw new ConsoleUserFacingError("页面绑定码中的 Origin 无效。");
+    }
+    if (
+      origin.protocol !== "https:" ||
+      origin.origin !== binding.origin ||
+      ![
+        "https://fxg.jinritemai.com",
+        "https://www.chanmama.com"
+      ].includes(binding.origin)
+    ) {
+      throw new ConsoleUserFacingError(
+        "当前页面不在 Design Mode 只读允许范围内。"
+      );
+    }
+    try {
+      const grantId = `design.grant-${this.#operationId()}`;
+      const requested = await this.#client.request<unknown>(
+        CONSOLE_CONTROL_METHODS.authoringDesignModeRequest,
+        {
+          grantId,
+          authoringSessionId: input.authoringSessionId,
+          approvedBy: this.#actorId,
+          browserSessionId: input.browserSessionId,
+          profileId: input.profileId,
+          tabId: binding.tabId,
+          origin: binding.origin,
+          pageEpoch: binding.pageEpoch,
+          screenshotApproved: input.screenshotApproved,
+          issuedAt: now.toISOString(),
+          expiresAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString()
+        }
+      );
+      const requestedRecord = record(requested);
+      if (!requestedRecord || requestedRecord.state !== "requested") {
+        throw new Error("Design Mode request rejected");
+      }
+      return designGrantView(
+        await this.#client.request<unknown>(
+          CONSOLE_CONTROL_METHODS.authoringDesignModeActivate,
+          {
+            grantId,
+            expectedRevision: integer(requestedRecord.revision),
+            actor: this.#actorId,
+            occurredAt: this.#now().toISOString()
+          }
+        )
+      );
+    } catch (error) {
+      if (error instanceof ConsoleUserFacingError) throw error;
+      throw failureMessage("开启 Design Mode");
+    }
+  }
+
+  async stopDesignMode(
+    grantId: string,
+    expectedRevision: number
+  ): Promise<DesignModeGrantView> {
+    try {
+      return designGrantView(
+        await this.#client.request<unknown>(
+          CONSOLE_CONTROL_METHODS.authoringDesignModeStop,
+          {
+            grantId,
+            expectedRevision,
+            actor: this.#actorId,
+            occurredAt: this.#now().toISOString(),
+            reason: "operator_stopped"
+          }
+        )
+      );
+    } catch {
+      throw failureMessage("停止 Design Mode");
     }
   }
 

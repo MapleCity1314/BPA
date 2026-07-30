@@ -17,6 +17,18 @@
         <p id="assistance-empty">当前没有需要关注的任务。</p>
         <ul id="assistance-tasks"></ul>
       </section>
+      <section class="design-mode" aria-labelledby="design-mode-title">
+        <h2 id="design-mode-title">Design Mode</h2>
+        <p>在需要采集的业务页面点击生成，再把一次性页面绑定码粘贴到 BPA 工作台。</p>
+        <button id="design-mode-prepare" type="button">生成只读页面绑定码</button>
+        <textarea
+          id="design-mode-binding"
+          aria-label="Design Mode 页面绑定码"
+          readonly
+          hidden
+        ></textarea>
+        <p id="design-mode-message" role="status"></p>
+      </section>
       <dl id="status"></dl>
       <p id="error"></p>
     </main>

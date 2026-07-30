@@ -296,7 +296,15 @@ export default defineBackground(() => {
       });
       return;
     }
-    let pageEpoch = createPageEpoch(tab.id);
+    const nodeInput =
+      payload.input && typeof payload.input === "object"
+        ? (payload.input as Record<string, unknown>)
+        : {};
+    let pageEpoch =
+      payload.node.id === "browser.design.snapshot.capture" &&
+      validPageEpoch(nodeInput.pageEpoch, tab.id)
+        ? nodeInput.pageEpoch
+        : createPageEpoch(tab.id);
     send(
       envelope(
         "command.ack",
@@ -350,11 +358,9 @@ export default defineBackground(() => {
       const timingPolicy = payload.timing_policy as TimingPolicy | undefined;
       const origin = new URL(executionUrl).origin;
       const rateScope = timingPolicy?.rateLimit?.scope ?? "tab";
-      const input =
-        payload.input && typeof payload.input === "object"
-          ? (payload.input as Record<string, unknown>)
-          : {};
-      const shopId = String(input.shop_id ?? input.shopId ?? "");
+      const shopId = String(
+        nodeInput.shop_id ?? nodeInput.shopId ?? ""
+      );
       const rateKey =
         rateScope === "domain"
           ? `domain:${origin}`
@@ -509,7 +515,7 @@ export default defineBackground(() => {
         adapterResponse = await browser.tabs.sendMessage(tab.id, {
           type: "bpa.execute",
           node: payload.node,
-          input,
+          input: nodeInput,
           pageEpoch,
           grantedPermissions,
           timingPolicy,
@@ -617,7 +623,8 @@ export default defineBackground(() => {
               output: {
                 ...adapterResponse.output,
                 ...(payload.node.id === "doudian.shop.context.read" ||
-                payload.node.id === "doudian.product.editor.open"
+                payload.node.id === "doudian.product.editor.open" ||
+                payload.node.id === "browser.design.snapshot.capture"
                   ? {
                       page_epoch: pageEpoch,
                       tab_ref: {

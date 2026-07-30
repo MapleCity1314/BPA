@@ -1,4 +1,5 @@
 import { browser } from "wxt/browser";
+import { createPageEpoch } from "@bpa/browser-bridge";
 import {
   ASSISTANCE_SUMMARY_LABELS,
   ASSISTANCE_SUPERVISION_LABELS,
@@ -19,6 +20,57 @@ const panel = new AssistancePanelRepository({
   get: (key) => browser.storage.local.get(key),
   set: (value) => browser.storage.local.set(value)
 });
+
+const DESIGN_MODE_ORIGINS = new Set([
+  "https://fxg.jinritemai.com",
+  "https://www.chanmama.com"
+]);
+
+async function prepareDesignModeBinding(): Promise<void> {
+  const message = document.querySelector("#design-mode-message")!;
+  const output = document.querySelector(
+    "#design-mode-binding"
+  ) as HTMLTextAreaElement;
+  const [tab] = await browser.tabs.query({
+    active: true,
+    currentWindow: true
+  });
+  if (tab?.id == null || !tab.url) {
+    message.textContent = "没有可授权的活动页面。";
+    return;
+  }
+  let url: URL;
+  try {
+    url = new URL(tab.url);
+  } catch {
+    message.textContent = "当前页面地址无效。";
+    return;
+  }
+  if (
+    !DESIGN_MODE_ORIGINS.has(url.origin) ||
+    /login|passport|signin|authorize/iu.test(url.pathname)
+  ) {
+    message.textContent = "当前页面不在 Design Mode 只读允许范围内。";
+    return;
+  }
+  const binding = JSON.stringify({
+    version: "bpa.design-page-binding/1",
+    tabId: tab.id,
+    origin: url.origin,
+    pageEpoch: createPageEpoch(tab.id),
+    issuedAt: new Date().toISOString()
+  });
+  output.value = binding;
+  output.hidden = false;
+  output.focus();
+  output.select();
+  try {
+    await navigator.clipboard.writeText(binding);
+    message.textContent = "页面绑定码已复制；它只用于本次 15 分钟授权。";
+  } catch {
+    message.textContent = "页面绑定码已生成，请手动复制。";
+  }
+}
 
 async function render(): Promise<void> {
   const value = (await browser.storage.local.get("bpaStatus")).bpaStatus;
@@ -72,3 +124,6 @@ async function render(): Promise<void> {
 }
 
 void render();
+document
+  .querySelector("#design-mode-prepare")!
+  .addEventListener("click", () => void prepareDesignModeBinding());

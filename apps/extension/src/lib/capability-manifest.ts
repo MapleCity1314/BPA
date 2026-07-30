@@ -3,8 +3,10 @@ import type { BridgeCapability } from "@bpa/browser-bridge";
 export const BROWSER_PROTOCOL = "bpa.browser/1";
 export const DOUDIAN_ADAPTER_VERSION = "1.2.0";
 export const DOUDIAN_ORIGIN = "https://fxg.jinritemai.com";
+export const CHANMAMA_ORIGIN = "https://www.chanmama.com";
 
 export type ExtensionNodeId =
+  | "browser.design.snapshot.capture"
   | "doudian.shop.context.read"
   | "doudian.product.scope.collect"
   | "doudian.product.scope.restore"
@@ -16,8 +18,12 @@ export interface ExtensionCapability {
   readonly versions: readonly string[];
   readonly riskLevel: "R0";
   readonly permissions: readonly string[];
-  readonly origin: typeof DOUDIAN_ORIGIN;
-  readonly pathname: "/ffa/g/list" | "/ffa/g/create";
+  readonly origins: readonly string[];
+  readonly pathnames?: readonly string[];
+  readonly adapter?: {
+    readonly id: "doudian";
+    readonly version: typeof DOUDIAN_ADAPTER_VERSION;
+  };
 }
 
 const READ_ONLY_PERMISSIONS = [
@@ -27,20 +33,33 @@ const READ_ONLY_PERMISSIONS = [
 
 export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   {
+    nodeId: "browser.design.snapshot.capture",
+    versions: ["1.0.0"],
+    riskLevel: "R0",
+    permissions: [
+      "browser.dom.read",
+      "browser.tabs.read",
+      "page-model.design.read"
+    ],
+    origins: [DOUDIAN_ORIGIN, CHANMAMA_ORIGIN]
+  },
+  {
     nodeId: "doudian.shop.context.read",
     versions: ["1.0.0", "1.1.0", "1.2.0", "1.3.0"],
     riskLevel: "R0",
     permissions: READ_ONLY_PERMISSIONS,
-    origin: DOUDIAN_ORIGIN,
-    pathname: "/ffa/g/list"
+    origins: [DOUDIAN_ORIGIN],
+    pathnames: ["/ffa/g/list"],
+    adapter: { id: "doudian", version: DOUDIAN_ADAPTER_VERSION }
   },
   {
     nodeId: "doudian.product.scope.collect",
     versions: ["1.0.0", "1.1.0"],
     riskLevel: "R0",
     permissions: READ_ONLY_PERMISSIONS,
-    origin: DOUDIAN_ORIGIN,
-    pathname: "/ffa/g/list"
+    origins: [DOUDIAN_ORIGIN],
+    pathnames: ["/ffa/g/list"],
+    adapter: { id: "doudian", version: DOUDIAN_ADAPTER_VERSION }
   },
   {
     nodeId: "doudian.product.scope.restore",
@@ -51,8 +70,9 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
       "browser.tabs.read",
       "browser.tabs.navigate"
     ],
-    origin: DOUDIAN_ORIGIN,
-    pathname: "/ffa/g/list"
+    origins: [DOUDIAN_ORIGIN],
+    pathnames: ["/ffa/g/list"],
+    adapter: { id: "doudian", version: DOUDIAN_ADAPTER_VERSION }
   },
   {
     nodeId: "doudian.product.editor.open",
@@ -63,16 +83,18 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
       "browser.tabs.read",
       "browser.tabs.navigate"
     ],
-    origin: DOUDIAN_ORIGIN,
-    pathname: "/ffa/g/create"
+    origins: [DOUDIAN_ORIGIN],
+    pathnames: ["/ffa/g/create"],
+    adapter: { id: "doudian", version: DOUDIAN_ADAPTER_VERSION }
   },
   {
     nodeId: "doudian.editor.priority-items.inspect",
     versions: ["1.0.0", "1.1.0"],
     riskLevel: "R0",
     permissions: READ_ONLY_PERMISSIONS,
-    origin: DOUDIAN_ORIGIN,
-    pathname: "/ffa/g/create"
+    origins: [DOUDIAN_ORIGIN],
+    pathnames: ["/ffa/g/create"],
+    adapter: { id: "doudian", version: DOUDIAN_ADAPTER_VERSION }
   }
 ];
 
@@ -81,7 +103,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
  * Updating a capability requires updating this value and its fixture test.
  */
 export const CAPABILITY_MANIFEST_DIGEST =
-  "sha256:70cb2ad0d566aa2e52de57a59388d58614fc98933fab01571a0bf48bda9c791c";
+  "sha256:def82ff7eb616e77fc73d5fab278461a487752fc2addd88500e9e974c4d86aac";
 
 export function capabilityReport(): {
   capabilities: Array<{
@@ -89,8 +111,8 @@ export function capabilityReport(): {
     versions: string[];
     risk_level: "R0";
     permissions: string[];
-    adapter_id: "doudian";
-    adapter_version: typeof DOUDIAN_ADAPTER_VERSION;
+    adapter_id?: "doudian";
+    adapter_version?: typeof DOUDIAN_ADAPTER_VERSION;
   }>;
   manifest_digest: typeof CAPABILITY_MANIFEST_DIGEST;
 } {
@@ -100,8 +122,12 @@ export function capabilityReport(): {
       versions: [...capability.versions],
       risk_level: capability.riskLevel,
       permissions: [...capability.permissions],
-      adapter_id: "doudian",
-      adapter_version: DOUDIAN_ADAPTER_VERSION
+      ...(capability.adapter
+        ? {
+            adapter_id: capability.adapter.id,
+            adapter_version: capability.adapter.version
+          }
+        : {})
     })),
     manifest_digest: CAPABILITY_MANIFEST_DIGEST
   };
@@ -155,10 +181,13 @@ export function validateCapabilityRoute(input: {
   } catch {
     return { valid: false, reason: "PAGE_URL_INVALID" };
   }
-  if (url.origin !== knownNode.origin) {
+  if (!knownNode.origins.includes(url.origin)) {
     return { valid: false, reason: "PAGE_ORIGIN_MISMATCH" };
   }
-  if (url.pathname !== knownNode.pathname) {
+  if (
+    knownNode.pathnames &&
+    !knownNode.pathnames.includes(url.pathname)
+  ) {
     return { valid: false, reason: "PAGE_PATH_MISMATCH" };
   }
   if (

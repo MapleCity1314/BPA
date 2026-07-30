@@ -22,7 +22,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -510,6 +511,12 @@ select {
   background: white;
 }
 
+textarea {
+  min-height: 110px;
+  resize: vertical;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 input[type="checkbox"] {
   width: 20px;
   min-height: 20px;
@@ -540,6 +547,46 @@ label small {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+}
+
+.wide-field,
+.checkbox-field {
+  grid-column: 1 / -1;
+}
+
+.checkbox-field {
+  grid-template-columns: 22px 1fr;
+  align-items: center;
+}
+
+.checkbox-field small {
+  grid-column: 2;
+}
+
+.design-grant-summary {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid #c6d7cb;
+  border-radius: 12px;
+  background: #f0f6f1;
+}
+
+.design-grant-summary dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.design-grant-summary dt {
+  color: #718078;
+  font-size: 12px;
+}
+
+.design-grant-summary dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
 }
 
 .form-actions {

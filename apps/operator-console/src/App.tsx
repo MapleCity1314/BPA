@@ -10,6 +10,7 @@ import type {
 import type { OperatorConsoleApi } from "./api.js";
 import {
   DatasetImport,
+  DesignModeView,
   EvidenceView,
   OverviewView,
   ReportsView,
@@ -26,7 +27,8 @@ const navigation: Array<{ id: ViewId; label: string; marker: string }> = [
   { id: "tasks", label: "任务中心", marker: "04" },
   { id: "datasets", label: "数据导入", marker: "05" },
   { id: "evidence", label: "证据血缘", marker: "06" },
-  { id: "reports", label: "报告与资产", marker: "07" }
+  { id: "reports", label: "报告与资产", marker: "07" },
+  { id: "authoring", label: "创作授权", marker: "08" }
 ];
 
 export function App({ api }: { api: OperatorConsoleApi }) {
@@ -211,6 +213,12 @@ export function App({ api }: { api: OperatorConsoleApi }) {
         ) : null}
         {view === "reports" ? (
           <ReportsView api={api} downloads={downloads} />
+        ) : null}
+        {view === "authoring" ? (
+          <DesignModeView
+            api={api}
+            sessions={dashboard.browserSessions}
+          />
         ) : null}
       </main>
     </div>

@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
   DashboardSnapshot,
@@ -157,7 +163,33 @@ function mockApi(): OperatorConsoleApi {
         createdAt: "2026-07-30T00:00:00.000Z"
       }
     ]),
-    downloadUrl: (id) => `/api/downloads/${id}`
+    downloadUrl: (id) => `/api/downloads/${id}`,
+    startDesignMode: vi.fn(async (input) => ({
+      id: "design.grant-1",
+      authoringSessionId: input.authoringSessionId,
+      browserSessionId: input.browserSessionId,
+      profileId: input.profileId,
+      state: "active" as const,
+      origin: input.pageBinding.origin,
+      tabId: input.pageBinding.tabId,
+      pageEpoch: input.pageBinding.pageEpoch,
+      expiresAt: "2030-01-01T00:15:00.000Z",
+      screenshotApproved: input.screenshotApproved,
+      revision: 1
+    })),
+    stopDesignMode: vi.fn(async (id, revision) => ({
+      id,
+      authoringSessionId: "authoring.session-1",
+      browserSessionId: "browser-session-1",
+      profileId: "chanmama.product-metrics",
+      state: "stopped" as const,
+      origin: "https://www.chanmama.com",
+      tabId: 7,
+      pageEpoch: "tab-7:1999999999999:design-1",
+      expiresAt: "2030-01-01T00:15:00.000Z",
+      screenshotApproved: false,
+      revision: revision + 1
+    }))
   };
 }
 
@@ -207,6 +239,59 @@ describe("Operator Console", () => {
       })
     );
     expect(screen.getByText(/已记录处理结果/)).toBeInTheDocument();
+  });
+
+  it("opens and stops an exact 15-minute Design Mode grant", async () => {
+    const user = userEvent.setup();
+    const api = await renderReady();
+    await user.click(screen.getByRole("button", { name: /创作授权/ }));
+    await user.type(
+      screen.getByLabelText(/创作会话编号/),
+      "authoring.session-1"
+    );
+    await user.type(
+      screen.getByLabelText(/页面能力 Profile/),
+      "doudian.shop-context"
+    );
+    await user.selectOptions(
+      screen.getByLabelText(/浏览器会话/),
+      "session-1"
+    );
+    const pageBinding = {
+      version: "bpa.design-page-binding/1",
+      tabId: 7,
+      origin: "https://fxg.jinritemai.com",
+      pageEpoch: "tab-7:1999999999999:design-1",
+      issuedAt: "2026-07-30T01:00:00.000Z"
+    } as const;
+    fireEvent.change(
+      screen.getByLabelText(/一次性页面绑定码/),
+      { target: { value: JSON.stringify(pageBinding) } }
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "确认并开启 15 分钟授权"
+      })
+    );
+    await waitFor(() =>
+      expect(api.startDesignMode).toHaveBeenCalledWith({
+        authoringSessionId: "authoring.session-1",
+        browserSessionId: "session-1",
+        profileId: "doudian.shop-context",
+        pageBinding,
+        screenshotApproved: false
+      })
+    );
+    expect(await screen.findByText("授权中")).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "立即停止授权" })
+    );
+    await waitFor(() =>
+      expect(api.stopDesignMode).toHaveBeenCalledWith(
+        "design.grant-1",
+        1
+      )
+    );
   });
 
   it("imports a browser File through the staging lease abstraction", async () => {

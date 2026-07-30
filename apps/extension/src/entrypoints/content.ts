@@ -20,6 +20,7 @@ import {
   type ContentActionHandlers,
   type ContentActionRequest
 } from "../lib/content-action-router";
+import { captureSemanticSnapshot } from "../lib/semantic-snapshot";
 
 function waitForPageChange(maxWaitMs: number): Promise<void> {
   return new Promise((resolve) => {
@@ -122,6 +123,22 @@ async function readShopContextWhenReady(
 }
 
 const handlers: ContentActionHandlers = {
+  async "browser.design.snapshot.capture"(input) {
+    const snapshot = await captureSemanticSnapshot(document, {
+      pageState: String(input.pageState)
+    });
+    return {
+      output: {
+        apiVersion: "bpa.authoring/v1alpha1",
+        kind: "SemanticSnapshotCapture",
+        authoringSessionId: String(input.authoringSessionId),
+        designGrantId: String(input.designGrantId),
+        profileId: String(input.profileId),
+        ...snapshot
+      }
+    };
+  },
+
   async "doudian.shop.context.read"(_input, request) {
     const ready = await readShopContextWhenReady(
       request.timingPolicy,
@@ -269,7 +286,8 @@ const handlers: ContentActionHandlers = {
 export default defineContentScript({
   matches: [
     "https://fxg.jinritemai.com/ffa/g/list*",
-    "https://fxg.jinritemai.com/ffa/g/create*"
+    "https://fxg.jinritemai.com/ffa/g/create*",
+    "https://www.chanmama.com/*"
   ],
   main() {
     browser.runtime.onMessage.addListener(

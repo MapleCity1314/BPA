@@ -275,6 +275,93 @@ describe("UdsControlBackend", () => {
     ]);
   });
 
+  it("creates a 15-minute exact Design Mode grant and can stop it", async () => {
+    const client = new FakeRequester()
+      .respond(CONSOLE_CONTROL_METHODS.authoringDesignModeRequest, {
+        grantId: "design.grant-operation-1",
+        revision: 0,
+        state: "requested"
+      })
+      .respond(CONSOLE_CONTROL_METHODS.authoringDesignModeActivate, {
+        grantId: "design.grant-operation-1",
+        authoringSessionId: "authoring.session-1",
+        browserSessionId: "browser-session-1",
+        profileId: "chanmama.product-metrics",
+        revision: 1,
+        state: "active",
+        origin: "https://www.chanmama.com",
+        tabId: 7,
+        pageEpoch: "tab-7:1999999999999:design-1",
+        allowedOperations: ["semantic_snapshot"],
+        expiresAt: "2026-07-30T04:15:00.000Z"
+      })
+      .respond(CONSOLE_CONTROL_METHODS.authoringDesignModeStop, {
+        grantId: "design.grant-operation-1",
+        authoringSessionId: "authoring.session-1",
+        browserSessionId: "browser-session-1",
+        profileId: "chanmama.product-metrics",
+        revision: 2,
+        state: "stopped",
+        origin: "https://www.chanmama.com",
+        tabId: 7,
+        pageEpoch: "tab-7:1999999999999:design-1",
+        allowedOperations: ["semantic_snapshot"],
+        expiresAt: "2026-07-30T04:15:00.000Z"
+      });
+    const adapter = backend(client);
+    const active = await adapter.startDesignMode({
+      authoringSessionId: "authoring.session-1",
+      browserSessionId: "browser-session-1",
+      profileId: "chanmama.product-metrics",
+      screenshotApproved: false,
+      pageBinding: {
+        version: "bpa.design-page-binding/1",
+        tabId: 7,
+        origin: "https://www.chanmama.com",
+        pageEpoch: "tab-7:1999999999999:design-1",
+        issuedAt: "2026-07-30T03:59:00.000Z"
+      }
+    });
+    expect(active).toMatchObject({
+      id: "design.grant-operation-1",
+      state: "active",
+      screenshotApproved: false
+    });
+    await expect(
+      adapter.stopDesignMode(active.id, active.revision)
+    ).resolves.toMatchObject({ state: "stopped", revision: 2 });
+    expect(client.calls).toEqual([
+      {
+        method: "authoring.design-mode.request",
+        params: expect.objectContaining({
+          grantId: "design.grant-operation-1",
+          tabId: 7,
+          origin: "https://www.chanmama.com",
+          expiresAt: "2026-07-30T04:15:00.000Z"
+        })
+      },
+      {
+        method: "authoring.design-mode.activate",
+        params: {
+          grantId: "design.grant-operation-1",
+          expectedRevision: 0,
+          actor: "operator:test",
+          occurredAt: "2026-07-30T04:00:00.000Z"
+        }
+      },
+      {
+        method: "authoring.design-mode.stop",
+        params: {
+          grantId: "design.grant-operation-1",
+          expectedRevision: 1,
+          actor: "operator:test",
+          occurredAt: "2026-07-30T04:00:00.000Z",
+          reason: "operator_stopped"
+        }
+      }
+    ]);
+  });
+
   it("claims and submits a human task with a short fenced lease", async () => {
     const client = new FakeRequester()
       .respond(CONSOLE_CONTROL_METHODS.taskList, [

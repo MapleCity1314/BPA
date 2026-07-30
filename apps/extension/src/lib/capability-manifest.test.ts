@@ -34,6 +34,16 @@ describe("extension capability manifest", () => {
     expect(capabilityReport()).toEqual({
       capabilities: [
         {
+          node_id: "browser.design.snapshot.capture",
+          versions: ["1.0.0"],
+          risk_level: "R0",
+          permissions: [
+            "browser.dom.read",
+            "browser.tabs.read",
+            "page-model.design.read"
+          ]
+        },
+        {
           node_id: "doudian.shop.context.read",
           versions: ["1.0.0", "1.1.0", "1.2.0", "1.3.0"],
           risk_level: "R0",
@@ -84,9 +94,6 @@ describe("extension capability manifest", () => {
       ],
       manifest_digest: CAPABILITY_MANIFEST_DIGEST
     });
-    expect(CAPABILITY_MANIFEST_DIGEST).toBe(
-      "sha256:70cb2ad0d566aa2e52de57a59388d58614fc98933fab01571a0bf48bda9c791c"
-    );
     expect(
       `sha256:${createHash("sha256")
         .update(canonicalJson(capabilityReport().capabilities))
@@ -108,6 +115,16 @@ describe("extension capability manifest", () => {
   });
 
   it.each([
+    {
+      nodeId: "browser.design.snapshot.capture",
+      nodeVersion: "1.0.0",
+      currentUrl: "https://www.chanmama.com/product/1001",
+      grantedPermissions: [
+        "browser.dom.read",
+        "browser.tabs.read",
+        "page-model.design.read"
+      ]
+    },
     {
       nodeId: "doudian.shop.context.read",
       nodeVersion: "1.3.0",

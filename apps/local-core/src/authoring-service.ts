@@ -372,6 +372,52 @@ export class LocalAuthoringService {
     issuedAt: string;
     expiresAt: string;
   }): DesignModeGrantRecord {
+    const session = this.persistence.getAuthoringSession(
+      input.authoringSessionId
+    );
+    if (!session || ["bundled", "archived"].includes(session.state)) {
+      throw new Error(
+        "Design Mode requires an active Authoring Session."
+      );
+    }
+    const browserSession = this.persistence.getBrowserSession(
+      input.browserSessionId
+    );
+    if (
+      !browserSession ||
+      browserSession.disconnectedAt ||
+      browserSession.observationState !== "available" ||
+      browserSession.observedOrigin !== input.origin
+    ) {
+      throw new Error(
+        "Design Mode Browser Session is unavailable or has a different Origin."
+      );
+    }
+    const issuedAt = Date.parse(input.issuedAt);
+    const expiresAt = Date.parse(input.expiresAt);
+    let origin: URL;
+    try {
+      origin = new URL(input.origin);
+    } catch {
+      throw new Error("Design Mode Origin is invalid.");
+    }
+    if (
+      origin.protocol !== "https:" ||
+      origin.origin !== input.origin ||
+      !Number.isSafeInteger(input.tabId) ||
+      input.tabId < 0 ||
+      !input.pageEpoch.startsWith(`tab-${input.tabId}:`) ||
+      !Number.isFinite(issuedAt) ||
+      !Number.isFinite(expiresAt) ||
+      expiresAt <= issuedAt ||
+      expiresAt - issuedAt > 15 * 60 * 1000 ||
+      !input.approvedBy.trim() ||
+      !input.profileId.trim()
+    ) {
+      throw new Error(
+        "Design Mode Grant must bind an exact HTTPS Origin, Tab, PageEpoch, operator and TTL of at most 15 minutes."
+      );
+    }
     const grant: DesignModeGrantRecord = {
       grantId: input.grantId,
       authoringSessionId: input.authoringSessionId,
@@ -408,6 +454,22 @@ export class LocalAuthoringService {
     actor: string;
     occurredAt: string;
   }): DesignModeGrantRecord {
+    const grant = this.getDesignMode(input.grantId);
+    const browserSession = this.persistence.getBrowserSession(
+      grant.browserSessionId
+    );
+    if (
+      grant.state !== "requested" ||
+      Date.parse(grant.expiresAt) <= Date.parse(input.occurredAt) ||
+      !browserSession ||
+      browserSession.disconnectedAt ||
+      browserSession.observationState !== "available" ||
+      browserSession.observedOrigin !== grant.origin
+    ) {
+      throw new Error(
+        "Design Mode Grant cannot be activated because its page resource is no longer exact and available."
+      );
+    }
     return this.persistence.transitionDesignModeGrant({
       ...input,
       nextState: "active"

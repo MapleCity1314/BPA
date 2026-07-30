@@ -1,6 +1,7 @@
 import type {
   ControlBackend,
   CreateRunInput,
+  DesignModeGrantInput,
   StagingLeaseRequest,
   StagedDatasetImportInput,
   SubmitTaskInput
@@ -76,6 +77,17 @@ export class UnavailableControlBackend implements ControlBackend {
   }
 
   async getDownload(_downloadId: string) {
+    return unavailable();
+  }
+
+  async startDesignMode(_input: DesignModeGrantInput) {
+    return unavailable();
+  }
+
+  async stopDesignMode(
+    _grantId: string,
+    _expectedRevision: number
+  ) {
     return unavailable();
   }
 }

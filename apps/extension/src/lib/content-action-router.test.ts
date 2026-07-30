@@ -26,6 +26,12 @@ function request(
 
 function handlers(): ContentActionHandlers {
   return {
+    "browser.design.snapshot.capture": vi.fn(async () => ({
+      output: {
+        apiVersion: "bpa.authoring/v1alpha1",
+        kind: "SemanticSnapshotCapture"
+      }
+    })),
     "doudian.shop.context.read": vi.fn(async () => ({
       output: { supported: true }
     })),
@@ -63,6 +69,60 @@ describe("content action router", () => {
       }
     });
     expect(actions["doudian.product.scope.collect"]).toHaveBeenCalledOnce();
+  });
+
+  it("routes Design Mode capture only with the exact governed input", async () => {
+    const actions = handlers();
+    const designRequest = {
+      ...request("browser.design.snapshot.capture", {
+        authoringSessionId: "authoring.session-1",
+        designGrantId: "design.grant-1",
+        pageState: "product.detail",
+        profileId: "chanmama.product-metrics",
+        pageEpoch
+      }),
+      grantedPermissions: [...permissions, "page-model.design.read"]
+    };
+    await expect(
+      routeContentAction({
+        request: designRequest,
+        currentUrl: "https://www.chanmama.com/product/1001",
+        handlers: actions,
+        now: Date.parse("2026-07-28T00:00:00.000Z")
+      })
+    ).resolves.toMatchObject({
+      response: {
+        ok: true,
+        output: {
+          apiVersion: "bpa.authoring/v1alpha1",
+          kind: "SemanticSnapshotCapture"
+        }
+      }
+    });
+
+    await expect(
+      routeContentAction({
+        request: {
+          ...designRequest,
+          input: {
+            authoringSessionId: "authoring.session-1",
+            designGrantId: "design.grant-1",
+            pageState: "product.detail",
+            profileId: "chanmama.product-metrics",
+            pageEpoch,
+            script: "return document.cookie"
+          }
+        },
+        currentUrl: "https://www.chanmama.com/product/1001",
+        handlers: actions,
+        now: Date.parse("2026-07-28T00:00:00.000Z")
+      })
+    ).resolves.toMatchObject({
+      response: {
+        ok: false,
+        error: { code: "DESIGN_CAPTURE_INPUT_INVALID" }
+      }
+    });
   });
 
   it("rejects unknown actions instead of silently ignoring them", async () => {

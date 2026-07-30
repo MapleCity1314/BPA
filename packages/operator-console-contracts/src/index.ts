@@ -181,6 +181,34 @@ export interface DownloadPayload {
   body: Uint8Array;
 }
 
+export interface DesignModeGrantInput {
+  authoringSessionId: string;
+  browserSessionId: string;
+  profileId: string;
+  pageBinding: {
+    version: "bpa.design-page-binding/1";
+    tabId: number;
+    origin: string;
+    pageEpoch: string;
+    issuedAt: string;
+  };
+  screenshotApproved: boolean;
+}
+
+export interface DesignModeGrantView {
+  id: string;
+  authoringSessionId: string;
+  browserSessionId: string;
+  profileId: string;
+  state: "active" | "stopped";
+  origin: string;
+  tabId: number;
+  pageEpoch: string;
+  expiresAt: string;
+  screenshotApproved: boolean;
+  revision: number;
+}
+
 export interface ControlBackend {
   getDashboard(): Promise<DashboardSnapshot>;
   listWorkflows(): Promise<WorkflowSummary[]>;
@@ -200,4 +228,11 @@ export interface ControlBackend {
   getEvidenceLineage(runId: string): Promise<EvidenceLineageView>;
   listDownloads(runId?: string): Promise<DownloadView[]>;
   getDownload(downloadId: string): Promise<DownloadPayload>;
+  startDesignMode(
+    input: DesignModeGrantInput
+  ): Promise<DesignModeGrantView>;
+  stopDesignMode(
+    grantId: string,
+    expectedRevision: number
+  ): Promise<DesignModeGrantView>;
 }
