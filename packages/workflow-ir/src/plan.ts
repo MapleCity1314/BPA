@@ -264,7 +264,7 @@ function normalizeStep(step: ExecutionStep): ExecutionStep {
                 Object.entries(step.resourceRequirements)
                   .sort(([left], [right]) => left.localeCompare(right))
                   .map(([name, requirement]) => [
-                    name.trim(),
+                    name,
                     normalizeResourceRequirement(requirement)
                   ])
               )
@@ -441,7 +441,7 @@ export function normalizeExecutionPlan(plan: ExecutionPlan): ExecutionPlan {
             Object.entries(plan.resourceSlots)
               .sort(([left], [right]) => left.localeCompare(right))
               .map(([name, requirement]) => [
-                name.trim(),
+                name,
                 normalizeResourceRequirement(requirement)
               ])
           )
