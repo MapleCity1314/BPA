@@ -1,0 +1,121 @@
+{
+  "apiVersion": "bpa.authoring/v1alpha1",
+  "kind": "CandidateBundle",
+  "metadata": {
+    "id": "chanmama.product.metrics.observe.candidate",
+    "version": "0.1.0",
+    "title": "蝉妈妈商品指标读取候选包",
+    "description": "由语义页面证据生成、等待人工审核的只读候选资产。"
+  },
+  "status": "candidate",
+  "scenarioRef": {
+    "id": "chanmama.product.metrics.observe",
+    "version": "0.1.0",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "authoringSession": {
+    "id": "authoring-session-001",
+    "revision": 9
+  },
+  "artifacts": [
+    {
+      "kind": "node",
+      "id": "chanmama.product.metrics.read",
+      "version": "0.1.0",
+      "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "status": "candidate"
+    },
+    {
+      "kind": "element_contract",
+      "id": "chanmama.product.metrics",
+      "version": "0.1.0",
+      "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "status": "candidate"
+    },
+    {
+      "kind": "replay_fixture",
+      "id": "chanmama.product.detail.default",
+      "version": "0.1.0",
+      "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "status": "candidate"
+    }
+  ],
+  "files": [
+    {
+      "path": "nodes/chanmama/product-metrics-read.node.json",
+      "mediaType": "application/json",
+      "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+      "sizeBytes": 1800,
+      "sourceAssetRef": {
+        "id": "candidate-file-node-definition",
+        "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+      }
+    },
+    {
+      "path": "adapters/chanmama/candidates/product-metrics.element-contract.json",
+      "mediaType": "application/json",
+      "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+      "sizeBytes": 2400,
+      "sourceAssetRef": {
+        "id": "candidate-file-element-contract",
+        "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+      }
+    }
+  ],
+  "dependencyClosure": [
+    {
+      "assetType": "node",
+      "id": "control.start",
+      "version": "1.0.0",
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "published"
+    }
+  ],
+  "capabilityGaps": [
+    {
+      "gapId": "gap-chanmama-complex-recovery",
+      "capabilityId": "chanmama.product.page.recover",
+      "status": "open"
+    }
+  ],
+  "validation": {
+    "schema": {
+      "valid": true,
+      "issueCount": 0
+    },
+    "contracts": {
+      "valid": true,
+      "issueCount": 0
+    },
+    "replay": {
+      "valid": true,
+      "issueCount": 0
+    },
+    "permissions": {
+      "valid": true,
+      "issueCount": 0
+    },
+    "risk": {
+      "valid": true,
+      "issueCount": 0
+    }
+  },
+  "riskReport": {
+    "ceiling": "R1",
+    "effective": "R1",
+    "permissions": [
+      "browser.dom.read",
+      "browser.tabs.read"
+    ],
+    "manualReviewPoints": [
+      "确认两个页面状态下的指标定位保持稳定",
+      "确认会员不可见字段不会被推测补全"
+    ]
+  },
+  "executionPolicy": {
+    "autoExecute": false,
+    "autoPublish": false,
+    "autoApplySource": false
+  },
+  "createdAt": "2026-07-30T02:30:00.000Z"
+}

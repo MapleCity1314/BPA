@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/authoring/scenario-spec/v1alpha1",
+  "title": "BPA Authoring ScenarioSpec v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "businessGoal",
+    "platform",
+    "riskCeiling",
+    "inputs",
+    "outputs",
+    "resourceRequirements",
+    "successCriteria",
+    "failurePolicy",
+    "evidencePolicy",
+    "acceptanceTests"
+  ],
+  "properties": {
+    "apiVersion": { "const": "bpa.authoring/v1alpha1" },
+    "kind": { "const": "ScenarioSpec" },
+    "metadata": { "$ref": "#/$defs/metadata" },
+    "businessGoal": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "origins"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "origins": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://[^/?#]+$"
+          }
+        }
+      }
+    },
+    "riskCeiling": { "$ref": "#/$defs/risk" },
+    "inputs": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/ioField" }
+    },
+    "outputs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/ioField" }
+    },
+    "resourceRequirements": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["slot", "purpose", "origin", "authentication"],
+        "properties": {
+          "slot": { "$ref": "#/$defs/id" },
+          "purpose": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "origin": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://[^/?#]+$"
+          },
+          "authentication": {
+            "enum": ["public", "authenticated", "membership"]
+          }
+        }
+      }
+    },
+    "successCriteria": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 1000 }
+    },
+    "failurePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "failure",
+        "timeout",
+        "cancelled",
+        "uncertain"
+      ],
+      "properties": {
+        "failure": { "enum": ["fail", "request_assistance"] },
+        "timeout": { "enum": ["fail", "request_assistance"] },
+        "cancelled": { "const": "cancel" },
+        "uncertain": {
+          "enum": ["stop_uncertain", "request_assistance"]
+        }
+      }
+    },
+    "evidencePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "rawRetentionHours",
+        "screenshotDefault"
+      ],
+      "properties": {
+        "classification": {
+          "enum": ["public", "restricted", "confidential"]
+        },
+        "rawRetentionHours": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 24
+        },
+        "screenshotDefault": { "const": false }
+      }
+    },
+    "acceptanceTests": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "scenario", "input", "expected"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "scenario": {
+            "enum": [
+              "success",
+              "business_failure",
+              "timeout",
+              "cancelled",
+              "uncertain",
+              "page_change"
+            ]
+          },
+          "input": { "$ref": "#/$defs/jsonValue" },
+          "expected": { "$ref": "#/$defs/jsonValue" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "title"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/semver" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 4000 }
+      }
+    },
+    "ioField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "required"],
+      "properties": {
+        "name": { "$ref": "#/$defs/id" },
+        "type": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "required": { "type": "boolean" },
+        "description": { "type": "string", "maxLength": 1000 }
+      }
+    },
+    "risk": { "enum": ["R0", "R1", "R2", "R3", "R4"] },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+      "maxLength": 160
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "jsonValue": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "type": "null" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/jsonValue" }
+        },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+        }
+      ]
+    }
+  }
+}

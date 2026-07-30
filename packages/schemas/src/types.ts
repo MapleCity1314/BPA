@@ -51,6 +51,18 @@ import type {
 import type {
   BPAPageModelV1Alpha1
 } from "./generated/page_model.js";
+import type {
+  BPAAuthoringScenarioSpecV1Alpha1
+} from "./generated/scenario_spec.js";
+import type {
+  BPAAuthoringSessionV1Alpha1
+} from "./generated/authoring_session.js";
+import type {
+  BPAAuthoringPageSnapshotV1Alpha1
+} from "./generated/page_snapshot.js";
+import type {
+  BPAAuthoringCandidateBundleV1Alpha1
+} from "./generated/candidate_bundle.js";
 
 export type {
   BPABrowserProtocolV1Message,
@@ -64,6 +76,10 @@ export type {
   BPANodeDefinition,
   BPANodeDefinitionV1Alpha2,
   BPAPageModelV1Alpha1,
+  BPAAuthoringScenarioSpecV1Alpha1,
+  BPAAuthoringSessionV1Alpha1,
+  BPAAuthoringPageSnapshotV1Alpha1,
+  BPAAuthoringCandidateBundleV1Alpha1,
   BPASourceRecordV1Alpha1,
   BPAAssetRecordV1Alpha1,
   BPAEvidenceLinkV1Alpha1,
@@ -98,6 +114,10 @@ export type DatasetVersionDefinition = BPADatasetVersionV1Alpha1;
 export type DecisionRecordDefinition = BPADecisionRecordV1Alpha1;
 export type ElementContractDefinition = BPAElementContractV1Alpha1;
 export type PageModelDefinition = BPAPageModelV1Alpha1;
+export type ScenarioSpecDefinition = BPAAuthoringScenarioSpecV1Alpha1;
+export type AuthoringSessionDefinition = BPAAuthoringSessionV1Alpha1;
+export type PageSnapshotDefinition = BPAAuthoringPageSnapshotV1Alpha1;
+export type CandidateBundleDefinition = BPAAuthoringCandidateBundleV1Alpha1;
 export type SignedPermissionGrant = BPASignedPermissionGrant;
 export type RiskLevel = BPAWorkflow["spec"]["riskLevel"];
 export type TimingPolicy = BPATimingPolicyV1;

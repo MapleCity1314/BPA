@@ -14,6 +14,10 @@ import type {
   NodeDefinition,
   NodeDefinitionV1Alpha2,
   PageModelDefinition,
+  ScenarioSpecDefinition,
+  AuthoringSessionDefinition,
+  PageSnapshotDefinition,
+  CandidateBundleDefinition,
   SourceRecordDefinition,
   AssetRecordDefinition,
   EvidenceLinkDefinition,
@@ -54,6 +58,14 @@ export const deterministicResultValidatorPolicySchema = loadSchema(
 );
 export const datasetSchema = loadSchema("dataset.schema.json");
 export const decisionRecordSchema = loadSchema("decision-record.schema.json");
+export const scenarioSpecSchema = loadSchema("scenario-spec.schema.json");
+export const authoringSessionSchema = loadSchema(
+  "authoring-session.schema.json"
+);
+export const pageSnapshotSchema = loadSchema("page-snapshot.schema.json");
+export const candidateBundleSchema = loadSchema(
+  "candidate-bundle.schema.json"
+);
 export const elementContractSchema = loadSchema(
   "element-contract.schema.json"
 );
@@ -127,6 +139,18 @@ export const validateDataset = ajv.compile(
 export const validateDecisionRecord = ajv.compile(
   decisionRecordSchema
 ) as ValidateFunction<DecisionRecordDefinition>;
+export const validateScenarioSpec = ajv.compile(
+  scenarioSpecSchema
+) as ValidateFunction<ScenarioSpecDefinition>;
+export const validateAuthoringSession = ajv.compile(
+  authoringSessionSchema
+) as ValidateFunction<AuthoringSessionDefinition>;
+export const validatePageSnapshot = ajv.compile(
+  pageSnapshotSchema
+) as ValidateFunction<PageSnapshotDefinition>;
+export const validateCandidateBundle = ajv.compile(
+  candidateBundleSchema
+) as ValidateFunction<CandidateBundleDefinition>;
 export const validateElementContract = ajv.compile(
   elementContractSchema
 ) as ValidateFunction<ElementContractDefinition>;

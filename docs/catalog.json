@@ -126,6 +126,17 @@
       "public": false
     },
     {
+      "id": "repo.protocol.authoring-v1alpha1",
+      "source": "docs/protocols/authoring-v1alpha1.md",
+      "title": "BPA Authoring v1alpha1 协议候选",
+      "summary": "ScenarioSpec、创作会话、语义页面快照、Design Mode 与候选包边界。",
+      "authority": "normative",
+      "implementation": "planned",
+      "audience": ["developer", "integrator", "ai"],
+      "since": "0.5.0",
+      "public": false
+    },
+    {
       "id": "repo.protocol.compatibility-0.5",
       "source": "docs/protocols/compatibility-matrix-v0.5.md",
       "title": "BPA v0.5 compatibility matrix",
@@ -224,6 +235,17 @@
       "implementation": "partial",
       "audience": ["developer", "integrator", "ai"],
       "since": "0.4.0",
+      "public": false
+    },
+    {
+      "id": "repo.adr.0007",
+      "source": "docs/adr/0007-semantic-evidence-authoring-boundary.md",
+      "title": "ADR 0007: Author from semantic evidence without granting execution authority",
+      "summary": "用受限语义证据创作候选，但不授予执行、源码写入或发布权限。",
+      "authority": "architecture",
+      "implementation": "planned",
+      "audience": ["developer", "integrator", "ai"],
+      "since": "0.5.0",
       "public": false
     },
     {

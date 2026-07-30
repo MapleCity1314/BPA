@@ -1,0 +1,56 @@
+{
+  "apiVersion": "bpa.authoring/v1alpha1",
+  "kind": "AuthoringSession",
+  "sessionId": "authoring-session-001",
+  "revision": 4,
+  "state": "modeling",
+  "scenarioRef": {
+    "id": "chanmama.product.metrics.observe",
+    "version": "0.1.0",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "actor": {
+    "type": "ai",
+    "id": "codex:local"
+  },
+  "catalogSelections": [
+    {
+      "assetType": "node",
+      "id": "control.start",
+      "version": "1.0.0",
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "published"
+    }
+  ],
+  "capabilityGaps": [
+    {
+      "gapId": "gap-chanmama-metrics-read",
+      "capabilityId": "chanmama.product.metrics.read",
+      "summary": "缺少经过审核的蝉妈妈商品指标只读节点。",
+      "platform": "chanmama",
+      "requiredInputs": ["product_url"],
+      "requiredOutputs": ["product_metrics"],
+      "maximumRisk": "R1",
+      "status": "open"
+    }
+  ],
+  "designGrantRefs": ["design-grant-001"],
+  "snapshotRefs": [
+    {
+      "id": "page-snapshot-product-detail-default",
+      "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "id": "page-snapshot-product-detail-membership",
+      "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  ],
+  "appliedOperationIds": [
+    "operation-create-session",
+    "operation-catalog-search",
+    "operation-capture-default",
+    "operation-capture-membership"
+  ],
+  "createdAt": "2026-07-30T02:00:00.000Z",
+  "updatedAt": "2026-07-30T02:12:00.000Z"
+}

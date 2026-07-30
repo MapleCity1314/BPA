@@ -1,6 +1,6 @@
 # BPA v0.5 compatibility matrix
 
-Status: accepted (human confirmation on 2026-07-30)
+Status: accepted for 0.4 evidence/control; authoring additions are candidate
 
 | Producer | Accepted source | Frozen runtime form | Compatibility rule |
 | --- | --- | --- | --- |
@@ -15,6 +15,10 @@ Status: accepted (human confirmation on 2026-07-30)
 | Asset producer | AssetRecord v1alpha1 plus verified Blob | Content-addressed local storage | Caller paths never become storage references |
 | Source producer | SourceRecord v1alpha1 | Immutable source metadata and raw digest | Missing access or metric provenance remains explicit |
 | Page authoring | PageModel/ElementContract plus Readiness Contract | New exact Adapter version | Existing Adapter versions do not inherit later readiness behavior |
+| AI authoring client | `bpa.authoring/v1alpha1` ScenarioSpec and CAS operations | Authoring Session revision plus immutable references | Unknown fields and stale revisions fail without changing runtime assets |
+| Design capture | Exact Design Mode Grant plus built-in read-only capture Node | Evidence-backed PageSnapshot | `bpa.browser/1@1.0.0` remains unchanged; snapshot bodies use Evidence references |
+| Candidate producer | `bpa.authoring/v1alpha1` CandidateBundle | Immutable CAS bundle | Candidate content cannot auto-execute, auto-apply source or auto-publish |
+| Pre-0.5 Core | Existing runtime/control requests only | Existing behavior | Unknown authoring operations are rejected without affecting Runs |
 
 ## Upgrade constraints
 
@@ -27,6 +31,10 @@ Status: accepted (human confirmation on 2026-07-30)
 - Runtime 0.3 must refuse a v7/v8 database during an unsafe manual rollback.
 - Existing active Runs never acquire Resource Slots or new Adapter readiness
   semantics.
+- Existing PageModel, ElementContract, Workflow Draft and Artifact Candidate
+  records are reused rather than migrated into parallel authoring models.
+- Authoring v1alpha1 records are additive SQLite v9 data. Older safe Runtime
+  versions must refuse a database schema they do not support.
 - `parallel`, generic `paginate`, arbitrary back-edges, browser writes and
   untrusted code remain unsupported.
 
@@ -40,3 +48,6 @@ The following require a later protocol or ADR:
 - automatically switching Browser Sessions;
 - changing Asset retention while active references exist;
 - placing selector, XPath, coordinates or script in a Readiness Contract.
+- allowing page content to widen ScenarioSpec authority;
+- renewing a Design Mode Grant without a new human approval;
+- applying, executing or publishing a Candidate Bundle from Core or MCP.
