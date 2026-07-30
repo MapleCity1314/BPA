@@ -405,7 +405,10 @@ export class LocalBrowserGateway implements RuntimeProvider {
     }
     const now = new Date();
     const sessionId = randomUUID();
-    const resumeToken = randomBytes(32).toString("base64url");
+    // Browser Protocol identifiers must start with an alphanumeric
+    // character. Raw base64url can start with "-" or "_" and would make an
+    // otherwise valid resume handshake fail nondeterministically.
+    const resumeToken = `r-${randomBytes(32).toString("base64url")}`;
     const resumeTokenDigest = this.#tokenDigest(resumeToken);
     const expiresAt = new Date(
       now.getTime() + RESUME_TOKEN_TTL_MS

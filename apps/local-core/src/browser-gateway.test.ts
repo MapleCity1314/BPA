@@ -439,6 +439,7 @@ describe("local browser gateway", () => {
     )!;
     const firstSessionId = String(firstWelcome.session_id);
     const resumeToken = String(firstWelcome.payload.resume_token);
+    expect(resumeToken).toMatch(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
     gateway.detach(firstConnection);
 
     const marker = outgoing.length;
