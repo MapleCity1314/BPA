@@ -8,9 +8,9 @@
 <p align="center">
   <a href="https://maplecity1314.github.io/BPA/">协议文档</a>
   ·
-  <a href="docs/BPA通用技术方案-v1.0.md">架构方案</a>
+  <a href="docs/normative/BPA通用技术方案-v1.0.md">架构方案</a>
   ·
-  <a href="docs/local-v1-operations.md">运行与验收</a>
+  <a href="docs/operations/local-v1-operations.md">运行与验收</a>
   ·
   <a href="https://maplecity1314.github.io/BPA/reference/schemas/">JSON Schema</a>
 </p>
@@ -19,7 +19,7 @@ BPA（Browser Process Assistance）把经过审核的浏览器流程编译成版
 
 当前仓库包含一条可运行的本地纵向链路：CLI、Local Core、Workflow Engine、Browser Gateway、Native Host、Chrome Extension、SQLite 状态与审计，以及用于创作 Workflow / Node 的 MCP 工具。
 
-2026-07-30 的实现实况见 [BPA 0.4 当前实况](docs/current-state-v0.4.md)。上一阶段的默认节点和 Skills 盘点保留在 [BPA 当前实况与默认资产 v0.3](docs/current-state-and-default-assets-v0.3.md)；单节点运行、人工步骤、结构化循环和 AI 页面预定位设计见 [BPA 基础场景、工程闭环与 AI 创作设计 v0.4](docs/basic-scenarios-and-ai-authoring-v0.4.md)。
+2026-07-30 的实现实况见 [BPA 0.4 当前实况](docs/current/current-state-v0.4.md)。文档与 AI 的推荐阅读顺序见 [BPA 文档阅读入口](docs/AI-START-HERE.md)。上一阶段的默认节点和 Skills 盘点保留在 [BPA 当前实况与默认资产 v0.3](docs/archive/current-state-and-default-assets-v0.3.md)；单节点运行、人工步骤、结构化循环和 AI 页面预定位设计见 [BPA 基础场景、工程闭环与 AI 创作设计 v0.4](docs/plans/basic-scenarios-and-ai-authoring-v0.4.md)。
 
 ## 执行边界
 
@@ -113,7 +113,7 @@ pnpm bpa doctor
 pnpm docs:dev
 ```
 
-Chrome 扩展、Native Host、首个只读 Workflow 和 macOS 安装流程见[本地 v1 运行与验收](docs/local-v1-operations.md)。
+Chrome 扩展、Native Host、首个只读 Workflow 和 macOS 安装流程见[本地 v1 运行与验收](docs/operations/local-v1-operations.md)。
 
 ## 从资产到执行
 
@@ -153,9 +153,9 @@ Browser Protocol v1 覆盖会话建立、能力声明、Permission Grant、命�
 
 ## 项目阶段
 
-BPA 已完成本地 v1 的纵向闭环和一个真实页面的只读参考实现。现阶段重点是收紧协议与资产模型、扩大回放和故障测试，再逐步抽离更多通用节点。仓库中的 `docs/architecture-v0.1.md` 和实验报告用于追溯，不是当前规范。
+BPA 已完成本地 v1 的纵向闭环和一个真实页面的只读参考实现。现阶段重点是收紧协议与资产模型、扩大回放和故障测试，再逐步抽离更多通用节点。仓库中的 `docs/archive/` 只用于追溯，不是当前规范。
 
-架构基线以 [BPA 通用技术方案 v1.0](docs/BPA通用技术方案-v1.0.md) 为准；对外集成优先阅读[协议文档站](https://maplecity1314.github.io/BPA/)。
+架构基线以 [BPA 通用技术方案 v1.0](docs/normative/BPA通用技术方案-v1.0.md) 为准；对外集成优先阅读[协议文档站](https://maplecity1314.github.io/BPA/)。
 
 ## License
 

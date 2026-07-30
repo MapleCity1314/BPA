@@ -4,12 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "predev": "node ./scripts/prepare-public-specs.mjs",
+    "catalog:check": "node ./scripts/validate-docs-catalog.mjs",
+    "predev": "pnpm catalog:check && node ./scripts/prepare-public-specs.mjs",
     "dev": "astro dev",
-    "prebuild": "node ./scripts/prepare-public-specs.mjs",
+    "prebuild": "pnpm catalog:check && node ./scripts/prepare-public-specs.mjs",
     "build": "astro build",
     "preview": "astro preview",
-    "precheck": "node ./scripts/prepare-public-specs.mjs",
+    "precheck": "pnpm catalog:check && node ./scripts/prepare-public-specs.mjs",
     "check": "astro check && astro build && node ./scripts/validate-public-build.mjs"
   },
   "dependencies": {

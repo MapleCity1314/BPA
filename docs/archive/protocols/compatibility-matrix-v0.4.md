@@ -1,5 +1,7 @@
 # BPA v0.4 compatibility matrix
 
+> 历史归档：已被 `docs/protocols/compatibility-matrix-v0.5.md` 替代。
+
 Status: accepted
 
 | Producer | Accepted source | Frozen runtime form | Recovery rule |

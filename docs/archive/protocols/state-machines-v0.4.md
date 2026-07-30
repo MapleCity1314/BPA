@@ -1,5 +1,7 @@
 # BPA v0.4 state machines
 
+> 历史归档：已被 `docs/protocols/state-machines-v0.5.md` 替代。
+
 Status: accepted
 
 ## Run and execution

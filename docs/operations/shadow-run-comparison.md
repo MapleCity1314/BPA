@@ -1,5 +1,7 @@
 # Shadow-run 只读迁移比较器
 
+> 文档类别：运维指南。
+
 `@bpa/shadow-run` 用于比较旧重点项检查插件与 BPA 对同一店铺、同一范围执行只读影子任务后的脱敏结果。它不连接浏览器、不读取数据库，也不依赖 Core、Engine 或 Persistence。
 
 ```zsh
