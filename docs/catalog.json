@@ -37,6 +37,17 @@
       "public": false
     },
     {
+      "id": "repo.current-state-authoring-0.5",
+      "source": "docs/current/authoring-current-state-v0.5.md",
+      "title": "BPA 0.5 AI 创作当前实况",
+      "summary": "Authoring Session、Design Mode、语义快照、候选闭包与真实页面验收门。",
+      "authority": "current-state",
+      "implementation": "partial",
+      "audience": ["operator", "developer", "integrator", "ai"],
+      "since": "0.5.0",
+      "public": false
+    },
+    {
       "id": "repo.normative.platform",
       "source": "docs/normative/BPA通用技术方案-v1.0.md",
       "title": "BPA 通用技术方案 v1.0",
@@ -128,7 +139,7 @@
     {
       "id": "repo.protocol.authoring-v1alpha1",
       "source": "docs/protocols/authoring-v1alpha1.md",
-      "title": "BPA Authoring v1alpha1 协议候选",
+      "title": "BPA Authoring v1alpha1 协议",
       "summary": "ScenarioSpec、创作会话、语义页面快照、Design Mode 与候选包边界。",
       "authority": "normative",
       "implementation": "partial",

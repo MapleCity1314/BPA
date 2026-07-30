@@ -14,6 +14,9 @@
 
 此时不要写 Node 名、选择器或页面操作。
 
+用 `authoring_session_create` 保存 ScenarioSpec。创建后以返回的 revision 为唯一修改
+基线；不要在页面发现过程中重写业务目标或提高风险上限。
+
 ### 第二遍：语义能力
 
 1. 先搜索已有 Workflow、Recipe 和相近业务场景。
@@ -34,6 +37,9 @@
 复杂流程必须采用增量草稿：一次只增加或配置一个 Step、绑定、Test 或异常策略，
 每次携带 `expectedRevision`。CAS 冲突时读取最新草稿并做语义合并，不能覆盖他人
 修改。完成后校验草稿并保存不可变 Candidate。
+
+最终闭包使用 `candidate_bundle_validate` 校验，再调用 `candidate_bundle_save` 和
+`candidate_bundle_export`。tar 内的 `candidate.patch` 只供人工审查，不得自动应用。
 
 ## 常见模式
 

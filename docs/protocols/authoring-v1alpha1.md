@@ -1,4 +1,4 @@
-# BPA Authoring v1alpha1 协议候选
+# BPA Authoring v1alpha1 协议
 
 Status: accepted (human confirmation on 2026-07-30)
 
@@ -213,3 +213,14 @@ the bundle digest, archive digest, destination lease and actor in Audit.
 
 The JSON Schemas in `packages/schemas/schema/` remain the machine-readable
 source of truth.
+
+## 10. Implementation status
+
+The durable models, SQLite v9 state, exact Design Grant, semantic capture,
+bounded Snapshot query, Page Candidate validation, CAS-backed generated files,
+Candidate Bundle closure validation and deterministic tar export are
+implemented.
+
+Real Chanmama page capture, generated Chanmama assets, human publication and a
+real read-only workflow remain acceptance gates. Their absence does not relax
+the Schema or allow fixture-only Candidates to be called published.
