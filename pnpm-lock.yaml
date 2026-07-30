@@ -298,6 +298,22 @@ importers:
         specifier: workspace:*
         version: link:../../packages/workflow-ir
 
+  packages/asset-core:
+    dependencies:
+      '@bpa/schemas':
+        specifier: workspace:*
+        version: link:../schemas
+
+  packages/asset-store-local:
+    dependencies:
+      '@bpa/asset-core':
+        specifier: workspace:*
+        version: link:../asset-core
+    devDependencies:
+      '@bpa/evidence-core':
+        specifier: workspace:*
+        version: link:../evidence-core
+
   packages/assistance-core:
     dependencies:
       '@bpa/schemas':
@@ -356,6 +372,15 @@ importers:
         specifier: workspace:*
         version: link:../workflow-ir
 
+  packages/evidence-core:
+    dependencies:
+      '@bpa/asset-core':
+        specifier: workspace:*
+        version: link:../asset-core
+      '@bpa/schemas':
+        specifier: workspace:*
+        version: link:../schemas
+
   packages/gateway-core:
     dependencies:
       '@bpa/schemas':
@@ -407,18 +432,36 @@ importers:
 
   packages/persistence:
     dependencies:
+      '@bpa/asset-core':
+        specifier: workspace:*
+        version: link:../asset-core
+      '@bpa/evidence-core':
+        specifier: workspace:*
+        version: link:../evidence-core
       '@bpa/schemas':
         specifier: workspace:*
         version: link:../schemas
+      '@bpa/source-core':
+        specifier: workspace:*
+        version: link:../source-core
       '@bpa/workflow-ir':
         specifier: workspace:*
         version: link:../workflow-ir
 
   packages/persistence-sqlite:
     dependencies:
+      '@bpa/asset-core':
+        specifier: workspace:*
+        version: link:../asset-core
+      '@bpa/evidence-core':
+        specifier: workspace:*
+        version: link:../evidence-core
       '@bpa/persistence':
         specifier: workspace:*
         version: link:../persistence
+      '@bpa/source-core':
+        specifier: workspace:*
+        version: link:../source-core
       better-sqlite3:
         specifier: 12.10.0
         version: 12.10.0
@@ -432,6 +475,12 @@ importers:
   packages/schemas: {}
 
   packages/shadow-run: {}
+
+  packages/source-core:
+    dependencies:
+      '@bpa/schemas':
+        specifier: workspace:*
+        version: link:../schemas
 
   packages/team-runtime:
     dependencies:

@@ -1646,7 +1646,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(6);
+      expect(store.health().schemaVersion).toBe(7);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1677,6 +1677,27 @@ describe("append-only migrations", () => {
 
       const legacy = new Database(databasePath);
       legacy.exec(`
+        DROP TRIGGER evidence_links_no_delete;
+        DROP TRIGGER evidence_links_no_update;
+        DROP TRIGGER asset_records_no_delete;
+        DROP TRIGGER asset_records_no_update;
+        DROP TRIGGER blobs_no_delete;
+        DROP TRIGGER blobs_no_update;
+        DROP TRIGGER source_records_no_delete;
+        DROP TRIGGER source_records_no_update;
+        DROP TABLE retention_jobs;
+        DROP TABLE evidence_link_assets;
+        DROP TABLE evidence_link_sources;
+        DROP TABLE evidence_links;
+        DROP TABLE evidence_chunks;
+        DROP TABLE evidence_transfers;
+        DROP TABLE staging_leases;
+        DROP TABLE asset_deletions;
+        DROP TABLE asset_derivations;
+        DROP TABLE asset_sources;
+        DROP TABLE asset_records;
+        DROP TABLE blobs;
+        DROP TABLE source_records;
         DROP TRIGGER workflow_candidates_no_delete;
         DROP TRIGGER workflow_candidates_no_update;
         DROP TRIGGER workflow_draft_revisions_no_delete;
@@ -1689,12 +1710,12 @@ describe("append-only migrations", () => {
         DROP INDEX assistance_tasks_status_mode_created;
         DROP INDEX assistance_task_request_results_task;
         DROP TABLE assistance_task_request_results;
-        DELETE FROM schema_migrations WHERE version IN (4, 5, 6);
+        DELETE FROM schema_migrations WHERE version IN (4, 5, 6, 7);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(6);
+      expect(upgraded.health().schemaVersion).toBe(7);
       expect(upgraded.getAssistanceTask(task.task.taskId)).toEqual(task);
       expect(
         upgraded.getAssistanceRequestResult("not-recorded")
@@ -1719,7 +1740,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(6);
+      expect(store.health().schemaVersion).toBe(7);
       expect(store.getAssistanceRequestResult("not-recorded")).toBeUndefined();
       store.close();
     } finally {
@@ -1741,7 +1762,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(6);
+      expect(store.health().schemaVersion).toBe(7);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1756,6 +1777,27 @@ describe("append-only migrations", () => {
       seeded.close();
       const legacy = new Database(databasePath);
       legacy.exec(`
+        DROP TRIGGER evidence_links_no_delete;
+        DROP TRIGGER evidence_links_no_update;
+        DROP TRIGGER asset_records_no_delete;
+        DROP TRIGGER asset_records_no_update;
+        DROP TRIGGER blobs_no_delete;
+        DROP TRIGGER blobs_no_update;
+        DROP TRIGGER source_records_no_delete;
+        DROP TRIGGER source_records_no_update;
+        DROP TABLE retention_jobs;
+        DROP TABLE evidence_link_assets;
+        DROP TABLE evidence_link_sources;
+        DROP TABLE evidence_links;
+        DROP TABLE evidence_chunks;
+        DROP TABLE evidence_transfers;
+        DROP TABLE staging_leases;
+        DROP TABLE asset_deletions;
+        DROP TABLE asset_derivations;
+        DROP TABLE asset_sources;
+        DROP TABLE asset_records;
+        DROP TABLE blobs;
+        DROP TABLE source_records;
         DROP TRIGGER workflow_candidates_no_delete;
         DROP TRIGGER workflow_candidates_no_update;
         DROP TRIGGER workflow_draft_revisions_no_delete;
@@ -1763,12 +1805,12 @@ describe("append-only migrations", () => {
         DROP TABLE workflow_candidates;
         DROP TABLE workflow_draft_revisions;
         DROP TABLE workflow_drafts;
-        DELETE FROM schema_migrations WHERE version = 6;
+        DELETE FROM schema_migrations WHERE version IN (6, 7);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(6);
+      expect(upgraded.health().schemaVersion).toBe(7);
       expect(
         upgraded.createWorkflowDraft({
           draftId: "v5-upgraded-draft",
@@ -1809,7 +1851,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(6);
+      expect(store.health().schemaVersion).toBe(7);
       expect(store.getWorkflowDraft("not-created")).toBeUndefined();
       store.close();
     } finally {
@@ -1822,7 +1864,7 @@ describe("append-only migrations", () => {
     const databasePath = join(directory, "bpa.sqlite3");
     try {
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(6);
+      expect(store.health().schemaVersion).toBe(7);
       store.close();
       const raw = new Database(databasePath);
       raw

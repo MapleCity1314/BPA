@@ -1,8 +1,19 @@
 import type {
+  AssetRecordDefinition,
   AssistanceTaskDefinition,
   DatasetVersionDefinition,
-  DecisionRecordDefinition
+  DecisionRecordDefinition,
+  EvidenceLinkDefinition,
+  SourceRecordDefinition
 } from "@bpa/schemas";
+import type {
+  BlobRecord,
+  StagingLeaseRecord
+} from "@bpa/asset-core";
+import type {
+  EvidenceChunkRecord,
+  EvidenceTransferRecord
+} from "@bpa/evidence-core";
 import type {
   ExecutionPlan,
   JsonValue,
@@ -10,10 +21,18 @@ import type {
 } from "@bpa/workflow-ir";
 
 export type {
+  AssetRecordDefinition,
   AssistanceTaskDefinition,
   DatasetVersionDefinition,
-  DecisionRecordDefinition
+  DecisionRecordDefinition,
+  EvidenceLinkDefinition,
+  SourceRecordDefinition
 } from "@bpa/schemas";
+export type { BlobRecord, StagingLeaseRecord } from "@bpa/asset-core";
+export type {
+  EvidenceChunkRecord,
+  EvidenceTransferRecord
+} from "@bpa/evidence-core";
 export type { ExecutionPlan, JsonValue, ScopePath } from "@bpa/workflow-ir";
 
 export type ArtifactType =
@@ -488,6 +507,22 @@ export interface GatewayDeliveryUnitOfWork {
     inboxMessageId: string;
     receivedAt: string;
   }): "accepted" | "duplicate" | "stale";
+  acceptResultWithEvidence(input: {
+    commandId: string;
+    runId: string;
+    nodeExecutionId: string;
+    fencingToken: number;
+    result: unknown;
+    evidenceIds: readonly string[];
+    evidenceLinks: readonly EvidenceLinkDefinition[];
+    inboxMessageId: string;
+    receivedAt: string;
+  }):
+    | "accepted"
+    | "duplicate"
+    | "stale"
+    | "evidence_not_ready"
+    | "evidence_invalid";
 }
 
 export interface BrowserSessionRecord {
@@ -600,6 +635,105 @@ export interface WorkflowAuthoringStore {
   ): WorkflowCandidateRecord | undefined;
 }
 
+export interface RetentionJobRecord {
+  jobId: string;
+  targetType: "evidence" | "asset" | "blob";
+  targetId: string;
+  expectedPolicy: string;
+  state: "scheduled" | "running" | "completed" | "skipped" | "failed";
+  notBefore: string;
+  attempt: number;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SourceAssetStore {
+  putSourceRecord(
+    record: SourceRecordDefinition
+  ): { status: "accepted" | "duplicate"; record: SourceRecordDefinition };
+  getSourceRecord(sourceId: string): SourceRecordDefinition | undefined;
+  registerBlob(
+    record: BlobRecord
+  ): {
+    status: "accepted" | "duplicate";
+    record: BlobRecord;
+    storageWarning: boolean;
+  };
+  getBlob(digest: string): BlobRecord | undefined;
+  putAssetRecord(
+    record: AssetRecordDefinition
+  ): { status: "accepted" | "duplicate"; record: AssetRecordDefinition };
+  getAssetRecord(assetId: string): AssetRecordDefinition | undefined;
+  deleteAssetRecord(input: {
+    assetId: string;
+    actor: string;
+    deletedAt: string;
+  }):
+    | { status: "deleted" }
+    | { status: "missing" | "referenced" | "retained" };
+}
+
+export interface EvidenceTransferUnitOfWork {
+  putStagingLease(
+    lease: StagingLeaseRecord
+  ): { status: "accepted" | "duplicate"; lease: StagingLeaseRecord };
+  getStagingLease(leaseId: string): StagingLeaseRecord | undefined;
+  transitionStagingLease(input: {
+    leaseId: string;
+    expectedState: StagingLeaseRecord["state"];
+    nextState: StagingLeaseRecord["state"];
+  }): StagingLeaseRecord;
+  declareEvidence(
+    transfer: EvidenceTransferRecord
+  ):
+    | {
+        status: "accepted" | "duplicate";
+        transfer: EvidenceTransferRecord;
+        runBytes: number;
+      }
+    | { status: "over_run_quota"; runBytes: number };
+  commitEvidenceChunk(input: {
+    evidenceId: string;
+    chunk: EvidenceChunkRecord;
+  }):
+    | { status: "accepted" | "duplicate"; transfer: EvidenceTransferRecord }
+    | { status: "out_of_order"; nextChunkIndex: number }
+    | { status: "conflict" };
+  completeEvidence(input: {
+    evidenceId: string;
+    blob: BlobRecord;
+  }): EvidenceTransferRecord;
+  acknowledgeEvidence(
+    evidenceId: string,
+    acknowledgedAt: string
+  ): EvidenceTransferRecord;
+  terminateEvidence(input: {
+    evidenceId: string;
+    terminalState: "rejected" | "expired";
+    updatedAt: string;
+  }): EvidenceTransferRecord;
+  getEvidenceTransfer(
+    evidenceId: string
+  ): EvidenceTransferRecord | undefined;
+  listEvidenceChunks(evidenceId: string): EvidenceChunkRecord[];
+  linkEvidence(
+    link: EvidenceLinkDefinition
+  ): { status: "accepted" | "duplicate"; link: EvidenceLinkDefinition };
+  getEvidenceLink(linkId: string): EvidenceLinkDefinition | undefined;
+  scheduleRetention(
+    job: RetentionJobRecord
+  ): { status: "accepted" | "duplicate"; job: RetentionJobRecord };
+  listDueRetentionJobs(now: string, limit: number): RetentionJobRecord[];
+  completeRetentionJob(input: {
+    jobId: string;
+    expectedState: "scheduled" | "running";
+    nextState: "completed" | "skipped" | "failed";
+    updatedAt: string;
+    lastError?: string;
+  }): RetentionJobRecord;
+}
+
 export interface Persistence
   extends RegistryStore,
     ExecutionUnitOfWork,
@@ -609,7 +743,9 @@ export interface Persistence
     DecisionRecordStore,
     GatewayDeliveryUnitOfWork,
     ExecutionStore,
-    WorkflowAuthoringStore {
+    WorkflowAuthoringStore,
+    SourceAssetStore,
+    EvidenceTransferUnitOfWork {
   health(): {
     adapter: string;
     schemaVersion: number;
@@ -655,3 +791,6 @@ export class StaleFencingTokenError extends Error {}
 export class WorkflowDraftConflictError extends Error {}
 export class WorkflowOperationConflictError extends Error {}
 export class WorkflowCandidateConflictError extends Error {}
+export class EvidenceConflictError extends Error {}
+export class EvidenceOwnershipError extends Error {}
+export class AssetReferenceConflictError extends Error {}

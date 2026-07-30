@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@bpa/asset-core": "workspace:*",
+    "@bpa/evidence-core": "workspace:*",
     "@bpa/schemas": "workspace:*",
+    "@bpa/source-core": "workspace:*",
     "@bpa/workflow-ir": "workspace:*"
   },
   "exports": {

@@ -3,7 +3,10 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import {
+  AssetReferenceConflictError,
   ArtifactConflictError,
+  EvidenceConflictError,
+  EvidenceOwnershipError,
   RevisionConflictError,
   StaleFencingTokenError,
   WorkflowCandidateConflictError,
@@ -11,6 +14,7 @@ import {
   WorkflowOperationConflictError,
   type ApplyWorkflowDraftRevisionInput,
   type ApplyWorkflowDraftRevisionResult,
+  type AssetRecordDefinition,
   type ArtifactRecord,
   type ArtifactType,
   type AssistanceTaskRecord,
@@ -18,6 +22,7 @@ import {
   type AuditRecord,
   type BrowserCapabilityRecord,
   type BrowserSessionRecord,
+  type BlobRecord,
   type CreateRunInput,
   type CreateBlockingAssistanceInput,
   type CommitAssistanceTaskRequestInput,
@@ -27,6 +32,9 @@ import {
   type DatasetVersionDefinition,
   type DecisionRecordDefinition,
   type EngineCheckpointRecord,
+  type EvidenceChunkRecord,
+  type EvidenceLinkDefinition,
+  type EvidenceTransferRecord,
   type ExecutionScopeRecord,
   type ExecutionEventRecord,
   type GatewayCommandRecord,
@@ -39,15 +47,33 @@ import {
   type OutboxMessage,
   type Persistence,
   type PublishArtifactInput,
+  type RetentionJobRecord,
   type RunRecord,
   type RunPlanSnapshotRecord,
   type RunTransitionInput,
+  type SourceRecordDefinition,
+  type StagingLeaseRecord,
   type StepInstanceRecord,
   type SubmitAssistanceAndWakeInput,
   type WorkflowCandidateRecord,
   type WorkflowDraftRecord,
   type WorkflowDraftRevisionRecord
 } from "@bpa/persistence";
+import {
+  GLOBAL_STORAGE_WARNING_BYTES,
+  MAX_RUN_BYTES,
+  assertAssetRecord
+} from "@bpa/asset-core";
+import {
+  EvidenceValidationError,
+  acceptChunk,
+  acknowledgeEvidence as transitionEvidenceAcknowledged,
+  assertEvidenceLink,
+  completeEvidence as transitionEvidenceComplete,
+  markEvidenceLinked,
+  terminateEvidence as transitionEvidenceTerminated
+} from "@bpa/evidence-core";
+import { assertSourceRecord } from "@bpa/source-core";
 import { migrations, type Migration } from "./migrations.js";
 
 type SqlRow = Record<string, unknown>;
@@ -184,11 +210,15 @@ export interface SqlitePersistenceOptions {
   path: string;
   readonly?: boolean;
   failureInjector?: (point: string) => void;
+  clock?: () => Date;
+  idFactory?: () => string;
 }
 
 export class SqlitePersistence implements Persistence {
   readonly #db: Database.Database;
   readonly #failureInjector: ((point: string) => void) | undefined;
+  readonly #clock: () => Date;
+  readonly #idFactory: () => string;
 
   constructor(options: SqlitePersistenceOptions) {
     if (options.path !== ":memory:") {
@@ -200,6 +230,8 @@ export class SqlitePersistence implements Persistence {
       timeout: 5_000
     });
     this.#failureInjector = options.failureInjector;
+    this.#clock = options.clock ?? (() => new Date());
+    this.#idFactory = options.idFactory ?? randomUUID;
     try {
       this.#db.pragma("foreign_keys = ON");
       this.#db.pragma("busy_timeout = 5000");
@@ -2021,6 +2053,199 @@ export class SqlitePersistence implements Persistence {
     })();
   }
 
+  acceptResultWithEvidence(input: {
+    commandId: string;
+    runId: string;
+    nodeExecutionId: string;
+    fencingToken: number;
+    result: unknown;
+    evidenceIds: readonly string[];
+    evidenceLinks: readonly EvidenceLinkDefinition[];
+    inboxMessageId: string;
+    receivedAt: string;
+  }):
+    | "accepted"
+    | "duplicate"
+    | "stale"
+    | "evidence_not_ready"
+    | "evidence_invalid" {
+    return this.#db.transaction(() => {
+      const inbox = this.#db
+        .prepare("SELECT 1 FROM gateway_inbox WHERE message_id = ?")
+        .get(input.inboxMessageId);
+      if (inbox) return "duplicate" as const;
+      const command = this.#db
+        .prepare(
+          `SELECT node_execution_id, fencing_token, state, payload_json
+           FROM gateway_commands WHERE id = ?`
+        )
+        .get(input.commandId) as
+        | {
+            node_execution_id: string;
+            fencing_token: number;
+            state: string;
+            payload_json: string;
+          }
+        | undefined;
+      const execution = this.getNodeExecution(input.nodeExecutionId);
+      if (
+        !command ||
+        command.fencing_token !== input.fencingToken ||
+        command.node_execution_id !== input.nodeExecutionId ||
+        !this.#gatewayPayloadOwnsExecution(
+          command.payload_json,
+          input.runId,
+          input.nodeExecutionId,
+          input.fencingToken
+        ) ||
+        (execution
+          ? execution.runId !== input.runId ||
+            execution.fencingToken !== input.fencingToken
+          : !this.#hasRecoverableIr2Run(input.runId))
+      ) {
+        return "stale" as const;
+      }
+      if (command.state === "terminal") {
+        this.#db
+          .prepare(
+            `INSERT INTO gateway_inbox(
+              message_id, command_id, received_at
+            ) VALUES (?, ?, ?)`
+          )
+          .run(input.inboxMessageId, input.commandId, input.receivedAt);
+        return "duplicate" as const;
+      }
+      const evidenceIds = [...new Set(input.evidenceIds)];
+      const linkEvidenceIds = input.evidenceLinks.map(
+        (link) => link.evidenceId
+      );
+      if (
+        evidenceIds.length !== input.evidenceIds.length ||
+        new Set(linkEvidenceIds).size !== input.evidenceLinks.length ||
+        evidenceIds.length !== input.evidenceLinks.length ||
+        evidenceIds.some((id) => !linkEvidenceIds.includes(id))
+      ) {
+        return "evidence_invalid" as const;
+      }
+      for (const link of input.evidenceLinks) {
+        const transfer = this.getEvidenceTransfer(link.evidenceId);
+        if (
+          transfer &&
+          transfer.runId === input.runId &&
+          transfer.nodeExecutionId === input.nodeExecutionId &&
+          transfer.fencingToken === input.fencingToken &&
+          transfer.state !== "acknowledged"
+        ) {
+          return "evidence_not_ready" as const;
+        }
+        try {
+          assertEvidenceLink(link, {
+            transfer,
+            sourceExists: (id) => this.getSourceRecord(id) !== undefined,
+            assetExists: (id) => this.getAssetRecord(id) !== undefined
+          });
+        } catch (error) {
+          if (error instanceof EvidenceValidationError) {
+            return "evidence_invalid" as const;
+          }
+          throw error;
+        }
+      }
+      this.#db
+        .prepare(
+          `INSERT INTO gateway_inbox(
+            message_id, command_id, received_at
+          ) VALUES (?, ?, ?)`
+        )
+        .run(input.inboxMessageId, input.commandId, input.receivedAt);
+      const commandUpdate = this.#db
+        .prepare(
+          `UPDATE gateway_commands
+           SET state = 'terminal', result_json = ?, updated_at = ?
+           WHERE id = ? AND fencing_token = ? AND state <> 'terminal'`
+        )
+        .run(
+          json(input.result),
+          input.receivedAt,
+          input.commandId,
+          input.fencingToken
+        );
+      if (commandUpdate.changes !== 1) {
+        throw new RevisionConflictError("Gateway Result CAS failed");
+      }
+      this.#inject("evidence.result.after_gateway");
+      const linkStatement = this.#db.prepare(
+        `INSERT INTO evidence_links(
+          link_id, evidence_id, run_id, node_execution_id,
+          relation, claim_ref, canonical_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      const sourceStatement = this.#db.prepare(
+        `INSERT INTO evidence_link_sources(link_id, source_id)
+         VALUES (?, ?)`
+      );
+      const assetStatement = this.#db.prepare(
+        `INSERT INTO evidence_link_assets(link_id, asset_id)
+         VALUES (?, ?)`
+      );
+      const transferStatement = this.#db.prepare(
+        `UPDATE evidence_transfers
+         SET state = 'linked', updated_at = ?
+         WHERE evidence_id = ? AND run_id = ? AND node_execution_id = ?
+           AND fencing_token = ? AND state = 'acknowledged'`
+      );
+      for (const link of input.evidenceLinks) {
+        linkStatement.run(
+          link.linkId,
+          link.evidenceId,
+          link.runId,
+          link.nodeExecutionId,
+          link.relation,
+          link.claimRef ?? null,
+          json(link),
+          link.createdAt
+        );
+        for (const sourceId of link.sourceIds) {
+          sourceStatement.run(link.linkId, sourceId);
+        }
+        for (const assetId of link.assetIds ?? []) {
+          assetStatement.run(link.linkId, assetId);
+        }
+        const linked = transferStatement.run(
+          input.receivedAt,
+          link.evidenceId,
+          input.runId,
+          input.nodeExecutionId,
+          input.fencingToken
+        );
+        if (linked.changes !== 1) {
+          throw new RevisionConflictError(
+            `Evidence link CAS failed: ${link.evidenceId}`
+          );
+        }
+      }
+      this.#db
+        .prepare(
+          `UPDATE gateway_outbox
+           SET acknowledged_at = COALESCE(acknowledged_at, ?)
+           WHERE aggregate_id = ?`
+        )
+        .run(input.receivedAt, input.commandId);
+      this.#insertAudit(
+        "gateway.result.evidence.accepted",
+        "gateway",
+        input.commandId,
+        {
+          runId: input.runId,
+          nodeExecutionId: input.nodeExecutionId,
+          fencingToken: input.fencingToken,
+          evidenceIds
+        }
+      );
+      return "accepted" as const;
+    }).immediate();
+  }
+
   listPendingEngineOutbox(): OutboxMessage[] {
     const rows = this.#db
       .prepare(
@@ -2046,12 +2271,10 @@ export class SqlitePersistence implements Persistence {
   listGatewayCommandsForRun(runId: string): GatewayCommandRecord[] {
     const rows = this.#db
       .prepare(
-        `SELECT gateway_commands.*
+        `SELECT *
          FROM gateway_commands
-         INNER JOIN node_executions
-           ON node_executions.id = gateway_commands.node_execution_id
-         WHERE node_executions.run_id = ?
-         ORDER BY gateway_commands.command_seq`
+         WHERE json_extract(payload_json, '$.run_id') = ?
+         ORDER BY command_seq`
       )
       .all(runId) as SqlRow[];
     return rows.map((row) => this.#readGatewayCommand(row));
@@ -2254,6 +2477,791 @@ export class SqlitePersistence implements Persistence {
       riskLevel: String(row.risk_level),
       permissions: parseJson(row.permissions_json) as string[]
     }));
+  }
+
+  putSourceRecord(
+    record: SourceRecordDefinition
+  ): { status: "accepted" | "duplicate"; record: SourceRecordDefinition } {
+    assertSourceRecord(record);
+    const existing = this.getSourceRecord(record.sourceId);
+    if (existing) {
+      if (canonicalJson(existing) !== canonicalJson(record)) {
+        throw new EvidenceConflictError(
+          `SourceRecord identity conflict: ${record.sourceId}`
+        );
+      }
+      return { status: "duplicate", record: existing };
+    }
+    this.#db
+      .prepare(
+        `INSERT INTO source_records(
+          source_id, source_type, classification, canonical_json,
+          observed_at, recorded_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        record.sourceId,
+        record.sourceType,
+        record.classification,
+        json(record),
+        record.observedAt,
+        record.recordedAt
+      );
+    return { status: "accepted", record: this.getSourceRecord(record.sourceId)! };
+  }
+
+  getSourceRecord(sourceId: string): SourceRecordDefinition | undefined {
+    const row = this.#db
+      .prepare(
+        "SELECT canonical_json FROM source_records WHERE source_id = ?"
+      )
+      .get(sourceId) as { canonical_json: string } | undefined;
+    return row
+      ? (parseJson(row.canonical_json) as SourceRecordDefinition)
+      : undefined;
+  }
+
+  registerBlob(
+    record: BlobRecord
+  ): {
+    status: "accepted" | "duplicate";
+    record: BlobRecord;
+    storageWarning: boolean;
+  } {
+    const expectedStorageRef = `asset-store:${record.digest}`;
+    if (
+      !/^sha256:[a-f0-9]{64}$/.test(record.digest) ||
+      record.storageRef !== expectedStorageRef ||
+      !Number.isSafeInteger(record.size) ||
+      record.size < 1 ||
+      record.size > 25 * 1024 * 1024
+    ) {
+      throw new EvidenceConflictError("Invalid immutable Blob metadata");
+    }
+    const existing = this.getBlob(record.digest);
+    if (existing) {
+      if (canonicalJson(existing) !== canonicalJson(record)) {
+        throw new EvidenceConflictError(
+          `Blob digest metadata conflict: ${record.digest}`
+        );
+      }
+      return {
+        status: "duplicate",
+        record: existing,
+        storageWarning: this.#storedBlobBytes() >= GLOBAL_STORAGE_WARNING_BYTES
+      };
+    }
+    this.#db
+      .prepare(
+        `INSERT INTO blobs(
+          digest, size, media_type, storage_ref, created_at
+        ) VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(
+        record.digest,
+        record.size,
+        record.mediaType,
+        record.storageRef,
+        record.createdAt
+      );
+    return {
+      status: "accepted",
+      record,
+      storageWarning: this.#storedBlobBytes() >= GLOBAL_STORAGE_WARNING_BYTES
+    };
+  }
+
+  getBlob(blobDigest: string): BlobRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM blobs WHERE digest = ?")
+      .get(blobDigest) as SqlRow | undefined;
+    return row
+      ? {
+          digest: String(row.digest),
+          size: Number(row.size),
+          mediaType: String(row.media_type),
+          storageRef: String(row.storage_ref),
+          createdAt: String(row.created_at)
+        }
+      : undefined;
+  }
+
+  putAssetRecord(
+    record: AssetRecordDefinition
+  ): { status: "accepted" | "duplicate"; record: AssetRecordDefinition } {
+    const existing = this.#getAssetRecordIncludingDeleted(record.assetId);
+    if (existing) {
+      if (canonicalJson(existing) !== canonicalJson(record)) {
+        throw new EvidenceConflictError(
+          `AssetRecord identity conflict: ${record.assetId}`
+        );
+      }
+      return { status: "duplicate", record: existing };
+    }
+    assertAssetRecord(record, {
+      blob: this.getBlob(record.digest),
+      sourceExists: (sourceId) => this.getSourceRecord(sourceId) !== undefined,
+      assetExists: (assetId) => this.getAssetRecord(assetId) !== undefined
+    });
+    this.#db.transaction(() => {
+      this.#db
+        .prepare(
+          `INSERT INTO asset_records(
+            asset_id, digest, classification, retention_policy,
+            retain_until, canonical_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          record.assetId,
+          record.digest,
+          record.classification,
+          record.retention.policy,
+          "retainUntil" in record.retention
+            ? record.retention.retainUntil
+            : null,
+          json(record),
+          record.createdAt
+        );
+      const sourceStatement = this.#db.prepare(
+        "INSERT INTO asset_sources(asset_id, source_id) VALUES (?, ?)"
+      );
+      for (const sourceId of record.sourceIds) {
+        sourceStatement.run(record.assetId, sourceId);
+      }
+      const derivationStatement = this.#db.prepare(
+        `INSERT INTO asset_derivations(asset_id, parent_asset_id)
+         VALUES (?, ?)`
+      );
+      for (const parentId of record.derivedFromAssetIds ?? []) {
+        derivationStatement.run(record.assetId, parentId);
+      }
+      this.#inject("evidence.asset.after_record");
+    }).immediate();
+    return { status: "accepted", record: this.getAssetRecord(record.assetId)! };
+  }
+
+  getAssetRecord(assetId: string): AssetRecordDefinition | undefined {
+    const deleted = this.#db
+      .prepare("SELECT 1 FROM asset_deletions WHERE asset_id = ?")
+      .get(assetId);
+    return deleted ? undefined : this.#getAssetRecordIncludingDeleted(assetId);
+  }
+
+  deleteAssetRecord(input: {
+    assetId: string;
+    actor: string;
+    deletedAt: string;
+  }):
+    | { status: "deleted" }
+    | { status: "missing" | "referenced" | "retained" } {
+    const asset = this.getAssetRecord(input.assetId);
+    if (!asset) return { status: "missing" };
+    const activeReference = this.#db
+      .prepare(
+        `SELECT 1
+         FROM evidence_link_assets ela
+         WHERE ela.asset_id = ?
+         UNION ALL
+         SELECT 1
+         FROM asset_derivations ad
+         LEFT JOIN asset_deletions deleted ON deleted.asset_id = ad.asset_id
+         WHERE ad.parent_asset_id = ? AND deleted.asset_id IS NULL
+         LIMIT 1`
+      )
+      .get(input.assetId, input.assetId);
+    if (activeReference) return { status: "referenced" };
+    if (!("retainUntil" in asset.retention)) {
+      return { status: "retained" };
+    }
+    if (
+      Date.parse(asset.retention.retainUntil) > Date.parse(input.deletedAt)
+    ) {
+      return { status: "retained" };
+    }
+    this.#db.transaction(() => {
+      const recheck = this.#db
+        .prepare(
+          `SELECT 1 FROM evidence_link_assets WHERE asset_id = ?
+           UNION ALL
+           SELECT 1 FROM asset_derivations ad
+           LEFT JOIN asset_deletions d ON d.asset_id = ad.asset_id
+           WHERE ad.parent_asset_id = ? AND d.asset_id IS NULL
+           LIMIT 1`
+        )
+        .get(input.assetId, input.assetId);
+      if (recheck) {
+        throw new AssetReferenceConflictError(
+          `Asset became referenced: ${input.assetId}`
+        );
+      }
+      this.#db
+        .prepare(
+          `INSERT INTO asset_deletions(asset_id, actor, deleted_at)
+           VALUES (?, ?, ?)`
+        )
+        .run(input.assetId, input.actor, input.deletedAt);
+      this.#insertAudit(
+        "asset.retention.deleted",
+        input.actor,
+        input.assetId,
+        { digest: asset.digest, retention: asset.retention }
+      );
+    }).immediate();
+    return { status: "deleted" };
+  }
+
+  putStagingLease(
+    lease: StagingLeaseRecord
+  ): { status: "accepted" | "duplicate"; lease: StagingLeaseRecord } {
+    const existing = this.getStagingLease(lease.leaseId);
+    if (existing) {
+      if (canonicalJson(existing) !== canonicalJson(lease)) {
+        throw new EvidenceConflictError(
+          `Staging lease identity conflict: ${lease.leaseId}`
+        );
+      }
+      return { status: "duplicate", lease: existing };
+    }
+    this.#db
+      .prepare(
+        `INSERT INTO staging_leases(
+          lease_id, run_id, token_digest, max_bytes, state,
+          created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        lease.leaseId,
+        lease.runId,
+        lease.tokenDigest,
+        lease.maxBytes,
+        lease.state,
+        lease.createdAt,
+        lease.expiresAt
+      );
+    return { status: "accepted", lease };
+  }
+
+  getStagingLease(leaseId: string): StagingLeaseRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM staging_leases WHERE lease_id = ?")
+      .get(leaseId) as SqlRow | undefined;
+    return row ? this.#readStagingLease(row) : undefined;
+  }
+
+  transitionStagingLease(input: {
+    leaseId: string;
+    expectedState: StagingLeaseRecord["state"];
+    nextState: StagingLeaseRecord["state"];
+  }): StagingLeaseRecord {
+    if (
+      input.expectedState !== "active" ||
+      !["consumed", "expired", "rejected"].includes(input.nextState)
+    ) {
+      throw new RevisionConflictError(
+        "A staging lease only transitions once from active to a terminal state"
+      );
+    }
+    const result = this.#db
+      .prepare(
+        `UPDATE staging_leases SET state = ?
+         WHERE lease_id = ? AND state = ?`
+      )
+      .run(input.nextState, input.leaseId, input.expectedState);
+    if (result.changes !== 1) {
+      throw new RevisionConflictError("Staging lease state changed");
+    }
+    return this.getStagingLease(input.leaseId)!;
+  }
+
+  declareEvidence(
+    transfer: EvidenceTransferRecord
+  ):
+    | {
+        status: "accepted" | "duplicate";
+        transfer: EvidenceTransferRecord;
+        runBytes: number;
+      }
+    | { status: "over_run_quota"; runBytes: number } {
+    const existing = this.getEvidenceTransfer(transfer.evidenceId);
+    if (existing) {
+      if (
+        canonicalJson(this.#evidenceDeclarationIdentity(existing)) !==
+        canonicalJson(this.#evidenceDeclarationIdentity(transfer))
+      ) {
+        throw new EvidenceConflictError(
+          `Evidence identity conflict: ${transfer.evidenceId}`
+        );
+      }
+      return {
+        status: "duplicate",
+        transfer: existing,
+        runBytes: this.#runEvidenceBytes(transfer.runId)
+      };
+    }
+    const lease = this.getStagingLease(transfer.stagingLeaseId);
+    const run = this.getRun(transfer.runId);
+    const execution = this.getNodeExecution(transfer.nodeExecutionId);
+    const session = this.#getBrowserSession(transfer.sessionId);
+    const command = this.#db
+      .prepare(
+        `SELECT fencing_token, payload_json
+         FROM gateway_commands WHERE node_execution_id = ?`
+      )
+      .get(transfer.nodeExecutionId) as
+      | { fencing_token: number; payload_json: string }
+      | undefined;
+    if (
+      !run ||
+      !command ||
+      command.fencing_token !== transfer.fencingToken ||
+      !this.#gatewayPayloadOwnsExecution(
+        command.payload_json,
+        transfer.runId,
+        transfer.nodeExecutionId,
+        transfer.fencingToken
+      ) ||
+      (execution
+        ? execution.runId !== transfer.runId ||
+          execution.fencingToken !== transfer.fencingToken
+        : !this.#hasRecoverableIr2Run(transfer.runId)) ||
+      !session ||
+      !lease ||
+      lease.runId !== transfer.runId ||
+      lease.state !== "active" ||
+      Date.parse(lease.expiresAt) <= this.#clock().getTime()
+    ) {
+      throw new EvidenceOwnershipError(
+        "Evidence ownership, fencing, Session or staging lease is stale"
+      );
+    }
+    const runBytes = this.#runEvidenceBytes(transfer.runId);
+    if (runBytes + transfer.size > MAX_RUN_BYTES) {
+      return { status: "over_run_quota", runBytes };
+    }
+    this.#db
+      .prepare(
+        `INSERT INTO evidence_transfers(
+          evidence_id, run_id, node_execution_id, session_id, fencing_token,
+          kind, media_type, size, digest, chunk_size, chunk_count,
+          next_chunk_index, classification, staging_lease_id, state,
+          storage_ref, created_at, updated_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        transfer.evidenceId,
+        transfer.runId,
+        transfer.nodeExecutionId,
+        transfer.sessionId,
+        transfer.fencingToken,
+        transfer.kind,
+        transfer.mediaType,
+        transfer.size,
+        transfer.digest,
+        transfer.chunkSize,
+        transfer.chunkCount,
+        transfer.nextChunkIndex,
+        transfer.classification,
+        transfer.stagingLeaseId,
+        transfer.state,
+        transfer.storageRef ?? null,
+        transfer.createdAt,
+        transfer.updatedAt,
+        transfer.expiresAt ?? null
+      );
+    return {
+      status: "accepted",
+      transfer: this.getEvidenceTransfer(transfer.evidenceId)!,
+      runBytes: runBytes + transfer.size
+    };
+  }
+
+  commitEvidenceChunk(input: {
+    evidenceId: string;
+    chunk: EvidenceChunkRecord;
+  }):
+    | { status: "accepted" | "duplicate"; transfer: EvidenceTransferRecord }
+    | { status: "out_of_order"; nextChunkIndex: number }
+    | { status: "conflict" } {
+    const transfer = this.getEvidenceTransfer(input.evidenceId);
+    if (!transfer) return { status: "conflict" };
+    const existingRow = this.#db
+      .prepare(
+        `SELECT * FROM evidence_chunks
+         WHERE evidence_id = ? AND chunk_index = ?`
+      )
+      .get(input.evidenceId, input.chunk.index) as SqlRow | undefined;
+    const existing = existingRow
+      ? this.#readEvidenceChunk(existingRow)
+      : undefined;
+    let result;
+    try {
+      result = acceptChunk(
+        transfer,
+        input.chunk,
+        existing,
+        { now: this.#clock }
+      );
+    } catch (error) {
+      if (
+        error instanceof EvidenceValidationError &&
+        error.code === "OUT_OF_ORDER"
+      ) {
+        return {
+          status: "out_of_order",
+          nextChunkIndex: transfer.nextChunkIndex
+        };
+      }
+      if (error instanceof EvidenceValidationError) {
+        return { status: "conflict" };
+      }
+      throw error;
+    }
+    if (result.status === "duplicate") {
+      return { status: "duplicate", transfer };
+    }
+    this.#db.transaction(() => {
+      this.#db
+        .prepare(
+          `INSERT INTO evidence_chunks(
+            evidence_id, chunk_index, digest, size, received_at
+          ) VALUES (?, ?, ?, ?, ?)`
+        )
+        .run(
+          input.evidenceId,
+          input.chunk.index,
+          input.chunk.digest,
+          input.chunk.size,
+          input.chunk.receivedAt
+        );
+      this.#inject("evidence.chunk.after_metadata");
+      const update = this.#db
+        .prepare(
+          `UPDATE evidence_transfers
+           SET state = ?, next_chunk_index = ?, updated_at = ?
+           WHERE evidence_id = ? AND next_chunk_index = ?
+             AND state IN ('declared', 'receiving')`
+        )
+        .run(
+          result.transfer.state,
+          result.transfer.nextChunkIndex,
+          result.transfer.updatedAt,
+          input.evidenceId,
+          transfer.nextChunkIndex
+        );
+      if (update.changes !== 1) {
+        throw new RevisionConflictError("Evidence chunk CAS failed");
+      }
+    }).immediate();
+    return {
+      status: "accepted",
+      transfer: this.getEvidenceTransfer(input.evidenceId)!
+    };
+  }
+
+  completeEvidence(input: {
+    evidenceId: string;
+    blob: BlobRecord;
+  }): EvidenceTransferRecord {
+    const transfer = this.getEvidenceTransfer(input.evidenceId);
+    if (!transfer) {
+      throw new EvidenceConflictError("Evidence transfer does not exist");
+    }
+    if (
+      transfer.state === "complete" ||
+      transfer.state === "acknowledged" ||
+      transfer.state === "linked"
+    ) {
+      const stored = this.getBlob(transfer.digest);
+      if (
+        !stored ||
+        input.blob.digest !== transfer.digest ||
+        input.blob.size !== transfer.size ||
+        input.blob.mediaType !== transfer.mediaType ||
+        input.blob.storageRef !== transfer.storageRef
+      ) {
+        throw new EvidenceConflictError(
+          "Replayed Evidence completion conflicts with stored Blob"
+        );
+      }
+      return transfer;
+    }
+    const chunks = this.listEvidenceChunks(input.evidenceId);
+    const completed = transitionEvidenceComplete(
+      transfer,
+      chunks,
+      input.blob,
+      { now: this.#clock }
+    );
+    this.#db.transaction(() => {
+      this.registerBlob(input.blob);
+      const result = this.#db
+        .prepare(
+          `UPDATE evidence_transfers
+           SET state = 'complete', storage_ref = ?, updated_at = ?
+           WHERE evidence_id = ? AND state = 'receiving'
+             AND next_chunk_index = chunk_count`
+        )
+        .run(
+          completed.storageRef,
+          completed.updatedAt,
+          input.evidenceId
+        );
+      if (result.changes !== 1) {
+        throw new RevisionConflictError("Evidence completion CAS failed");
+      }
+      this.#db
+        .prepare(
+          `UPDATE staging_leases SET state = 'consumed'
+           WHERE lease_id = ? AND state = 'active'`
+        )
+        .run(transfer.stagingLeaseId);
+      this.#inject("evidence.complete.after_blob");
+    }).immediate();
+    return this.getEvidenceTransfer(input.evidenceId)!;
+  }
+
+  acknowledgeEvidence(
+    evidenceId: string,
+    acknowledgedAt: string
+  ): EvidenceTransferRecord {
+    const transfer = this.getEvidenceTransfer(evidenceId);
+    if (!transfer) {
+      throw new EvidenceConflictError("Evidence transfer does not exist");
+    }
+    if (
+      transfer.state === "acknowledged" ||
+      transfer.state === "linked"
+    ) {
+      return transfer;
+    }
+    const acknowledged = transitionEvidenceAcknowledged(transfer, {
+      now: () => new Date(acknowledgedAt)
+    });
+    const result = this.#db
+      .prepare(
+        `UPDATE evidence_transfers
+         SET state = 'acknowledged', updated_at = ?
+         WHERE evidence_id = ? AND state = 'complete'`
+      )
+      .run(acknowledged.updatedAt, evidenceId);
+    if (result.changes !== 1) {
+      throw new RevisionConflictError("Evidence acknowledgement CAS failed");
+    }
+    return this.getEvidenceTransfer(evidenceId)!;
+  }
+
+  terminateEvidence(input: {
+    evidenceId: string;
+    terminalState: "rejected" | "expired";
+    updatedAt: string;
+  }): EvidenceTransferRecord {
+    const transfer = this.getEvidenceTransfer(input.evidenceId);
+    if (!transfer) {
+      throw new EvidenceConflictError("Evidence transfer does not exist");
+    }
+    const terminated = transitionEvidenceTerminated(
+      transfer,
+      input.terminalState,
+      { now: () => new Date(input.updatedAt) }
+    );
+    const result = this.#db
+      .prepare(
+        `UPDATE evidence_transfers
+         SET state = ?, updated_at = ?
+         WHERE evidence_id = ? AND state IN ('declared', 'receiving')`
+      )
+      .run(
+        terminated.state,
+        terminated.updatedAt,
+        input.evidenceId
+      );
+    if (result.changes !== 1) {
+      throw new RevisionConflictError("Evidence terminal CAS failed");
+    }
+    this.#db
+      .prepare(
+        `UPDATE staging_leases SET state = ?
+         WHERE lease_id = ? AND state = 'active'`
+      )
+      .run(
+        input.terminalState,
+        transfer.stagingLeaseId
+      );
+    return this.getEvidenceTransfer(input.evidenceId)!;
+  }
+
+  getEvidenceTransfer(
+    evidenceId: string
+  ): EvidenceTransferRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM evidence_transfers WHERE evidence_id = ?")
+      .get(evidenceId) as SqlRow | undefined;
+    return row ? this.#readEvidenceTransfer(row) : undefined;
+  }
+
+  listEvidenceChunks(evidenceId: string): EvidenceChunkRecord[] {
+    return (
+      this.#db
+        .prepare(
+          `SELECT * FROM evidence_chunks
+           WHERE evidence_id = ? ORDER BY chunk_index`
+        )
+        .all(evidenceId) as SqlRow[]
+    ).map((row) => this.#readEvidenceChunk(row));
+  }
+
+  linkEvidence(
+    link: EvidenceLinkDefinition
+  ): { status: "accepted" | "duplicate"; link: EvidenceLinkDefinition } {
+    const existing = this.getEvidenceLink(link.linkId);
+    if (existing) {
+      if (canonicalJson(existing) !== canonicalJson(link)) {
+        throw new EvidenceConflictError(
+          `EvidenceLink identity conflict: ${link.linkId}`
+        );
+      }
+      return { status: "duplicate", link: existing };
+    }
+    const transfer = this.getEvidenceTransfer(link.evidenceId);
+    assertEvidenceLink(link, {
+      transfer,
+      sourceExists: (id) => this.getSourceRecord(id) !== undefined,
+      assetExists: (id) => this.getAssetRecord(id) !== undefined
+    });
+    const linked = markEvidenceLinked(transfer!, {
+      now: () => new Date(link.createdAt)
+    });
+    this.#db.transaction(() => {
+      this.#db
+        .prepare(
+          `INSERT INTO evidence_links(
+            link_id, evidence_id, run_id, node_execution_id,
+            relation, claim_ref, canonical_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          link.linkId,
+          link.evidenceId,
+          link.runId,
+          link.nodeExecutionId,
+          link.relation,
+          link.claimRef ?? null,
+          json(link),
+          link.createdAt
+        );
+      const sourceStatement = this.#db.prepare(
+        `INSERT INTO evidence_link_sources(link_id, source_id)
+         VALUES (?, ?)`
+      );
+      for (const sourceId of link.sourceIds) {
+        sourceStatement.run(link.linkId, sourceId);
+      }
+      const assetStatement = this.#db.prepare(
+        `INSERT INTO evidence_link_assets(link_id, asset_id)
+         VALUES (?, ?)`
+      );
+      for (const assetId of link.assetIds ?? []) {
+        assetStatement.run(link.linkId, assetId);
+      }
+      const result = this.#db
+        .prepare(
+          `UPDATE evidence_transfers
+           SET state = 'linked', updated_at = ?
+           WHERE evidence_id = ? AND state = 'acknowledged'`
+        )
+        .run(linked.updatedAt, link.evidenceId);
+      if (result.changes !== 1) {
+        throw new RevisionConflictError("Evidence link CAS failed");
+      }
+      this.#inject("evidence.link.after_link");
+    }).immediate();
+    return { status: "accepted", link: this.getEvidenceLink(link.linkId)! };
+  }
+
+  getEvidenceLink(linkId: string): EvidenceLinkDefinition | undefined {
+    const row = this.#db
+      .prepare(
+        "SELECT canonical_json FROM evidence_links WHERE link_id = ?"
+      )
+      .get(linkId) as { canonical_json: string } | undefined;
+    return row
+      ? (parseJson(row.canonical_json) as EvidenceLinkDefinition)
+      : undefined;
+  }
+
+  scheduleRetention(
+    job: RetentionJobRecord
+  ): { status: "accepted" | "duplicate"; job: RetentionJobRecord } {
+    const existing = this.#getRetentionJob(job.jobId);
+    if (existing) {
+      if (canonicalJson(existing) !== canonicalJson(job)) {
+        throw new EvidenceConflictError(
+          `Retention job identity conflict: ${job.jobId}`
+        );
+      }
+      return { status: "duplicate", job: existing };
+    }
+    this.#db
+      .prepare(
+        `INSERT INTO retention_jobs(
+          job_id, target_type, target_id, expected_policy, state,
+          not_before, attempt, last_error, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        job.jobId,
+        job.targetType,
+        job.targetId,
+        job.expectedPolicy,
+        job.state,
+        job.notBefore,
+        job.attempt,
+        job.lastError ?? null,
+        job.createdAt,
+        job.updatedAt
+      );
+    return { status: "accepted", job };
+  }
+
+  listDueRetentionJobs(nowValue: string, limit: number): RetentionJobRecord[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
+      throw new Error("Retention job limit must be between 1 and 1000");
+    }
+    return (
+      this.#db
+        .prepare(
+          `SELECT * FROM retention_jobs
+           WHERE state = 'scheduled' AND not_before <= ?
+           ORDER BY not_before, job_id LIMIT ?`
+        )
+        .all(nowValue, limit) as SqlRow[]
+    ).map((row) => this.#readRetentionJob(row));
+  }
+
+  completeRetentionJob(input: {
+    jobId: string;
+    expectedState: "scheduled" | "running";
+    nextState: "completed" | "skipped" | "failed";
+    updatedAt: string;
+    lastError?: string;
+  }): RetentionJobRecord {
+    const result = this.#db
+      .prepare(
+        `UPDATE retention_jobs
+         SET state = ?, attempt = attempt + 1, last_error = ?, updated_at = ?
+         WHERE job_id = ? AND state = ?`
+      )
+      .run(
+        input.nextState,
+        input.lastError ?? null,
+        input.updatedAt,
+        input.jobId,
+        input.expectedState
+      );
+    if (result.changes !== 1) {
+      throw new RevisionConflictError("Retention job state changed");
+    }
+    return this.#getRetentionJob(input.jobId)!;
   }
 
   listAudit(target?: string): AuditRecord[] {
@@ -2523,7 +3531,14 @@ export class SqlitePersistence implements Persistence {
           id, action, actor, target, detail_json, occurred_at
         ) VALUES (?, ?, ?, ?, ?, ?)`
       )
-      .run(randomUUID(), action, actor, target, json(detail), now());
+      .run(
+        this.#idFactory(),
+        action,
+        actor,
+        target,
+        json(detail),
+        this.#clock().toISOString()
+      );
   }
 
   #insertAuditRecord(record: AuditRecord): void {
@@ -2572,6 +3587,156 @@ export class SqlitePersistence implements Persistence {
     return row
       ? (parseJson(row.canonical_json) as DecisionRecordDefinition)
       : undefined;
+  }
+
+  #getAssetRecordIncludingDeleted(
+    assetId: string
+  ): AssetRecordDefinition | undefined {
+    const row = this.#db
+      .prepare(
+        "SELECT canonical_json FROM asset_records WHERE asset_id = ?"
+      )
+      .get(assetId) as { canonical_json: string } | undefined;
+    return row
+      ? (parseJson(row.canonical_json) as AssetRecordDefinition)
+      : undefined;
+  }
+
+  #storedBlobBytes(): number {
+    const row = this.#db
+      .prepare("SELECT COALESCE(SUM(size), 0) AS bytes FROM blobs")
+      .get() as { bytes: number };
+    return Number(row.bytes);
+  }
+
+  #runEvidenceBytes(runId: string): number {
+    const row = this.#db
+      .prepare(
+        `SELECT COALESCE(SUM(size), 0) AS bytes
+         FROM evidence_transfers
+         WHERE run_id = ? AND state NOT IN ('rejected', 'expired')`
+      )
+      .get(runId) as { bytes: number };
+    return Number(row.bytes);
+  }
+
+  #gatewayPayloadOwnsExecution(
+    payloadJson: string,
+    runId: string,
+    nodeExecutionId: string,
+    fencingToken: number
+  ): boolean {
+    const payload = parseJson(payloadJson) as
+      | Record<string, unknown>
+      | undefined;
+    return (
+      payload?.run_id === runId &&
+      payload.node_execution_id === nodeExecutionId &&
+      payload.fencing_token === fencingToken
+    );
+  }
+
+  #evidenceDeclarationIdentity(
+    transfer: EvidenceTransferRecord
+  ): Record<string, unknown> {
+    return {
+      evidenceId: transfer.evidenceId,
+      runId: transfer.runId,
+      nodeExecutionId: transfer.nodeExecutionId,
+      sessionId: transfer.sessionId,
+      fencingToken: transfer.fencingToken,
+      kind: transfer.kind,
+      mediaType: transfer.mediaType,
+      size: transfer.size,
+      digest: transfer.digest,
+      chunkSize: transfer.chunkSize,
+      chunkCount: transfer.chunkCount,
+      classification: transfer.classification,
+      stagingLeaseId: transfer.stagingLeaseId
+    };
+  }
+
+  #hasRecoverableIr2Run(runId: string): boolean {
+    return (
+      this.getRun(runId) !== undefined &&
+      this.getRunPlanSnapshot(runId) !== undefined &&
+      this.getEngineCheckpoint(runId) !== undefined
+    );
+  }
+
+  #readStagingLease(row: SqlRow): StagingLeaseRecord {
+    return {
+      leaseId: String(row.lease_id),
+      runId: String(row.run_id),
+      tokenDigest: String(row.token_digest),
+      maxBytes: Number(row.max_bytes),
+      state: row.state as StagingLeaseRecord["state"],
+      createdAt: String(row.created_at),
+      expiresAt: String(row.expires_at)
+    };
+  }
+
+  #readEvidenceTransfer(row: SqlRow): EvidenceTransferRecord {
+    return {
+      evidenceId: String(row.evidence_id),
+      runId: String(row.run_id),
+      nodeExecutionId: String(row.node_execution_id),
+      sessionId: String(row.session_id),
+      fencingToken: Number(row.fencing_token),
+      kind: row.kind as EvidenceTransferRecord["kind"],
+      mediaType: String(row.media_type),
+      size: Number(row.size),
+      digest: String(row.digest),
+      chunkSize: Number(row.chunk_size) as EvidenceTransferRecord["chunkSize"],
+      chunkCount: Number(row.chunk_count),
+      nextChunkIndex: Number(row.next_chunk_index),
+      classification:
+        row.classification as EvidenceTransferRecord["classification"],
+      stagingLeaseId: String(row.staging_lease_id),
+      state: row.state as EvidenceTransferRecord["state"],
+      ...(row.storage_ref == null
+        ? {}
+        : { storageRef: String(row.storage_ref) }),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      ...(row.expires_at == null
+        ? {}
+        : { expiresAt: String(row.expires_at) })
+    };
+  }
+
+  #readEvidenceChunk(row: SqlRow): EvidenceChunkRecord {
+    return {
+      evidenceId: String(row.evidence_id),
+      index: Number(row.chunk_index),
+      digest: String(row.digest),
+      size: Number(row.size),
+      receivedAt: String(row.received_at)
+    };
+  }
+
+  #getRetentionJob(jobId: string): RetentionJobRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM retention_jobs WHERE job_id = ?")
+      .get(jobId) as SqlRow | undefined;
+    return row ? this.#readRetentionJob(row) : undefined;
+  }
+
+  #readRetentionJob(row: SqlRow): RetentionJobRecord {
+    return {
+      jobId: String(row.job_id),
+      targetType: row.target_type as RetentionJobRecord["targetType"],
+      targetId: String(row.target_id),
+      expectedPolicy: String(row.expected_policy),
+      state: row.state as RetentionJobRecord["state"],
+      notBefore: String(row.not_before),
+      attempt: Number(row.attempt),
+      ...(row.last_error == null
+        ? {}
+        : { lastError: String(row.last_error) }),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at)
+    };
   }
 
   #readArtifact(row: SqlRow): ArtifactRecord {

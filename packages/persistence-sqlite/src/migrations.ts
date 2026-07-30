@@ -430,5 +430,242 @@ export const migrations: Migration[] = [
         SELECT RAISE(ABORT, 'workflow candidates are immutable');
       END;
     `
+  },
+  {
+    version: 7,
+    sql: `
+      CREATE TABLE source_records (
+        source_id TEXT PRIMARY KEY,
+        source_type TEXT NOT NULL,
+        classification TEXT NOT NULL CHECK (
+          classification IN ('public', 'internal', 'confidential', 'restricted')
+        ),
+        canonical_json TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        recorded_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE blobs (
+        digest TEXT PRIMARY KEY CHECK (
+          digest GLOB 'sha256:*' AND length(digest) = 71
+        ),
+        size INTEGER NOT NULL CHECK (size > 0 AND size <= 26214400),
+        media_type TEXT NOT NULL,
+        storage_ref TEXT NOT NULL UNIQUE CHECK (
+          storage_ref GLOB 'asset-store:sha256:*' AND length(storage_ref) = 83
+        ),
+        created_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE asset_records (
+        asset_id TEXT PRIMARY KEY,
+        digest TEXT NOT NULL REFERENCES blobs(digest) ON DELETE RESTRICT,
+        classification TEXT NOT NULL CHECK (
+          classification IN ('public', 'internal', 'confidential', 'restricted')
+        ),
+        retention_policy TEXT NOT NULL CHECK (
+          retention_policy IN (
+            'restricted_24h', 'public_30d', 'reference_pack', 'manual'
+          )
+        ),
+        retain_until TEXT,
+        canonical_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        CHECK (
+          (retention_policy IN ('restricted_24h', 'public_30d')
+            AND retain_until IS NOT NULL)
+          OR
+          (retention_policy IN ('reference_pack', 'manual')
+            AND retain_until IS NULL)
+        )
+      ) STRICT;
+
+      CREATE TABLE asset_sources (
+        asset_id TEXT NOT NULL
+          REFERENCES asset_records(asset_id) ON DELETE RESTRICT,
+        source_id TEXT NOT NULL
+          REFERENCES source_records(source_id) ON DELETE RESTRICT,
+        PRIMARY KEY(asset_id, source_id)
+      ) STRICT;
+
+      CREATE TABLE asset_derivations (
+        asset_id TEXT NOT NULL
+          REFERENCES asset_records(asset_id) ON DELETE RESTRICT,
+        parent_asset_id TEXT NOT NULL
+          REFERENCES asset_records(asset_id) ON DELETE RESTRICT,
+        PRIMARY KEY(asset_id, parent_asset_id),
+        CHECK(asset_id <> parent_asset_id)
+      ) STRICT;
+
+      CREATE TABLE asset_deletions (
+        asset_id TEXT PRIMARY KEY
+          REFERENCES asset_records(asset_id) ON DELETE RESTRICT,
+        actor TEXT NOT NULL,
+        deleted_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE staging_leases (
+        lease_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        token_digest TEXT NOT NULL,
+        max_bytes INTEGER NOT NULL CHECK (
+          max_bytes > 0 AND max_bytes <= 26214400
+        ),
+        state TEXT NOT NULL CHECK (
+          state IN ('active', 'consumed', 'expired', 'rejected')
+        ),
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE evidence_transfers (
+        evidence_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL
+          REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        node_execution_id TEXT NOT NULL,
+        session_id TEXT NOT NULL
+          REFERENCES browser_sessions(id) ON DELETE RESTRICT,
+        fencing_token INTEGER NOT NULL CHECK (fencing_token >= 1),
+        kind TEXT NOT NULL,
+        media_type TEXT NOT NULL,
+        size INTEGER NOT NULL CHECK (size > 0 AND size <= 26214400),
+        digest TEXT NOT NULL CHECK (
+          digest GLOB 'sha256:*' AND length(digest) = 71
+        ),
+        chunk_size INTEGER NOT NULL CHECK (chunk_size = 262144),
+        chunk_count INTEGER NOT NULL CHECK (chunk_count > 0),
+        next_chunk_index INTEGER NOT NULL DEFAULT 0 CHECK (
+          next_chunk_index >= 0 AND next_chunk_index <= chunk_count
+        ),
+        classification TEXT NOT NULL CHECK (
+          classification IN ('public', 'internal', 'confidential', 'restricted')
+        ),
+        staging_lease_id TEXT NOT NULL
+          REFERENCES staging_leases(lease_id) ON DELETE RESTRICT,
+        state TEXT NOT NULL CHECK (
+          state IN (
+            'declared', 'receiving', 'complete', 'acknowledged', 'linked',
+            'rejected', 'expired'
+          )
+        ),
+        storage_ref TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        expires_at TEXT,
+        UNIQUE(run_id, evidence_id)
+      ) STRICT;
+
+      CREATE INDEX evidence_transfers_run_state
+        ON evidence_transfers(run_id, state);
+
+      CREATE TABLE evidence_chunks (
+        evidence_id TEXT NOT NULL
+          REFERENCES evidence_transfers(evidence_id) ON DELETE RESTRICT,
+        chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+        digest TEXT NOT NULL CHECK (
+          digest GLOB 'sha256:*' AND length(digest) = 71
+        ),
+        size INTEGER NOT NULL CHECK (size > 0 AND size <= 262144),
+        received_at TEXT NOT NULL,
+        PRIMARY KEY(evidence_id, chunk_index)
+      ) STRICT;
+
+      CREATE TABLE evidence_links (
+        link_id TEXT PRIMARY KEY,
+        evidence_id TEXT NOT NULL UNIQUE
+          REFERENCES evidence_transfers(evidence_id) ON DELETE RESTRICT,
+        run_id TEXT NOT NULL
+          REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        node_execution_id TEXT NOT NULL,
+        relation TEXT NOT NULL,
+        claim_ref TEXT,
+        canonical_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE evidence_link_sources (
+        link_id TEXT NOT NULL
+          REFERENCES evidence_links(link_id) ON DELETE RESTRICT,
+        source_id TEXT NOT NULL
+          REFERENCES source_records(source_id) ON DELETE RESTRICT,
+        PRIMARY KEY(link_id, source_id)
+      ) STRICT;
+
+      CREATE TABLE evidence_link_assets (
+        link_id TEXT NOT NULL
+          REFERENCES evidence_links(link_id) ON DELETE RESTRICT,
+        asset_id TEXT NOT NULL
+          REFERENCES asset_records(asset_id) ON DELETE RESTRICT,
+        PRIMARY KEY(link_id, asset_id)
+      ) STRICT;
+
+      CREATE TABLE retention_jobs (
+        job_id TEXT PRIMARY KEY,
+        target_type TEXT NOT NULL CHECK (
+          target_type IN ('evidence', 'asset', 'blob')
+        ),
+        target_id TEXT NOT NULL,
+        expected_policy TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (
+          state IN ('scheduled', 'running', 'completed', 'skipped', 'failed')
+        ),
+        not_before TEXT NOT NULL,
+        attempt INTEGER NOT NULL CHECK (attempt >= 0),
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE INDEX retention_jobs_due
+        ON retention_jobs(state, not_before, job_id);
+
+      CREATE TRIGGER source_records_no_update
+      BEFORE UPDATE ON source_records
+      BEGIN
+        SELECT RAISE(ABORT, 'source records are immutable');
+      END;
+
+      CREATE TRIGGER source_records_no_delete
+      BEFORE DELETE ON source_records
+      BEGIN
+        SELECT RAISE(ABORT, 'source records are immutable');
+      END;
+
+      CREATE TRIGGER blobs_no_update
+      BEFORE UPDATE ON blobs
+      BEGIN
+        SELECT RAISE(ABORT, 'blob metadata is immutable');
+      END;
+
+      CREATE TRIGGER blobs_no_delete
+      BEFORE DELETE ON blobs
+      BEGIN
+        SELECT RAISE(ABORT, 'blob metadata is immutable');
+      END;
+
+      CREATE TRIGGER asset_records_no_update
+      BEFORE UPDATE ON asset_records
+      BEGIN
+        SELECT RAISE(ABORT, 'asset records are immutable');
+      END;
+
+      CREATE TRIGGER asset_records_no_delete
+      BEFORE DELETE ON asset_records
+      BEGIN
+        SELECT RAISE(ABORT, 'asset records are immutable');
+      END;
+
+      CREATE TRIGGER evidence_links_no_update
+      BEFORE UPDATE ON evidence_links
+      BEGIN
+        SELECT RAISE(ABORT, 'evidence links are immutable');
+      END;
+
+      CREATE TRIGGER evidence_links_no_delete
+      BEFORE DELETE ON evidence_links
+      BEGIN
+        SELECT RAISE(ABORT, 'evidence links are immutable');
+      END;
+    `
   }
 ];

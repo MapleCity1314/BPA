@@ -1,0 +1,15 @@
+{
+  "name": "@bpa/asset-store-local",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@bpa/asset-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@bpa/evidence-core": "workspace:*"
+  }
+}
