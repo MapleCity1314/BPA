@@ -812,5 +812,273 @@ export const migrations: Migration[] = [
         SELECT RAISE(ABORT, 'export records are immutable');
       END;
     `
+  },
+  {
+    version: 9,
+    sql: `
+      CREATE TABLE authoring_scenarios (
+        scenario_id TEXT NOT NULL,
+        version TEXT NOT NULL,
+        scenario_digest TEXT NOT NULL CHECK (
+          scenario_digest GLOB 'sha256:*' AND length(scenario_digest) = 71
+        ),
+        canonical_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(scenario_id, version)
+      ) STRICT;
+
+      CREATE TABLE authoring_sessions (
+        session_id TEXT PRIMARY KEY,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        state TEXT NOT NULL CHECK (
+          state IN (
+            'intake', 'catalog', 'discovery', 'modeling', 'assembly',
+            'validation', 'candidate', 'closed', 'failed'
+          )
+        ),
+        scenario_id TEXT NOT NULL,
+        scenario_version TEXT NOT NULL,
+        scenario_digest TEXT NOT NULL,
+        canonical_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(scenario_id, scenario_version)
+          REFERENCES authoring_scenarios(scenario_id, version)
+          ON DELETE RESTRICT
+      ) STRICT;
+
+      CREATE TABLE authoring_session_revisions (
+        session_id TEXT NOT NULL
+          REFERENCES authoring_sessions(session_id) ON DELETE RESTRICT,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        operation_id TEXT,
+        operation_digest TEXT,
+        state TEXT NOT NULL,
+        canonical_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(session_id, revision),
+        UNIQUE(session_id, operation_id),
+        CHECK (
+          (revision = 0 AND operation_id IS NULL AND operation_digest IS NULL)
+          OR
+          (revision > 0 AND operation_id IS NOT NULL AND operation_digest IS NOT NULL)
+        )
+      ) STRICT;
+
+      CREATE TABLE design_mode_grants (
+        grant_id TEXT PRIMARY KEY,
+        authoring_session_id TEXT NOT NULL
+          REFERENCES authoring_sessions(session_id) ON DELETE RESTRICT,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        state TEXT NOT NULL CHECK (
+          state IN (
+            'requested', 'active', 'stopped', 'expired', 'revoked', 'invalidated'
+          )
+        ),
+        approved_by TEXT NOT NULL,
+        browser_session_id TEXT NOT NULL
+          REFERENCES browser_sessions(id) ON DELETE RESTRICT,
+        profile_id TEXT NOT NULL,
+        tab_id INTEGER NOT NULL CHECK (tab_id >= 0),
+        origin TEXT NOT NULL,
+        page_epoch TEXT NOT NULL,
+        allowed_operations_json TEXT NOT NULL,
+        issued_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        terminal_reason TEXT
+      ) STRICT;
+
+      CREATE TABLE design_mode_grant_revisions (
+        grant_id TEXT NOT NULL
+          REFERENCES design_mode_grants(grant_id) ON DELETE RESTRICT,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        state TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        reason TEXT,
+        occurred_at TEXT NOT NULL,
+        PRIMARY KEY(grant_id, revision)
+      ) STRICT;
+
+      CREATE TABLE authoring_page_snapshots (
+        snapshot_id TEXT PRIMARY KEY,
+        authoring_session_id TEXT NOT NULL
+          REFERENCES authoring_sessions(session_id) ON DELETE RESTRICT,
+        design_grant_id TEXT NOT NULL
+          REFERENCES design_mode_grants(grant_id) ON DELETE RESTRICT,
+        page_state TEXT NOT NULL,
+        evidence_id TEXT NOT NULL UNIQUE
+          REFERENCES evidence_transfers(evidence_id) ON DELETE RESTRICT,
+        asset_id TEXT NOT NULL
+          REFERENCES asset_records(asset_id) ON DELETE RESTRICT,
+        content_digest TEXT NOT NULL CHECK (
+          content_digest GLOB 'sha256:*' AND length(content_digest) = 71
+        ),
+        canonical_json TEXT NOT NULL,
+        captured_at TEXT NOT NULL,
+        raw_evidence_expires_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE INDEX authoring_page_snapshots_session
+        ON authoring_page_snapshots(
+          authoring_session_id, captured_at, snapshot_id
+        );
+
+      CREATE TABLE candidate_bundles (
+        bundle_id TEXT PRIMARY KEY,
+        version TEXT NOT NULL,
+        authoring_session_id TEXT NOT NULL,
+        source_revision INTEGER NOT NULL CHECK (source_revision >= 0),
+        record_digest TEXT NOT NULL CHECK (
+          record_digest GLOB 'sha256:*' AND length(record_digest) = 71
+        ),
+        canonical_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(authoring_session_id, source_revision)
+          REFERENCES authoring_session_revisions(session_id, revision)
+          ON DELETE RESTRICT
+      ) STRICT;
+
+      CREATE TABLE candidate_bundle_items (
+        bundle_id TEXT NOT NULL
+          REFERENCES candidate_bundles(bundle_id) ON DELETE RESTRICT,
+        item_type TEXT NOT NULL CHECK (item_type IN ('artifact', 'file')),
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        item_key TEXT NOT NULL,
+        digest TEXT NOT NULL CHECK (
+          digest GLOB 'sha256:*' AND length(digest) = 71
+        ),
+        canonical_json TEXT NOT NULL,
+        PRIMARY KEY(bundle_id, item_type, ordinal),
+        UNIQUE(bundle_id, item_type, item_key)
+      ) STRICT;
+
+      CREATE TABLE candidate_bundle_validations (
+        bundle_id TEXT NOT NULL
+          REFERENCES candidate_bundles(bundle_id) ON DELETE RESTRICT,
+        check_type TEXT NOT NULL CHECK (
+          check_type IN (
+            'schema', 'contracts', 'replay', 'permissions', 'risk'
+          )
+        ),
+        valid INTEGER NOT NULL CHECK (valid IN (0, 1)),
+        issue_count INTEGER NOT NULL CHECK (issue_count >= 0),
+        report_asset_id TEXT
+          REFERENCES asset_records(asset_id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(bundle_id, check_type)
+      ) STRICT;
+
+      CREATE TABLE candidate_exports (
+        export_id TEXT PRIMARY KEY,
+        bundle_id TEXT NOT NULL
+          REFERENCES candidate_bundles(bundle_id) ON DELETE RESTRICT,
+        bundle_digest TEXT NOT NULL,
+        archive_digest TEXT NOT NULL,
+        manifest_digest TEXT NOT NULL,
+        destination_ref TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE INDEX candidate_exports_bundle
+        ON candidate_exports(bundle_id, created_at, export_id);
+
+      CREATE TRIGGER authoring_scenarios_no_update
+      BEFORE UPDATE ON authoring_scenarios
+      BEGIN
+        SELECT RAISE(ABORT, 'authoring scenarios are immutable');
+      END;
+
+      CREATE TRIGGER authoring_scenarios_no_delete
+      BEFORE DELETE ON authoring_scenarios
+      BEGIN
+        SELECT RAISE(ABORT, 'authoring scenarios are immutable');
+      END;
+
+      CREATE TRIGGER authoring_session_revisions_no_update
+      BEFORE UPDATE ON authoring_session_revisions
+      BEGIN
+        SELECT RAISE(ABORT, 'authoring session revisions are append-only');
+      END;
+
+      CREATE TRIGGER authoring_session_revisions_no_delete
+      BEFORE DELETE ON authoring_session_revisions
+      BEGIN
+        SELECT RAISE(ABORT, 'authoring session revisions are append-only');
+      END;
+
+      CREATE TRIGGER design_mode_grant_revisions_no_update
+      BEFORE UPDATE ON design_mode_grant_revisions
+      BEGIN
+        SELECT RAISE(ABORT, 'design mode grant revisions are append-only');
+      END;
+
+      CREATE TRIGGER design_mode_grant_revisions_no_delete
+      BEFORE DELETE ON design_mode_grant_revisions
+      BEGIN
+        SELECT RAISE(ABORT, 'design mode grant revisions are append-only');
+      END;
+
+      CREATE TRIGGER authoring_page_snapshots_no_update
+      BEFORE UPDATE ON authoring_page_snapshots
+      BEGIN
+        SELECT RAISE(ABORT, 'authoring page snapshots are immutable');
+      END;
+
+      CREATE TRIGGER authoring_page_snapshots_no_delete
+      BEFORE DELETE ON authoring_page_snapshots
+      BEGIN
+        SELECT RAISE(ABORT, 'authoring page snapshots are immutable');
+      END;
+
+      CREATE TRIGGER candidate_bundles_no_update
+      BEFORE UPDATE ON candidate_bundles
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate bundles are immutable');
+      END;
+
+      CREATE TRIGGER candidate_bundles_no_delete
+      BEFORE DELETE ON candidate_bundles
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate bundles are immutable');
+      END;
+
+      CREATE TRIGGER candidate_bundle_items_no_update
+      BEFORE UPDATE ON candidate_bundle_items
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate bundle items are immutable');
+      END;
+
+      CREATE TRIGGER candidate_bundle_items_no_delete
+      BEFORE DELETE ON candidate_bundle_items
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate bundle items are immutable');
+      END;
+
+      CREATE TRIGGER candidate_bundle_validations_no_update
+      BEFORE UPDATE ON candidate_bundle_validations
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate validation results are immutable');
+      END;
+
+      CREATE TRIGGER candidate_bundle_validations_no_delete
+      BEFORE DELETE ON candidate_bundle_validations
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate validation results are immutable');
+      END;
+
+      CREATE TRIGGER candidate_exports_no_update
+      BEFORE UPDATE ON candidate_exports
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate exports are immutable');
+      END;
+
+      CREATE TRIGGER candidate_exports_no_delete
+      BEFORE DELETE ON candidate_exports
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate exports are immutable');
+      END;
+    `
   }
 ];

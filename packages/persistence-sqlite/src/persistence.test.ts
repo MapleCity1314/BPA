@@ -1646,7 +1646,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(8);
+      expect(store.health().schemaVersion).toBe(9);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1677,6 +1677,16 @@ describe("append-only migrations", () => {
 
       const legacy = new Database(databasePath);
       legacy.exec(`
+        DROP TABLE candidate_exports;
+        DROP TABLE candidate_bundle_validations;
+        DROP TABLE candidate_bundle_items;
+        DROP TABLE candidate_bundles;
+        DROP TABLE authoring_page_snapshots;
+        DROP TABLE design_mode_grant_revisions;
+        DROP TABLE design_mode_grants;
+        DROP TABLE authoring_session_revisions;
+        DROP TABLE authoring_sessions;
+        DROP TABLE authoring_scenarios;
         DROP TRIGGER export_records_no_delete;
         DROP TRIGGER export_records_no_update;
         DROP TRIGGER run_resource_bindings_no_delete;
@@ -1732,12 +1742,12 @@ describe("append-only migrations", () => {
         DROP INDEX assistance_tasks_status_mode_created;
         DROP INDEX assistance_task_request_results_task;
         DROP TABLE assistance_task_request_results;
-        DELETE FROM schema_migrations WHERE version IN (4, 5, 6, 7, 8);
+        DELETE FROM schema_migrations WHERE version IN (4, 5, 6, 7, 8, 9);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(8);
+      expect(upgraded.health().schemaVersion).toBe(9);
       expect(upgraded.getAssistanceTask(task.task.taskId)).toEqual(task);
       expect(
         upgraded.getAssistanceRequestResult("not-recorded")
@@ -1762,7 +1772,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(8);
+      expect(store.health().schemaVersion).toBe(9);
       expect(store.getAssistanceRequestResult("not-recorded")).toBeUndefined();
       store.close();
     } finally {
@@ -1784,7 +1794,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(8);
+      expect(store.health().schemaVersion).toBe(9);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1799,6 +1809,16 @@ describe("append-only migrations", () => {
       seeded.close();
       const legacy = new Database(databasePath);
       legacy.exec(`
+        DROP TABLE candidate_exports;
+        DROP TABLE candidate_bundle_validations;
+        DROP TABLE candidate_bundle_items;
+        DROP TABLE candidate_bundles;
+        DROP TABLE authoring_page_snapshots;
+        DROP TABLE design_mode_grant_revisions;
+        DROP TABLE design_mode_grants;
+        DROP TABLE authoring_session_revisions;
+        DROP TABLE authoring_sessions;
+        DROP TABLE authoring_scenarios;
         DROP TRIGGER export_records_no_delete;
         DROP TRIGGER export_records_no_update;
         DROP TRIGGER run_resource_bindings_no_delete;
@@ -1849,12 +1869,12 @@ describe("append-only migrations", () => {
         DROP TABLE workflow_candidates;
         DROP TABLE workflow_draft_revisions;
         DROP TABLE workflow_drafts;
-        DELETE FROM schema_migrations WHERE version IN (6, 7, 8);
+        DELETE FROM schema_migrations WHERE version IN (6, 7, 8, 9);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(8);
+      expect(upgraded.health().schemaVersion).toBe(9);
       expect(
         upgraded.createWorkflowDraft({
           draftId: "v5-upgraded-draft",
@@ -1895,7 +1915,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(8);
+      expect(store.health().schemaVersion).toBe(9);
       expect(store.getWorkflowDraft("not-created")).toBeUndefined();
       store.close();
     } finally {
@@ -1908,7 +1928,7 @@ describe("append-only migrations", () => {
     const databasePath = join(directory, "bpa.sqlite3");
     try {
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(8);
+      expect(store.health().schemaVersion).toBe(9);
       store.close();
       const raw = new Database(databasePath);
       raw

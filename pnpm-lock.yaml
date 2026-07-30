@@ -480,6 +480,9 @@ importers:
       '@bpa/resource-binding':
         specifier: workspace:*
         version: link:../resource-binding
+      '@bpa/schemas':
+        specifier: workspace:*
+        version: link:../schemas
       '@bpa/source-core':
         specifier: workspace:*
         version: link:../source-core

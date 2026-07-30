@@ -11,6 +11,7 @@
     "@bpa/evidence-core": "workspace:*",
     "@bpa/persistence": "workspace:*",
     "@bpa/resource-binding": "workspace:*",
+    "@bpa/schemas": "workspace:*",
     "@bpa/source-core": "workspace:*",
     "better-sqlite3": "12.10.0"
   }

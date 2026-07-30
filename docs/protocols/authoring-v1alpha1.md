@@ -200,8 +200,9 @@ the bundle digest, archive digest, destination lease and actor in Audit.
 - v1alpha1 is strict: unknown fields are invalid. Additive model changes require
   a new alpha version or an explicitly optional field accepted by every
   producer and consumer.
-- SQLite v9 will persist these contracts append-only after this candidate is
-  accepted; the Schema decision itself does not mutate a database.
+- SQLite v9 persists ScenarioSpec, CAS Session revisions, Design Mode Grant
+  history, PageSnapshot provenance, immutable Candidate Bundles, validation
+  results and export records with append-only migrations.
 
 ## 9. Canonical examples
 
