@@ -1,0 +1,233 @@
+// @vitest-environment jsdom
+import "@testing-library/jest-dom/vitest";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type {
+  DashboardSnapshot,
+  EvidenceLineageView,
+  RunView,
+  TaskView,
+  WorkflowSummary
+} from "@bpa/operator-console-contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { App } from "./App.js";
+import type { OperatorConsoleApi } from "./api.js";
+
+afterEach(cleanup);
+
+const dashboard: DashboardSnapshot = {
+  attention: "action",
+  headline: "有 1 项需要确认",
+  runtimeVersion: "0.4.0",
+  activeRunCount: 1,
+  pendingTaskCount: 1,
+  components: [
+    {
+      id: "core",
+      label: "本地服务",
+      status: "healthy",
+      summary: "运行正常",
+      technicalDetails: "socket=/private/example/core.sock"
+    }
+  ],
+  browserSessions: [
+    {
+      id: "session-1",
+      label: "抖店商品管理",
+      status: "ready",
+      origin: "https://fxg.jinritemai.com",
+      authenticated: true,
+      lastSeenAt: "2026-07-30T01:00:00.000Z"
+    }
+  ]
+};
+
+const workflows: WorkflowSummary[] = [
+  {
+    id: "doudian.priority-check",
+    version: "1.0.0",
+    title: "重点项检查",
+    description: "只读检查商品缺项",
+    riskLevel: "R1",
+    inputFields: [
+      {
+        key: "scope",
+        label: "检查范围",
+        kind: "text",
+        required: true
+      }
+    ],
+    resourceSlots: [
+      {
+        key: "shop",
+        label: "抖店会话",
+        requiredOrigin: "https://fxg.jinritemai.com"
+      }
+    ]
+  }
+];
+
+const tasks: TaskView[] = [
+  {
+    id: "task-1",
+    runId: "run-1",
+    kind: "human_confirm",
+    title: "确认可比商品",
+    guidance: "请批量复核 AI 建议。",
+    attention: "action",
+    choices: [{ value: "accept", label: "确认选择" }]
+  }
+];
+
+const run: RunView = {
+  id: "run-1",
+  workflowTitle: "重点项检查",
+  status: "running",
+  businessSummary: "已检查 35 / 100 件商品",
+  startedAt: "2026-07-30T00:00:00.000Z",
+  timeline: [
+    {
+      id: "event-1",
+      at: "2026-07-30T00:00:01.000Z",
+      title: "已确认店铺",
+      summary: "店铺与筛选范围一致",
+      state: "completed",
+      technicalDetails: "scopeDigest=sha256:scope"
+    }
+  ]
+};
+
+const lineage: EvidenceLineageView = {
+  runId: "run-1",
+  sources: [
+    {
+      id: "source-1",
+      label: "抖店商品页",
+      origin: "https://fxg.jinritemai.com",
+      observedAt: "2026-07-30T00:00:00.000Z"
+    }
+  ],
+  evidence: [
+    {
+      id: "evidence-1",
+      label: "商品字段观察",
+      classification: "restricted",
+      digest: "sha256:evidence",
+      sourceIds: ["source-1"]
+    }
+  ],
+  assets: [
+    {
+      id: "asset-1",
+      label: "重点项报告",
+      digest: "sha256:asset",
+      evidenceIds: ["evidence-1"]
+    }
+  ]
+};
+
+function mockApi(): OperatorConsoleApi {
+  return {
+    initializeSession: vi.fn(async () => {}),
+    getDashboard: vi.fn(async () => dashboard),
+    listWorkflows: vi.fn(async () => workflows),
+    createRun: vi.fn(async () => ({ runId: "run-1" })),
+    getRun: vi.fn(async () => run),
+    listTasks: vi.fn(async () => tasks),
+    submitTask: vi.fn(async () => {}),
+    importFile: vi.fn(async () => ({
+      leaseId: "lease-1",
+      digest: "sha256:dataset",
+      sizeBytes: 3
+    })),
+    getEvidenceLineage: vi.fn(async () => lineage),
+    listDownloads: vi.fn(async () => [
+      {
+        id: "download-1",
+        runId: "run-1",
+        kind: "report" as const,
+        title: "重点项检查报告",
+        fileName: "report.json",
+        sizeBytes: 1024,
+        createdAt: "2026-07-30T00:00:00.000Z"
+      }
+    ]),
+    downloadUrl: (id) => `/api/downloads/${id}`
+  };
+}
+
+async function renderReady(api = mockApi()) {
+  render(<App api={api} />);
+  await screen.findByRole("heading", { name: "系统健康" });
+  return api;
+}
+
+describe("Operator Console", () => {
+  it("shows business health and keeps technical details collapsed", async () => {
+    await renderReady();
+    expect(screen.getAllByText("需要操作").length).toBeGreaterThan(0);
+    expect(screen.getByText("抖店商品管理")).toBeInTheDocument();
+    const details = screen.getByText("查看技术细节").closest("details");
+    expect(details).not.toHaveAttribute("open");
+    expect(screen.getByText("socket=/private/example/core.sock")).not.toBeVisible();
+  });
+
+  it("starts a workflow with an exact browser session binding", async () => {
+    const user = userEvent.setup();
+    const api = await renderReady();
+    await user.click(screen.getByRole("button", { name: /启动流程/ }));
+    await user.type(screen.getByLabelText("检查范围"), "全部在售商品");
+    await user.selectOptions(screen.getByLabelText("抖店会话"), "session-1");
+    await user.click(screen.getByRole("button", { name: "确认并启动" }));
+    await waitFor(() =>
+      expect(api.createRun).toHaveBeenCalledWith({
+        workflowId: "doudian.priority-check",
+        workflowVersion: "1.0.0",
+        inputs: { scope: "全部在售商品" },
+        resourceBindings: { shop: "session-1" }
+      })
+    );
+    expect(await screen.findByText("已检查 35 / 100 件商品")).toBeInTheDocument();
+  });
+
+  it("handles a task and refreshes the task center", async () => {
+    const user = userEvent.setup();
+    const api = await renderReady();
+    await user.click(screen.getByRole("button", { name: /任务中心/ }));
+    expect(screen.getByText("确认可比商品")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "确认选择" }));
+    await waitFor(() =>
+      expect(api.submitTask).toHaveBeenCalledWith("task-1", {
+        decision: "accept"
+      })
+    );
+    expect(screen.getByText(/已记录处理结果/)).toBeInTheDocument();
+  });
+
+  it("imports a browser File through the staging lease abstraction", async () => {
+    const user = userEvent.setup();
+    const api = await renderReady();
+    await user.click(screen.getByRole("button", { name: /数据导入/ }));
+    const file = new File(["a,b"], "master.csv", { type: "text/csv" });
+    await user.upload(screen.getByLabelText("选择数据文件"), file);
+    await user.click(screen.getByRole("button", { name: "开始导入" }));
+    await waitFor(() =>
+      expect(api.importFile).toHaveBeenCalledWith(file, "dataset")
+    );
+    expect(screen.getByText(/导入完成/)).toBeInTheDocument();
+  });
+
+  it("renders evidence lineage and authenticated report downloads", async () => {
+    const user = userEvent.setup();
+    await renderReady();
+    await user.click(screen.getByRole("button", { name: /证据血缘/ }));
+    await user.type(screen.getByLabelText("任务编号"), "run-1");
+    await user.click(screen.getByRole("button", { name: "查看血缘" }));
+    expect(await screen.findByText("商品字段观察")).toBeInTheDocument();
+    expect(screen.getByText("重点项报告")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /报告与资产/ }));
+    const download = screen.getByRole("link", { name: "下载" });
+    expect(download).toHaveAttribute("href", "/api/downloads/download-1");
+  });
+});
