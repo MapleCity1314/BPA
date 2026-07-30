@@ -135,10 +135,15 @@ function mockApi(): OperatorConsoleApi {
     getRun: vi.fn(async () => run),
     listTasks: vi.fn(async () => tasks),
     submitTask: vi.fn(async () => {}),
-    importFile: vi.fn(async () => ({
-      leaseId: "lease-1",
-      digest: "sha256:dataset",
-      sizeBytes: 3
+    importDataset: vi.fn(async () => ({
+      status: "published" as const,
+      stagingId: "staging-1",
+      sourceDigest: `sha256:${"a".repeat(64)}`,
+      id: "packaging-master",
+      version: "1.0.0",
+      recordCount: 12,
+      warnings: [],
+      errors: []
     })),
     getEvidenceLineage: vi.fn(async () => lineage),
     listDownloads: vi.fn(async () => [
@@ -208,13 +213,19 @@ describe("Operator Console", () => {
     const user = userEvent.setup();
     const api = await renderReady();
     await user.click(screen.getByRole("button", { name: /数据导入/ }));
-    const file = new File(["a,b"], "master.csv", { type: "text/csv" });
+    const file = new File(["xlsx"], "master.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    });
     await user.upload(screen.getByLabelText("选择数据文件"), file);
     await user.click(screen.getByRole("button", { name: "开始导入" }));
     await waitFor(() =>
-      expect(api.importFile).toHaveBeenCalledWith(file, "dataset")
+      expect(api.importDataset).toHaveBeenCalledWith(file, {
+        id: "packaging-master",
+        version: "1.0.0",
+        title: "包装主数据"
+      })
     );
-    expect(screen.getByText(/导入完成/)).toBeInTheDocument();
+    expect(screen.getByText(/已发布 packaging-master@1.0.0/)).toBeInTheDocument();
   });
 
   it("renders evidence lineage and authenticated report downloads", async () => {

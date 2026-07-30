@@ -10,6 +10,7 @@ import type {
   ControlBackend,
   CreateRunInput,
   StagingLeaseRequest,
+  StagedDatasetImportInput,
   SubmitTaskInput
 } from "@bpa/operator-console-contracts";
 import { ConsoleUserFacingError } from "./user-facing-error.js";
@@ -247,6 +248,60 @@ function parseLeaseInput(value: unknown): StagingLeaseRequest {
   };
 }
 
+function parseDatasetImportInput(value: unknown): StagedDatasetImportInput {
+  const record = asRecord(value);
+  const allowed = new Set(["upload", "id", "version", "title"]);
+  if (Object.keys(record).some((key) => !allowed.has(key))) {
+    throw new HttpError(400, "INVALID_REQUEST", "数据导入请求包含未知字段。");
+  }
+  const upload = asRecord(record.upload);
+  if (
+    Object.keys(upload).some(
+      (key) => !["leaseId", "digest", "sizeBytes"].includes(key)
+    )
+  ) {
+    throw new HttpError(400, "INVALID_REQUEST", "上传回执包含未知字段。");
+  }
+  const leaseId = requiredString(upload, "leaseId", 200);
+  const digest = requiredString(upload, "digest", 80);
+  const sizeBytes = upload.sizeBytes;
+  if (
+    !/^sha256:[a-f0-9]{64}$/.test(digest) ||
+    !Number.isSafeInteger(sizeBytes) ||
+    (sizeBytes as number) < 1 ||
+    (sizeBytes as number) > UPLOAD_LIMIT_BYTES
+  ) {
+    throw new HttpError(400, "INVALID_REQUEST", "上传回执无效。");
+  }
+  const id = requiredString(record, "id", 160);
+  const version = requiredString(record, "version", 100);
+  if (
+    !/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(id) ||
+    !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$/.test(
+      version
+    )
+  ) {
+    throw new HttpError(400, "INVALID_REQUEST", "Dataset ID 或版本格式无效。");
+  }
+  const title = record.title;
+  if (
+    title !== undefined &&
+    (typeof title !== "string" || title.length < 1 || title.length > 200)
+  ) {
+    throw new HttpError(400, "INVALID_REQUEST", "Dataset 标题无效。");
+  }
+  return {
+    upload: {
+      leaseId,
+      digest,
+      sizeBytes: sizeBytes as number
+    },
+    id,
+    version,
+    ...(typeof title === "string" ? { title } : {})
+  };
+}
+
 function mimeType(path: string): string {
   return (
     {
@@ -445,6 +500,17 @@ export async function startConsoleHost(
           );
           leases.delete(leaseId);
           writeJson(response, 201, receipt);
+          return;
+        }
+        if (request.method === "POST" && path === "/api/datasets/imports") {
+          requireMutationSession(request);
+          writeJson(
+            response,
+            201,
+            await options.backend.importStagedDataset(
+              parseDatasetImportInput(await readJson(request))
+            )
+          );
           return;
         }
         const lineageMatch = /^\/api\/runs\/([^/]+)\/lineage$/.exec(path);

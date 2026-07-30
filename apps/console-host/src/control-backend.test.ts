@@ -422,15 +422,23 @@ describe("UdsControlBackend", () => {
         sizeBytes: body.byteLength
       }))
     };
-    const client = new FakeRequester().respond(
-      CONSOLE_CONTROL_METHODS.stagingLeaseCreate,
-      {
-        leaseId: "lease-secure",
-        expiresAt: "2026-07-30T04:10:00.000Z",
-        maxBytes: body.byteLength,
-        transferToken: "secret-token"
-      }
-    );
+    const client = new FakeRequester()
+      .respond(CONSOLE_CONTROL_METHODS.stagingLeaseCreate, {
+          leaseId: "lease-secure",
+          expiresAt: "2026-07-30T04:10:00.000Z",
+          maxBytes: body.byteLength,
+          transferToken: "secret-token"
+        })
+      .respond(CONSOLE_CONTROL_METHODS.datasetImportStaged, {
+        status: "published",
+        stagingId: "dataset-staging-1",
+        dataset: {
+          metadata: { id: "packaging-master", version: "1.0.0" },
+          source: { digest: `sha256:${"a".repeat(64)}` },
+          recordCount: 10
+        },
+        warnings: []
+      });
     const adapter = backend(client, uploader);
     await adapter.createStagingLease({
       fileName: "packaging.xlsx",
@@ -456,6 +464,38 @@ describe("UdsControlBackend", () => {
       body,
       expectedSha256: "a".repeat(64)
     });
+    await expect(
+      adapter.importStagedDataset({
+        upload: {
+          leaseId: "lease-secure",
+          digest: `sha256:${"a".repeat(64)}`,
+          sizeBytes: body.byteLength
+        },
+        id: "packaging-master",
+        version: "1.0.0",
+        title: "包装主数据"
+      })
+    ).resolves.toEqual({
+      status: "published",
+      stagingId: "dataset-staging-1",
+      sourceDigest: `sha256:${"a".repeat(64)}`,
+      id: "packaging-master",
+      version: "1.0.0",
+      recordCount: 10,
+      warnings: [],
+      errors: []
+    });
     expect(JSON.stringify(client.calls)).not.toContain("1,2,3");
+    expect(client.calls.at(-1)).toEqual({
+      method: "dataset.import.staged",
+      params: {
+        leaseId: "lease-secure",
+        digest: `sha256:${"a".repeat(64)}`,
+        id: "packaging-master",
+        version: "1.0.0",
+        actor: "operator:test",
+        title: "包装主数据"
+      }
+    });
   });
 });

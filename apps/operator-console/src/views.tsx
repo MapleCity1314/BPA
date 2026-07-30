@@ -441,6 +441,9 @@ export function TaskCenter({
 
 export function DatasetImport({ api }: { api: OperatorConsoleApi }) {
   const [file, setFile] = useState<File>();
+  const [datasetId, setDatasetId] = useState("packaging-master");
+  const [version, setVersion] = useState("1.0.0");
+  const [title, setTitle] = useState("包装主数据");
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   async function upload() {
@@ -448,8 +451,16 @@ export function DatasetImport({ api }: { api: OperatorConsoleApi }) {
     setBusy(true);
     setStatus("");
     try {
-      const receipt = await api.importFile(file, "dataset");
-      setStatus(`导入完成，文件摘要 ${receipt.digest.slice(0, 18)}…`);
+      const result = await api.importDataset(file, {
+        id: datasetId,
+        version,
+        title
+      });
+      setStatus(
+        result.status === "published"
+          ? `已发布 ${result.id}@${result.version}，共 ${result.recordCount ?? 0} 条记录。`
+          : `文件未通过校验：${result.errors.join("；") || "请检查工作簿格式。"}`
+      );
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "导入失败。");
     } finally {
@@ -466,16 +477,42 @@ export function DatasetImport({ api }: { api: OperatorConsoleApi }) {
         </div>
       </div>
       <div className="upload-zone">
+        <div className="inline-form">
+          <label>
+            Dataset ID
+            <input
+              aria-label="Dataset ID"
+              value={datasetId}
+              onChange={(event) => setDatasetId(event.target.value)}
+            />
+          </label>
+          <label>
+            版本
+            <input
+              aria-label="Dataset 版本"
+              value={version}
+              onChange={(event) => setVersion(event.target.value)}
+            />
+          </label>
+          <label>
+            标题
+            <input
+              aria-label="Dataset 标题"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+            />
+          </label>
+        </div>
         <input
           aria-label="选择数据文件"
           type="file"
-          accept=".xlsx,.xls,.csv,.tsv"
+          accept=".xlsx"
           onChange={(event) => setFile(event.target.files?.[0])}
         />
-        <p>{file ? `${file.name} · ${Math.ceil(file.size / 1024)} KiB` : "支持 Excel、CSV 和 TSV"}</p>
+        <p>{file ? `${file.name} · ${Math.ceil(file.size / 1024)} KiB` : "当前支持 packaging-master-v1 的 .xlsx 文件"}</p>
         <button
           className="primary-button"
-          disabled={!file || busy}
+          disabled={!file || !datasetId || !version || !title || busy}
           onClick={() => void upload()}
           type="button"
         >

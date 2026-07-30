@@ -2,6 +2,7 @@ import type {
   ControlBackend,
   CreateRunInput,
   StagingLeaseRequest,
+  StagedDatasetImportInput,
   SubmitTaskInput
 } from "@bpa/operator-console-contracts";
 
@@ -59,6 +60,10 @@ export class UnavailableControlBackend implements ControlBackend {
     _body: Uint8Array,
     _expectedSha256?: string
   ) {
+    return unavailable();
+  }
+
+  async importStagedDataset(_input: StagedDatasetImportInput) {
     return unavailable();
   }
 

@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { chmodSync, rmSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { LocalAssetStore } from "@bpa/asset-store-local";
-import { MAX_OBJECT_BYTES } from "@bpa/asset-core";
+import { defaultRetention, MAX_OBJECT_BYTES } from "@bpa/asset-core";
 import type { Persistence } from "@bpa/persistence";
 
 const METADATA_LIMIT_BYTES = 64 * 1024;
@@ -30,6 +30,21 @@ export interface StagingLeaseRequest {
   sizeBytes: number;
   sha256?: string;
   purpose: "dataset" | "evidence";
+}
+
+export interface ResolvedDatasetUpload {
+  readonly bytes: Uint8Array;
+  readonly fileName: string;
+  readonly digest: string;
+  readonly size: number;
+}
+
+function sourceId(leaseId: string): string {
+  return `staging-source:${leaseId}`;
+}
+
+function assetId(leaseId: string): string {
+  return `staging-asset:${leaseId}`;
 }
 
 export class StagingTransferService {
@@ -139,7 +154,48 @@ export class StagingTransferService {
       expectedSize: body.byteLength,
       mediaType: pending.mediaType
     });
-    this.persistence.registerBlob(stored.blob);
+    const existingBlob = this.persistence.getBlob(stored.blob.digest);
+    if (
+      existingBlob &&
+      (existingBlob.size !== stored.blob.size ||
+        existingBlob.storageRef !== stored.blob.storageRef)
+    ) {
+      throw new Error("Stored Blob metadata conflicts with its digest");
+    }
+    const blob =
+      existingBlob ??
+      this.persistence.registerBlob(stored.blob).record;
+    const recordedAt = blob.createdAt;
+    this.persistence.putSourceRecord({
+      apiVersion: "bpa.source/v1alpha1",
+      kind: "SourceRecord",
+      sourceId: sourceId(lease.leaseId),
+      sourceType: "user_file",
+      locator: {
+        originalFileName: pending.fileName,
+        mediaType: pending.mediaType,
+        size: body.byteLength,
+        digest
+      },
+      observedAt: recordedAt,
+      recordedAt,
+      accessScope: "user_provided",
+      classification: "restricted",
+      title: pending.fileName
+    });
+    this.persistence.putAssetRecord({
+      apiVersion: "bpa.asset/v1alpha1",
+      kind: "AssetRecord",
+      assetId: assetId(lease.leaseId),
+      digest,
+      size: blob.size,
+      mediaType: blob.mediaType,
+      storageRef: blob.storageRef,
+      classification: "restricted",
+      sourceIds: [sourceId(lease.leaseId)],
+      createdAt: recordedAt,
+      retention: defaultRetention("restricted", new Date(recordedAt))
+    });
     this.persistence.transitionStagingLease({
       leaseId: lease.leaseId,
       expectedState: "active",
@@ -150,6 +206,61 @@ export class StagingTransferService {
       leaseId: lease.leaseId,
       digest,
       sizeBytes: body.byteLength
+    };
+  }
+
+  resolveDatasetUpload(input: {
+    leaseId: string;
+    digest: string;
+  }): ResolvedDatasetUpload {
+    const lease = this.persistence.getStagingLease(input.leaseId);
+    if (
+      !lease ||
+      lease.state !== "consumed" ||
+      lease.runId !== "console-upload:dataset" ||
+      !/^sha256:[a-f0-9]{64}$/.test(input.digest)
+    ) {
+      throw new Error("Dataset upload receipt is invalid");
+    }
+    const source = this.persistence.getSourceRecord(sourceId(input.leaseId));
+    const asset = this.persistence.getAssetRecord(assetId(input.leaseId));
+    const locator =
+      source?.sourceType === "user_file"
+        ? (source.locator as Record<string, unknown>)
+        : undefined;
+    if (
+      !source ||
+      !asset ||
+      !locator ||
+      asset.digest !== input.digest ||
+      !asset.sourceIds.includes(source.sourceId) ||
+      locator.digest !== input.digest ||
+      typeof locator.originalFileName !== "string" ||
+      typeof locator.size !== "number"
+    ) {
+      throw new Error("Dataset upload lineage is incomplete or inconsistent");
+    }
+    const blob = this.persistence.getBlob(input.digest);
+    if (
+      !blob ||
+      blob.size !== asset.size ||
+      blob.storageRef !== asset.storageRef ||
+      locator.size !== blob.size
+    ) {
+      throw new Error("Dataset upload Blob metadata is inconsistent");
+    }
+    const bytes = this.#store.read(blob.storageRef);
+    const actualDigest = `sha256:${createHash("sha256")
+      .update(bytes)
+      .digest("hex")}`;
+    if (bytes.byteLength !== blob.size || actualDigest !== blob.digest) {
+      throw new Error("Dataset upload Blob failed integrity verification");
+    }
+    return {
+      bytes: Uint8Array.from(bytes),
+      fileName: locator.originalFileName,
+      digest: blob.digest,
+      size: blob.size
     };
   }
 }

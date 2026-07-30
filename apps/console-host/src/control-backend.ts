@@ -4,6 +4,7 @@ import type {
   ControlBackend,
   CreateRunInput,
   DashboardSnapshot,
+  DatasetImportResult,
   DownloadPayload,
   DownloadView,
   EvidenceLineageView,
@@ -11,6 +12,7 @@ import type {
   RunView,
   StagingLease,
   StagingLeaseRequest,
+  StagedDatasetImportInput,
   SubmitTaskInput,
   TaskView,
   UploadReceipt,
@@ -31,6 +33,7 @@ export const CONSOLE_CONTROL_METHODS = {
   taskClaim: "assistance.task.claim",
   taskSubmit: "assistance.task.submit",
   stagingLeaseCreate: "staging.lease.create",
+  datasetImportStaged: "dataset.import.staged",
   evidenceLineageGet: "evidence.lineage.get",
   downloadList: "download.list",
   downloadGet: "download.get"
@@ -84,6 +87,12 @@ function integer(value: unknown, fallback = 0): number {
 
 function boolean(value: unknown): boolean {
   return value === true;
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 function safeTimestamp(value: unknown, fallback: string): string {
@@ -740,6 +749,51 @@ export class UdsControlBackend implements ControlBackend {
       return receipt;
     } catch {
       throw failureMessage("安全上传文件");
+    }
+  }
+
+  async importStagedDataset(
+    input: StagedDatasetImportInput
+  ): Promise<DatasetImportResult> {
+    try {
+      const value = await this.#client.request<unknown>(
+        CONSOLE_CONTROL_METHODS.datasetImportStaged,
+        {
+          leaseId: input.upload.leaseId,
+          digest: input.upload.digest,
+          id: input.id,
+          version: input.version,
+          actor: this.#actorId,
+          ...(input.title === undefined ? {} : { title: input.title })
+        }
+      );
+      const result = record(value);
+      const status = result?.status;
+      if (!result || (status !== "published" && status !== "rejected")) {
+        throw new Error("invalid dataset import result");
+      }
+      const dataset = record(result.dataset);
+      const metadata = record(dataset?.metadata);
+      const source = record(dataset?.source);
+      return {
+        status,
+        stagingId: text(result.stagingId),
+        sourceDigest: text(
+          result.sourceDigest,
+          text(source?.digest, input.upload.digest)
+        ),
+        ...(status === "published"
+          ? {
+              id: text(metadata?.id, input.id),
+              version: text(metadata?.version, input.version),
+              recordCount: integer(dataset?.recordCount)
+            }
+          : {}),
+        warnings: stringList(result.warnings),
+        errors: stringList(result.errors)
+      };
+    } catch {
+      throw failureMessage("校验并发布业务主数据");
     }
   }
 

@@ -32,6 +32,12 @@ export interface PackagingDatasetImportInput {
   readonly title?: string;
 }
 
+export interface PackagingDatasetBytesImportInput
+  extends Omit<PackagingDatasetImportInput, "path"> {
+  readonly bytes: Uint8Array;
+  readonly fileName: string;
+}
+
 export type PackagingDatasetImportResult =
   | {
       readonly status: "published";
@@ -140,6 +146,37 @@ async function readSafeXlsx(path: string): Promise<SafeSource> {
   }
 }
 
+function readSafeBytes(input: {
+  readonly bytes: Uint8Array;
+  readonly fileName: string;
+}): SafeSource {
+  requireText(input.fileName, "fileName");
+  if (
+    basename(input.fileName) !== input.fileName ||
+    input.fileName.includes("\0") ||
+    extname(input.fileName).toLowerCase() !== ".xlsx"
+  ) {
+    throw new DatasetImportPathError(
+      "Dataset source must use a safe .xlsx file name"
+    );
+  }
+  if (
+    input.bytes.byteLength < 1 ||
+    input.bytes.byteLength > MAX_DATASET_SOURCE_BYTES
+  ) {
+    throw new DatasetImportPathError(
+      `Dataset source must contain 1-${MAX_DATASET_SOURCE_BYTES} bytes`
+    );
+  }
+  const bytes = Uint8Array.from(input.bytes);
+  return {
+    bytes,
+    fileName: input.fileName,
+    size: bytes.byteLength,
+    digest: digest(bytes)
+  };
+}
+
 function jsonRecord(value: unknown): JsonValue {
   const serialized = JSON.stringify(value);
   if (serialized === undefined) {
@@ -177,7 +214,7 @@ function validationReport(input: {
 function validateParsedDataset(
   parsed: PackagingDatasetImport,
   source: SafeSource,
-  input: PackagingDatasetImportInput
+  input: Pick<PackagingDatasetImportInput, "id" | "version">
 ): readonly string[] {
   const errors: string[] = [];
   if (parsed.sourceDigest !== source.digest) {
@@ -228,6 +265,21 @@ export class PackagingDatasetService {
   async import(
     input: PackagingDatasetImportInput
   ): Promise<PackagingDatasetImportResult> {
+    const source = await readSafeXlsx(input.path);
+    return this.#importSource(input, source);
+  }
+
+  async importBytes(
+    input: PackagingDatasetBytesImportInput
+  ): Promise<PackagingDatasetImportResult> {
+    const source = readSafeBytes(input);
+    return this.#importSource(input, source);
+  }
+
+  async #importSource(
+    input: Omit<PackagingDatasetImportInput, "path">,
+    source: SafeSource
+  ): Promise<PackagingDatasetImportResult> {
     requireText(input.id, "dataset id");
     requireText(input.version, "dataset version");
     requireText(input.actor, "actor");
@@ -237,7 +289,6 @@ export class PackagingDatasetService {
       );
     }
 
-    const source = await readSafeXlsx(input.path);
     const stagingId = this.#uuid();
     const stagedAt = this.#clock();
     this.#store.stageDataset({

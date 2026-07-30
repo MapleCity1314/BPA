@@ -1,6 +1,11 @@
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { LocalCoreService } from "./control.js";
+import { StagingTransferService } from "./staging-transfer.js";
 
 const timestamp = "2026-07-28T00:00:00.000Z";
 
@@ -116,5 +121,64 @@ describe("Local Core dataset control", () => {
     expect(response).toMatchObject({ id: "import", ok: false });
     expect(response.error?.message).toContain("ENOENT");
     persistence.close();
+  });
+
+  it("imports a consumed dataset upload by immutable receipt after restart", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "bpa-dataset-control-"));
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const firstTransfers = new StagingTransferService(persistence, directory);
+    const body = Buffer.from("invalid-but-trusted-xlsx-container");
+    const sha256 = createHash("sha256").update(body).digest("hex");
+    const lease = firstTransfers.issue({
+      fileName: "packaging.xlsx",
+      mediaType:
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      sizeBytes: body.byteLength,
+      sha256,
+      purpose: "dataset"
+    });
+    const receipt = firstTransfers.upload(
+      {
+        protocol: "bpa.staging/1",
+        leaseId: lease.leaseId,
+        token: lease.transferToken,
+        sizeBytes: body.byteLength,
+        expectedSha256: sha256
+      },
+      body
+    );
+    const recoveredTransfers = new StagingTransferService(
+      persistence,
+      directory
+    );
+    const service = new LocalCoreService(
+      persistence,
+      undefined,
+      undefined,
+      recoveredTransfers
+    );
+
+    const response = await service.handleAsync({
+      id: "staged-import",
+      method: "dataset.import.staged",
+      params: {
+        leaseId: receipt.leaseId,
+        digest: receipt.digest,
+        id: "packaging-master",
+        version: "1.0.0",
+        actor: "operator-console"
+      }
+    });
+    expect(response).toMatchObject({
+      id: "staged-import",
+      ok: true,
+      result: {
+        status: "rejected",
+        sourceDigest: receipt.digest
+      }
+    });
+
+    persistence.close();
+    rmSync(directory, { recursive: true, force: true });
   });
 });

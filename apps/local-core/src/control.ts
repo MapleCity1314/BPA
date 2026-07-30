@@ -242,7 +242,8 @@ export class LocalCoreService {
   async handleAsync(request: ControlRequest): Promise<ControlResponse> {
     if (
       !request.method.startsWith("assistance.task.") &&
-      request.method !== "dataset.import"
+      request.method !== "dataset.import" &&
+      request.method !== "dataset.import.staged"
     ) {
       return this.handle(request);
     }
@@ -259,6 +260,8 @@ export class LocalCoreService {
                 ? {}
                 : { title: String(params.title) })
             })
+          : request.method === "dataset.import.staged"
+            ? await this.#importStagedDataset(params)
           : await this.#dispatchAssistance(request, params);
       return { id: request.id, ok: true, result };
     } catch (error) {
@@ -274,6 +277,28 @@ export class LocalCoreService {
         }
       };
     }
+  }
+
+  async #importStagedDataset(
+    params: Record<string, unknown>
+  ): Promise<unknown> {
+    if (!this.stagingTransfers) {
+      throw new Error("Staging transfer service is unavailable");
+    }
+    const upload = this.stagingTransfers.resolveDatasetUpload({
+      leaseId: String(params.leaseId),
+      digest: String(params.digest)
+    });
+    return this.datasets.importBytes({
+      bytes: upload.bytes,
+      fileName: upload.fileName,
+      id: String(params.id),
+      version: String(params.version),
+      actor: String(params.actor || userInfo().username),
+      ...(params.title === undefined
+        ? {}
+        : { title: String(params.title) })
+    });
   }
 
   async #dispatchAssistance(

@@ -6,6 +6,7 @@ import type {
   ControlBackend,
   CreateRunInput,
   StagingLeaseRequest,
+  StagedDatasetImportInput,
   SubmitTaskInput
 } from "@bpa/operator-console-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -22,8 +23,20 @@ class RecordingBackend implements ControlBackend {
   readonly uploadStagingLease = vi.fn(
     async (leaseId: string, body: Uint8Array, _expectedSha256?: string) => ({
       leaseId,
-      digest: "sha256:uploaded",
+      digest: `sha256:${"a".repeat(64)}`,
       sizeBytes: body.byteLength
+    })
+  );
+  readonly importStagedDataset = vi.fn(
+    async (input: StagedDatasetImportInput) => ({
+      status: "published" as const,
+      stagingId: "dataset-staging-1",
+      sourceDigest: input.upload.digest,
+      id: input.id,
+      version: input.version,
+      recordCount: 12,
+      warnings: [],
+      errors: []
     })
   );
 
@@ -277,6 +290,29 @@ describe("Console Host security boundary", () => {
     );
     expect(upload.status).toBe(201);
     expect(backend.uploadStagingLease).toHaveBeenCalledOnce();
+    const receipt = await upload.json();
+    const imported = await fetch(`${handle.origin}/api/datasets/imports`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        upload: receipt,
+        id: "packaging-master",
+        version: "1.0.0",
+        title: "包装主数据"
+      })
+    });
+    expect(imported.status).toBe(201);
+    expect(await imported.json()).toMatchObject({
+      status: "published",
+      id: "packaging-master",
+      recordCount: 12
+    });
+    expect(backend.importStagedDataset).toHaveBeenCalledWith({
+      upload: receipt,
+      id: "packaging-master",
+      version: "1.0.0",
+      title: "包装主数据"
+    });
 
     const replay = await fetch(
       `${handle.origin}/api/uploads/leases/lease-1/content`,

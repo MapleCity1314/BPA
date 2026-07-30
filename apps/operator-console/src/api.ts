@@ -2,11 +2,13 @@ import type {
   CreateRunInput,
   CreateRunResult,
   DashboardSnapshot,
+  DatasetImportResult,
   DownloadView,
   EvidenceLineageView,
   RunView,
   StagingLease,
   StagingLeaseRequest,
+  StagedDatasetImportInput,
   SubmitTaskInput,
   TaskView,
   UploadReceipt,
@@ -21,7 +23,10 @@ export interface OperatorConsoleApi {
   getRun(runId: string): Promise<RunView>;
   listTasks(): Promise<TaskView[]>;
   submitTask(taskId: string, input: SubmitTaskInput): Promise<void>;
-  importFile(file: File, purpose: "dataset" | "evidence"): Promise<UploadReceipt>;
+  importDataset(
+    file: File,
+    input: Omit<StagedDatasetImportInput, "upload">
+  ): Promise<DatasetImportResult>;
   getEvidenceLineage(runId: string): Promise<EvidenceLineageView>;
   listDownloads(runId?: string): Promise<DownloadView[]>;
   downloadUrl(downloadId: string): string;
@@ -123,7 +128,7 @@ export class HttpOperatorConsoleApi implements OperatorConsoleApi {
     );
   }
 
-  async importFile(
+  async #uploadFile(
     file: File,
     purpose: "dataset" | "evidence"
   ): Promise<UploadReceipt> {
@@ -153,6 +158,21 @@ export class HttpOperatorConsoleApi implements OperatorConsoleApi {
           "X-BPA-Content-SHA256": sha256
         },
         body: bytes
+      },
+      true
+    );
+  }
+
+  async importDataset(
+    file: File,
+    input: Omit<StagedDatasetImportInput, "upload">
+  ): Promise<DatasetImportResult> {
+    const upload = await this.#uploadFile(file, "dataset");
+    return this.#request<DatasetImportResult>(
+      "/api/datasets/imports",
+      {
+        method: "POST",
+        body: JSON.stringify({ upload, ...input })
       },
       true
     );

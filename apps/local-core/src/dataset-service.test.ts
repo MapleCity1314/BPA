@@ -90,6 +90,49 @@ function validParse(input: {
 }
 
 describe("PackagingDatasetService", () => {
+  it("publishes trusted in-memory workbook bytes without accepting a path", async () => {
+    const bytes = new TextEncoder().encode("trusted uploaded workbook");
+    const store = new SqlitePersistence({ path: ":memory:" });
+    cleanups.push(async () => store.close());
+    const ids = ["staging-upload", "audit-upload"];
+    const service = new PackagingDatasetService(store, {
+      clock: () => now,
+      uuid: () => ids.shift()!,
+      parse: validParse
+    });
+
+    await expect(
+      service.importBytes({
+        bytes,
+        fileName: "packaging.xlsx",
+        id: "packaging-master",
+        version: "1.0.0",
+        actor: "operator-console"
+      })
+    ).resolves.toMatchObject({
+      status: "published",
+      dataset: {
+        metadata: {
+          id: "packaging-master",
+          version: "1.0.0"
+        },
+        source: {
+          fileName: "packaging.xlsx",
+          digest: sha256(bytes)
+        }
+      }
+    });
+    await expect(
+      service.importBytes({
+        bytes,
+        fileName: "../packaging.xlsx",
+        id: "packaging-master-unsafe",
+        version: "1.0.0",
+        actor: "operator-console"
+      })
+    ).rejects.toBeInstanceOf(DatasetImportPathError);
+  });
+
   it("publishes immutable normalized records, audit, and bounded read helpers", async () => {
     const source = await fixtureSource(
       new TextEncoder().encode("RAW_EXCEL_BYTES_MUST_NOT_BE_PERSISTED")

@@ -89,6 +89,42 @@ describe("local staging transfer", () => {
     expect(persistence.getBlob(`sha256:${expected}`)).toMatchObject({
       size: body.byteLength
     });
+    expect(
+      persistence.getSourceRecord(`staging-source:${lease.leaseId}`)
+    ).toMatchObject({
+      sourceType: "user_file",
+      locator: {
+        originalFileName: "packaging.xlsx",
+        digest: `sha256:${expected}`
+      }
+    });
+    expect(
+      persistence.getAssetRecord(`staging-asset:${lease.leaseId}`)
+    ).toMatchObject({
+      digest: `sha256:${expected}`,
+      classification: "restricted"
+    });
+    const recoveredService = new StagingTransferService(
+      persistence,
+      directory
+    );
+    expect(
+      recoveredService.resolveDatasetUpload({
+        leaseId: lease.leaseId,
+        digest: `sha256:${expected}`
+      })
+    ).toEqual({
+      bytes: new Uint8Array(body),
+      fileName: "packaging.xlsx",
+      digest: `sha256:${expected}`,
+      size: body.byteLength
+    });
+    expect(() =>
+      recoveredService.resolveDatasetUpload({
+        leaseId: lease.leaseId,
+        digest: `sha256:${"0".repeat(64)}`
+      })
+    ).toThrow("lineage is incomplete");
     persistence.close();
     rmSync(directory, { recursive: true, force: true });
   });
@@ -130,6 +166,12 @@ describe("local staging transfer", () => {
         digest: `sha256:${expected}`
       }
     });
+    expect(() =>
+      service.resolveDatasetUpload({
+        leaseId: lease.leaseId,
+        digest: `sha256:${expected}`
+      })
+    ).toThrow("receipt is invalid");
     await server.stop();
     persistence.close();
     rmSync(directory, { recursive: true, force: true });

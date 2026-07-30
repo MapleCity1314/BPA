@@ -124,6 +124,24 @@ export interface UploadReceipt {
   sizeBytes: number;
 }
 
+export interface StagedDatasetImportInput {
+  upload: UploadReceipt;
+  id: string;
+  version: string;
+  title?: string;
+}
+
+export interface DatasetImportResult {
+  status: "published" | "rejected";
+  stagingId: string;
+  sourceDigest: string;
+  id?: string;
+  version?: string;
+  recordCount?: number;
+  warnings: string[];
+  errors: string[];
+}
+
 export interface EvidenceLineageView {
   runId: string;
   sources: Array<{
@@ -176,6 +194,9 @@ export interface ControlBackend {
     body: Uint8Array,
     expectedSha256?: string
   ): Promise<UploadReceipt>;
+  importStagedDataset(
+    input: StagedDatasetImportInput
+  ): Promise<DatasetImportResult>;
   getEvidenceLineage(runId: string): Promise<EvidenceLineageView>;
   listDownloads(runId?: string): Promise<DownloadView[]>;
   getDownload(downloadId: string): Promise<DownloadPayload>;
