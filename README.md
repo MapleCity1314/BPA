@@ -19,7 +19,7 @@ BPA（Browser Process Assistance）把经过审核的浏览器流程编译成版
 
 当前仓库包含一条可运行的本地纵向链路：CLI、Local Core、Workflow Engine、Browser Gateway、Native Host、Chrome Extension、SQLite 状态与审计，以及用于创作 Workflow / Node 的 MCP 工具。
 
-2026-07-28 的代码实况、默认节点和 Skills 补强记录见 [BPA 当前实况与默认资产 v0.3](docs/current-state-and-default-assets-v0.3.md)。单节点运行、人工步骤、结构化循环、工程闭环和 AI 页面预定位的候选设计见 [BPA 基础场景、工程闭环与 AI 创作设计 v0.4](docs/basic-scenarios-and-ai-authoring-v0.4.md)。
+2026-07-30 的实现实况见 [BPA 0.4 当前实况](docs/current-state-v0.4.md)。上一阶段的默认节点和 Skills 盘点保留在 [BPA 当前实况与默认资产 v0.3](docs/current-state-and-default-assets-v0.3.md)；单节点运行、人工步骤、结构化循环和 AI 页面预定位设计见 [BPA 基础场景、工程闭环与 AI 创作设计 v0.4](docs/basic-scenarios-and-ai-authoring-v0.4.md)。
 
 ## 执行边界
 
@@ -45,11 +45,11 @@ Workflow 决定流程，Node 定义单步能力，Extension Bridge 校验页面�
 
 | 范围 | 版本 / 状态 | 说明 |
 | --- | --- | --- |
-| BPA Runtime | `0.3.0` | 契约执行、默认节点、精细化创作 Skills 与 macOS arm64 发布链路 |
+| BPA Runtime | `0.3.0` + `0.4` candidate | 已进入可信 Evidence、资源绑定和本地业务工作台迭代，正式 0.4 RC 尚未发布 |
 | Browser Protocol | `bpa.browser/1` · `1.0.0` | 已确认；双向独立序列、ACK、Resume、Cancel 与 Fencing |
 | Permission / Event / Evidence | `v1` | 稳定公共模型 |
-| Workflow / Node | `v1alpha1` | Alpha；实现方应固定版本并执行兼容测试 |
-| Reference Adapter | Doudian Adapter `1.1.0` / Node `1.2.0` | 当前只读参考场景，不代表通用零适配承诺 |
+| Workflow / Node | Workflow `v1alpha1` / `v1alpha2` / `v1alpha3`；Node `v1alpha1` / `v1alpha2` | Alpha；v1alpha3 增加冻结 Browser Resource Slot |
+| Reference Adapter | Doudian Adapter `1.2.0` | 当前只读参考场景，不代表通用零适配承诺 |
 
 机器规范以 [`packages/schemas/schema`](packages/schemas/schema) 为唯一事实来源。公开站点只复制明确列入白名单的 Schema 和中性消息样例。
 
@@ -59,17 +59,22 @@ Workflow 决定流程，Node 定义单步能力，Extension Bridge 校验页面�
 .
 ├── apps/
 │   ├── cli/                 # 本地控制 CLI
+│   ├── console-host/        # Loopback 工作台 Host 与安全文件通道
 │   ├── docs/                # Astro + Starlight 协议站
 │   ├── extension/           # WXT Chrome Extension
 │   ├── local-core/          # 本地控制面与 Unix Socket API
 │   ├── mcp-server/          # Workflow / Node 创作工具
-│   └── native-host/         # Chrome Native Messaging Host
+│   ├── native-host/         # Chrome Native Messaging Host
+│   └── operator-console/    # React 本地业务工作台
 ├── packages/
 │   ├── compiler/            # Workflow 编译、摘要与版本固定
 │   ├── engine/              # 执行、重试、暂停、取消与补偿
 │   ├── gateway-core/        # Browser Protocol 会话与投递
 │   ├── browser-bridge/      # Bridge 端协议、Pending Result
 │   ├── node-runtime/        # Node 执行契约
+│   ├── asset-core/          # 不可变 Asset / Blob 契约
+│   ├── asset-store-local/   # 本地 SHA-256 内容寻址存储
+│   ├── evidence-core/       # Evidence 生命周期与分块语义
 │   ├── persistence/         # 持久化接口
 │   ├── persistence-sqlite/  # SQLite Registry / Event / Inbox / Outbox
 │   └── schemas/             # JSON Schema 与生成类型
