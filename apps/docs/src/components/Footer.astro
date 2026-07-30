@@ -1,0 +1,76 @@
+---
+import LastUpdated from "@astrojs/starlight/components/LastUpdated.astro";
+import Pagination from "@astrojs/starlight/components/Pagination.astro";
+import catalog from "../../../../docs/catalog.json";
+
+const { id, entry } = Astro.locals.starlightRoute;
+const metadata = catalog.entries.find(
+  (candidate) => candidate.public && candidate.route === id
+);
+const rawPath = id ? `raw/${id}.md` : "raw/index.md";
+const rawHref = `${import.meta.env.BASE_URL}${rawPath}`;
+const source = metadata?.source ?? `apps/docs/src/content/docs/${entry.filePath}`;
+const repository = "https://github.com/MapleCity1314/BPA";
+const sourceHref = `${repository}/blob/main/${source}`;
+const editHref = `${repository}/edit/main/${source}`;
+const issueHref = `${repository}/issues/new?title=${encodeURIComponent(
+  `[Docs] ${entry.data.title}`
+)}&body=${encodeURIComponent(
+  `页面：${new URL(Astro.url.pathname, Astro.site).toString()}\n\n请描述需要修正的内容：`
+)}`;
+---
+
+<footer class="bpa-doc-footer">
+  {
+    metadata && (
+      <div class="bpa-doc-actions" aria-label="文档操作">
+        <bpa-copy-markdown data-url={rawHref}>
+          <button type="button">复制 Markdown</button>
+          <span role="status" aria-live="polite"></span>
+        </bpa-copy-markdown>
+        <a href={rawHref}>查看原文</a>
+        <a href={sourceHref}>查看源码</a>
+        {entry.data.editUrl !== false && <a href={editHref}>编辑本页</a>}
+        <a href={issueHref}>报告问题</a>
+      </div>
+    )
+  }
+  <div class="bpa-doc-meta">
+    <LastUpdated />
+  </div>
+  <Pagination />
+  <div class="bpa-site-footer">
+    <p>BPA / Governed browser workflows with verifiable evidence.</p>
+    <nav aria-label="项目链接">
+      <a href={repository}>GitHub</a>
+      <a href={`${repository}/releases`}>Releases</a>
+      <a href={`${repository}/issues`}>Issues</a>
+      <a href={`${repository}/blob/main/CONTRIBUTING.md`}>Contributing</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+  class BpaCopyMarkdown extends HTMLElement {
+    connectedCallback() {
+      const button = this.querySelector("button");
+      const status = this.querySelector("[role='status']");
+      button?.addEventListener("click", async () => {
+        const url = this.dataset.url;
+        if (!url || !status) return;
+        try {
+          const response = await fetch(url);
+          if (!response.ok) throw new Error("request failed");
+          await navigator.clipboard.writeText(await response.text());
+          status.textContent = "已复制";
+        } catch {
+          status.textContent = "复制失败，请打开原文";
+        }
+      });
+    }
+  }
+
+  if (!customElements.get("bpa-copy-markdown")) {
+    customElements.define("bpa-copy-markdown", BpaCopyMarkdown);
+  }
+</script>

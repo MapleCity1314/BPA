@@ -1,0 +1,19 @@
+---
+import DefaultHead from "@astrojs/starlight/components/Head.astro";
+
+const { id, entry } = Astro.locals.starlightRoute;
+const rawPath = id ? `raw/${id}.md` : "raw/index.md";
+const rawUrl = new URL(rawPath, new URL(import.meta.env.BASE_URL, Astro.site));
+---
+
+<DefaultHead />
+{
+  id !== "404" && (
+    <link
+      rel="alternate"
+      type="text/markdown"
+      title={`${entry.data.title} · Markdown`}
+      href={rawUrl}
+    />
+  )
+}

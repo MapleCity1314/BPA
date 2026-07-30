@@ -2,95 +2,130 @@
 title: 可信地运行真实浏览器流程
 description: BPA 的产品边界、平台架构、执行模型、可信证据和公共协议入口。
 editUrl: false
+template: splash
+hero:
+  title: 浏览器流程，可信地运行。
+  tagline: 把已审核的业务能力编译成可恢复、可审计、可验证的本地工作流。
+  actions:
+    - text: 开始了解
+      link: ./start/current-status/
+      variant: primary
+    - text: 查看 GitHub
+      link: https://github.com/MapleCity1314/BPA
+      variant: minimal
 ---
 
-import ProtocolFlow from "../../components/ProtocolFlow.astro";
+import HomeMetrics from "../../components/HomeMetrics.astro";
 
-<p class="protocol-lede">
-  BPA（Browser Process Assistance）把经过审核的业务流程编译成版本化
-  Workflow 和 Node，再在用户真实浏览器的登录环境中执行。它优先解决确定性、
-  恢复、权限收敛和证据留存，而不是把页面交给一个可以任意操作的浏览器 Agent。
-</p>
+<HomeMetrics />
 
-<div class="protocol-status">
-  <span>平台 0.4 candidate</span>
-  <span>Browser Protocol 1.0.0</span>
-  <span>Control Hello 已启用</span>
-  <span>基线 2026-07-30</span>
-</div>
+<section class="bpa-home-section bpa-home-section--pipeline">
+  <div class="bpa-section-heading">
+    <span>01 / EXECUTION</span>
+    <h2>一条不会在重启后失忆的执行链</h2>
+    <p>
+      Workflow 决定结构，Node 描述能力，Adapter 理解页面。每次运行冻结计划、权限和
+      资产版本，每一次状态变化都留下可验证记录。
+    </p>
+  </div>
+  <ol class="bpa-pipeline" aria-label="BPA 执行链">
+    <li><span>01</span><strong>Workflow</strong><small>业务意图</small></li>
+    <li><span>02</span><strong>Frozen Plan</strong><small>版本与权限</small></li>
+    <li><span>03</span><strong>Runtime</strong><small>确定性调度</small></li>
+    <li><span>04</span><strong>Browser</strong><small>真实登录环境</small></li>
+    <li><span>05</span><strong>Evidence</strong><small>摘要与来源</small></li>
+    <li><span>06</span><strong>Audit</strong><small>完整追溯</small></li>
+  </ol>
+</section>
 
-<div class="bpa-card-grid">
-  <a class="bpa-card" href="./start/current-status/">
-    <span class="bpa-card__eyebrow">OPERATORS</span>
-    <strong>现在能做什么</strong>
-    <p>查看本地工作台、只读流程、人工任务、Dataset 导入和证据血缘的真实状态。</p>
-  </a>
-  <a class="bpa-card" href="./platform/architecture/">
-    <span class="bpa-card__eyebrow">BUILDERS</span>
-    <strong>平台怎样分层</strong>
-    <p>理解 Compiler、IR2、Engine、Runtime Provider、Gateway、Adapter 和持久化边界。</p>
-  </a>
-  <a class="bpa-card" href="./browser/v1/">
-    <span class="bpa-card__eyebrow">INTEGRATORS</span>
-    <strong>协议怎样保证安全</strong>
-    <p>从 Session、Capability、Permission Grant、Fencing 到 Result 与 Evidence ACK。</p>
-  </a>
-</div>
+<section class="bpa-home-section">
+  <div class="bpa-section-heading">
+    <span>02 / PRINCIPLES</span>
+    <h2>自动化必须同时满足三件事</h2>
+  </div>
+  <div class="bpa-principles">
+    <article>
+      <span class="bpa-principle-mark">R</span>
+      <h3>可恢复</h3>
+      <p>计划、Checkpoint、Inbox/Outbox、Lease 和 Fencing 共同保证中断后安全继续。</p>
+      <a href="./platform/runtime-recovery/">了解执行恢复 →</a>
+    </article>
+    <article>
+      <span class="bpa-principle-mark">G</span>
+      <h3>受治理</h3>
+      <p>AI 只能组合或创建 Candidate；正式资产、权限扩大和写操作始终由人确认。</p>
+      <a href="./start/concepts/">了解资产边界 →</a>
+    </article>
+    <article>
+      <span class="bpa-principle-mark">V</span>
+      <h3>可验证</h3>
+      <p>来源、Evidence、不可变 Asset 和 Audit 让每条业务结论都能回到原始事实。</p>
+      <a href="./control/trusted-evidence/">了解可信证据 →</a>
+    </article>
+  </div>
+</section>
 
-## 一条执行链路
+<section class="bpa-home-section">
+  <div class="bpa-section-heading">
+    <span>03 / PATHS</span>
+    <h2>从与你有关的部分开始</h2>
+  </div>
+  <div class="bpa-reading-paths">
+    <a href="./guides/operator-console/">
+      <span>OPERATORS</span>
+      <h3>运营人员</h3>
+      <p>从工作台启动流程、绑定浏览器、处理人工任务并查看证据。</p>
+      <strong>进入使用指南 ↗</strong>
+    </a>
+    <a href="./platform/architecture/">
+      <span>BUILDERS</span>
+      <h3>平台开发者</h3>
+      <p>理解 Compiler、IR2、Engine、Runtime Provider 和持久化边界。</p>
+      <strong>阅读平台架构 ↗</strong>
+    </a>
+    <a href="./browser/v1/">
+      <span>INTEGRATORS</span>
+      <h3>能力集成方</h3>
+      <p>从 Session、Capability、Permission Grant 到 Evidence ACK。</p>
+      <strong>查看正式协议 ↗</strong>
+    </a>
+  </div>
+</section>
 
-```text
-Operator Console / CLI / MCP
-            │ bpa.control/hello/1
-            ▼
-        Local Core
-            │
-   Compiler → IR2 → Engine
-            │ Runtime Invocation
-            ▼
-      Provider Registry
-            │
- Browser Gateway ↔ Native Host ↔ Extension Bridge
-            │
-            ▼
-      reviewed Adapter
-            │
-            ▼
-   real browser page state
+<section class="bpa-home-section bpa-scope">
+  <div class="bpa-section-heading">
+    <span>04 / REALITY</span>
+    <h2>以当前事实为边界</h2>
+    <p>协议设计、fixture 和单元测试都不能替代真实页面验收。BPA 明确区分已实现、部分完成和规划能力。</p>
+  </div>
+  <div class="bpa-scope-grid">
+    <article>
+      <span class="bpa-state bpa-state--active">ACTIVE</span>
+      <h3>已进入闭环</h3>
+      <p>冻结 IR2、恢复与幂等、Browser Protocol v1、可信证据、Dataset 和人工任务。</p>
+    </article>
+    <article>
+      <span class="bpa-state bpa-state--partial">PARTIAL</span>
+      <h3>仍需真实验收</h3>
+      <p>复杂页面就绪、多来源登录恢复、完整长流程和业务影子运行。</p>
+    </article>
+    <article>
+      <span class="bpa-state">OUT OF SCOPE</span>
+      <h3>没有偷偷承诺</h3>
+      <p>R2+ 页面写入、验证码绕过、云端多租户、任意脚本和不可信代码执行。</p>
+    </article>
+  </div>
+  <a class="bpa-text-link" href="./start/current-status/">查看完整能力状态 →</a>
+</section>
 
-Every transition → Event · Evidence · Source · Asset · Audit
-```
-
-Workflow 决定流程结构；Node 描述单步能力；Adapter 保存平台页面逻辑；Engine
-只推进确定性的执行状态。Workflow 不允许携带 selector、XPath、坐标或任意
-JavaScript。
-
-## 三条必须同时成立的边界
-
-### 已审核能力
-
-浏览器只执行 Extension Capability Manifest 中已经注册的精确 Node 和版本。
-AI 可以创建 Candidate，但不能自行批准或发布正式资产。
-
-### 冻结执行计划
-
-Run 创建时保存规范化 IR2、摘要、风险快照和精确资产闭包。恢复使用保存的计划，
-不会重新编译已经变化的源资产。
-
-### 可验证结果
-
-大型正文不进入控制协议或普通 Result。Evidence 先完成分块上传和摘要验证，
-Result 才能引用它并推进 Engine。
-
-<ProtocolFlow />
-
-## 当前不是哪些东西
-
-- 不是可以执行任意网页脚本的通用 Agent。
-- 不是用无头浏览器替代用户真实登录状态的采集器。
-- 不是验证码、会员权限、限流或平台风控的绕过工具。
-- 不是已经开放保存、发布、改价等 R2+ 写动作的系统。
-- 不是云端、多租户或 PostgreSQL 部署。
-
-从[当前能力](./start/current-status/)开始了解已实现与待验收边界；开发者可以直接进入
-[模块与边界](./platform/architecture/)或[公共 Schema](./reference/schemas/)。
+<section class="bpa-home-section bpa-community">
+  <div>
+    <span>OPEN CONTRACTS</span>
+    <h2>协议、Schema 和实现放在同一个仓库里。</h2>
+  </div>
+  <div class="bpa-community__links">
+    <a href="https://github.com/MapleCity1314/BPA">查看 GitHub</a>
+    <a href="./reference/schemas/">下载 Schema</a>
+    <a href="./reference/machine-readable/">供 AI 阅读</a>
+  </div>
+</section>

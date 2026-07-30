@@ -349,6 +349,90 @@
       "navigationOrder": 40
     },
     {
+      "id": "site.guides.operator-console",
+      "source": "apps/docs/src/content/docs/guides/operator-console.md",
+      "route": "guides/operator-console",
+      "title": "使用本地工作台",
+      "summary": "启动 BPA Operator Console，理解健康状态、导航和当前产品边界。",
+      "authority": "tutorial",
+      "implementation": "partial",
+      "audience": ["operator", "developer", "ai"],
+      "since": "0.4.0",
+      "public": true,
+      "navigationGroup": "guides",
+      "navigationOrder": 10
+    },
+    {
+      "id": "site.guides.run-workflow",
+      "source": "apps/docs/src/content/docs/guides/run-workflow.md",
+      "route": "guides/run-workflow",
+      "title": "启动 Workflow",
+      "summary": "选择正式 Workflow、填写输入、绑定浏览器资源并观察一次 Run。",
+      "authority": "tutorial",
+      "implementation": "partial",
+      "audience": ["operator", "developer", "ai"],
+      "since": "0.4.0",
+      "public": true,
+      "navigationGroup": "guides",
+      "navigationOrder": 20
+    },
+    {
+      "id": "site.guides.browser-sessions",
+      "source": "apps/docs/src/content/docs/guides/browser-sessions.md",
+      "route": "guides/browser-sessions",
+      "title": "Browser Session 与登录",
+      "summary": "理解浏览器资源、精确绑定、认证状态和登录失效后的人工接管。",
+      "authority": "tutorial",
+      "implementation": "partial",
+      "audience": ["operator", "developer", "integrator", "ai"],
+      "since": "0.4.0",
+      "public": true,
+      "navigationGroup": "guides",
+      "navigationOrder": 30
+    },
+    {
+      "id": "site.guides.assistance-tasks",
+      "source": "apps/docs/src/content/docs/guides/assistance-tasks.md",
+      "route": "guides/assistance-tasks",
+      "title": "处理人工任务",
+      "summary": "在任务中心处理 AI Review、Human Confirm 和 Human Action。",
+      "authority": "tutorial",
+      "implementation": "active",
+      "audience": ["operator", "developer", "ai"],
+      "since": "0.4.0",
+      "public": true,
+      "navigationGroup": "guides",
+      "navigationOrder": 40
+    },
+    {
+      "id": "site.guides.evidence-assets",
+      "source": "apps/docs/src/content/docs/guides/evidence-assets.md",
+      "route": "guides/evidence-assets",
+      "title": "查看证据与资产",
+      "summary": "从 Run 追溯 Source、Evidence、Asset、摘要、保留策略和导出记录。",
+      "authority": "tutorial",
+      "implementation": "active",
+      "audience": ["operator", "developer", "integrator", "ai"],
+      "since": "0.4.0",
+      "public": true,
+      "navigationGroup": "guides",
+      "navigationOrder": 50
+    },
+    {
+      "id": "site.guides.recovery",
+      "source": "apps/docs/src/content/docs/guides/recovery.md",
+      "route": "guides/recovery",
+      "title": "故障与恢复",
+      "summary": "处理 Console、Core、Chrome、Session 和页面状态变化。",
+      "authority": "tutorial",
+      "implementation": "active",
+      "audience": ["operator", "developer", "integrator", "ai"],
+      "since": "0.4.0",
+      "public": true,
+      "navigationGroup": "guides",
+      "navigationOrder": 60
+    },
+    {
       "id": "site.platform.architecture",
       "source": "apps/docs/src/content/docs/platform/architecture.md",
       "route": "platform/architecture",
@@ -389,6 +473,20 @@
       "public": true,
       "navigationGroup": "platform",
       "navigationOrder": 30
+    },
+    {
+      "id": "site.platform.ai-authoring",
+      "source": "apps/docs/src/content/docs/platform/ai-authoring.md",
+      "route": "platform/ai-authoring",
+      "title": "AI 创作与发布边界",
+      "summary": "Codex 如何搜索能力、生成 Workflow/Node Candidate，并保持人工发布边界。",
+      "authority": "architecture",
+      "implementation": "partial",
+      "audience": ["developer", "integrator", "ai"],
+      "since": "0.4.0",
+      "public": true,
+      "navigationGroup": "platform",
+      "navigationOrder": 40
     },
     {
       "id": "site.control.hello",
@@ -643,6 +741,20 @@
       "navigationOrder": 20
     },
     {
+      "id": "site.operations.publishing",
+      "source": "apps/docs/src/content/docs/operations/publishing.md",
+      "route": "operations/publishing",
+      "title": "正式资产发布",
+      "summary": "验证并人工发布 Workflow、Node、Adapter、Profile、Policy 和页面资产。",
+      "authority": "operations",
+      "implementation": "active",
+      "audience": ["developer", "integrator", "ai"],
+      "since": "0.4.0",
+      "public": true,
+      "navigationGroup": "operations",
+      "navigationOrder": 30
+    },
+    {
       "id": "site.reference.schemas",
       "source": "apps/docs/src/content/docs/reference/schemas.mdx",
       "route": "reference/schemas",
@@ -669,6 +781,20 @@
       "public": true,
       "navigationGroup": "reference",
       "navigationOrder": 20
+    },
+    {
+      "id": "site.reference.machine-readable",
+      "source": "apps/docs/src/content/docs/reference/machine-readable.md",
+      "route": "reference/machine-readable",
+      "title": "机器可读文档",
+      "summary": "BPA 的 llms.txt、完整文本索引、结构化目录和 Raw Markdown 入口。",
+      "authority": "normative",
+      "implementation": "active",
+      "audience": ["developer", "integrator", "ai"],
+      "since": "0.4.0",
+      "public": true,
+      "navigationGroup": "reference",
+      "navigationOrder": 30
     }
   ]
 }

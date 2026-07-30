@@ -1,9 +1,13 @@
 ---
+import catalog from "../../../../docs/catalog.json";
+
 const { siteTitleHref } = Astro.props as { siteTitleHref: string };
+const current = catalog.entries.find((entry) => entry.id === "repo.current-state-0.4");
+const version = current?.since?.replace(/\.0$/, "") ?? "0.4";
 ---
 
 <a class="bpa-site-title" href={siteTitleHref} aria-label="BPA 文档首页">
   <span class="bpa-site-title__brand">BPA</span>
   <span class="bpa-site-title__section">/ Docs</span>
-  <span class="bpa-site-title__status">0.4 candidate</span>
+  <span class="bpa-site-title__status">{version} candidate</span>
 </a>

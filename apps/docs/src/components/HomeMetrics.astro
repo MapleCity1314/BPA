@@ -1,0 +1,27 @@
+---
+import catalog from "../../../../docs/catalog.json";
+import { publicSchemas } from "../data/public-artifacts.mjs";
+
+const publicCount = catalog.entries.filter((entry) => entry.public).length;
+const current = catalog.entries.find((entry) => entry.id === "repo.current-state-0.4");
+const version = current?.since?.replace(/\.0$/, "") ?? "0.4";
+---
+
+<div class="bpa-metrics" aria-label="平台文档状态">
+  <div>
+    <strong>{version}</strong>
+    <span>平台候选版本</span>
+  </div>
+  <div>
+    <strong>1.0.0</strong>
+    <span>Browser Protocol</span>
+  </div>
+  <div>
+    <strong>{publicSchemas.length}</strong>
+    <span>公开 Schema</span>
+  </div>
+  <div>
+    <strong>{publicCount}</strong>
+    <span>受治理文档</span>
+  </div>
+</div>

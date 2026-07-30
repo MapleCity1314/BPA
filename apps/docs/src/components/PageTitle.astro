@@ -1,0 +1,54 @@
+---
+import catalog from "../../../../docs/catalog.json";
+
+const { id, entry } = Astro.locals.starlightRoute;
+const metadata = catalog.entries.find(
+  (candidate) => candidate.public && candidate.route === id
+);
+
+const authorityLabels: Record<string, string> = {
+  "current-state": "当前实况",
+  normative: "正式规范",
+  architecture: "架构",
+  operations: "运维",
+  tutorial: "使用指南",
+  plan: "计划",
+  research: "研究",
+  historical: "历史"
+};
+
+const implementationLabels: Record<string, string> = {
+  active: "已实现",
+  partial: "部分完成",
+  planned: "规划中",
+  deprecated: "已弃用",
+  superseded: "已替代"
+};
+
+const audienceLabels: Record<string, string> = {
+  operator: "运营人员",
+  developer: "开发者",
+  integrator: "集成方",
+  ai: "AI"
+};
+---
+
+{
+  metadata && (
+    <div class="bpa-page-kicker" aria-label="文档元数据">
+      <span>{authorityLabels[metadata.authority]}</span>
+      <span data-state={metadata.implementation}>
+        {implementationLabels[metadata.implementation]}
+      </span>
+      {metadata.since && <span>自 {metadata.since}</span>}
+    </div>
+  )
+}
+<h1 id="_top">{entry.data.title}</h1>
+{
+  metadata && (
+    <p class="bpa-page-audience">
+      适合 {metadata.audience.map((item) => audienceLabels[item]).join("、")} 阅读
+    </p>
+  )
+}

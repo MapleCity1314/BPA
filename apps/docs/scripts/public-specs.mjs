@@ -1,31 +1,12 @@
-export const publicSchemas = [
-  "browser-protocol-v1.schema.json",
-  "permission.schema.json",
-  "timing-policy.schema.json",
-  "risk-signal.schema.json",
-  "workflow.schema.json",
-  "workflow-v1alpha2.schema.json",
-  "workflow-v1alpha3.schema.json",
-  "node.schema.json",
-  "node-v1alpha2.schema.json",
-  "event.schema.json",
-  "evidence.schema.json",
-  "source-record.schema.json",
-  "asset-record.schema.json",
-  "evidence-link.schema.json",
-  "assistance-task.schema.json",
-  "dataset.schema.json",
-  "decision-record.schema.json",
-  "page-model.schema.json",
-  "element-contract.schema.json"
-];
+import { loadCatalog } from "./docs-catalog.mjs";
+import {
+  publicExamples,
+  publicSchemas as publicSchemaRecords,
+  publicStaticAssets
+} from "../src/data/public-artifacts.mjs";
 
-export const publicExamples = [
-  "browser-protocol-v1.messages.json",
-  "control-hello-v1.example.json"
-];
-
-export const publicStaticAssets = ["og-v2.png"];
+export const publicSchemas = publicSchemaRecords.map(([file]) => file);
+export { publicExamples, publicStaticAssets };
 
 const catalog = await loadCatalog();
 
@@ -35,4 +16,3 @@ export const expectedRoutes = [
     .map((entry) => (entry.route ? `${entry.route}/index.html` : "index.html")),
   "404.html"
 ];
-import { loadCatalog } from "./docs-catalog.mjs";
