@@ -224,6 +224,13 @@ header.header {
   font-size: 0.82rem;
 }
 
+html:not([data-has-hero]) h1#_top {
+  max-width: 22ch;
+  font-size: clamp(2.4rem, 5vw, 3rem);
+  line-height: 1.08;
+  letter-spacing: -0.045em;
+}
+
 .sl-markdown-content th {
   color: var(--sl-color-gray-3);
   font-size: 0.75rem;
