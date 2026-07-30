@@ -1,0 +1,395 @@
+import { describe, expect, it } from "vitest";
+import {
+  CONSOLE_CONTROL_METHODS,
+  UdsControlBackend,
+  type ConsoleControlRequester
+} from "./control-backend.js";
+
+interface Call {
+  method: string;
+  params: Record<string, unknown>;
+}
+
+class FakeRequester implements ConsoleControlRequester {
+  readonly calls: Call[] = [];
+  readonly responses = new Map<string, unknown[]>();
+  error?: Error;
+
+  respond(method: string, ...values: unknown[]): this {
+    this.responses.set(method, values);
+    return this;
+  }
+
+  async request<TResult>(
+    method: string,
+    params: Record<string, unknown> = {}
+  ): Promise<TResult> {
+    this.calls.push({ method, params });
+    if (this.error) throw this.error;
+    const queue = this.responses.get(method) ?? [];
+    if (queue.length === 0) {
+      throw new Error(`No fake response for ${method}`);
+    }
+    return queue.shift() as TResult;
+  }
+}
+
+function operationIds(): () => string {
+  let sequence = 0;
+  return () => `operation-${++sequence}`;
+}
+
+function backend(client: FakeRequester) {
+  return new UdsControlBackend(client, {
+    actorId: "operator:test",
+    operationId: operationIds(),
+    now: () => new Date("2026-07-30T04:00:00.000Z"),
+    leaseDurationMs: 60_000
+  });
+}
+
+describe("UdsControlBackend", () => {
+  it("maps doctor and pending assistance into a business dashboard", async () => {
+    const client = new FakeRequester()
+      .respond(CONSOLE_CONTROL_METHODS.doctor, {
+        status: "ok",
+        protocol: "bpa.browser/1",
+        persistence: {
+          adapter: "sqlite",
+          schemaVersion: 8,
+          writable: true
+        },
+        browser: {
+          connected: true,
+          ready: true,
+          sessionId: "session-1",
+          extensionId: "extension-id"
+        }
+      })
+      .respond(CONSOLE_CONTROL_METHODS.taskList, [
+        { taskId: "task-1" }
+      ]);
+    const result = await backend(client).getDashboard();
+    expect(result).toMatchObject({
+      attention: "attention",
+      headline: "有 1 项等待处理",
+      pendingTaskCount: 1,
+      components: [
+        { id: "core", status: "healthy" },
+        { id: "persistence", status: "healthy" },
+        { id: "browser", status: "healthy" }
+      ],
+      browserSessions: [{ id: "session-1", status: "ready" }]
+    });
+    expect(client.calls).toEqual([
+      { method: "doctor", params: {} },
+      {
+        method: "assistance.task.list",
+        params: {
+          statuses: [
+            "queued",
+            "claimed",
+            "processing",
+            "awaiting_human"
+          ],
+          modes: ["human_confirm", "human_action"],
+          limit: 100
+        }
+      }
+    ]);
+  });
+
+  it("turns transport failures into an unavailable view without leaking details", async () => {
+    const client = new FakeRequester();
+    client.error = new Error(
+      "connect ENOENT /Users/private/Library/Application Support/BPA/run/core.sock"
+    );
+    const result = await backend(client).getDashboard();
+    expect(JSON.stringify(result)).toContain("本地服务尚未连接");
+    expect(JSON.stringify(result)).not.toContain("/Users/private");
+    expect(await backend(client).listWorkflows()).toEqual([]);
+    expect(await backend(client).listTasks()).toEqual([]);
+    expect(await backend(client).listDownloads()).toEqual([]);
+  });
+
+  it("maps only R0/R1 published workflows and freezes resource bindings", async () => {
+    const client = new FakeRequester().respond(
+      CONSOLE_CONTROL_METHODS.catalogList,
+      [
+        {
+          assetId: "research.readonly",
+          version: "1.2.0",
+          content: {
+            metadata: {
+              id: "research.readonly",
+              version: "1.2.0",
+              title: "商品研究",
+              description: "只读采集"
+            },
+            spec: {
+              riskLevel: "R1",
+              inputSchema: {
+                type: "object",
+                required: ["keyword"],
+                properties: {
+                  keyword: {
+                    type: "string",
+                    title: "商品关键词",
+                    description: "填写商品名"
+                  },
+                  dataset: { type: "object", title: "主数据" },
+                  ignored: { type: "array" }
+                }
+              },
+              resourceSlots: {
+                metrics: {
+                  kind: "browser",
+                  purpose: "蝉妈妈指标来源",
+                  allowedOrigins: ["https://www.chanmama.com"]
+                }
+              }
+            }
+          }
+        },
+        {
+          assetId: "write.workflow",
+          version: "1.0.0",
+          content: {
+            metadata: { id: "write.workflow", version: "1.0.0" },
+            spec: { riskLevel: "R2", inputSchema: {} }
+          }
+        }
+      ]
+    );
+    const workflows = await backend(client).listWorkflows();
+    expect(workflows).toEqual([
+      {
+        id: "research.readonly",
+        version: "1.2.0",
+        title: "商品研究",
+        description: "只读采集",
+        riskLevel: "R1",
+        inputFields: [
+          {
+            key: "keyword",
+            label: "商品关键词",
+            kind: "text",
+            required: true,
+            help: "填写商品名"
+          },
+          {
+            key: "dataset",
+            label: "主数据",
+            kind: "dataset",
+            required: false
+          }
+        ],
+        resourceSlots: [
+          {
+            key: "metrics",
+            label: "蝉妈妈指标来源",
+            requiredOrigin: "https://www.chanmama.com"
+          }
+        ]
+      }
+    ]);
+    expect(client.calls).toEqual([
+      { method: "catalog.list", params: { assetType: "workflow" } }
+    ]);
+  });
+
+  it("maps run creation, inspection, and events without exposing payloads", async () => {
+    const client = new FakeRequester()
+      .respond(CONSOLE_CONTROL_METHODS.runCreate, { id: "run-1" })
+      .respond(CONSOLE_CONTROL_METHODS.runInspect, {
+        id: "run-1",
+        workflowId: "research",
+        workflowVersion: "1.0.0",
+        status: "running",
+        currentNodeKey: "collect",
+        createdAt: "2026-07-30T03:00:00.000Z",
+        updatedAt: "2026-07-30T03:01:00.000Z"
+      })
+      .respond(CONSOLE_CONTROL_METHODS.runEvents, [
+        {
+          id: "event-1",
+          sequence: 1,
+          type: "NODE_DISPATCHED",
+          occurredAt: "2026-07-30T03:00:05.000Z",
+          payload: { privateDom: "<secret>" }
+        }
+      ]);
+    const adapter = backend(client);
+    await expect(
+      adapter.createRun({
+        workflowId: "research",
+        workflowVersion: "1.0.0",
+        inputs: { keyword: "煎饼" },
+        resourceBindings: { metrics: "session-1" }
+      })
+    ).resolves.toEqual({ runId: "run-1" });
+    const run = await adapter.getRun("run-1");
+    expect(run).toMatchObject({
+      id: "run-1",
+      status: "running",
+      timeline: [
+        {
+          title: "正在执行检查步骤",
+          technicalDetails: "event=NODE_DISPATCHED · sequence=1"
+        }
+      ]
+    });
+    expect(JSON.stringify(run)).not.toContain("<secret>");
+    expect(client.calls).toEqual([
+      {
+        method: "run.create",
+        params: {
+          workflowId: "research",
+          workflowVersion: "1.0.0",
+          input: { keyword: "煎饼" },
+          resourceBindings: { metrics: "session-1" }
+        }
+      },
+      { method: "run.inspect", params: { runId: "run-1" } },
+      { method: "run.events", params: { runId: "run-1" } }
+    ]);
+  });
+
+  it("claims and submits a human task with a short fenced lease", async () => {
+    const client = new FakeRequester()
+      .respond(CONSOLE_CONTROL_METHODS.taskList, [
+        {
+          taskId: "task-1",
+          runId: "run-1",
+          mode: "human_confirm",
+          status: "queued",
+          profile: { id: "binding_confirm" },
+          deadline: "2026-07-30T05:00:00.000Z",
+          outputSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: { approved: { type: "boolean" } }
+          }
+        }
+      ])
+      .respond(CONSOLE_CONTROL_METHODS.taskClaim, {
+        ok: true,
+        task: {
+          taskId: "task-1",
+          fencingCounter: 7,
+          lease: { fencingToken: 7 }
+        }
+      })
+      .respond(CONSOLE_CONTROL_METHODS.taskSubmit, { ok: true });
+    const adapter = backend(client);
+    const tasks = await adapter.listTasks();
+    expect(tasks[0]).toMatchObject({
+      id: "task-1",
+      kind: "human_confirm",
+      choices: [
+        { value: "confirmed", label: "确认" },
+        { value: "rejected", label: "暂不确认" }
+      ]
+    });
+    await adapter.submitTask("task-1", { decision: "confirmed" });
+    expect(client.calls.slice(1)).toEqual([
+      {
+        method: "assistance.task.claim",
+        params: {
+          operationId: "operation-2",
+          taskId: "task-1",
+          leaseId: "console-lease:operation-1",
+          actorId: "operator:test",
+          actorType: "human",
+          leaseDurationMs: 60_000
+        }
+      },
+      {
+        method: "assistance.task.submit",
+        params: {
+          operationId: "operation-3",
+          taskId: "task-1",
+          leaseId: "console-lease:operation-1",
+          actorId: "operator:test",
+          resolverType: "human",
+          fencingToken: 7,
+          output: { approved: true }
+        }
+      }
+    ]);
+  });
+
+  it("locks future metadata methods while refusing file bytes on control", async () => {
+    const client = new FakeRequester()
+      .respond(CONSOLE_CONTROL_METHODS.stagingLeaseCreate, {
+        leaseId: "lease-1",
+        expiresAt: "2026-07-30T04:10:00.000Z",
+        maxBytes: 1024
+      })
+      .respond(CONSOLE_CONTROL_METHODS.evidenceLineageGet, {
+        runId: "run-1",
+        sources: [
+          {
+            id: "source-1",
+            label: "公开商品页",
+            origin: "https://example.com",
+            observedAt: "2026-07-30T03:00:00.000Z"
+          }
+        ],
+        evidence: [],
+        assets: []
+      })
+      .respond(CONSOLE_CONTROL_METHODS.downloadList, [
+        {
+          id: "download-1",
+          runId: "run-1",
+          kind: "report",
+          title: "研究报告",
+          fileName: "report.json",
+          sizeBytes: 123,
+          createdAt: "2026-07-30T03:00:00.000Z"
+        }
+      ])
+      .respond(CONSOLE_CONTROL_METHODS.downloadGet, {
+        capability: "pending"
+      });
+    const adapter = backend(client);
+    await expect(
+      adapter.createStagingLease({
+        fileName: "master.xlsx",
+        mediaType: "application/octet-stream",
+        sizeBytes: 3,
+        purpose: "dataset"
+      })
+    ).resolves.toMatchObject({ id: "lease-1", maxBytes: 1024 });
+    const callCount = client.calls.length;
+    await expect(
+      adapter.uploadStagingLease("lease-1", new Uint8Array([1, 2, 3]))
+    ).rejects.toThrow("文件内容不会通过控制协议发送");
+    expect(client.calls).toHaveLength(callCount);
+    await expect(adapter.getEvidenceLineage("run-1")).resolves.toMatchObject({
+      runId: "run-1",
+      sources: [{ id: "source-1" }]
+    });
+    await expect(adapter.listDownloads("run-1")).resolves.toMatchObject([
+      { id: "download-1", kind: "report" }
+    ]);
+    await expect(adapter.getDownload("download-1")).rejects.toThrow(
+      "文件内容不会通过控制协议发送"
+    );
+    expect(client.calls).toEqual([
+      {
+        method: "staging.lease.create",
+        params: {
+          fileName: "master.xlsx",
+          mediaType: "application/octet-stream",
+          sizeBytes: 3,
+          purpose: "dataset"
+        }
+      },
+      { method: "evidence.lineage.get", params: { runId: "run-1" } },
+      { method: "download.list", params: { runId: "run-1" } },
+      { method: "download.get", params: { downloadId: "download-1" } }
+    ]);
+  });
+});

@@ -6,9 +6,9 @@ filesystem paths.
 
 ## Integration
 
-Inject an implementation of `ControlBackend` from
-`@bpa/operator-console-contracts` and call `startConsoleHost`. The future UDS
-adapter remains outside this package.
+The default executable creates `UdsControlBackend` over
+`@bpa/control-client`. It uses `BPA_SOCKET` when set, otherwise resolves
+`BPA_HOME/run/core.sock` through the shared client.
 
 ```ts
 const handle = await startConsoleHost({
@@ -30,10 +30,12 @@ time.
 pnpm console:host
 ```
 
-The standalone command builds both apps and prints a launch URL. It deliberately
-uses `UnavailableControlBackend`; it is useful for security and static-resource
-validation, not for real workflow execution.
+The standalone command builds both apps and prints a launch URL. If Core is not
+available, the workbench opens in a business-facing unavailable state without
+showing the socket path or transport error.
 
 Uploads use two calls: create a staging lease from browser-provided file
 metadata, then upload bytes against that lease ID. No API accepts a caller
-provided path.
+provided path. Only lease creation currently crosses the control protocol.
+Content upload stays disabled until Core can issue a one-time loopback upload
+capability; file bytes are never encoded into the 512 KiB JSON control frame.

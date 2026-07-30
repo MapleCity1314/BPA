@@ -1,14 +1,27 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  ControlClient,
+  resolveControlSocketPath,
+  UnixSocketControlTransport
+} from "@bpa/control-client";
+import { UdsControlBackend } from "./control-backend.js";
 import { startConsoleHost } from "./server.js";
-import { UnavailableControlBackend } from "./unavailable-backend.js";
 
 const appRoot =
   process.env.BPA_CONSOLE_STATIC_ROOT ??
   resolve(fileURLToPath(new URL("../../operator-console/dist", import.meta.url)));
 
+const socketPath =
+  process.env.BPA_SOCKET?.trim() || resolveControlSocketPath();
+const controlClient = new ControlClient(
+  new UnixSocketControlTransport(socketPath, {
+    runtime: { name: "bpa-console-host", version: "0.4.0" },
+    features: ["operator-console", "staging-lease", "trusted-evidence"]
+  })
+);
 const handle = await startConsoleHost({
-  backend: new UnavailableControlBackend(),
+  backend: new UdsControlBackend(controlClient),
   staticRoot: appRoot
 });
 

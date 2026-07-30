@@ -12,6 +12,7 @@ import type {
   StagingLeaseRequest,
   SubmitTaskInput
 } from "@bpa/operator-console-contracts";
+import { ConsoleUserFacingError } from "./user-facing-error.js";
 
 const SESSION_COOKIE = "bpa_console_session";
 const JSON_LIMIT_BYTES = 512 * 1024;
@@ -517,10 +518,14 @@ export async function startConsoleHost(
         response.destroy();
         return;
       }
-      if (!(error instanceof HttpError)) logError(error);
+      if (!(error instanceof HttpError) && !(error instanceof ConsoleUserFacingError)) {
+        logError(error);
+      }
       const failure =
         error instanceof HttpError
           ? error
+          : error instanceof ConsoleUserFacingError
+            ? new HttpError(503, "BACKEND_UNAVAILABLE", error.message)
           : new HttpError(500, "INTERNAL_ERROR", "工作台服务暂时不可用，请稍后重试。");
       writeJson(response, failure.status, {
         error: { code: failure.code, message: failure.message }

@@ -10,6 +10,7 @@
     "test": "vitest run src"
   },
   "dependencies": {
+    "@bpa/control-client": "workspace:*",
     "@bpa/operator-console-contracts": "workspace:*"
   },
   "devDependencies": {

@@ -96,6 +96,9 @@ importers:
 
   apps/console-host:
     dependencies:
+      '@bpa/control-client':
+        specifier: workspace:*
+        version: link:../../packages/control-client
       '@bpa/operator-console-contracts':
         specifier: workspace:*
         version: link:../../packages/operator-console-contracts
