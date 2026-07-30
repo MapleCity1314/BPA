@@ -228,17 +228,22 @@ export class LocalCoreService {
         return published?.digest === profile.digest;
       }
     });
-    this.candidateArchives = candidateArchiveDataDirectory
+    const candidateArchives = candidateArchiveDataDirectory
       ? new LocalCandidateArchiveService(
           persistence,
           candidateArchiveDataDirectory
         )
       : undefined;
+    this.candidateArchives = candidateArchives;
     this.authoring = new LocalAuthoringService(
       persistence,
-      this.candidateArchives
+      candidateArchives
         ? (storageRef) =>
-            this.candidateArchives!.readAsset(storageRef)
+            candidateArchives.readAsset(storageRef)
+        : undefined,
+      candidateArchives
+        ? (input) =>
+            candidateArchives.storeCandidateFile(input)
         : undefined
     );
   }

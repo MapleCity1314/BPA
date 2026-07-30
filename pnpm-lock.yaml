@@ -75,6 +75,12 @@ importers:
 
   adapters/doudian:
     dependencies:
+      '@bpa/compiler':
+        specifier: workspace:*
+        version: link:../../packages/compiler
+      '@bpa/page-model':
+        specifier: workspace:*
+        version: link:../../packages/page-model
       '@bpa/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas

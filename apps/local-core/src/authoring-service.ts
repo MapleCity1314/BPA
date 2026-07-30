@@ -319,7 +319,20 @@ export class LocalAuthoringService {
 
   constructor(
     readonly persistence: Persistence,
-    readonly readAsset?: (storageRef: string) => Uint8Array
+    readonly readAsset?: (storageRef: string) => Uint8Array,
+    readonly storeCandidateFile?: (input: {
+      authoringSessionId: string;
+      path: string;
+      mediaType: string;
+      body: string;
+      createdAt: string;
+    }) => {
+      path: string;
+      mediaType: string;
+      digest: string;
+      sizeBytes: number;
+      sourceAssetRef: { id: string; digest: string };
+    }
   ) {
     this.drafts = new PersistenceWorkflowDraftStore(persistence);
   }
@@ -972,6 +985,49 @@ export class LocalAuthoringService {
       content: structuredClone(input.candidate.pageModel),
       actor: input.actor
     });
+    const candidateDirectory =
+      `adapters/${input.candidate.pageModel.adapter.id}` +
+      `/candidates/${input.candidate.candidateId}`;
+    const storeCandidateFile = this.storeCandidateFile;
+    const generatedFiles = storeCandidateFile
+      ? [
+          storeCandidateFile({
+            authoringSessionId: input.sessionId,
+            path: `${candidateDirectory}.page-model.json`,
+            mediaType: "application/json",
+            body: `${canonicalJson(input.candidate.pageModel)}\n`,
+            createdAt: input.candidate.createdAt
+          }),
+          ...input.candidate.contracts.map((pinned) =>
+            storeCandidateFile({
+              authoringSessionId: input.sessionId,
+              path:
+                `${candidateDirectory}.` +
+                `${pinned.definition.metadata.id}.element-contract.json`,
+              mediaType: "application/json",
+              body: `${canonicalJson(pinned.definition)}\n`,
+              createdAt: input.candidate.createdAt
+            })
+          ),
+          storeCandidateFile({
+            authoringSessionId: input.sessionId,
+            path: `${candidateDirectory}.implementation-plan.json`,
+            mediaType: "application/json",
+            body: `${canonicalJson({
+              apiVersion: "bpa.authoring/v1alpha1",
+              kind: "PageImplementationPlan",
+              candidateId: input.candidate.candidateId,
+              implementations: input.candidate.implementations,
+              executionPolicy: {
+                autoExecute: false,
+                autoApplySource: false,
+                autoPublish: false
+              }
+            })}\n`,
+            createdAt: input.candidate.createdAt
+          })
+        ]
+      : [];
     return {
       status: "candidate" as const,
       candidateId: input.candidate.candidateId,
@@ -980,6 +1036,7 @@ export class LocalAuthoringService {
       implementations: structuredClone(
         input.candidate.implementations
       ),
+      generatedFiles,
       validation
     };
   }

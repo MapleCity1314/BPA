@@ -28,6 +28,15 @@ function assertRealDirectory(path: string): void {
   }
 }
 
+const CANDIDATE_FILE_PATH =
+  /^(?:adapters|nodes|workflows|tests)\/(?!.*(?:^|\/)\.\.(?:\/|$))(?!.*\/\/)[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)*$/u;
+const CANDIDATE_MEDIA_TYPES = new Set([
+  "application/json",
+  "application/yaml",
+  "text/typescript",
+  "text/markdown"
+]);
+
 export class LocalCandidateArchiveService {
   readonly #assets: LocalAssetStore;
   readonly #exportsDirectory: string;
@@ -62,6 +71,103 @@ export class LocalCandidateArchiveService {
 
   readAsset(storageRef: string): Uint8Array {
     return this.#assets.read(storageRef);
+  }
+
+  storeCandidateFile(input: {
+    authoringSessionId: string;
+    path: string;
+    mediaType: string;
+    body: string;
+    createdAt: string;
+  }) {
+    if (
+      !CANDIDATE_FILE_PATH.test(input.path) ||
+      !CANDIDATE_MEDIA_TYPES.has(input.mediaType)
+    ) {
+      throw new Error("Generated Candidate file path or media type is unsafe");
+    }
+    const bytes = Buffer.from(input.body, "utf8");
+    if (bytes.byteLength < 1 || bytes.byteLength > 25 * 1024 * 1024) {
+      throw new Error("Generated Candidate file size is outside the safe limit");
+    }
+    const digest = sha256(bytes);
+    const identity = sha256(
+      Buffer.from(
+        `${input.authoringSessionId}\0${input.path}\0${digest}`,
+        "utf8"
+      )
+    ).slice("sha256:".length, "sha256:".length + 32);
+    const sourceId = `source:candidate:${identity}`;
+    const assetId = `candidate-file-${identity}`;
+    const issued = this.#assets.issueStagingLease({
+      runId: input.authoringSessionId,
+      maxBytes: bytes.byteLength
+    });
+    this.#assets.writeChunk({
+      lease: issued.lease,
+      token: issued.token,
+      index: 0,
+      bytes,
+      digest
+    });
+    const stored = this.#assets.finalize({
+      lease: issued.lease,
+      token: issued.token,
+      chunks: [
+        {
+          index: 0,
+          digest,
+          size: bytes.byteLength
+        }
+      ],
+      expectedDigest: digest,
+      expectedSize: bytes.byteLength,
+      mediaType: input.mediaType
+    });
+    const blob =
+      this.persistence.getBlob(digest) ??
+      this.persistence.registerBlob(stored.blob).record;
+    this.persistence.putSourceRecord({
+      apiVersion: "bpa.source/v1alpha1",
+      kind: "SourceRecord",
+      sourceId,
+      sourceType: "user_file",
+      locator: {
+        originalFileName: input.path.split("/").at(-1)!,
+        mediaType: input.mediaType,
+        size: bytes.byteLength,
+        digest
+      },
+      observedAt: input.createdAt,
+      recordedAt: input.createdAt,
+      accessScope: "user_provided",
+      rawDigest: digest,
+      classification: "internal",
+      title: `Generated Candidate file ${input.path}`
+    });
+    this.persistence.putAssetRecord({
+      apiVersion: "bpa.asset/v1alpha1",
+      kind: "AssetRecord",
+      assetId,
+      digest,
+      size: bytes.byteLength,
+      mediaType: input.mediaType,
+      storageRef: blob.storageRef,
+      classification: "internal",
+      sourceIds: [sourceId],
+      createdAt: input.createdAt,
+      retention: { policy: "manual" }
+    });
+    return {
+      path: input.path,
+      mediaType: input.mediaType,
+      digest,
+      sizeBytes: bytes.byteLength,
+      sourceAssetRef: {
+        id: assetId,
+        digest
+      }
+    };
   }
 
   export(input: {
