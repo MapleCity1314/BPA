@@ -27,33 +27,12 @@ export const publicExamples = [
 
 export const publicStaticAssets = ["og-v2.png"];
 
+const catalog = await loadCatalog();
+
 export const expectedRoutes = [
-  "index.html",
-  "start/current-status/index.html",
-  "start/concepts/index.html",
-  "platform/architecture/index.html",
-  "platform/runtime-recovery/index.html",
-  "platform/operator-console/index.html",
-  "control/hello/index.html",
-  "control/resource-binding/index.html",
-  "control/trusted-evidence/index.html",
-  "browser/v1/index.html",
-  "browser/v1/messages/index.html",
-  "browser/v1/security/index.html",
-  "browser/v1/timing-and-risk/index.html",
-  "models/workflow/v1alpha1/index.html",
-  "models/workflow/structured/index.html",
-  "models/node/v1alpha1/index.html",
-  "models/node/v1alpha2/index.html",
-  "models/assistance/v1alpha1/index.html",
-  "models/data/v1alpha1/index.html",
-  "models/page/v1alpha1/index.html",
-  "models/execution-event/v1/index.html",
-  "models/evidence/v1/index.html",
-  "operations/data-security/index.html",
-  "operations/runtime/index.html",
-  "reference/schemas/index.html",
-  "reference/examples/index.html",
-  "reference/versioning/index.html",
+  ...catalog.entries
+    .filter((entry) => entry.public)
+    .map((entry) => (entry.route ? `${entry.route}/index.html` : "index.html")),
   "404.html"
 ];
+import { loadCatalog } from "./docs-catalog.mjs";

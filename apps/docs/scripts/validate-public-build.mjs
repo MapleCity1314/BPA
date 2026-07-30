@@ -7,12 +7,14 @@ import {
   publicSchemas,
   publicStaticAssets
 } from "./public-specs.mjs";
+import { publicDocuments } from "./docs-catalog.mjs";
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const distDir = join(repoRoot, "apps/docs/dist");
 const sourceSchemaDir = join(repoRoot, "packages/schemas/schema");
 const sourceExampleDir = join(repoRoot, "docs/protocols/examples");
 const publicSpecDir = join(distDir, "specs");
+const publicDocs = await publicDocuments();
 
 const forbiddenText = [
   "fxg.jinritemai.com",
@@ -47,6 +49,20 @@ for (const route of expectedRoutes) {
 
 for (const asset of publicStaticAssets) {
   await readFile(join(distDir, asset));
+}
+
+for (const file of [
+  "llms.txt",
+  "llms-full.txt",
+  "docs-index.json",
+  "robots.txt"
+]) {
+  await readFile(join(distDir, file));
+}
+
+for (const document of publicDocs) {
+  const rawPath = document.route ? `${document.route}.md` : "index.md";
+  await readFile(join(distDir, "raw", rawPath));
 }
 
 for (const file of publicSchemas) {
@@ -91,5 +107,5 @@ if (pagefindFiles.length === 0) {
 }
 
 console.log(
-  `Validated ${expectedRoutes.length} routes, ${publicSchemas.length + publicExamples.length} artifacts, ${publicStaticAssets.length} static assets, and the public-content boundary.`
+  `Validated ${expectedRoutes.length} routes, ${publicSchemas.length + publicExamples.length} protocol artifacts, ${publicDocs.length} machine-readable documents, ${publicStaticAssets.length} static assets, and the public-content boundary.`
 );

@@ -5,12 +5,12 @@
   "type": "module",
   "scripts": {
     "catalog:check": "node ./scripts/validate-docs-catalog.mjs",
-    "predev": "pnpm catalog:check && node ./scripts/prepare-public-specs.mjs",
+    "predev": "pnpm catalog:check && node ./scripts/prepare-public-specs.mjs && node ./scripts/prepare-public-docs.mjs",
     "dev": "astro dev",
-    "prebuild": "pnpm catalog:check && node ./scripts/prepare-public-specs.mjs",
+    "prebuild": "pnpm catalog:check && node ./scripts/prepare-public-specs.mjs && node ./scripts/prepare-public-docs.mjs",
     "build": "astro build",
     "preview": "astro preview",
-    "precheck": "pnpm catalog:check && node ./scripts/prepare-public-specs.mjs",
+    "precheck": "pnpm catalog:check && node ./scripts/prepare-public-specs.mjs && node ./scripts/prepare-public-docs.mjs",
     "check": "astro check && astro build && node ./scripts/validate-public-build.mjs"
   },
   "dependencies": {
