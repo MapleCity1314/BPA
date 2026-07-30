@@ -1,0 +1,39 @@
+{
+  "apiVersion": "bpa.page-readiness/v1alpha1",
+  "kind": "ReadinessContract",
+  "metadata": {
+    "id": "chanmama.product.assets.ready",
+    "version": "1.0.0"
+  },
+  "mode": "all",
+  "signals": [
+    {
+      "kind": "target-present",
+      "semanticTargetId": "product_detail_root",
+      "minimumCount": 1
+    },
+    {
+      "kind": "dom-quiet",
+      "quietWindowMs": 800
+    },
+    {
+      "kind": "network-quiet",
+      "quietWindowMs": 800,
+      "maximumInflightRequests": 1
+    },
+    {
+      "kind": "asset-count-stable",
+      "semanticCollectionId": "product_images",
+      "minimumCount": 1,
+      "consecutiveSamples": 3,
+      "sampleIntervalMs": 500
+    }
+  ],
+  "limits": {
+    "timeoutMs": 30000,
+    "refresh": {
+      "maximumAttempts": 1,
+      "cooldownMs": 1000
+    }
+  }
+}

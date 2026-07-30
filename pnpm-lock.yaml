@@ -11,12 +11,18 @@ importers:
       '@bpa/compiler':
         specifier: workspace:*
         version: link:packages/compiler
+      '@bpa/control-protocol':
+        specifier: workspace:*
+        version: link:packages/control-protocol
       '@bpa/engine':
         specifier: workspace:*
         version: link:packages/engine
       '@bpa/node-runtime':
         specifier: workspace:*
         version: link:packages/node-runtime
+      '@bpa/page-readiness':
+        specifier: workspace:*
+        version: link:packages/page-readiness
       '@bpa/persistence':
         specifier: workspace:*
         version: link:packages/persistence

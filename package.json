@@ -29,8 +29,10 @@
   },
   "dependencies": {
     "@bpa/compiler": "workspace:*",
+    "@bpa/control-protocol": "workspace:*",
     "@bpa/engine": "workspace:*",
     "@bpa/node-runtime": "workspace:*",
+    "@bpa/page-readiness": "workspace:*",
     "@bpa/persistence": "workspace:*",
     "@bpa/persistence-sqlite": "workspace:*",
     "@bpa/schemas": "workspace:*",

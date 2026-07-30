@@ -1,0 +1,44 @@
+{
+  "hello": {
+    "version": "bpa.control/hello/1",
+    "kind": "hello",
+    "requestId": "hello-01",
+    "supportedApplicationProtocols": [
+      "bpa.control/1"
+    ],
+    "runtime": {
+      "name": "bpa-console",
+      "version": "0.4.0"
+    },
+    "maxFrameBytes": 524288,
+    "features": [
+      "evidence_refs",
+      "resource_bindings"
+    ]
+  },
+  "welcome": {
+    "version": "bpa.control/hello/1",
+    "kind": "welcome",
+    "requestId": "hello-01",
+    "applicationProtocol": "bpa.control/1",
+    "runtime": {
+      "name": "bpa-core",
+      "version": "0.4.0"
+    },
+    "maxFrameBytes": 524288,
+    "features": [
+      "evidence_refs",
+      "resource_bindings"
+    ]
+  },
+  "incompatible": {
+    "version": "bpa.control/hello/1",
+    "kind": "error",
+    "requestId": "hello-02",
+    "error": {
+      "code": "NO_COMMON_APPLICATION_PROTOCOL",
+      "message": "No common control application protocol"
+    },
+    "connection": "close"
+  }
+}
