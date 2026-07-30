@@ -14,6 +14,41 @@ function implementationDigest(ref: string, implementation: string): string {
 
 export const TEAM_WORKER_HANDLER_MANIFEST = [
   {
+    ref: "ecommerce.intent.normalize@1.0.0",
+    implementationDigest: implementationDigest(
+      "ecommerce.intent.normalize@1.0.0",
+      "ecommerce-product-intent-v1:bounded-pure"
+    )
+  },
+  {
+    ref: "ecommerce.category-space.build@1.0.0",
+    implementationDigest: implementationDigest(
+      "ecommerce.category-space.build@1.0.0",
+      "ecommerce-category-space-v1:modal-platform-category"
+    )
+  },
+  {
+    ref: "ecommerce.comparable-pool.build@1.0.0",
+    implementationDigest: implementationDigest(
+      "ecommerce.comparable-pool.build@1.0.0",
+      "ecommerce-comparable-pool-v1:ready-pack-category"
+    )
+  },
+  {
+    ref: "ecommerce.evidence.evaluate@1.0.0",
+    implementationDigest: implementationDigest(
+      "ecommerce.evidence.evaluate@1.0.0",
+      "ecommerce-evidence-v1:range-preserving-e1-e2"
+    )
+  },
+  {
+    ref: "ecommerce.reference-pack.build@1.0.0",
+    implementationDigest: implementationDigest(
+      "ecommerce.reference-pack.build@1.0.0",
+      "ecommerce-reference-pack-v1:asset-ref-only"
+    )
+  },
+  {
     ref: "packaging.products.normalize@1.0.0",
     implementationDigest: implementationDigest(
       "packaging.products.normalize@1.0.0",

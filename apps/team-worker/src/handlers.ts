@@ -20,6 +20,13 @@ import {
 import type { DecisionReuseContext } from "@bpa/dataset-core";
 import type { JsonValue } from "@bpa/workflow-ir";
 import {
+  buildCategorySpace,
+  buildComparablePool,
+  buildReferencePack,
+  evaluateViralEvidence,
+  normalizeProductIntent
+} from "./ecommerce-evidence.js";
+import {
   TEAM_WORKER_CODE_DIGEST,
   TEAM_WORKER_HANDLER_MANIFEST,
   TEAM_WORKER_HANDLER_REFS,
@@ -38,6 +45,16 @@ export const ISSUES_RECONCILE_HANDLER_REF =
   "issues.reconcile@1.0.0";
 export const REPORT_ISSUE_BUILD_HANDLER_REF =
   "report.issue.build@1.0.0";
+export const ECOMMERCE_INTENT_NORMALIZE_HANDLER_REF =
+  "ecommerce.intent.normalize@1.0.0";
+export const ECOMMERCE_CATEGORY_SPACE_BUILD_HANDLER_REF =
+  "ecommerce.category-space.build@1.0.0";
+export const ECOMMERCE_COMPARABLE_POOL_BUILD_HANDLER_REF =
+  "ecommerce.comparable-pool.build@1.0.0";
+export const ECOMMERCE_EVIDENCE_EVALUATE_HANDLER_REF =
+  "ecommerce.evidence.evaluate@1.0.0";
+export const ECOMMERCE_REFERENCE_PACK_BUILD_HANDLER_REF =
+  "ecommerce.reference-pack.build@1.0.0";
 
 const MAX_TEAM_DATASET_BYTES = 512 * 1024;
 const MAX_TEAM_DATASET_BASE64_LENGTH = 700_000;
@@ -176,6 +193,61 @@ const manifestDigest = (ref: string): string => {
 };
 
 export const teamHandlerRegistry = new TeamHandlerRegistry([
+  {
+    node: { id: "ecommerce.intent.normalize", version: "1.0.0" },
+    implementationDigest: manifestDigest(
+      ECOMMERCE_INTENT_NORMALIZE_HANDLER_REF
+    ),
+    invoke(input, signal) {
+      return domainResult("Ecommerce product intent normalization", signal, () =>
+        normalizeProductIntent(input)
+      );
+    }
+  },
+  {
+    node: { id: "ecommerce.category-space.build", version: "1.0.0" },
+    implementationDigest: manifestDigest(
+      ECOMMERCE_CATEGORY_SPACE_BUILD_HANDLER_REF
+    ),
+    invoke(input, signal) {
+      return domainResult("Ecommerce category-space building", signal, () =>
+        buildCategorySpace(input)
+      );
+    }
+  },
+  {
+    node: { id: "ecommerce.comparable-pool.build", version: "1.0.0" },
+    implementationDigest: manifestDigest(
+      ECOMMERCE_COMPARABLE_POOL_BUILD_HANDLER_REF
+    ),
+    invoke(input, signal) {
+      return domainResult("Ecommerce comparable-pool building", signal, () =>
+        buildComparablePool(input)
+      );
+    }
+  },
+  {
+    node: { id: "ecommerce.evidence.evaluate", version: "1.0.0" },
+    implementationDigest: manifestDigest(
+      ECOMMERCE_EVIDENCE_EVALUATE_HANDLER_REF
+    ),
+    invoke(input, signal) {
+      return domainResult("Ecommerce evidence evaluation", signal, () =>
+        evaluateViralEvidence(input)
+      );
+    }
+  },
+  {
+    node: { id: "ecommerce.reference-pack.build", version: "1.0.0" },
+    implementationDigest: manifestDigest(
+      ECOMMERCE_REFERENCE_PACK_BUILD_HANDLER_REF
+    ),
+    invoke(input, signal) {
+      return domainResult("Ecommerce reference-pack building", signal, () =>
+        buildReferencePack(input)
+      );
+    }
+  },
   {
     node: {
       id: "packaging.products.normalize",

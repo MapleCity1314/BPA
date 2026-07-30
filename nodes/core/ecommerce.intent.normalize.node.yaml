@@ -1,0 +1,126 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: ecommerce.intent.normalize
+  version: 1.0.0
+  title: 规范化电商商品研究意图
+  description: 将平台、品名、研究目标、人群和场景整理成稳定产品意图；不访问页面或推断未提供的业务事实。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - intentId
+    - platform
+    - seedQuery
+    - researchGoal
+    - workingBoundary
+  properties:
+    intentId:
+      type: string
+      minLength: 1
+      maxLength: 200
+    platform:
+      type: string
+      minLength: 1
+      maxLength: 100
+    seedQuery:
+      type: string
+      minLength: 1
+      maxLength: 300
+    researchGoal:
+      type: string
+      minLength: 1
+      maxLength: 2000
+    workingBoundary:
+      type: object
+      additionalProperties: false
+      required:
+        - productForm
+        - targetPeople
+        - usageScenes
+      properties:
+        productForm:
+          type: string
+          minLength: 1
+          maxLength: 500
+        targetPeople:
+          type: array
+          maxItems: 50
+          items:
+            type: string
+            minLength: 1
+            maxLength: 500
+        usageScenes:
+          type: array
+          maxItems: 50
+          items:
+            type: string
+            minLength: 1
+            maxLength: 500
+        confidence:
+          enum:
+            - LOW
+            - MEDIUM
+            - HIGH
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - schemaVersion
+    - intentId
+    - researchObject
+  properties:
+    schemaVersion:
+      const: product-intent/v0.2
+    intentId:
+      type: string
+    researchObject:
+      type: object
+      additionalProperties: false
+      required:
+        - confirmed
+        - workingBoundary
+      properties:
+        confirmed:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            type: object
+        workingBoundary:
+          type: object
+          additionalProperties: false
+          required:
+            - productForm
+            - targetPeople
+            - usageScenes
+            - confidence
+          properties:
+            productForm:
+              type: string
+            targetPeople:
+              type: array
+              items:
+                type: string
+            usageScenes:
+              type: array
+              items:
+                type: string
+            confidence:
+              enum:
+                - LOW
+                - MEDIUM
+                - HIGH
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 5s
+  idempotency: pure
+  cancellable: true
+errors:
+  - TEAM_HANDLER_INPUT_INVALID
+  - TEAM_HANDLER_RESULT_LIMIT_EXCEEDED
+  - TEAM_HANDLER_CANCELLED
+  - TEAM_HANDLER_TIMEOUT

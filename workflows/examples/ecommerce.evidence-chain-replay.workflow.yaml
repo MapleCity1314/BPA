@@ -1,0 +1,138 @@
+apiVersion: bpa/v1alpha2
+kind: Workflow
+metadata:
+  id: ecommerce.evidence-chain-replay
+  version: 1.0.0
+  title: 电商爆款内容证据链回放
+  description: 从已采集的有界商品快照确定性重建产品意图、类目空间、可比商品池、E1/E2 证据声明和设计参考资产包。
+spec:
+  riskLevel: R0
+  inputSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - intent
+      - poolId
+      - packId
+      - sourceRunId
+      - observedAt
+      - products
+      - exclusionRules
+    properties:
+      intent:
+        type: object
+        additionalProperties: false
+        required:
+          - intentId
+          - platform
+          - seedQuery
+          - researchGoal
+          - workingBoundary
+        properties:
+          intentId:
+            type: string
+          platform:
+            type: string
+          seedQuery:
+            type: string
+          researchGoal:
+            type: string
+          workingBoundary:
+            type: object
+      poolId:
+        type: string
+        minLength: 1
+      packId:
+        type: string
+        minLength: 1
+      sourceRunId:
+        type: string
+        minLength: 1
+      observedAt:
+        type: string
+        format: date
+      products:
+        type: array
+        minItems: 1
+        maxItems: 100
+        items:
+          type: object
+      exclusionRules:
+        type: array
+        maxItems: 50
+        items:
+          type: string
+  outputSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - productIntent
+      - categorySpace
+      - comparablePool
+      - evidenceClaims
+      - referencePack
+    properties:
+      productIntent:
+        type: object
+      categorySpace:
+        type: object
+      comparablePool:
+        type: object
+      evidenceClaims:
+        type: object
+      referencePack:
+        type: object
+  limits:
+    maxDepth: 2
+    maxStepExecutions: 30
+  root:
+    kind: sequence
+    steps:
+      - key: normalize_intent
+        kind: call
+        use: ecommerce.intent.normalize@1.0.0
+        with: ${input.intent}
+        timeout: 5s
+      - key: build_category_space
+        kind: call
+        use: ecommerce.category-space.build@1.0.0
+        with:
+          intent: ${steps.normalize_intent.output}
+          products: ${input.products}
+          exclusionRules: ${input.exclusionRules}
+        timeout: 10s
+      - key: build_comparable_pool
+        kind: call
+        use: ecommerce.comparable-pool.build@1.0.0
+        with:
+          poolId: ${input.poolId}
+          categorySpace: ${steps.build_category_space.output}
+          products: ${input.products}
+        timeout: 10s
+      - key: evaluate_evidence
+        kind: call
+        use: ecommerce.evidence.evaluate@1.0.0
+        with:
+          observedAt: ${input.observedAt}
+          comparablePool: ${steps.build_comparable_pool.output}
+          products: ${input.products}
+        timeout: 10s
+      - key: build_reference_pack
+        kind: call
+        use: ecommerce.reference-pack.build@1.0.0
+        with:
+          packId: ${input.packId}
+          sourceRunId: ${input.sourceRunId}
+          comparablePool: ${steps.build_comparable_pool.output}
+          evidence: ${steps.evaluate_evidence.output}
+          products: ${input.products}
+        timeout: 10s
+      - key: completed
+        kind: terminal
+        status: succeeded
+        output:
+          productIntent: ${steps.normalize_intent.output}
+          categorySpace: ${steps.build_category_space.output}
+          comparablePool: ${steps.build_comparable_pool.output}
+          evidenceClaims: ${steps.evaluate_evidence.output}
+          referencePack: ${steps.build_reference_pack.output}
