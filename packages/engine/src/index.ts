@@ -1,7 +1,6 @@
-import {
-  RuntimeProviderRegistry,
-  type RuntimeInvocation,
-  type RuntimeOutcome
+import type {
+  RuntimeInvocation,
+  RuntimeOutcome
 } from "@bpa/node-runtime";
 import {
   appendScope,
@@ -375,6 +374,9 @@ function scheduleCall(
     providerId: step.providerId,
     input: step.input ? resolveBinding(step.input, state) : {},
     permissionSnapshot: step.permissionSnapshot,
+    ...(step.resourceMappings
+      ? { resourceMappings: clone(step.resourceMappings) }
+      : {}),
     deadlineAt: Math.min(
       notBefore + step.timeoutMs,
       foreachDeadline?.deadlineAt ?? Number.POSITIVE_INFINITY
@@ -1203,12 +1205,17 @@ export class DeterministicWorkflowEngine {
   }
 }
 
+export interface RuntimeEffectDispatcher {
+  invoke(
+    invocation: RuntimeInvocation,
+    signal: AbortSignal
+  ): Promise<RuntimeOutcome>;
+}
+
 export async function dispatchRuntimeEffect(
-  registry: RuntimeProviderRegistry,
+  dispatcher: RuntimeEffectDispatcher,
   effect: Extract<EngineEffect, { kind: "runtime.invoke" }>,
   signal: AbortSignal
 ): Promise<RuntimeOutcome> {
-  return registry
-    .resolve(effect.invocation.providerId, effect.invocation.node)
-    .invoke(effect.invocation, signal);
+  return dispatcher.invoke(effect.invocation, signal);
 }

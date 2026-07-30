@@ -13,6 +13,7 @@ import {
 import {
   BuiltinRuntimeProvider,
   RuntimeProviderRegistry,
+  type RuntimeInvocation,
   type RuntimeProvider
 } from "@bpa/node-runtime";
 import { contentDigest } from "@bpa/compiler";
@@ -23,6 +24,7 @@ import type {
   ArtifactRef,
   ExecutionPlan,
   JsonValue,
+  ResourceBindingSnapshot,
   RuntimeNodeSchemaContract
 } from "@bpa/workflow-ir";
 import type { NodeDefinition } from "@bpa/schemas";
@@ -145,6 +147,71 @@ function plan(
         kind: "terminal",
         key: "uncertain",
         status: "uncertain"
+      }
+    }
+  };
+}
+
+const browserRequirement = {
+  kind: "browser" as const,
+  capabilities: ["browser.dom.read"],
+  allowedOrigins: ["https://www.chanmama.com"],
+  authentication: "authenticated" as const,
+  purpose: "Read authenticated metrics"
+};
+
+function resourcePlan(): ExecutionPlan {
+  const current = plan("browser");
+  const call = current.steps.constant;
+  if (call?.kind !== "call") throw new Error("fixture changed");
+  return {
+    ...current,
+    resourceSlots: {
+      metrics_source: browserRequirement
+    },
+    steps: {
+      ...current.steps,
+      constant: {
+        ...call,
+        permissionSnapshot: {
+          riskLevel: "R1",
+          permissions: ["browser.dom.read"],
+          domains: ["https://www.chanmama.com"]
+        },
+        resourceRequirements: {
+          page_session: browserRequirement
+        },
+        resourceMappings: {
+          page_session: {
+            requirementName: "page_session",
+            slotName: "metrics_source",
+            requirement: browserRequirement,
+            requirementDigest: contentDigest(browserRequirement)
+          }
+        }
+      }
+    }
+  };
+}
+
+function resourceBindingSnapshot(runId: string): ResourceBindingSnapshot {
+  return {
+    snapshotVersion: "bpa.resource-binding/1",
+    runId,
+    resourceSlots: {
+      metrics_source: browserRequirement
+    },
+    bindings: {
+      metrics_source: {
+        bindingId: "binding-1",
+        revision: 1,
+        slotName: "metrics_source",
+        sessionId: "session-1",
+        capabilityDigest: digest("6"),
+        origin: "https://www.chanmama.com",
+        authentication: "authenticated",
+        frozenAt: 900,
+        approvedBy: "user:test"
       }
     }
   };
@@ -307,6 +374,188 @@ describe("Local Core IR2 runtime", () => {
     await expect(restarted.drainOnce()).resolves.toBe(0);
     persistence.close();
   });
+
+  it("hydrates frozen Resource Bindings and validates them before Provider dispatch", async () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const providers = new RuntimeProviderRegistry();
+    let observed: RuntimeInvocation | undefined;
+    providers.register({
+      id: "browser",
+      supports: () => true,
+      invoke: async (invocation) => {
+        observed = invocation;
+        return {
+          status: "succeeded",
+          output: { recovered: true },
+          evidence: [],
+          riskSignals: []
+        };
+      }
+    });
+    const runtime = new Ir2WorkflowRuntime(persistence, providers, {
+      now: () => 1_000,
+      id: ids(),
+      random: () => 0.5,
+      resolveResourceBindingSnapshot: resourceBindingSnapshot,
+      browserSessions: {
+        getBrowserSession: () => ({
+          sessionId: "session-1",
+          capabilityDigest: digest("6"),
+          capabilities: ["browser.dom.read"],
+          origin: "https://www.chanmama.com",
+          authentication: "authenticated",
+          state: "available"
+        })
+      }
+    });
+    const expectedPlan = resourcePlan();
+    const expectedCall = expectedPlan.steps.constant;
+    if (expectedCall?.kind !== "call") throw new Error("fixture changed");
+    const run = runtime.start(expectedPlan, {});
+    await expect(runtime.drainOnce()).resolves.toBe(1);
+    expect(observed?.resourceMappings).toEqual(
+      expectedCall.resourceMappings
+    );
+    expect(observed?.resourceBindings).toMatchObject({
+      page_session: {
+        requirementName: "page_session",
+        slotName: "metrics_source",
+        binding: {
+          sessionId: "session-1",
+          capabilityDigest: digest("6")
+        }
+      }
+    });
+    expect(persistence.getRun(run.id)).toMatchObject({
+      status: "succeeded",
+      output: { recovered: true }
+    });
+    persistence.close();
+  });
+
+  it("rejects a missing frozen Resource Binding without invoking the Provider", async () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const providers = new RuntimeProviderRegistry();
+    let invocations = 0;
+    providers.register({
+      id: "browser",
+      supports: () => true,
+      invoke: async () => {
+        invocations += 1;
+        return {
+          status: "succeeded",
+          output: { recovered: true },
+          evidence: [],
+          riskSignals: []
+        };
+      }
+    });
+    const runtime = new Ir2WorkflowRuntime(persistence, providers, {
+      now: () => 1_000,
+      id: ids(),
+      random: () => 0.5,
+      browserSessions: {
+        getBrowserSession: () => undefined
+      }
+    });
+    const run = runtime.start(resourcePlan(), {});
+    const active = (
+      persistence.getEngineCheckpoint(run.id)?.state as unknown as EngineState
+    ).active;
+    if (active?.kind !== "call") throw new Error("fixture changed");
+    await expect(runtime.drainOnce()).resolves.toBe(1);
+    expect(invocations).toBe(0);
+    expect(
+      persistence.getInboxMessage(
+        `result:${active.invocation.invocationId}`
+      )?.payload
+    ).toMatchObject({
+      status: "rejected",
+      error: {
+        code: "RESOURCE_BINDING_MISSING",
+        retryable: false
+      }
+    });
+    expect(persistence.getRun(run.id)).toMatchObject({ status: "failed" });
+    persistence.close();
+  });
+
+  it.each([
+    {
+      name: "session",
+      sessionId: "session-other",
+      capabilityDigest: digest("6"),
+      capabilities: ["browser.dom.read"]
+    },
+    {
+      name: "capability digest",
+      sessionId: "session-1",
+      capabilityDigest: digest("7"),
+      capabilities: ["browser.dom.read"]
+    },
+    {
+      name: "capability set",
+      sessionId: "session-1",
+      capabilityDigest: digest("6"),
+      capabilities: []
+    }
+  ])(
+    "rejects a changed browser $name without invoking the Provider",
+    async ({ sessionId, capabilityDigest, capabilities }) => {
+      const persistence = new SqlitePersistence({ path: ":memory:" });
+      const providers = new RuntimeProviderRegistry();
+      let invocations = 0;
+      providers.register({
+        id: "browser",
+        supports: () => true,
+        invoke: async () => {
+          invocations += 1;
+          return {
+            status: "succeeded",
+            output: { recovered: true },
+            evidence: [],
+            riskSignals: []
+          };
+        }
+      });
+      const runtime = new Ir2WorkflowRuntime(persistence, providers, {
+        now: () => 1_000,
+        id: ids(),
+        random: () => 0.5,
+        resolveResourceBindingSnapshot: resourceBindingSnapshot,
+        browserSessions: {
+          getBrowserSession: () => ({
+            sessionId,
+            capabilityDigest,
+            capabilities,
+            origin: "https://www.chanmama.com",
+            authentication: "authenticated",
+            state: "available"
+          })
+        }
+      });
+      const run = runtime.start(resourcePlan(), {});
+      const active = (
+        persistence.getEngineCheckpoint(run.id)?.state as unknown as EngineState
+      ).active;
+      if (active?.kind !== "call") throw new Error("fixture changed");
+      await expect(runtime.drainOnce()).resolves.toBe(1);
+      expect(invocations).toBe(0);
+      expect(
+        persistence.getInboxMessage(
+          `result:${active.invocation.invocationId}`
+        )?.payload
+      ).toMatchObject({
+        status: "rejected",
+        error: {
+          code: "RESOURCE_BINDING_INVALID",
+          retryable: false
+        }
+      });
+      expect(persistence.getRun(run.id)).toMatchObject({ status: "failed" });
+      persistence.close();
+    }
+  );
 
   it.each(["builtin", "team", "browser"])(
     "rejects invalid frozen input before invoking the %s provider",

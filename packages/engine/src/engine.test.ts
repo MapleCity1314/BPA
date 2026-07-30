@@ -7,7 +7,10 @@ import type {
   ForeachStep,
   PermissionSnapshot
 } from "@bpa/workflow-ir";
-import { RuntimeProviderRegistry } from "@bpa/node-runtime";
+import {
+  ResourceValidatedRuntimeDispatcher,
+  RuntimeProviderRegistry
+} from "@bpa/node-runtime";
 import {
   DeterministicWorkflowEngine,
   dispatchRuntimeEffect,
@@ -981,7 +984,52 @@ describe("deterministic IR2 engine", () => {
     ).toBe("failed");
   });
 
-  it("dispatches effects only through the provider registry", async () => {
+  it("copies immutable Call resource mappings into every invocation", () => {
+    const resourcePlan = structuredClone(planWithForeach(1));
+    const foreach = resourcePlan.steps.items;
+    if (foreach?.kind !== "foreach") throw new Error("fixture changed");
+    const inspect = foreach.body.steps.inspect;
+    if (inspect?.kind !== "call") throw new Error("fixture changed");
+    const resourceMappings = {
+      page_session: {
+        requirementName: "page_session",
+        slotName: "metrics_source",
+        requirement: {
+          kind: "browser" as const,
+          capabilities: ["browser.dom.read"],
+          allowedOrigins: ["https://www.chanmama.com"],
+          authentication: "authenticated" as const,
+          purpose: "Read authenticated metrics"
+        },
+        requirementDigest: digest("9")
+      }
+    };
+    (
+      inspect as unknown as {
+        resourceMappings: typeof resourceMappings;
+      }
+    ).resourceMappings = resourceMappings;
+    const engine = new DeterministicWorkflowEngine(
+      resourcePlan,
+      dependencies()
+    );
+    const waiting = engine.start("run-resource-mapping", {
+      items: [{ id: "a" }]
+    });
+    const effect = waiting.effects[0];
+    if (effect?.kind !== "runtime.invoke") {
+      throw new Error("fixture changed");
+    }
+    expect(effect.invocation.resourceMappings).toEqual(resourceMappings);
+    expect(effect.invocation.resourceMappings).not.toBe(resourceMappings);
+    expect(
+      waiting.state.active?.kind === "call"
+        ? waiting.state.active.invocation.resourceMappings
+        : undefined
+    ).toEqual(resourceMappings);
+  });
+
+  it("dispatches effects through the resource-validating dispatcher", async () => {
     const engine = new DeterministicWorkflowEngine(
       planWithForeach(),
       dependencies()
@@ -998,9 +1046,12 @@ describe("deterministic IR2 engine", () => {
       invoke: async (invocation) =>
         succeeded({ invocationId: invocation.invocationId })
     });
+    const dispatcher = new ResourceValidatedRuntimeDispatcher(registry, {
+      getBrowserSession: () => undefined
+    });
     await expect(
       dispatchRuntimeEffect(
-        registry,
+        dispatcher,
         effect,
         new AbortController().signal
       )

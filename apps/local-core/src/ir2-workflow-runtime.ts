@@ -19,7 +19,9 @@ import {
 } from "@bpa/engine";
 import { contentDigest } from "@bpa/compiler";
 import {
+  ResourceValidatedRuntimeDispatcher,
   RuntimeProviderRegistry,
+  type RuntimeBrowserSessionResolver,
   type RuntimeInvocation,
   type RuntimeOutcome
 } from "@bpa/node-runtime";
@@ -34,7 +36,12 @@ import type {
   RunRecord,
   RunStatus
 } from "@bpa/persistence";
-import type { ExecutionPlan, JsonValue } from "@bpa/workflow-ir";
+import type {
+  ExecutionPlan,
+  InvocationResourceBinding,
+  JsonValue,
+  ResourceBindingSnapshot
+} from "@bpa/workflow-ir";
 import {
   resolveRuntimeNodeSchemaContract,
   runtimeSchemaErrors,
@@ -47,6 +54,10 @@ export interface Ir2RuntimeOptions {
   random?: () => number;
   schedule?: (callback: () => void, delayMs: number) => unknown;
   cancelScheduled?: (handle: unknown) => void;
+  browserSessions?: RuntimeBrowserSessionResolver;
+  resolveResourceBindingSnapshot?: (
+    runId: string
+  ) => ResourceBindingSnapshot | undefined;
 }
 
 export type RuntimeResultDisposition = "advanced" | "duplicate" | "stale";
@@ -104,6 +115,10 @@ function assistanceTaskRecord(task: AssistanceTask): AssistanceTaskRecord {
 export class Ir2WorkflowRuntime {
   readonly #persistence: Persistence;
   readonly #providers: RuntimeProviderRegistry;
+  readonly #runtimeDispatcher: ResourceValidatedRuntimeDispatcher;
+  readonly #resolveResourceBindingSnapshot: (
+    runId: string
+  ) => ResourceBindingSnapshot | undefined;
   readonly #now: () => number;
   readonly #id: () => string;
   readonly #random: () => number;
@@ -117,6 +132,14 @@ export class Ir2WorkflowRuntime {
   ) {
     this.#persistence = persistence;
     this.#providers = providers;
+    this.#runtimeDispatcher = new ResourceValidatedRuntimeDispatcher(
+      providers,
+      options.browserSessions ?? {
+        getBrowserSession: () => undefined
+      }
+    );
+    this.#resolveResourceBindingSnapshot =
+      options.resolveResourceBindingSnapshot ?? (() => undefined);
     this.#now = options.now ?? Date.now;
     this.#id = options.id ?? randomUUID;
     this.#random = options.random ?? Math.random;
@@ -304,10 +327,10 @@ export class Ir2WorkflowRuntime {
             errors: resolved.errors
           });
         } else {
-          const invocation = {
+          const invocation = this.#bindInvocationResources({
             ...effect.invocation,
             schemaContract: resolved.contract
-          };
+          });
           const inputErrors = runtimeSchemaErrors(
             resolved.contract.inputSchema,
             invocation.input
@@ -331,7 +354,7 @@ export class Ir2WorkflowRuntime {
             );
             try {
               outcome = await dispatchRuntimeEffect(
-                this.#providers,
+                this.#runtimeDispatcher,
                 { ...effect, invocation },
                 controller.signal
               );
@@ -366,6 +389,40 @@ export class Ir2WorkflowRuntime {
       if (disposition !== "stale") processed += 1;
     }
     return processed;
+  }
+
+  #bindInvocationResources(
+    invocation: RuntimeInvocation
+  ): RuntimeInvocation {
+    const mappings = invocation.resourceMappings;
+    if (!mappings || Object.keys(mappings).length === 0) {
+      return invocation;
+    }
+    const snapshot = this.#resolveResourceBindingSnapshot(
+      invocation.identity.runId
+    );
+    if (!snapshot || snapshot.runId !== invocation.identity.runId) {
+      return invocation;
+    }
+    const resourceBindings: Record<
+      string,
+      InvocationResourceBinding
+    > = {};
+    for (const [name, mapping] of Object.entries(mappings)) {
+      const binding = snapshot.bindings[mapping.slotName];
+      if (!binding || !snapshot.resourceSlots[mapping.slotName]) continue;
+      resourceBindings[name] = {
+        requirementName: mapping.requirementName,
+        slotName: mapping.slotName,
+        requirement: structuredClone(mapping.requirement),
+        requirementDigest: mapping.requirementDigest,
+        binding: { ...binding }
+      };
+    }
+    return {
+      ...invocation,
+      resourceBindings
+    };
   }
 
   acceptRuntimeResult(input: {
