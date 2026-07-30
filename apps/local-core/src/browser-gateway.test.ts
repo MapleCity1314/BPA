@@ -1,5 +1,7 @@
-import { generateKeyPairSync } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
 import { LocalWorkflowEngine } from "./compatibility/local-workflow-engine.js";
@@ -12,6 +14,7 @@ import {
 } from "@bpa/gateway-core";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { LocalBrowserGateway } from "./browser-gateway.js";
+import { BrowserEvidenceReceiver } from "./browser-evidence.js";
 import { LocalCoreService } from "./control.js";
 
 function fixture(path: string): unknown {
@@ -23,6 +26,7 @@ function fixture(path: string): unknown {
 describe("local browser gateway", () => {
   it("completes a signed, idempotent browser workflow", () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
+    const dataDirectory = mkdtempSync(join(tmpdir(), "bpa-browser-evidence-"));
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");
     const signingKey: CoreSigningKey = {
       keyId: "core-test-key",
@@ -33,7 +37,9 @@ describe("local browser gateway", () => {
     const gateway = new LocalBrowserGateway(
       persistence,
       new LocalWorkflowEngine(persistence),
-      signingKey
+      signingKey,
+      undefined,
+      new BrowserEvidenceReceiver(persistence, dataDirectory)
     );
     const service = new LocalCoreService(persistence, gateway);
     for (const path of [
@@ -165,12 +171,103 @@ describe("local browser gateway", () => {
         fencing_token: 1
       }
     });
+    const evidenceBody = Buffer.from(
+      JSON.stringify({
+        schema: "bpa.browser-evidence/1",
+        supported: true,
+        shop_id: "shop-1"
+      })
+    );
+    const evidenceDigest = `sha256:${createHash("sha256")
+      .update(evidenceBody)
+      .digest("hex")}`;
+    gateway.handle({
+      protocol: "bpa.browser/1",
+      version: "1.0.0",
+      message_id: "evidence-begin-1",
+      session_id: sessionId,
+      seq: 3,
+      sent_at: new Date().toISOString(),
+      type: "evidence.begin",
+      trace_id: command.trace_id,
+      payload: {
+        evidence_id: "evidence-1",
+        run_id: runId,
+        node_execution_id: command.payload.node_execution_id,
+        kind: "dom_summary",
+        media_type: "application/vnd.bpa.browser-evidence+json",
+        size: evidenceBody.byteLength,
+        digest: evidenceDigest,
+        chunk_size: 262_144,
+        chunk_count: 1
+      }
+    });
+    gateway.handle({
+      protocol: "bpa.browser/1",
+      version: "1.0.0",
+      message_id: "evidence-out-of-order-1",
+      session_id: sessionId,
+      seq: 4,
+      sent_at: new Date().toISOString(),
+      type: "evidence.chunk",
+      trace_id: command.trace_id,
+      payload: {
+        evidence_id: "evidence-1",
+        index: 1,
+        data_base64: evidenceBody.toString("base64"),
+        chunk_digest: evidenceDigest
+      }
+    });
+    expect(outgoing.at(-1)).toMatchObject({
+      type: "evidence.ack",
+      payload: {
+        evidence_id: "evidence-1",
+        accepted: false,
+        next_chunk_index: 0,
+        reason_code: "RESUME_FROM_CHUNK"
+      }
+    });
+    gateway.handle({
+      protocol: "bpa.browser/1",
+      version: "1.0.0",
+      message_id: "evidence-chunk-1",
+      session_id: sessionId,
+      seq: 5,
+      sent_at: new Date().toISOString(),
+      type: "evidence.chunk",
+      trace_id: command.trace_id,
+      payload: {
+        evidence_id: "evidence-1",
+        index: 0,
+        data_base64: evidenceBody.toString("base64"),
+        chunk_digest: evidenceDigest
+      }
+    });
+    gateway.handle({
+      protocol: "bpa.browser/1",
+      version: "1.0.0",
+      message_id: "evidence-complete-1",
+      session_id: sessionId,
+      seq: 6,
+      sent_at: new Date().toISOString(),
+      type: "evidence.complete",
+      trace_id: command.trace_id,
+      payload: {
+        evidence_id: "evidence-1",
+        digest: evidenceDigest,
+        chunk_count: 1
+      }
+    });
+    expect(outgoing.at(-1)).toMatchObject({
+      type: "evidence.ack",
+      payload: { evidence_id: "evidence-1", accepted: true }
+    });
     const result = {
       protocol: "bpa.browser/1",
       version: "1.0.0",
       message_id: "result-1",
       session_id: sessionId,
-      seq: 3,
+      seq: 7,
       sent_at: new Date().toISOString(),
       type: "command.result",
       trace_id: command.trace_id,
@@ -196,13 +293,23 @@ describe("local browser gateway", () => {
           },
           page_epoch: "epoch-1"
         },
-        evidence_refs: [],
+        evidence_refs: ["evidence-1"],
         page_epoch: "epoch-1"
       }
     };
     gateway.handle(result);
     expect(persistence.getRun(runId)?.status).toBe("succeeded");
     expect(outgoing.at(-1)?.type).toBe("result.ack");
+    expect(persistence.getEvidenceTransfer("evidence-1")).toMatchObject({
+      state: "linked",
+      digest: evidenceDigest,
+      classification: "restricted"
+    });
+    expect(persistence.getEvidenceLink("link-evidence-1")).toMatchObject({
+      runId,
+      nodeExecutionId: command.payload.node_execution_id,
+      sourceIds: ["source-evidence-1"]
+    });
 
     gateway.handle(result);
     expect(persistence.getRun(runId)?.status).toBe("succeeded");
@@ -230,7 +337,7 @@ describe("local browser gateway", () => {
       version: "1.0.0",
       message_id: "risk-command-ack",
       session_id: sessionId,
-      seq: 4,
+      seq: 8,
       sent_at: new Date().toISOString(),
       type: "command.ack",
       trace_id: riskCommand.trace_id,
@@ -247,7 +354,7 @@ describe("local browser gateway", () => {
       version: "1.0.0",
       message_id: "risk-result",
       session_id: sessionId,
-      seq: 5,
+      seq: 9,
       sent_at: new Date().toISOString(),
       type: "command.result",
       trace_id: riskCommand.trace_id,
@@ -289,5 +396,6 @@ describe("local browser gateway", () => {
       riskSignals: [{ code: "CAPTCHA_REQUIRED", severity: "blocking" }]
     });
     persistence.close();
+    rmSync(dataDirectory, { recursive: true, force: true });
   });
 });

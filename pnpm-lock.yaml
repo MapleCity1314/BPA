@@ -158,6 +158,9 @@ importers:
 
   apps/local-core:
     dependencies:
+      '@bpa/asset-store-local':
+        specifier: workspace:*
+        version: link:../../packages/asset-store-local
       '@bpa/assistance-core':
         specifier: workspace:*
         version: link:../../packages/assistance-core
@@ -176,6 +179,9 @@ importers:
       '@bpa/engine':
         specifier: workspace:*
         version: link:../../packages/engine
+      '@bpa/evidence-core':
+        specifier: workspace:*
+        version: link:../../packages/evidence-core
       '@bpa/gateway-core':
         specifier: workspace:*
         version: link:../../packages/gateway-core

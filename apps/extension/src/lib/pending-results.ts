@@ -1,3 +1,5 @@
+import type { PendingEvidenceUpload } from "./evidence-transfer.js";
+
 const DATABASE_NAME = "bpa-bridge";
 const STORE_NAME = "pending-results";
 const EVIDENCE_STORE_NAME = "pending-evidence";
@@ -50,15 +52,8 @@ function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
-export interface PendingEvidenceChunk {
-  id: string;
-  evidenceId: string;
-  index: number;
-  message: Record<string, unknown>;
-}
-
-export async function savePendingEvidenceChunk(
-  chunk: PendingEvidenceChunk
+export async function savePendingEvidenceUpload(
+  upload: PendingEvidenceUpload
 ): Promise<void> {
   const database = await openDatabase();
   await new Promise<void>((resolve, reject) => {
@@ -66,7 +61,7 @@ export async function savePendingEvidenceChunk(
       EVIDENCE_STORE_NAME,
       "readwrite"
     );
-    transaction.objectStore(EVIDENCE_STORE_NAME).put(chunk);
+    transaction.objectStore(EVIDENCE_STORE_NAME).put(upload);
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
   });
@@ -75,30 +70,46 @@ export async function savePendingEvidenceChunk(
 
 export async function removePendingEvidence(evidenceId: string): Promise<void> {
   const database = await openDatabase();
-  const chunks = await new Promise<PendingEvidenceChunk[]>(
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(
+      EVIDENCE_STORE_NAME,
+      "readwrite"
+    );
+    transaction.objectStore(EVIDENCE_STORE_NAME).delete(evidenceId);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+}
+
+export async function listPendingEvidenceUploads(): Promise<
+  PendingEvidenceUpload[]
+> {
+  const database = await openDatabase();
+  const values = await new Promise<PendingEvidenceUpload[]>(
     (resolve, reject) => {
       const request = database
         .transaction(EVIDENCE_STORE_NAME, "readonly")
         .objectStore(EVIDENCE_STORE_NAME)
         .getAll();
       request.onsuccess = () =>
-        resolve(request.result as PendingEvidenceChunk[]);
+        resolve(
+          (request.result as unknown[]).filter(
+            (candidate): candidate is PendingEvidenceUpload =>
+              candidate !== null &&
+              typeof candidate === "object" &&
+              typeof (candidate as PendingEvidenceUpload).evidenceId ===
+                "string" &&
+              Array.isArray(
+                (candidate as PendingEvidenceUpload).chunkPayloads
+              )
+          )
+        );
       request.onerror = () => reject(request.error);
     }
   );
-  await new Promise<void>((resolve, reject) => {
-    const transaction = database.transaction(
-      EVIDENCE_STORE_NAME,
-      "readwrite"
-    );
-    const store = transaction.objectStore(EVIDENCE_STORE_NAME);
-    for (const chunk of chunks) {
-      if (chunk.evidenceId === evidenceId) store.delete(chunk.id);
-    }
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-  });
   database.close();
+  return values;
 }
 
 export async function savePendingResult(result: PendingResult): Promise<void> {

@@ -10,9 +10,18 @@ import {
 } from "@bpa/node-runtime";
 import type { RiskSignal, TimingPolicy } from "@bpa/schemas";
 import {
+  createJsonEvidenceUpload,
+  evidenceTransferMessages,
+  interpretEvidenceAcknowledgement,
+  type PendingEvidenceUpload
+} from "../lib/evidence-transfer";
+import {
+  listPendingEvidenceUploads,
   listPendingResults,
   normalizePendingResultForReplay,
+  removePendingEvidence,
   removePendingResult,
+  savePendingEvidenceUpload,
   savePendingResult
 } from "../lib/pending-results";
 import {
@@ -118,17 +127,57 @@ export default defineBackground(() => {
     );
   };
 
-  const sendPending = async (): Promise<void> => {
-    for (const storedPending of await listPendingResults()) {
-      const pending = normalizePendingResultForReplay(storedPending);
-      const message = envelope(
-        "command.result",
-        pending.payload,
-        pending.traceId
-      );
-      await savePendingResult(pending);
-      send(message);
+  const sendStoredResult = async (
+    storedPending: Awaited<ReturnType<typeof listPendingResults>>[number]
+  ): Promise<void> => {
+    const pending = normalizePendingResultForReplay(storedPending);
+    const message = envelope(
+      "command.result",
+      pending.payload,
+      pending.traceId
+    );
+    await savePendingResult(pending);
+    send(message);
+  };
+
+  const sendReadyPendingResults = async (): Promise<void> => {
+    const pendingEvidenceIds = new Set(
+      (await listPendingEvidenceUploads()).map((upload) => upload.evidenceId)
+    );
+    for (const pending of await listPendingResults()) {
+      const evidenceRefs = Array.isArray(pending.payload.evidence_refs)
+        ? pending.payload.evidence_refs.filter(
+            (value): value is string => typeof value === "string"
+          )
+        : [];
+      if (
+        evidenceRefs.some((evidenceId) => pendingEvidenceIds.has(evidenceId))
+      ) {
+        continue;
+      }
+      await sendStoredResult(pending);
     }
+  };
+
+  const sendEvidenceUpload = async (
+    upload: PendingEvidenceUpload,
+    options: {
+      readonly includeBegin?: boolean;
+      readonly startChunkIndex?: number;
+    } = {}
+  ): Promise<void> => {
+    await savePendingEvidenceUpload(upload);
+    for (const message of evidenceTransferMessages(upload, options)) {
+      send(envelope(message.type, message.payload, upload.traceId));
+    }
+  };
+
+  const sendPending = async (): Promise<void> => {
+    const uploads = await listPendingEvidenceUploads();
+    for (const upload of uploads) {
+      await sendEvidenceUpload(upload);
+    }
+    await sendReadyPendingResults();
   };
 
   const recordAssistanceAttention = async (input: {
@@ -594,23 +643,50 @@ export default defineBackground(() => {
           rate_limit_wait_ms: rateLimitWaitMs,
           ...adapterResponse.timingObservation
         },
-        evidence_refs: [],
+        evidence_refs: [] as string[],
         page_epoch: pageEpoch
       };
     try {
+      const evidenceId = crypto.randomUUID();
+      const pageUrl = new URL(executionUrl);
+      const evidenceUpload = await createJsonEvidenceUpload({
+        evidenceId,
+        traceId: String(message.trace_id),
+        runId: String(payload.run_id),
+        nodeExecutionId: String(payload.node_execution_id),
+        value: {
+          schema: "bpa.browser-evidence/1",
+          captured_at: new Date().toISOString(),
+          node: {
+            id: String(payload.node.id),
+            version: String(payload.node.version)
+          },
+          page: {
+            origin: pageUrl.origin,
+            pathname: pageUrl.pathname,
+            epoch: pageEpoch
+          },
+          status: resultPayload.status,
+          ...(resultPayload.output === undefined
+            ? {}
+            : { output: resultPayload.output }),
+          ...(resultPayload.error === undefined
+            ? {}
+            : { error: resultPayload.error }),
+          ...(resultPayload.risk_signals === undefined
+            ? {}
+            : { risk_signals: resultPayload.risk_signals })
+        }
+      });
+      resultPayload.evidence_refs = [evidenceId];
+      await savePendingEvidenceUpload(evidenceUpload);
       await savePendingResult({
         commandId,
         commandSeq: Number(payload.command_seq),
         traceId: String(message.trace_id),
         payload: resultPayload
       });
-      send(
-        envelope(
-          "command.result",
-          resultPayload,
-          String(message.trace_id)
-        )
-      );
+      await sendEvidenceUpload(evidenceUpload);
     } finally {
       activeCommands.delete(commandId);
     }
@@ -781,6 +857,38 @@ export default defineBackground(() => {
           await removePendingResult(commandId);
         }
         break;
+      case "evidence.ack": {
+        const evidenceId = String(message.payload.evidence_id);
+        const upload = (await listPendingEvidenceUploads()).find(
+          (candidate) => candidate.evidenceId === evidenceId
+        );
+        if (!upload) break;
+        const acknowledgement = interpretEvidenceAcknowledgement(upload, {
+          accepted: message.payload.accepted === true,
+          ...(typeof message.payload.next_chunk_index === "number"
+            ? { nextChunkIndex: message.payload.next_chunk_index }
+            : {}),
+          ...(typeof message.payload.reason_code === "string"
+            ? { reasonCode: message.payload.reason_code }
+            : {})
+        });
+        if (acknowledgement.state === "rejected") {
+          await updateStatus({
+            lastError: `证据上传被拒绝: ${acknowledgement.reasonCode}`
+          });
+          break;
+        }
+        if (acknowledgement.state === "complete") {
+          await removePendingEvidence(evidenceId);
+          await sendReadyPendingResults();
+          break;
+        }
+        await sendEvidenceUpload(upload, {
+          includeBegin: false,
+          startChunkIndex: acknowledgement.nextChunkIndex
+        });
+        break;
+      }
       case "heartbeat.ping":
         send(
           envelope(

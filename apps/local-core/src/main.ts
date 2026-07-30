@@ -4,6 +4,7 @@ import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { loadOrCreateCoreSigningKey } from "@bpa/gateway-core";
 import { LocalWorkflowEngine } from "./compatibility/local-workflow-engine.js";
 import { LocalBrowserGateway } from "./browser-gateway.js";
+import { BrowserEvidenceReceiver } from "./browser-evidence.js";
 import { LocalControlServer, LocalCoreService } from "./control.js";
 import { resolveBpaPaths } from "./paths.js";
 import { CoreInstanceLock } from "./instance-lock.js";
@@ -22,10 +23,16 @@ if (process.argv.includes("--migrate-only")) {
   process.exit(0);
 }
 const signingKey = loadOrCreateCoreSigningKey(paths.signingKey);
+const browserEvidence = new BrowserEvidenceReceiver(
+  persistence,
+  paths.data
+);
 const browserGateway = new LocalBrowserGateway(
   persistence,
   new LocalWorkflowEngine(persistence),
-  signingKey
+  signingKey,
+  undefined,
+  browserEvidence
 );
 const service = new LocalCoreService(persistence, browserGateway);
 browserGateway.recoverTerminalResults();

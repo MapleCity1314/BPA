@@ -8,12 +8,14 @@
     "./paths": "./src/paths.ts"
   },
   "dependencies": {
+    "@bpa/asset-store-local": "workspace:*",
     "@bpa/assistance-core": "workspace:*",
     "@bpa/authoring-core": "workspace:*",
     "@bpa/compiler": "workspace:*",
     "@bpa/control-protocol": "workspace:*",
     "@bpa/dataset-core": "workspace:*",
     "@bpa/engine": "workspace:*",
+    "@bpa/evidence-core": "workspace:*",
     "@bpa/gateway-core": "workspace:*",
     "@bpa/node-runtime": "workspace:*",
     "@bpa/page-model": "workspace:*",

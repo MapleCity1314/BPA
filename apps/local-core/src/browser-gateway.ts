@@ -31,6 +31,11 @@ import type {
   RiskLevel,
   WorkflowDefinition
 } from "@bpa/schemas";
+import {
+  BrowserEvidenceError,
+  type BrowserEvidenceAcknowledgement,
+  type BrowserEvidenceReceiver
+} from "./browser-evidence.js";
 
 type Message = BrowserProtocolMessage & {
   payload: Record<string, unknown>;
@@ -71,7 +76,8 @@ export class LocalBrowserGateway implements RuntimeProvider {
     readonly engine: LocalWorkflowEngine,
     readonly signingKey: CoreSigningKey,
     extensionId =
-      process.env.BPA_EXTENSION_ID ?? DEFAULT_BPA_EXTENSION_ID
+      process.env.BPA_EXTENSION_ID ?? DEFAULT_BPA_EXTENSION_ID,
+    readonly evidence?: BrowserEvidenceReceiver
   ) {
     this.#extensionId = extensionId;
   }
@@ -236,11 +242,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
         case "evidence.begin":
         case "evidence.chunk":
         case "evidence.complete":
-          this.#sendError(
-            "EVIDENCE_NOT_ENABLED",
-            "Evidence transport is reserved by v1 but disabled for the first read-only milestone.",
-            candidate.message_id
-          );
+          this.#handleEvidence(candidate);
           break;
         default:
           this.#sendError(
@@ -496,10 +498,25 @@ export class LocalBrowserGateway implements RuntimeProvider {
   }
 
   #handleResult(message: Message): void {
-    const outcome = this.#commitResult(message.message_id, message.payload);
+    let outcome:
+      | "accepted"
+      | "duplicate"
+      | "stale"
+      | "evidence_not_ready"
+      | "evidence_invalid";
+    try {
+      outcome = this.#commitResult(message.message_id, message.payload);
+    } catch (error) {
+      if (!(error instanceof BrowserEvidenceError)) throw error;
+      outcome =
+        error.code === "EVIDENCE_NOT_READY"
+          ? "evidence_not_ready"
+          : "evidence_invalid";
+    }
     this.#cancelRequests.delete(String(message.payload.command_id));
-    if (outcome !== "stale") this.#lastError = undefined;
-    if (outcome !== "stale") {
+    const accepted = outcome === "accepted" || outcome === "duplicate";
+    if (accepted) this.#lastError = undefined;
+    if (accepted) {
       const command = this.persistence.getGatewayCommand(
         String(message.payload.command_id)
       );
@@ -519,8 +536,17 @@ export class LocalBrowserGateway implements RuntimeProvider {
       {
         command_id: String(message.payload.command_id),
         node_execution_id: String(message.payload.node_execution_id),
-        accepted: outcome !== "stale",
-        ...(outcome === "stale" ? { reason_code: "STALE_FENCING_TOKEN" } : {})
+        accepted,
+        ...(accepted
+          ? {}
+          : {
+              reason_code:
+                outcome === "stale"
+                  ? "STALE_FENCING_TOKEN"
+                  : outcome === "evidence_not_ready"
+                    ? "EVIDENCE_NOT_READY"
+                    : "EVIDENCE_INVALID"
+            })
       },
       message.trace_id
     );
@@ -552,18 +578,42 @@ export class LocalBrowserGateway implements RuntimeProvider {
   #commitResult(
     inboxMessageId: string,
     payload: Record<string, unknown>
-  ): "accepted" | "duplicate" | "stale" {
+  ):
+    | "accepted"
+    | "duplicate"
+    | "stale"
+    | "evidence_not_ready"
+    | "evidence_invalid" {
     const commandId = String(payload.command_id);
-    const outcome = this.persistence.acceptResult({
-      commandId,
-      fencingToken: Number(payload.fencing_token),
-      result: payload,
-      inboxMessageId,
-      receivedAt: new Date().toISOString()
-    });
-    if (outcome === "stale") return outcome;
     const command = this.persistence.getGatewayCommand(commandId);
     if (!command) throw new Error(`Gateway command not found: ${commandId}`);
+    const evidenceIds = Array.isArray(payload.evidence_refs)
+      ? payload.evidence_refs.map(String)
+      : [];
+    const outcome =
+      evidenceIds.length === 0
+        ? this.persistence.acceptResult({
+            commandId,
+            fencingToken: Number(payload.fencing_token),
+            result: payload,
+            inboxMessageId,
+            receivedAt: new Date().toISOString()
+          })
+        : this.evidence
+          ? this.evidence.acceptResult({
+              command,
+              payload,
+              inboxMessageId,
+              receivedAt: new Date().toISOString()
+            })
+          : "evidence_not_ready";
+    if (
+      outcome === "stale" ||
+      outcome === "evidence_not_ready" ||
+      outcome === "evidence_invalid"
+    ) {
+      return outcome;
+    }
     if (command.id.startsWith("ir2:")) {
       return outcome;
     }
@@ -875,10 +925,13 @@ export class LocalBrowserGateway implements RuntimeProvider {
 
   #runtimeOutcome(result: unknown): RuntimeOutcome {
     const payload = result as Record<string, unknown>;
-    // Browser Protocol v1 carries evidence ids only, while RuntimeOutcome
-    // requires verified digest-bearing refs. Evidence transport is disabled in
-    // this milestone, so ids are not promoted into trusted Runtime evidence.
-    const evidence: RuntimeOutcome["evidence"] = [];
+    const evidenceIds = Array.isArray(payload.evidence_refs)
+      ? payload.evidence_refs.map(String)
+      : [];
+    const evidence: RuntimeOutcome["evidence"] =
+      evidenceIds.length === 0
+        ? []
+        : (this.evidence?.runtimeEvidence(evidenceIds) ?? []);
     const riskSignals = Array.isArray(payload.risk_signals)
       ? (payload.risk_signals as RiskSignal[])
       : [];
@@ -965,6 +1018,68 @@ export class LocalBrowserGateway implements RuntimeProvider {
       outgoingSeq: session.outgoingSeq
     });
     this.#send(message);
+  }
+
+  #handleEvidence(message: Message): void {
+    const evidenceId = String(message.payload.evidence_id);
+    if (!this.evidence) {
+      this.#sendEvidenceAcknowledgement(
+        {
+          evidenceId,
+          accepted: false,
+          reasonCode: "EVIDENCE_NOT_ENABLED"
+        },
+        message.trace_id
+      );
+      return;
+    }
+    try {
+      if (message.type === "evidence.begin") {
+        this.evidence.begin(this.#session!.id, message.payload);
+        return;
+      }
+      if (message.type === "evidence.chunk") {
+        this.evidence.chunk(this.#session!.id, message.payload);
+        return;
+      }
+      this.#sendEvidenceAcknowledgement(
+        this.evidence.complete(this.#session!.id, message.payload),
+        message.trace_id
+      );
+    } catch (error) {
+      if (!(error instanceof BrowserEvidenceError)) throw error;
+      this.#sendEvidenceAcknowledgement(
+        {
+          evidenceId,
+          accepted: false,
+          ...(error.nextChunkIndex === undefined
+            ? {}
+            : { nextChunkIndex: error.nextChunkIndex }),
+          reasonCode: error.code
+        },
+        message.trace_id
+      );
+    }
+  }
+
+  #sendEvidenceAcknowledgement(
+    acknowledgement: BrowserEvidenceAcknowledgement,
+    traceId: string
+  ): void {
+    this.#sendMessage(
+      "evidence.ack",
+      {
+        evidence_id: acknowledgement.evidenceId,
+        accepted: acknowledgement.accepted,
+        ...(acknowledgement.nextChunkIndex === undefined
+          ? {}
+          : { next_chunk_index: acknowledgement.nextChunkIndex }),
+        ...(acknowledgement.reasonCode === undefined
+          ? {}
+          : { reason_code: acknowledgement.reasonCode })
+      },
+      traceId
+    );
   }
 
   #sendError(
