@@ -55,8 +55,12 @@ import {
   type NodeDefinitionV1Alpha2,
   type AdapterManifestDefinition,
   type AssistanceProfileDefinition,
+  type AuthoringSessionDefinition,
+  type CandidateBundleDefinition,
   type ElementContractDefinition,
   type PageModelDefinition,
+  type PageSnapshotDefinition,
+  type ScenarioSpecDefinition,
   type DeterministicResultValidatorPolicyDefinition,
   type WorkflowDefinition,
   type WorkflowDefinitionV1Alpha2,
@@ -69,7 +73,10 @@ import {
 import type { LocalBrowserGateway } from "./browser-gateway.js";
 import { Ir2WorkflowRuntime } from "./ir2-workflow-runtime.js";
 import { PersistenceTaskQueue } from "./persistence-task-queue.js";
-import { LocalAuthoringService } from "./authoring-service.js";
+import {
+  LocalAuthoringService,
+  type AuthoringSessionOperation
+} from "./authoring-service.js";
 import { PackagingDatasetService } from "./dataset-service.js";
 import { DatasetRuntimeProvider } from "./dataset-runtime-provider.js";
 import { PACKAGING_DATASET_PROFILE } from "@bpa/packaging-dataset";
@@ -535,6 +542,76 @@ export class LocalCoreService {
           candidateId: String(params.candidateId),
           now: new Date().toISOString()
         });
+      case "authoring.session.create":
+        return this.authoring.createSession({
+          sessionId: String(params.sessionId),
+          scenario: params.scenario as ScenarioSpecDefinition,
+          actor: params.actor as AuthoringSessionDefinition["actor"],
+          now: String(params.occurredAt ?? new Date().toISOString())
+        });
+      case "authoring.session.get":
+        return this.authoring.getSession(String(params.sessionId));
+      case "authoring.session.apply":
+        return this.authoring.applySession({
+          sessionId: String(params.sessionId),
+          expectedRevision: Number(params.expectedRevision),
+          operation: params.operation as AuthoringSessionOperation,
+          actor: String(params.actor),
+          occurredAt: String(params.occurredAt)
+        });
+      case "authoring.design-mode.request":
+        return this.authoring.requestDesignMode({
+          grantId: String(params.grantId),
+          authoringSessionId: String(params.authoringSessionId),
+          approvedBy: String(params.approvedBy),
+          browserSessionId: String(params.browserSessionId),
+          profileId: String(params.profileId),
+          tabId: Number(params.tabId),
+          origin: String(params.origin),
+          pageEpoch: String(params.pageEpoch),
+          screenshotApproved: params.screenshotApproved === true,
+          issuedAt: String(params.issuedAt),
+          expiresAt: String(params.expiresAt)
+        });
+      case "authoring.design-mode.get":
+        return this.authoring.getDesignMode(String(params.grantId));
+      case "authoring.design-mode.activate":
+        return this.authoring.activateDesignMode({
+          grantId: String(params.grantId),
+          expectedRevision: Number(params.expectedRevision),
+          actor: String(params.actor),
+          occurredAt: String(params.occurredAt)
+        });
+      case "authoring.design-mode.stop":
+        return this.authoring.stopDesignMode({
+          grantId: String(params.grantId),
+          expectedRevision: Number(params.expectedRevision),
+          actor: String(params.actor),
+          occurredAt: String(params.occurredAt),
+          ...(params.reason === undefined
+            ? {}
+            : { reason: String(params.reason) })
+        });
+      case "authoring.snapshot.attach":
+        return this.authoring.attachSnapshot({
+          sessionId: String(params.sessionId),
+          expectedRevision: Number(params.expectedRevision),
+          operationId: String(params.operationId),
+          actor: String(params.actor),
+          occurredAt: String(params.occurredAt),
+          snapshot: params.snapshot as PageSnapshotDefinition
+        });
+      case "authoring.candidate-bundle.save":
+        return this.authoring.saveCandidateBundle({
+          sessionId: String(params.sessionId),
+          expectedRevision: Number(params.expectedRevision),
+          operationId: String(params.operationId),
+          actor: String(params.actor),
+          occurredAt: String(params.occurredAt),
+          bundle: params.bundle as CandidateBundleDefinition
+        });
+      case "authoring.candidate-bundle.get":
+        return this.authoring.getCandidateBundle(String(params.bundleId));
       case "dataset.inspect":
         return this.datasets.get(String(params.id), String(params.version));
       case "dataset.read":

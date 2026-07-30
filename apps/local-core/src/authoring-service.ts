@@ -14,16 +14,54 @@ import {
   type WorkflowDraft,
   type WorkflowDraftStore
 } from "@bpa/authoring-core";
+import { contentDigest } from "@bpa/compiler";
 import type {
+  ApplyAuthoringSessionResult,
   ArtifactRecord,
+  DesignModeGrantRecord,
   Persistence,
   WorkflowDraftRecord
 } from "@bpa/persistence";
 import type {
+  AuthoringSessionDefinition,
+  CandidateBundleDefinition,
   NodeDefinition,
+  PageSnapshotDefinition,
+  ScenarioSpecDefinition,
   WorkflowDefinition,
   WorkflowDefinitionV1Alpha2
 } from "@bpa/schemas";
+
+type CatalogSelection =
+  AuthoringSessionDefinition["catalogSelections"][number];
+type CapabilityGap =
+  AuthoringSessionDefinition["capabilityGaps"][number];
+type CapabilityGapResolution = NonNullable<
+  CapabilityGap["resolution"]
+>;
+
+export type AuthoringSessionOperation =
+  | {
+      operationId: string;
+      type: "state.transition";
+      state: AuthoringSessionDefinition["state"];
+    }
+  | {
+      operationId: string;
+      type: "catalog.selection.add";
+      selection: CatalogSelection;
+    }
+  | {
+      operationId: string;
+      type: "capability-gap.upsert";
+      gap: CapabilityGap;
+    }
+  | {
+      operationId: string;
+      type: "capability-gap.resolve";
+      gapId: string;
+      resolution: CapabilityGapResolution;
+    };
 
 function draftFromRecord(record: WorkflowDraftRecord): WorkflowDraft {
   const content = structuredClone(record.content) as WorkflowDraft;
@@ -212,6 +250,389 @@ export class LocalAuthoringService {
 
   constructor(readonly persistence: Persistence) {
     this.drafts = new PersistenceWorkflowDraftStore(persistence);
+  }
+
+  createSession(input: {
+    sessionId: string;
+    scenario: ScenarioSpecDefinition;
+    actor: AuthoringSessionDefinition["actor"];
+    now: string;
+  }): AuthoringSessionDefinition {
+    this.#assertReadOnlyRisk(input.scenario);
+    const scenarioDigest = contentDigest(input.scenario);
+    const existingScenario = this.persistence.getAuthoringScenario(
+      input.scenario.metadata.id,
+      input.scenario.metadata.version
+    );
+    if (existingScenario) {
+      if (
+        existingScenario.digest !== scenarioDigest ||
+        contentDigest(existingScenario.scenario) !== scenarioDigest
+      ) {
+        throw new Error(
+          `ScenarioSpec is immutable: ${input.scenario.metadata.id}@${input.scenario.metadata.version}`
+        );
+      }
+    } else {
+      this.persistence.putAuthoringScenario({
+        scenario: structuredClone(input.scenario),
+        digest: scenarioDigest,
+        createdAt: input.now
+      });
+    }
+    const expected: AuthoringSessionDefinition = {
+      apiVersion: "bpa.authoring/v1alpha1",
+      kind: "AuthoringSession",
+      sessionId: input.sessionId,
+      revision: 0,
+      state: "intake",
+      scenarioRef: {
+        id: input.scenario.metadata.id,
+        version: input.scenario.metadata.version,
+        digest: scenarioDigest
+      },
+      actor: structuredClone(input.actor),
+      catalogSelections: [],
+      capabilityGaps: [],
+      designGrantRefs: [],
+      snapshotRefs: [],
+      appliedOperationIds: [],
+      createdAt: input.now,
+      updatedAt: input.now
+    };
+    const existing = this.persistence.getAuthoringSession(input.sessionId);
+    if (existing) {
+      if (
+        contentDigest(existing.scenarioRef) !==
+          contentDigest(expected.scenarioRef) ||
+        contentDigest(existing.actor) !== contentDigest(expected.actor)
+      ) {
+        throw new Error(
+          `Authoring Session already exists with different authority: ${input.sessionId}`
+        );
+      }
+      return existing;
+    }
+    return this.persistence.createAuthoringSession(expected);
+  }
+
+  getSession(sessionId: string): AuthoringSessionDefinition {
+    const session = this.persistence.getAuthoringSession(sessionId);
+    if (!session) {
+      throw new Error(`Authoring Session not found: ${sessionId}`);
+    }
+    return session;
+  }
+
+  applySession(input: {
+    sessionId: string;
+    expectedRevision: number;
+    operation: AuthoringSessionOperation;
+    actor: string;
+    occurredAt: string;
+  }): ApplyAuthoringSessionResult {
+    const base = this.persistence.getAuthoringSessionRevision(
+      input.sessionId,
+      input.expectedRevision
+    )?.session;
+    if (!base) {
+      const current = this.persistence.getAuthoringSession(input.sessionId);
+      if (current) {
+        return {
+          status: "stale",
+          actualRevision: current.revision
+        };
+      }
+      throw new Error(`Authoring Session not found: ${input.sessionId}`);
+    }
+    const next = this.#applySessionOperation(
+      base,
+      input.operation,
+      input.occurredAt
+    );
+    return this.persistence.applyAuthoringSession({
+      sessionId: input.sessionId,
+      expectedRevision: input.expectedRevision,
+      operationId: input.operation.operationId,
+      next,
+      actor: input.actor
+    });
+  }
+
+  requestDesignMode(input: {
+    grantId: string;
+    authoringSessionId: string;
+    approvedBy: string;
+    browserSessionId: string;
+    profileId: string;
+    tabId: number;
+    origin: string;
+    pageEpoch: string;
+    screenshotApproved: boolean;
+    issuedAt: string;
+    expiresAt: string;
+  }): DesignModeGrantRecord {
+    const grant: DesignModeGrantRecord = {
+      grantId: input.grantId,
+      authoringSessionId: input.authoringSessionId,
+      revision: 0,
+      state: "requested",
+      approvedBy: input.approvedBy,
+      browserSessionId: input.browserSessionId,
+      profileId: input.profileId,
+      tabId: input.tabId,
+      origin: input.origin,
+      pageEpoch: input.pageEpoch,
+      allowedOperations: [
+        "semantic_snapshot",
+        ...(input.screenshotApproved ? ["screenshot_once" as const] : [])
+      ],
+      issuedAt: input.issuedAt,
+      expiresAt: input.expiresAt,
+      updatedAt: input.issuedAt
+    };
+    return this.persistence.putDesignModeGrant(grant);
+  }
+
+  getDesignMode(grantId: string): DesignModeGrantRecord {
+    const grant = this.persistence.getDesignModeGrant(grantId);
+    if (!grant) {
+      throw new Error(`Design Mode Grant not found: ${grantId}`);
+    }
+    return grant;
+  }
+
+  activateDesignMode(input: {
+    grantId: string;
+    expectedRevision: number;
+    actor: string;
+    occurredAt: string;
+  }): DesignModeGrantRecord {
+    return this.persistence.transitionDesignModeGrant({
+      ...input,
+      nextState: "active"
+    });
+  }
+
+  stopDesignMode(input: {
+    grantId: string;
+    expectedRevision: number;
+    actor: string;
+    occurredAt: string;
+    reason?: string;
+  }): DesignModeGrantRecord {
+    return this.persistence.transitionDesignModeGrant({
+      ...input,
+      nextState: "stopped"
+    });
+  }
+
+  attachSnapshot(input: {
+    sessionId: string;
+    expectedRevision: number;
+    operationId: string;
+    actor: string;
+    occurredAt: string;
+    snapshot: PageSnapshotDefinition;
+  }): ApplyAuthoringSessionResult {
+    const current = this.#revision(
+      input.sessionId,
+      input.expectedRevision
+    );
+    const next: AuthoringSessionDefinition = {
+      ...structuredClone(current),
+      revision: current.revision + 1,
+      designGrantRefs: [
+        ...new Set([
+          ...current.designGrantRefs,
+          input.snapshot.binding.designGrantId
+        ])
+      ],
+      snapshotRefs: [
+        ...current.snapshotRefs,
+        {
+          id: input.snapshot.snapshotId,
+          digest: input.snapshot.contentDigest
+        }
+      ],
+      appliedOperationIds: [
+        ...current.appliedOperationIds,
+        input.operationId
+      ],
+      updatedAt: input.occurredAt
+    };
+    return this.persistence.attachPageSnapshot({
+      sessionId: input.sessionId,
+      expectedRevision: input.expectedRevision,
+      operationId: input.operationId,
+      next,
+      actor: input.actor,
+      snapshot: structuredClone(input.snapshot)
+    });
+  }
+
+  saveCandidateBundle(input: {
+    sessionId: string;
+    expectedRevision: number;
+    operationId: string;
+    actor: string;
+    occurredAt: string;
+    bundle: CandidateBundleDefinition;
+  }) {
+    const current = this.#revision(
+      input.sessionId,
+      input.expectedRevision
+    );
+    if (current.state !== "validation") {
+      throw new Error(
+        "Candidate Bundle can only be saved from validation state"
+      );
+    }
+    if (
+      input.bundle.riskReport.ceiling !== "R0" &&
+      input.bundle.riskReport.ceiling !== "R1"
+    ) {
+      throw new Error("BPA 0.5 only accepts R0/R1 Candidate Bundles");
+    }
+    const bundleDigest = contentDigest(input.bundle);
+    const next: AuthoringSessionDefinition = {
+      ...structuredClone(current),
+      revision: current.revision + 1,
+      state: "candidate",
+      candidateBundleRef: {
+        id: input.bundle.metadata.id,
+        digest: bundleDigest
+      },
+      appliedOperationIds: [
+        ...current.appliedOperationIds,
+        input.operationId
+      ],
+      updatedAt: input.occurredAt
+    };
+    const validationResults = (
+      [
+        "schema",
+        "contracts",
+        "replay",
+        "permissions",
+        "risk"
+      ] as const
+    ).map((checkType) => ({
+      bundleId: input.bundle.metadata.id,
+      checkType,
+      valid: input.bundle.validation[checkType].valid,
+      issueCount: input.bundle.validation[checkType].issueCount,
+      createdAt: input.occurredAt
+    }));
+    return this.persistence.saveCandidateBundle({
+      sessionId: input.sessionId,
+      expectedRevision: input.expectedRevision,
+      operationId: input.operationId,
+      next,
+      actor: input.actor,
+      bundle: structuredClone(input.bundle),
+      validationResults
+    });
+  }
+
+  getCandidateBundle(bundleId: string) {
+    const bundle = this.persistence.getCandidateBundle(bundleId);
+    if (!bundle) {
+      throw new Error(`Candidate Bundle not found: ${bundleId}`);
+    }
+    return {
+      ...bundle,
+      validationResults:
+        this.persistence.listCandidateBundleValidation(bundleId)
+    };
+  }
+
+  #revision(
+    sessionId: string,
+    revision: number
+  ): AuthoringSessionDefinition {
+    const record = this.persistence.getAuthoringSessionRevision(
+      sessionId,
+      revision
+    );
+    if (!record) {
+      throw new Error(
+        `Authoring Session revision not found: ${sessionId}@${revision}`
+      );
+    }
+    return record.session;
+  }
+
+  #applySessionOperation(
+    current: AuthoringSessionDefinition,
+    operation: AuthoringSessionOperation,
+    occurredAt: string
+  ): AuthoringSessionDefinition {
+    const next = structuredClone(current);
+    switch (operation.type) {
+      case "state.transition":
+        if (
+          current.state === "catalog" &&
+          operation.state === "assembly" &&
+          current.capabilityGaps.some((gap) => gap.status === "open")
+        ) {
+          throw new Error(
+            "Open Capability Gaps must enter discovery before assembly"
+          );
+        }
+        next.state = operation.state;
+        break;
+      case "catalog.selection.add": {
+        const key = `${operation.selection.assetType}:${operation.selection.id}@${operation.selection.version}`;
+        next.catalogSelections = [
+          ...next.catalogSelections.filter(
+            (selection) =>
+              `${selection.assetType}:${selection.id}@${selection.version}` !==
+              key
+          ),
+          structuredClone(operation.selection)
+        ];
+        break;
+      }
+      case "capability-gap.upsert":
+        next.capabilityGaps = [
+          ...next.capabilityGaps.filter(
+            (gap) => gap.gapId !== operation.gap.gapId
+          ),
+          structuredClone(operation.gap)
+        ];
+        break;
+      case "capability-gap.resolve": {
+        const index = next.capabilityGaps.findIndex(
+          (gap) => gap.gapId === operation.gapId
+        );
+        if (index < 0) {
+          throw new Error(`Capability Gap not found: ${operation.gapId}`);
+        }
+        next.capabilityGaps[index] = {
+          ...next.capabilityGaps[index]!,
+          status: "resolved",
+          resolution: structuredClone(operation.resolution)
+        };
+        break;
+      }
+    }
+    next.revision = current.revision + 1;
+    next.appliedOperationIds = [
+      ...current.appliedOperationIds,
+      operation.operationId
+    ];
+    next.updatedAt = occurredAt;
+    return next;
+  }
+
+  #assertReadOnlyRisk(scenario: ScenarioSpecDefinition): void {
+    if (
+      scenario.riskCeiling !== "R0" &&
+      scenario.riskCeiling !== "R1"
+    ) {
+      throw new Error("BPA 0.5 authoring only accepts R0/R1 scenarios");
+    }
   }
 
   catalogSearch(input: {
