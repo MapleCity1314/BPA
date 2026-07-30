@@ -81,6 +81,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@bpa/console-host':
+        specifier: workspace:*
+        version: link:../console-host
       '@bpa/control-client':
         specifier: workspace:*
         version: link:../../packages/control-client

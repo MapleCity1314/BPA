@@ -178,6 +178,10 @@ await copyDirectory(
   join(outputRoot, "extension")
 );
 await copyDirectory(
+  join(repositoryRoot, "apps/operator-console/dist"),
+  join(outputRoot, "console")
+);
+await copyDirectory(
   join(repositoryRoot, "nodes/core"),
   join(outputRoot, "assets/nodes")
 );

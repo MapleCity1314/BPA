@@ -26,16 +26,39 @@ class RecordingClient implements ControlRequester {
   }
 }
 
-function fixture() {
+function fixture(options: {
+  launchConsole?: () => Promise<{ url: string }>;
+} = {}) {
   const client = new RecordingClient();
   const output: unknown[] = [];
   const program = createCliProgram({
     client,
     actor: "cli-user",
-    writeOutput: (value) => output.push(value)
+    writeOutput: (value) => output.push(value),
+    ...options
   });
   return { client, output, program };
 }
+
+describe("operator Console CLI", () => {
+  it("starts the temporary local host without a Control mutation", async () => {
+    let launches = 0;
+    const { client, output, program } = fixture({
+      async launchConsole() {
+        launches += 1;
+        return { url: "http://127.0.0.1:43123/#token=one-time" };
+      }
+    });
+
+    await program.parseAsync(["node", "bpa", "console"]);
+
+    expect(launches).toBe(1);
+    expect(client.calls).toEqual([]);
+    expect(output).toEqual([
+      { url: "http://127.0.0.1:43123/#token=one-time" }
+    ]);
+  });
+});
 
 describe("dataset CLI control mapping", () => {
   it("maps confirmed imports to dataset.import with an absolute local path", async () => {

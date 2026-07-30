@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@bpa/console-host": "workspace:*",
     "@bpa/control-client": "workspace:*",
     "@bpa/shadow-run": "workspace:*",
     "commander": "^14.0.2",

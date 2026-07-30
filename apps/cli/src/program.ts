@@ -15,6 +15,7 @@ export interface CliProgramOptions {
   readonly client: ControlRequester;
   readonly actor: string;
   readonly writeOutput?: (value: unknown) => void;
+  readonly launchConsole?: () => Promise<{ url: string }>;
 }
 
 function defaultOutput(value: unknown): void {
@@ -53,6 +54,16 @@ export function createCliProgram(options: CliProgramOptions): Command {
     .command("doctor")
     .description("check Local Core and persistence")
     .action(async () => output(await client.request("doctor")));
+
+  program
+    .command("console")
+    .description("open the local BPA business workspace")
+    .action(async () => {
+      if (!options.launchConsole) {
+        throw new Error("The BPA Console launcher is unavailable.");
+      }
+      output(await options.launchConsole());
+    });
 
   program
     .command("validate")

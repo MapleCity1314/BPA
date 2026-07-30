@@ -59,7 +59,8 @@ const requiredFiles = [
   "bin/bpa-release-scan.js",
   "package.json",
   "sbom.spdx.json",
-  "extension/manifest.json"
+  "extension/manifest.json",
+  "console/index.html"
 ];
 const expected = new Set([
   "runtime-manifest.json",
