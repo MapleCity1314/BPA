@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type {
   BrowserResourceRequirementSnapshot,
+  ExecutionPlan,
   InvocationResourceBinding,
   ResourceBindingRef
 } from "@bpa/workflow-ir";
 import {
+  assertResourceBindingSnapshotForPlan,
   freezeResourceBinding,
   createResourceBindingSnapshot,
   InvalidResourceBindingTransitionError,
@@ -151,5 +153,66 @@ describe("invocation Resource Binding validation", () => {
       [field]: value
     });
     expect(issues.map((issue) => issue.code)).toContain(code);
+  });
+});
+
+describe("Run Resource Binding Snapshot", () => {
+  const plan: ExecutionPlan = {
+    irVersion: "bpa.workflow-ir/2",
+    workflow: {
+      id: "workflow:test",
+      version: "1.0.0",
+      digest: `sha256:${"1".repeat(64)}`
+    },
+    artifactClosure: { entries: [] },
+    riskSnapshot: [],
+    limits: { maxDepth: 1, maxStepExecutions: 1 },
+    resourceSlots: { metrics_source: requirement },
+    entry: "done",
+    steps: {
+      done: { key: "done", kind: "terminal", status: "succeeded" }
+    }
+  };
+  const snapshot = {
+    snapshotVersion: "bpa.resource-binding/1" as const,
+    runId: "run-1",
+    resourceSlots: { metrics_source: requirement },
+    bindings: {
+      metrics_source: {
+        ...binding,
+        capabilityDigest: `sha256:${"a".repeat(64)}`
+      }
+    }
+  };
+
+  it("requires exact IR slots and frozen requirements", () => {
+    expect(() =>
+      assertResourceBindingSnapshotForPlan("run-1", snapshot, plan)
+    ).not.toThrow();
+    expect(() =>
+      assertResourceBindingSnapshotForPlan(
+        "run-1",
+        {
+          ...snapshot,
+          bindings: {}
+        },
+        plan
+      )
+    ).toThrow("exact IR resource slots");
+    expect(() =>
+      assertResourceBindingSnapshotForPlan(
+        "run-1",
+        {
+          ...snapshot,
+          resourceSlots: {
+            metrics_source: {
+              ...requirement,
+              authentication: "anonymous"
+            }
+          }
+        },
+        plan
+      )
+    ).toThrow("requirement drifted");
   });
 });

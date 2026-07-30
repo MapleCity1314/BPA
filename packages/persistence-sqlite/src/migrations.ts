@@ -667,5 +667,150 @@ export const migrations: Migration[] = [
         SELECT RAISE(ABORT, 'evidence links are immutable');
       END;
     `
+  },
+  {
+    version: 8,
+    sql: `
+      CREATE TABLE run_resource_binding_snapshots (
+        run_id TEXT PRIMARY KEY
+          REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        snapshot_version TEXT NOT NULL CHECK (
+          snapshot_version = 'bpa.resource-binding/1'
+        ),
+        snapshot_digest TEXT NOT NULL CHECK (
+          snapshot_digest GLOB 'sha256:*' AND length(snapshot_digest) = 71
+        ),
+        snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE run_resource_bindings (
+        run_id TEXT NOT NULL
+          REFERENCES run_resource_binding_snapshots(run_id) ON DELETE RESTRICT,
+        slot_name TEXT NOT NULL,
+        binding_id TEXT NOT NULL,
+        binding_revision INTEGER NOT NULL CHECK (binding_revision >= 1),
+        session_id TEXT NOT NULL
+          REFERENCES browser_sessions(id) ON DELETE RESTRICT,
+        capability_digest TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        authentication TEXT NOT NULL CHECK (
+          authentication IN (
+            'anonymous', 'optional', 'authenticated', 'membership'
+          )
+        ),
+        frozen_at INTEGER NOT NULL CHECK (frozen_at >= 0),
+        approved_by TEXT NOT NULL,
+        requirement_json TEXT NOT NULL,
+        PRIMARY KEY(run_id, slot_name),
+        UNIQUE(run_id, binding_id)
+      ) STRICT;
+
+      CREATE INDEX run_resource_bindings_session
+        ON run_resource_bindings(session_id, run_id, slot_name);
+
+      ALTER TABLE browser_sessions
+        ADD COLUMN observation_revision INTEGER NOT NULL DEFAULT 0
+        CHECK (observation_revision >= 0);
+      ALTER TABLE browser_sessions
+        ADD COLUMN session_role TEXT CHECK (
+          session_role IS NULL OR session_role IN (
+            'general', 'metrics_source', 'public_asset_source', 'design_mode'
+          )
+        );
+      ALTER TABLE browser_sessions ADD COLUMN observed_origin TEXT;
+      ALTER TABLE browser_sessions
+        ADD COLUMN observed_authentication TEXT CHECK (
+          observed_authentication IS NULL OR observed_authentication IN (
+            'anonymous', 'optional', 'authenticated', 'membership'
+          )
+        );
+      ALTER TABLE browser_sessions
+        ADD COLUMN observation_state TEXT NOT NULL DEFAULT 'unknown' CHECK (
+          observation_state IN (
+            'unknown', 'available', 'auth_required', 'revoked'
+          )
+        );
+      ALTER TABLE browser_sessions ADD COLUMN observed_at TEXT;
+
+      CREATE INDEX browser_sessions_role_state
+        ON browser_sessions(session_role, observation_state, observed_at);
+      CREATE INDEX browser_sessions_connected
+        ON browser_sessions(connected_at, id);
+
+      CREATE TABLE export_records (
+        export_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL
+          REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        export_type TEXT NOT NULL CHECK (
+          export_type IN (
+            'reference_asset_pack', 'issue_report',
+            'evidence_bundle', 'dataset'
+          )
+        ),
+        status TEXT NOT NULL CHECK (
+          status IN ('ready', 'failed', 'archived')
+        ),
+        metadata_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE export_record_assets (
+        export_id TEXT NOT NULL
+          REFERENCES export_records(export_id) ON DELETE RESTRICT,
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        asset_id TEXT NOT NULL
+          REFERENCES asset_records(asset_id) ON DELETE RESTRICT,
+        PRIMARY KEY(export_id, ordinal),
+        UNIQUE(export_id, asset_id)
+      ) STRICT;
+
+      CREATE INDEX export_records_run_created
+        ON export_records(run_id, created_at, export_id);
+      CREATE INDEX evidence_transfers_run_created
+        ON evidence_transfers(run_id, created_at, evidence_id);
+      CREATE INDEX evidence_links_run_created
+        ON evidence_links(run_id, created_at, link_id);
+      CREATE INDEX evidence_link_sources_source
+        ON evidence_link_sources(source_id, link_id);
+      CREATE INDEX evidence_link_assets_asset
+        ON evidence_link_assets(asset_id, link_id);
+
+      CREATE TRIGGER run_resource_binding_snapshots_no_update
+      BEFORE UPDATE ON run_resource_binding_snapshots
+      BEGIN
+        SELECT RAISE(ABORT, 'run resource binding snapshots are immutable');
+      END;
+
+      CREATE TRIGGER run_resource_binding_snapshots_no_delete
+      BEFORE DELETE ON run_resource_binding_snapshots
+      BEGIN
+        SELECT RAISE(ABORT, 'run resource binding snapshots are immutable');
+      END;
+
+      CREATE TRIGGER run_resource_bindings_no_update
+      BEFORE UPDATE ON run_resource_bindings
+      BEGIN
+        SELECT RAISE(ABORT, 'run resource bindings are immutable');
+      END;
+
+      CREATE TRIGGER run_resource_bindings_no_delete
+      BEFORE DELETE ON run_resource_bindings
+      BEGIN
+        SELECT RAISE(ABORT, 'run resource bindings are immutable');
+      END;
+
+      CREATE TRIGGER export_records_no_update
+      BEFORE UPDATE ON export_records
+      BEGIN
+        SELECT RAISE(ABORT, 'export records are immutable');
+      END;
+
+      CREATE TRIGGER export_records_no_delete
+      BEFORE DELETE ON export_records
+      BEGIN
+        SELECT RAISE(ABORT, 'export records are immutable');
+      END;
+    `
   }
 ];

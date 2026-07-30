@@ -1,5 +1,6 @@
 import type {
   BrowserResourceRequirementSnapshot,
+  ExecutionPlan,
   InvocationResourceBinding,
   ResourceAuthentication,
   ResourceBindingRef,
@@ -302,6 +303,85 @@ const AUTHENTICATION_RANK = {
   authenticated: 2,
   membership: 3
 } as const;
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+    .join(",")}}`;
+}
+
+export function assertResourceBindingSnapshotForPlan(
+  runId: string,
+  snapshot: ResourceBindingSnapshot,
+  plan: ExecutionPlan
+): void {
+  if (
+    snapshot.snapshotVersion !== "bpa.resource-binding/1" ||
+    snapshot.runId !== runId
+  ) {
+    throw new Error("Resource Binding Snapshot belongs to another Run");
+  }
+  const planSlots = plan.resourceSlots ?? {};
+  const planSlotNames = Object.keys(planSlots).sort();
+  const snapshotSlotNames = Object.keys(snapshot.resourceSlots).sort();
+  const bindingSlotNames = Object.keys(snapshot.bindings).sort();
+  if (
+    canonicalJson(planSlotNames) !== canonicalJson(snapshotSlotNames) ||
+    canonicalJson(planSlotNames) !== canonicalJson(bindingSlotNames)
+  ) {
+    throw new Error(
+      "Resource Binding Snapshot must cover the exact IR resource slots"
+    );
+  }
+  for (const slotName of planSlotNames) {
+    const requirement = planSlots[slotName]!;
+    const frozenRequirement = snapshot.resourceSlots[slotName]!;
+    const binding = snapshot.bindings[slotName]!;
+    if (
+      canonicalJson(requirement) !== canonicalJson(frozenRequirement)
+    ) {
+      throw new Error(
+        `Resource Binding Snapshot requirement drifted for slot ${slotName}`
+      );
+    }
+    if (
+      binding.slotName !== slotName ||
+      !binding.bindingId.trim() ||
+      !binding.sessionId.trim() ||
+      !/^sha256:[a-f0-9]{64}$/.test(binding.capabilityDigest) ||
+      !Number.isSafeInteger(binding.revision) ||
+      binding.revision < 1 ||
+      !Number.isSafeInteger(binding.frozenAt) ||
+      binding.frozenAt < 0 ||
+      !binding.approvedBy.trim()
+    ) {
+      throw new Error(
+        `Resource Binding Snapshot contains an invalid binding for ${slotName}`
+      );
+    }
+    if (!requirement.allowedOrigins.includes(binding.origin)) {
+      throw new Error(
+        `Resource Binding Snapshot origin is outside slot ${slotName}`
+      );
+    }
+    if (
+      AUTHENTICATION_RANK[binding.authentication] <
+      AUTHENTICATION_RANK[requirement.authentication]
+    ) {
+      throw new Error(
+        `Resource Binding Snapshot authentication is insufficient for ${slotName}`
+      );
+    }
+  }
+}
 
 export function validateInvocationResourceBinding(
   resource: InvocationResourceBinding,

@@ -17,6 +17,8 @@ import type {
 import type {
   ExecutionPlan,
   JsonValue,
+  ResourceAuthentication,
+  ResourceBindingSnapshot,
   ScopePath
 } from "@bpa/workflow-ir";
 
@@ -33,7 +35,13 @@ export type {
   EvidenceChunkRecord,
   EvidenceTransferRecord
 } from "@bpa/evidence-core";
-export type { ExecutionPlan, JsonValue, ScopePath } from "@bpa/workflow-ir";
+export type {
+  ExecutionPlan,
+  JsonValue,
+  ResourceAuthentication,
+  ResourceBindingSnapshot,
+  ScopePath
+} from "@bpa/workflow-ir";
 
 export type ArtifactType =
   | "workflow"
@@ -183,6 +191,9 @@ export interface StepInstanceRecord {
 
 export interface RecoveryStateStore {
   getRunPlanSnapshot(runId: string): RunPlanSnapshotRecord | undefined;
+  getRunResourceBindingSnapshot(
+    runId: string
+  ): ResourceBindingSnapshot | undefined;
   getEngineCheckpoint(runId: string): EngineCheckpointRecord | undefined;
   putExecutionScope(scope: ExecutionScopeRecord): ExecutionScopeRecord;
   putIterationInstance(
@@ -240,6 +251,7 @@ export interface CreateRunInput {
    * createRecoverableRun, which requires the snapshot.
    */
   planSnapshot?: RunPlanSnapshotRecord;
+  resourceBindingSnapshot?: ResourceBindingSnapshot;
 }
 
 export interface NodeTransitionInput {
@@ -525,6 +537,18 @@ export interface GatewayDeliveryUnitOfWork {
     | "evidence_invalid";
 }
 
+export type BrowserSessionRole =
+  | "general"
+  | "metrics_source"
+  | "public_asset_source"
+  | "design_mode";
+
+export type BrowserSessionObservationState =
+  | "unknown"
+  | "available"
+  | "auth_required"
+  | "revoked";
+
 export interface BrowserSessionRecord {
   id: string;
   browserInstanceId: string;
@@ -539,6 +563,12 @@ export interface BrowserSessionRecord {
   resumeTokenExpiresAt: string;
   connectedAt: string;
   disconnectedAt?: string;
+  observationRevision?: number;
+  role?: BrowserSessionRole;
+  observedOrigin?: string;
+  observedAuthentication?: ResourceAuthentication;
+  observationState?: BrowserSessionObservationState;
+  observedAt?: string;
 }
 
 export interface OpenBrowserSessionInput {
@@ -648,6 +678,73 @@ export interface RetentionJobRecord {
   updatedAt: string;
 }
 
+export interface EvidenceListCursor {
+  createdAt: string;
+  id: string;
+}
+
+export interface EvidenceListPage<T> {
+  records: readonly T[];
+  nextCursor?: EvidenceListCursor;
+}
+
+export interface ExportRecord {
+  exportId: string;
+  runId: string;
+  exportType:
+    | "reference_asset_pack"
+    | "issue_report"
+    | "evidence_bundle"
+    | "dataset";
+  status: "ready" | "failed" | "archived";
+  assetIds: readonly string[];
+  metadata: JsonValue;
+  createdAt: string;
+}
+
+export interface TrustedLineageStore {
+  listEvidenceTransfersForRun(input: {
+    runId: string;
+    limit: number;
+    cursor?: EvidenceListCursor;
+  }): EvidenceListPage<EvidenceTransferRecord>;
+  listEvidenceLinksForRun(input: {
+    runId: string;
+    limit: number;
+    cursor?: EvidenceListCursor;
+  }): EvidenceListPage<EvidenceLinkDefinition>;
+  listSourceRecordsForRun(input: {
+    runId: string;
+    limit: number;
+    afterSourceId?: string;
+  }): {
+    records: readonly SourceRecordDefinition[];
+    nextSourceId?: string;
+  };
+  listAssetRecordsForRun(input: {
+    runId: string;
+    limit: number;
+    afterAssetId?: string;
+  }): {
+    records: readonly AssetRecordDefinition[];
+    nextAssetId?: string;
+  };
+  getSourceRecords(sourceIds: readonly string[]): SourceRecordDefinition[];
+  getAssetRecords(assetIds: readonly string[]): AssetRecordDefinition[];
+}
+
+export interface ExportStore {
+  putExportRecord(
+    record: ExportRecord
+  ): { status: "accepted" | "duplicate"; record: ExportRecord };
+  getExportRecord(exportId: string): ExportRecord | undefined;
+  listExportRecordsForRun(input: {
+    runId: string;
+    limit: number;
+    cursor?: EvidenceListCursor;
+  }): EvidenceListPage<ExportRecord>;
+}
+
 export interface SourceAssetStore {
   putSourceRecord(
     record: SourceRecordDefinition
@@ -745,7 +842,9 @@ export interface Persistence
     ExecutionStore,
     WorkflowAuthoringStore,
     SourceAssetStore,
-    EvidenceTransferUnitOfWork {
+    EvidenceTransferUnitOfWork,
+    TrustedLineageStore,
+    ExportStore {
   health(): {
     adapter: string;
     schemaVersion: number;
@@ -775,6 +874,22 @@ export interface Persistence
     lastAckedCommandSeq?: number;
     capabilityDigest?: string;
     disconnectedAt?: string;
+  }): BrowserSessionRecord;
+  getBrowserSession(id: string): BrowserSessionRecord | undefined;
+  listBrowserSessions(input: {
+    limit: number;
+    role?: BrowserSessionRole;
+    observationState?: BrowserSessionObservationState;
+    cursor?: EvidenceListCursor;
+  }): EvidenceListPage<BrowserSessionRecord>;
+  updateBrowserSessionObservation(input: {
+    id: string;
+    expectedRevision: number;
+    role: BrowserSessionRole;
+    observedOrigin?: string;
+    observedAuthentication?: ResourceAuthentication;
+    observationState: BrowserSessionObservationState;
+    observedAt: string;
   }): BrowserSessionRecord;
   replaceBrowserCapabilities(
     sessionId: string,

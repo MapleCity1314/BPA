@@ -1646,7 +1646,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(7);
+      expect(store.health().schemaVersion).toBe(8);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1677,6 +1677,28 @@ describe("append-only migrations", () => {
 
       const legacy = new Database(databasePath);
       legacy.exec(`
+        DROP TRIGGER export_records_no_delete;
+        DROP TRIGGER export_records_no_update;
+        DROP TRIGGER run_resource_bindings_no_delete;
+        DROP TRIGGER run_resource_bindings_no_update;
+        DROP TRIGGER run_resource_binding_snapshots_no_delete;
+        DROP TRIGGER run_resource_binding_snapshots_no_update;
+        DROP TABLE export_record_assets;
+        DROP TABLE export_records;
+        DROP TABLE run_resource_bindings;
+        DROP TABLE run_resource_binding_snapshots;
+        DROP INDEX browser_sessions_connected;
+        DROP INDEX browser_sessions_role_state;
+        DROP INDEX evidence_transfers_run_created;
+        DROP INDEX evidence_links_run_created;
+        DROP INDEX evidence_link_sources_source;
+        DROP INDEX evidence_link_assets_asset;
+        ALTER TABLE browser_sessions DROP COLUMN observed_at;
+        ALTER TABLE browser_sessions DROP COLUMN observation_state;
+        ALTER TABLE browser_sessions DROP COLUMN observed_authentication;
+        ALTER TABLE browser_sessions DROP COLUMN observed_origin;
+        ALTER TABLE browser_sessions DROP COLUMN session_role;
+        ALTER TABLE browser_sessions DROP COLUMN observation_revision;
         DROP TRIGGER evidence_links_no_delete;
         DROP TRIGGER evidence_links_no_update;
         DROP TRIGGER asset_records_no_delete;
@@ -1710,12 +1732,12 @@ describe("append-only migrations", () => {
         DROP INDEX assistance_tasks_status_mode_created;
         DROP INDEX assistance_task_request_results_task;
         DROP TABLE assistance_task_request_results;
-        DELETE FROM schema_migrations WHERE version IN (4, 5, 6, 7);
+        DELETE FROM schema_migrations WHERE version IN (4, 5, 6, 7, 8);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(7);
+      expect(upgraded.health().schemaVersion).toBe(8);
       expect(upgraded.getAssistanceTask(task.task.taskId)).toEqual(task);
       expect(
         upgraded.getAssistanceRequestResult("not-recorded")
@@ -1740,7 +1762,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(7);
+      expect(store.health().schemaVersion).toBe(8);
       expect(store.getAssistanceRequestResult("not-recorded")).toBeUndefined();
       store.close();
     } finally {
@@ -1762,7 +1784,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(7);
+      expect(store.health().schemaVersion).toBe(8);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1777,6 +1799,28 @@ describe("append-only migrations", () => {
       seeded.close();
       const legacy = new Database(databasePath);
       legacy.exec(`
+        DROP TRIGGER export_records_no_delete;
+        DROP TRIGGER export_records_no_update;
+        DROP TRIGGER run_resource_bindings_no_delete;
+        DROP TRIGGER run_resource_bindings_no_update;
+        DROP TRIGGER run_resource_binding_snapshots_no_delete;
+        DROP TRIGGER run_resource_binding_snapshots_no_update;
+        DROP TABLE export_record_assets;
+        DROP TABLE export_records;
+        DROP TABLE run_resource_bindings;
+        DROP TABLE run_resource_binding_snapshots;
+        DROP INDEX browser_sessions_connected;
+        DROP INDEX browser_sessions_role_state;
+        DROP INDEX evidence_transfers_run_created;
+        DROP INDEX evidence_links_run_created;
+        DROP INDEX evidence_link_sources_source;
+        DROP INDEX evidence_link_assets_asset;
+        ALTER TABLE browser_sessions DROP COLUMN observed_at;
+        ALTER TABLE browser_sessions DROP COLUMN observation_state;
+        ALTER TABLE browser_sessions DROP COLUMN observed_authentication;
+        ALTER TABLE browser_sessions DROP COLUMN observed_origin;
+        ALTER TABLE browser_sessions DROP COLUMN session_role;
+        ALTER TABLE browser_sessions DROP COLUMN observation_revision;
         DROP TRIGGER evidence_links_no_delete;
         DROP TRIGGER evidence_links_no_update;
         DROP TRIGGER asset_records_no_delete;
@@ -1805,12 +1849,12 @@ describe("append-only migrations", () => {
         DROP TABLE workflow_candidates;
         DROP TABLE workflow_draft_revisions;
         DROP TABLE workflow_drafts;
-        DELETE FROM schema_migrations WHERE version IN (6, 7);
+        DELETE FROM schema_migrations WHERE version IN (6, 7, 8);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(7);
+      expect(upgraded.health().schemaVersion).toBe(8);
       expect(
         upgraded.createWorkflowDraft({
           draftId: "v5-upgraded-draft",
@@ -1851,7 +1895,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(7);
+      expect(store.health().schemaVersion).toBe(8);
       expect(store.getWorkflowDraft("not-created")).toBeUndefined();
       store.close();
     } finally {
@@ -1864,7 +1908,7 @@ describe("append-only migrations", () => {
     const databasePath = join(directory, "bpa.sqlite3");
     try {
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(7);
+      expect(store.health().schemaVersion).toBe(8);
       store.close();
       const raw = new Database(databasePath);
       raw

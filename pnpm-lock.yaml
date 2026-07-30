@@ -471,6 +471,9 @@ importers:
       '@bpa/persistence':
         specifier: workspace:*
         version: link:../persistence
+      '@bpa/resource-binding':
+        specifier: workspace:*
+        version: link:../resource-binding
       '@bpa/source-core':
         specifier: workspace:*
         version: link:../source-core

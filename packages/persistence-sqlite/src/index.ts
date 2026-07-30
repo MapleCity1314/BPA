@@ -21,7 +21,9 @@ import {
   type AssistanceTaskListFilter,
   type AuditRecord,
   type BrowserCapabilityRecord,
+  type BrowserSessionObservationState,
   type BrowserSessionRecord,
+  type BrowserSessionRole,
   type BlobRecord,
   type CreateRunInput,
   type CreateBlockingAssistanceInput,
@@ -33,8 +35,11 @@ import {
   type DecisionRecordDefinition,
   type EngineCheckpointRecord,
   type EvidenceChunkRecord,
+  type EvidenceListCursor,
+  type EvidenceListPage,
   type EvidenceLinkDefinition,
   type EvidenceTransferRecord,
+  type ExportRecord,
   type ExecutionScopeRecord,
   type ExecutionEventRecord,
   type GatewayCommandRecord,
@@ -51,6 +56,8 @@ import {
   type RunRecord,
   type RunPlanSnapshotRecord,
   type RunTransitionInput,
+  type ResourceAuthentication,
+  type ResourceBindingSnapshot,
   type SourceRecordDefinition,
   type StagingLeaseRecord,
   type StepInstanceRecord,
@@ -74,6 +81,7 @@ import {
   terminateEvidence as transitionEvidenceTerminated
 } from "@bpa/evidence-core";
 import { assertSourceRecord } from "@bpa/source-core";
+import { assertResourceBindingSnapshotForPlan } from "@bpa/resource-binding";
 import { migrations, type Migration } from "./migrations.js";
 
 type SqlRow = Record<string, unknown>;
@@ -705,14 +713,37 @@ export class SqlitePersistence implements Persistence {
       const run = input.run;
       if (
         input.event.runId !== run.id ||
-        (input.planSnapshot && input.planSnapshot.runId !== run.id)
+        (input.planSnapshot && input.planSnapshot.runId !== run.id) ||
+        (input.resourceBindingSnapshot &&
+          input.resourceBindingSnapshot.runId !== run.id)
       ) {
-        throw new Error("Run, plan snapshot and initial event identities differ");
+        throw new Error(
+          "Run, plan, resource binding snapshot and initial event identities differ"
+        );
+      }
+      if (input.resourceBindingSnapshot && !input.planSnapshot) {
+        throw new Error(
+          "A Resource Binding Snapshot requires an immutable Run plan"
+        );
+      }
+      if (input.resourceBindingSnapshot && input.planSnapshot) {
+        this.#validateResourceBindingSnapshot(
+          run.id,
+          input.planSnapshot,
+          input.resourceBindingSnapshot
+        );
       }
       this.#insertRun(run);
       this.#inject("create_run.after_run");
       if (input.planSnapshot) {
         this.#insertPlanSnapshot(input.planSnapshot);
+      }
+      if (input.resourceBindingSnapshot) {
+        this.#insertResourceBindingSnapshot(
+          input.resourceBindingSnapshot,
+          run.createdAt
+        );
+        this.#inject("create_run.after_binding");
       }
       this.#insertEvent(input.event);
       this.#inject("create_run.after_event");
@@ -732,16 +763,32 @@ export class SqlitePersistence implements Persistence {
       if (
         input.event.runId !== input.run.id ||
         input.planSnapshot.runId !== input.run.id ||
-        input.checkpoint.runId !== input.run.id
+        input.checkpoint.runId !== input.run.id ||
+        (input.resourceBindingSnapshot &&
+          input.resourceBindingSnapshot.runId !== input.run.id)
       ) {
         throw new Error(
-          "Recoverable Run, plan, checkpoint and event identities differ"
+          "Recoverable Run, plan, binding, checkpoint and event identities differ"
+        );
+      }
+      if (input.resourceBindingSnapshot) {
+        this.#validateResourceBindingSnapshot(
+          input.run.id,
+          input.planSnapshot,
+          input.resourceBindingSnapshot
         );
       }
       this.#insertRun(input.run);
       this.#inject("recoverable_run.after_run");
       this.#insertPlanSnapshot(input.planSnapshot);
       this.#insertCheckpoint(input.checkpoint);
+      if (input.resourceBindingSnapshot) {
+        this.#insertResourceBindingSnapshot(
+          input.resourceBindingSnapshot,
+          input.run.createdAt
+        );
+        this.#inject("recoverable_run.after_binding");
+      }
       for (const task of input.assistanceTasks ?? []) {
         if (task.task.runId !== input.run.id) {
           throw new Error("Assistance task belongs to a different Run");
@@ -956,6 +1003,20 @@ export class SqlitePersistence implements Persistence {
       .prepare("SELECT * FROM run_plan_snapshots WHERE run_id = ?")
       .get(runId) as SqlRow | undefined;
     return row ? this.#readPlanSnapshot(row) : undefined;
+  }
+
+  getRunResourceBindingSnapshot(
+    runId: string
+  ): ResourceBindingSnapshot | undefined {
+    const row = this.#db
+      .prepare(
+        `SELECT snapshot_json
+         FROM run_resource_binding_snapshots WHERE run_id = ?`
+      )
+      .get(runId) as { snapshot_json: string } | undefined;
+    return row
+      ? (parseJson(row.snapshot_json) as ResourceBindingSnapshot)
+      : undefined;
   }
 
   getEngineCheckpoint(runId: string): EngineCheckpointRecord | undefined {
@@ -2384,8 +2445,10 @@ export class SqlitePersistence implements Persistence {
             id, browser_instance_id, extension_id, extension_version,
             protocol_version, last_seq, outgoing_seq, last_acked_command_seq,
             capability_digest, resume_token_digest, resume_token_expires_at,
-            connected_at, disconnected_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            connected_at, disconnected_at, observation_revision,
+            session_role, observed_origin, observed_authentication,
+            observation_state, observed_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           session.id,
@@ -2400,7 +2463,13 @@ export class SqlitePersistence implements Persistence {
           session.resumeTokenDigest,
           session.resumeTokenExpiresAt,
           session.connectedAt,
-          session.disconnectedAt ?? null
+          session.disconnectedAt ?? null,
+          0,
+          null,
+          null,
+          null,
+          "unknown",
+          null
         );
       const opened = this.#getBrowserSession(session.id)!;
       return {
@@ -2435,6 +2504,125 @@ export class SqlitePersistence implements Persistence {
         input.disconnectedAt ?? current.disconnectedAt ?? null,
         input.id
       );
+    return this.#getBrowserSession(input.id)!;
+  }
+
+  getBrowserSession(id: string): BrowserSessionRecord | undefined {
+    return this.#getBrowserSession(id);
+  }
+
+  listBrowserSessions(input: {
+    limit: number;
+    role?: BrowserSessionRole;
+    observationState?: BrowserSessionObservationState;
+    cursor?: EvidenceListCursor;
+  }): EvidenceListPage<BrowserSessionRecord> {
+    this.#assertLineageLimit(input.limit);
+    this.#assertLineageCursor(input.cursor);
+    const rows = this.#db
+      .prepare(
+        `SELECT * FROM browser_sessions
+         WHERE (? IS NULL OR session_role = ?)
+           AND (? IS NULL OR observation_state = ?)
+           AND (
+             ? IS NULL OR connected_at > ?
+             OR (connected_at = ? AND id > ?)
+           )
+         ORDER BY connected_at, id LIMIT ?`
+      )
+      .all(
+        input.role ?? null,
+        input.role ?? null,
+        input.observationState ?? null,
+        input.observationState ?? null,
+        input.cursor?.createdAt ?? null,
+        input.cursor?.createdAt ?? null,
+        input.cursor?.createdAt ?? null,
+        input.cursor?.id ?? null,
+        input.limit + 1
+      ) as SqlRow[];
+    return this.#lineagePage(
+      rows,
+      input.limit,
+      (row) => this.#readBrowserSession(row),
+      (row) => ({
+        createdAt: String(row.connected_at),
+        id: String(row.id)
+      })
+    );
+  }
+
+  updateBrowserSessionObservation(input: {
+    id: string;
+    expectedRevision: number;
+    role: BrowserSessionRole;
+    observedOrigin?: string;
+    observedAuthentication?: ResourceAuthentication;
+    observationState: BrowserSessionObservationState;
+    observedAt: string;
+  }): BrowserSessionRecord {
+    if (
+      !Number.isSafeInteger(input.expectedRevision) ||
+      input.expectedRevision < 0 ||
+      !Number.isFinite(Date.parse(input.observedAt))
+    ) {
+      throw new Error("Browser Session observation revision or time is invalid");
+    }
+    if (input.observedOrigin !== undefined) {
+      const parsed = new URL(input.observedOrigin);
+      if (
+        parsed.protocol !== "https:" ||
+        parsed.origin !== input.observedOrigin
+      ) {
+        throw new Error(
+          "Browser Session observedOrigin must be an exact HTTPS Origin"
+        );
+      }
+    }
+    if (
+      input.observationState === "available" &&
+      (input.observedOrigin === undefined ||
+        input.observedAuthentication === undefined)
+    ) {
+      throw new Error(
+        "An available Browser Session requires Origin and authentication"
+      );
+    }
+    const current = this.#getBrowserSession(input.id);
+    if (!current) {
+      throw new Error(`Browser session not found: ${input.id}`);
+    }
+    if (
+      current.observationState === "revoked" &&
+      input.observationState !== "revoked"
+    ) {
+      throw new RevisionConflictError(
+        "A revoked Browser Session observation is terminal"
+      );
+    }
+    const result = this.#db
+      .prepare(
+        `UPDATE browser_sessions
+         SET observation_revision = observation_revision + 1,
+             session_role = ?, observed_origin = ?,
+             observed_authentication = ?, observation_state = ?,
+             observed_at = ?
+         WHERE id = ? AND observation_revision = ?`
+      )
+      .run(
+        input.role,
+        input.observedOrigin ?? null,
+        input.observedAuthentication ?? null,
+        input.observationState,
+        input.observedAt,
+        input.id,
+        input.expectedRevision
+      );
+    if (result.changes !== 1) {
+      throw new RevisionConflictError(
+        `Browser Session ${input.id} observation revision changed`
+      );
+    }
     return this.#getBrowserSession(input.id)!;
   }
 
@@ -2663,12 +2851,16 @@ export class SqlitePersistence implements Persistence {
          WHERE ela.asset_id = ?
          UNION ALL
          SELECT 1
+         FROM export_record_assets era
+         WHERE era.asset_id = ?
+         UNION ALL
+         SELECT 1
          FROM asset_derivations ad
          LEFT JOIN asset_deletions deleted ON deleted.asset_id = ad.asset_id
          WHERE ad.parent_asset_id = ? AND deleted.asset_id IS NULL
          LIMIT 1`
       )
-      .get(input.assetId, input.assetId);
+      .get(input.assetId, input.assetId, input.assetId);
     if (activeReference) return { status: "referenced" };
     if (!("retainUntil" in asset.retention)) {
       return { status: "retained" };
@@ -2683,12 +2875,14 @@ export class SqlitePersistence implements Persistence {
         .prepare(
           `SELECT 1 FROM evidence_link_assets WHERE asset_id = ?
            UNION ALL
+           SELECT 1 FROM export_record_assets WHERE asset_id = ?
+           UNION ALL
            SELECT 1 FROM asset_derivations ad
            LEFT JOIN asset_deletions d ON d.asset_id = ad.asset_id
            WHERE ad.parent_asset_id = ? AND d.asset_id IS NULL
            LIMIT 1`
         )
-        .get(input.assetId, input.assetId);
+        .get(input.assetId, input.assetId, input.assetId);
       if (recheck) {
         throw new AssetReferenceConflictError(
           `Asset became referenced: ${input.assetId}`
@@ -3189,6 +3383,316 @@ export class SqlitePersistence implements Persistence {
       : undefined;
   }
 
+  listEvidenceTransfersForRun(input: {
+    runId: string;
+    limit: number;
+    cursor?: EvidenceListCursor;
+  }): EvidenceListPage<EvidenceTransferRecord> {
+    this.#assertLineageLimit(input.limit);
+    this.#assertLineageCursor(input.cursor);
+    const rows = (input.cursor
+      ? this.#db
+          .prepare(
+            `SELECT * FROM evidence_transfers
+             WHERE run_id = ? AND (
+               created_at > ? OR (created_at = ? AND evidence_id > ?)
+             )
+             ORDER BY created_at, evidence_id LIMIT ?`
+          )
+          .all(
+            input.runId,
+            input.cursor.createdAt,
+            input.cursor.createdAt,
+            input.cursor.id,
+            input.limit + 1
+          )
+      : this.#db
+          .prepare(
+            `SELECT * FROM evidence_transfers
+             WHERE run_id = ?
+             ORDER BY created_at, evidence_id LIMIT ?`
+          )
+          .all(input.runId, input.limit + 1)) as SqlRow[];
+    return this.#lineagePage(
+      rows,
+      input.limit,
+      (row) => this.#readEvidenceTransfer(row),
+      (row) => ({
+        createdAt: String(row.created_at),
+        id: String(row.evidence_id)
+      })
+    );
+  }
+
+  listEvidenceLinksForRun(input: {
+    runId: string;
+    limit: number;
+    cursor?: EvidenceListCursor;
+  }): EvidenceListPage<EvidenceLinkDefinition> {
+    this.#assertLineageLimit(input.limit);
+    this.#assertLineageCursor(input.cursor);
+    const rows = (input.cursor
+      ? this.#db
+          .prepare(
+            `SELECT * FROM evidence_links
+             WHERE run_id = ? AND (
+               created_at > ? OR (created_at = ? AND link_id > ?)
+             )
+             ORDER BY created_at, link_id LIMIT ?`
+          )
+          .all(
+            input.runId,
+            input.cursor.createdAt,
+            input.cursor.createdAt,
+            input.cursor.id,
+            input.limit + 1
+          )
+      : this.#db
+          .prepare(
+            `SELECT * FROM evidence_links
+             WHERE run_id = ?
+             ORDER BY created_at, link_id LIMIT ?`
+          )
+          .all(input.runId, input.limit + 1)) as SqlRow[];
+    return this.#lineagePage(
+      rows,
+      input.limit,
+      (row) =>
+        parseJson(row.canonical_json) as EvidenceLinkDefinition,
+      (row) => ({
+        createdAt: String(row.created_at),
+        id: String(row.link_id)
+      })
+    );
+  }
+
+  listSourceRecordsForRun(input: {
+    runId: string;
+    limit: number;
+    afterSourceId?: string;
+  }): {
+    records: readonly SourceRecordDefinition[];
+    nextSourceId?: string;
+  } {
+    this.#assertLineageLimit(input.limit);
+    this.#assertAfterId(input.afterSourceId);
+    const rows = this.#db
+      .prepare(
+        `SELECT DISTINCT sources.source_id, sources.canonical_json
+         FROM source_records sources
+         INNER JOIN evidence_link_sources linked
+           ON linked.source_id = sources.source_id
+         INNER JOIN evidence_links links ON links.link_id = linked.link_id
+         WHERE links.run_id = ? AND sources.source_id > ?
+         ORDER BY sources.source_id LIMIT ?`
+      )
+      .all(
+        input.runId,
+        input.afterSourceId ?? "",
+        input.limit + 1
+      ) as Array<{ source_id: string; canonical_json: string }>;
+    const hasMore = rows.length > input.limit;
+    const selected = rows.slice(0, input.limit);
+    return {
+      records: selected.map(
+        (row) => parseJson(row.canonical_json) as SourceRecordDefinition
+      ),
+      ...(hasMore
+        ? { nextSourceId: selected.at(-1)!.source_id }
+        : {})
+    };
+  }
+
+  listAssetRecordsForRun(input: {
+    runId: string;
+    limit: number;
+    afterAssetId?: string;
+  }): {
+    records: readonly AssetRecordDefinition[];
+    nextAssetId?: string;
+  } {
+    this.#assertLineageLimit(input.limit);
+    this.#assertAfterId(input.afterAssetId);
+    const rows = this.#db
+      .prepare(
+        `SELECT DISTINCT assets.asset_id, assets.canonical_json
+         FROM asset_records assets
+         INNER JOIN evidence_link_assets linked
+           ON linked.asset_id = assets.asset_id
+         INNER JOIN evidence_links links ON links.link_id = linked.link_id
+         LEFT JOIN asset_deletions deleted
+           ON deleted.asset_id = assets.asset_id
+         WHERE links.run_id = ? AND assets.asset_id > ?
+           AND deleted.asset_id IS NULL
+         ORDER BY assets.asset_id LIMIT ?`
+      )
+      .all(
+        input.runId,
+        input.afterAssetId ?? "",
+        input.limit + 1
+      ) as Array<{ asset_id: string; canonical_json: string }>;
+    const hasMore = rows.length > input.limit;
+    const selected = rows.slice(0, input.limit);
+    return {
+      records: selected.map(
+        (row) => parseJson(row.canonical_json) as AssetRecordDefinition
+      ),
+      ...(hasMore ? { nextAssetId: selected.at(-1)!.asset_id } : {})
+    };
+  }
+
+  getSourceRecords(
+    sourceIds: readonly string[]
+  ): SourceRecordDefinition[] {
+    const ids = this.#boundedUniqueIds(sourceIds);
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => "?").join(",");
+    return (
+      this.#db
+        .prepare(
+          `SELECT canonical_json FROM source_records
+           WHERE source_id IN (${placeholders}) ORDER BY source_id`
+        )
+        .all(...ids) as Array<{ canonical_json: string }>
+    ).map(
+      (row) => parseJson(row.canonical_json) as SourceRecordDefinition
+    );
+  }
+
+  getAssetRecords(assetIds: readonly string[]): AssetRecordDefinition[] {
+    const ids = this.#boundedUniqueIds(assetIds);
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => "?").join(",");
+    return (
+      this.#db
+        .prepare(
+          `SELECT assets.canonical_json
+           FROM asset_records assets
+           LEFT JOIN asset_deletions deleted
+             ON deleted.asset_id = assets.asset_id
+           WHERE assets.asset_id IN (${placeholders})
+             AND deleted.asset_id IS NULL
+           ORDER BY assets.asset_id`
+        )
+        .all(...ids) as Array<{ canonical_json: string }>
+    ).map(
+      (row) => parseJson(row.canonical_json) as AssetRecordDefinition
+    );
+  }
+
+  putExportRecord(
+    record: ExportRecord
+  ): { status: "accepted" | "duplicate"; record: ExportRecord } {
+    const existing = this.getExportRecord(record.exportId);
+    if (existing) {
+      if (canonicalJson(existing) !== canonicalJson(record)) {
+        throw new EvidenceConflictError(
+          `ExportRecord identity conflict: ${record.exportId}`
+        );
+      }
+      return { status: "duplicate", record: existing };
+    }
+    if (
+      !record.exportId.trim() ||
+      !this.getRun(record.runId) ||
+      !Number.isFinite(Date.parse(record.createdAt)) ||
+      record.assetIds.length > 100 ||
+      new Set(record.assetIds).size !== record.assetIds.length ||
+      (record.status !== "failed" && record.assetIds.length < 1)
+    ) {
+      throw new EvidenceConflictError("Invalid ExportRecord metadata");
+    }
+    assertJsonCompatible(record.metadata, "ExportRecord metadata");
+    if (Buffer.byteLength(json(record.metadata), "utf8") > 32 * 1024) {
+      throw new EvidenceConflictError(
+        "ExportRecord metadata exceeds 32 KiB"
+      );
+    }
+    this.#assertExportMetadata(record.metadata);
+    for (const assetId of record.assetIds) {
+      if (!this.getAssetRecord(assetId)) {
+        throw new EvidenceConflictError(
+          `ExportRecord references an unknown Asset: ${assetId}`
+        );
+      }
+    }
+    this.#db.transaction(() => {
+      this.#db
+        .prepare(
+          `INSERT INTO export_records(
+            export_id, run_id, export_type, status, metadata_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          record.exportId,
+          record.runId,
+          record.exportType,
+          record.status,
+          json(record.metadata),
+          record.createdAt
+        );
+      const statement = this.#db.prepare(
+        `INSERT INTO export_record_assets(export_id, ordinal, asset_id)
+         VALUES (?, ?, ?)`
+      );
+      record.assetIds.forEach((assetId, ordinal) =>
+        statement.run(record.exportId, ordinal, assetId)
+      );
+      this.#inject("export.after_record");
+    }).immediate();
+    return {
+      status: "accepted",
+      record: this.getExportRecord(record.exportId)!
+    };
+  }
+
+  getExportRecord(exportId: string): ExportRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM export_records WHERE export_id = ?")
+      .get(exportId) as SqlRow | undefined;
+    return row ? this.#readExportRecord(row) : undefined;
+  }
+
+  listExportRecordsForRun(input: {
+    runId: string;
+    limit: number;
+    cursor?: EvidenceListCursor;
+  }): EvidenceListPage<ExportRecord> {
+    this.#assertLineageLimit(input.limit);
+    this.#assertLineageCursor(input.cursor);
+    const rows = (input.cursor
+      ? this.#db
+          .prepare(
+            `SELECT * FROM export_records
+             WHERE run_id = ? AND (
+               created_at > ? OR (created_at = ? AND export_id > ?)
+             )
+             ORDER BY created_at, export_id LIMIT ?`
+          )
+          .all(
+            input.runId,
+            input.cursor.createdAt,
+            input.cursor.createdAt,
+            input.cursor.id,
+            input.limit + 1
+          )
+      : this.#db
+          .prepare(
+            `SELECT * FROM export_records
+             WHERE run_id = ? ORDER BY created_at, export_id LIMIT ?`
+          )
+          .all(input.runId, input.limit + 1)) as SqlRow[];
+    return this.#lineagePage(
+      rows,
+      input.limit,
+      (row) => this.#readExportRecord(row),
+      (row) => ({
+        createdAt: String(row.created_at),
+        id: String(row.export_id)
+      })
+    );
+  }
+
   scheduleRetention(
     job: RetentionJobRecord
   ): { status: "accepted" | "duplicate"; job: RetentionJobRecord } {
@@ -3402,6 +3906,72 @@ export class SqlitePersistence implements Persistence {
       );
   }
 
+  #validateResourceBindingSnapshot(
+    runId: string,
+    plan: RunPlanSnapshotRecord,
+    snapshot: ResourceBindingSnapshot
+  ): void {
+    assertResourceBindingSnapshotForPlan(runId, snapshot, plan.planJson);
+    for (const [slotName, binding] of Object.entries(snapshot.bindings)) {
+      const session = this.#getBrowserSession(binding.sessionId);
+      if (
+        !session ||
+        session.observationRevision === undefined ||
+        session.observationRevision < 1 ||
+        session.observationState !== "available" ||
+        session.capabilityDigest !== binding.capabilityDigest ||
+        session.observedOrigin !== binding.origin ||
+        session.observedAuthentication !== binding.authentication
+      ) {
+        throw new Error(
+          `Resource Binding Snapshot session observation drifted for slot ${slotName}`
+        );
+      }
+    }
+  }
+
+  #insertResourceBindingSnapshot(
+    snapshot: ResourceBindingSnapshot,
+    createdAt: string
+  ): void {
+    this.#db
+      .prepare(
+        `INSERT INTO run_resource_binding_snapshots(
+          run_id, snapshot_version, snapshot_digest, snapshot_json, created_at
+        ) VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(
+        snapshot.runId,
+        snapshot.snapshotVersion,
+        digest(snapshot),
+        json(snapshot),
+        createdAt
+      );
+    const statement = this.#db.prepare(
+      `INSERT INTO run_resource_bindings(
+        run_id, slot_name, binding_id, binding_revision, session_id,
+        capability_digest, origin, authentication, frozen_at, approved_by,
+        requirement_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (const slotName of Object.keys(snapshot.bindings).sort()) {
+      const binding = snapshot.bindings[slotName]!;
+      statement.run(
+        snapshot.runId,
+        slotName,
+        binding.bindingId,
+        binding.revision,
+        binding.sessionId,
+        binding.capabilityDigest,
+        binding.origin,
+        binding.authentication,
+        binding.frozenAt,
+        binding.approvedBy,
+        json(snapshot.resourceSlots[slotName])
+      );
+    }
+  }
+
   #insertAssistanceTask(record: AssistanceTaskRecord): void {
     if (!assistanceFencingConsistent(record)) {
       throw new StaleFencingTokenError(
@@ -3600,6 +4170,114 @@ export class SqlitePersistence implements Persistence {
     return row
       ? (parseJson(row.canonical_json) as AssetRecordDefinition)
       : undefined;
+  }
+
+  #assertLineageLimit(limit: number): void {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+      throw new Error("Lineage list limit must be between 1 and 200");
+    }
+  }
+
+  #assertLineageCursor(cursor: EvidenceListCursor | undefined): void {
+    if (
+      cursor !== undefined &&
+      (!Number.isFinite(Date.parse(cursor.createdAt)) ||
+        !cursor.id.trim() ||
+        cursor.id.length > 200)
+    ) {
+      throw new Error("Lineage cursor is invalid");
+    }
+  }
+
+  #assertAfterId(id: string | undefined): void {
+    if (id !== undefined && (!id.trim() || id.length > 200)) {
+      throw new Error("Lineage after-ID is invalid");
+    }
+  }
+
+  #assertExportMetadata(value: JsonValue, path = "metadata"): void {
+    if (typeof value === "string") {
+      if (Buffer.byteLength(value, "utf8") > 4 * 1024) {
+        throw new EvidenceConflictError(
+          `ExportRecord ${path} contains inline content`
+        );
+      }
+      return;
+    }
+    if (value === null || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      value.forEach((item, index) =>
+        this.#assertExportMetadata(item, `${path}[${index}]`)
+      );
+      return;
+    }
+    const inlineContentKeys = new Set([
+      "body",
+      "bytes",
+      "content",
+      "data",
+      "data_base64",
+      "dataBase64",
+      "blob"
+    ]);
+    for (const [key, item] of Object.entries(value)) {
+      if (inlineContentKeys.has(key)) {
+        throw new EvidenceConflictError(
+          `ExportRecord ${path}.${key} must be an AssetRef, not inline content`
+        );
+      }
+      this.#assertExportMetadata(item, `${path}.${key}`);
+    }
+  }
+
+  #boundedUniqueIds(ids: readonly string[]): string[] {
+    if (ids.length > 100) {
+      throw new Error("A metadata batch can contain at most 100 IDs");
+    }
+    const unique = [...new Set(ids)];
+    if (
+      unique.length !== ids.length ||
+      unique.some((id) => !id.trim() || id.length > 200)
+    ) {
+      throw new Error("Metadata batch IDs must be unique bounded identifiers");
+    }
+    return unique;
+  }
+
+  #lineagePage<T>(
+    rows: readonly SqlRow[],
+    limit: number,
+    read: (row: SqlRow) => T,
+    cursor: (row: SqlRow) => EvidenceListCursor
+  ): EvidenceListPage<T> {
+    const hasMore = rows.length > limit;
+    const selected = rows.slice(0, limit);
+    return {
+      records: selected.map(read),
+      ...(hasMore
+        ? { nextCursor: cursor(selected.at(-1)!) }
+        : {})
+    };
+  }
+
+  #readExportRecord(row: SqlRow): ExportRecord {
+    const assetIds = (
+      this.#db
+        .prepare(
+          `SELECT asset_id FROM export_record_assets
+           WHERE export_id = ? ORDER BY ordinal`
+        )
+        .all(String(row.export_id)) as Array<{ asset_id: string }>
+    ).map((asset) => asset.asset_id);
+    return {
+      exportId: String(row.export_id),
+      runId: String(row.run_id),
+      exportType: row.export_type as ExportRecord["exportType"],
+      status: row.status as ExportRecord["status"],
+      assetIds,
+      metadata: parseJson(row.metadata_json) as JsonValue,
+      createdAt: String(row.created_at)
+    };
   }
 
   #storedBlobBytes(): number {
@@ -3897,7 +4575,36 @@ export class SqlitePersistence implements Persistence {
       connectedAt: String(row.connected_at),
       ...(row.disconnected_at == null
         ? {}
-        : { disconnectedAt: String(row.disconnected_at) })
+        : { disconnectedAt: String(row.disconnected_at) }),
+      ...(Number(row.observation_revision ?? 0) === 0 &&
+      String(row.observation_state ?? "unknown") === "unknown"
+        ? {}
+        : {
+            observationRevision: Number(row.observation_revision),
+            observationState: String(
+              row.observation_state
+            ) as NonNullable<BrowserSessionRecord["observationState"]>
+          }),
+      ...(row.session_role == null
+        ? {}
+        : {
+            role: String(
+              row.session_role
+            ) as NonNullable<BrowserSessionRecord["role"]>
+          }),
+      ...(row.observed_origin == null
+        ? {}
+        : { observedOrigin: String(row.observed_origin) }),
+      ...(row.observed_authentication == null
+        ? {}
+        : {
+            observedAuthentication: String(
+              row.observed_authentication
+            ) as ResourceAuthentication
+          }),
+      ...(row.observed_at == null
+        ? {}
+        : { observedAt: String(row.observed_at) })
     };
   }
 }
