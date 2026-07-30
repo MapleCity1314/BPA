@@ -219,6 +219,60 @@ export interface PermissionSnapshot {
   readonly grantDigest?: string;
 }
 
+export type ResourceAuthentication =
+  | "anonymous"
+  | "optional"
+  | "authenticated"
+  | "membership";
+
+export interface BrowserResourceRequirementSnapshot {
+  readonly kind: "browser";
+  readonly capabilities: readonly string[];
+  readonly allowedOrigins: readonly string[];
+  readonly authentication: ResourceAuthentication;
+  readonly purpose: string;
+}
+
+export interface ResourceSlotMappingSnapshot {
+  /** Name declared by the immutable Node asset. */
+  readonly requirementName: string;
+  /** Name declared by the immutable Workflow asset. */
+  readonly slotName: string;
+  /** Exact Node requirement copied into the plan at compilation time. */
+  readonly requirement: BrowserResourceRequirementSnapshot;
+  readonly requirementDigest: string;
+}
+
+export interface ResourceBindingRef {
+  readonly bindingId: string;
+  readonly revision: number;
+  readonly slotName: string;
+  readonly sessionId: string;
+  readonly capabilityDigest: string;
+  readonly origin: string;
+  readonly authentication: ResourceAuthentication;
+  readonly frozenAt: number;
+  readonly approvedBy: string;
+}
+
+export interface ResourceBindingSnapshot {
+  readonly snapshotVersion: "bpa.resource-binding/1";
+  readonly runId: string;
+  readonly resourceSlots: Readonly<
+    Record<string, BrowserResourceRequirementSnapshot>
+  >;
+  readonly bindings: Readonly<Record<string, ResourceBindingRef>>;
+}
+
+export interface InvocationResourceBinding {
+  readonly requirementName: string;
+  readonly slotName: string;
+  readonly requirement: BrowserResourceRequirementSnapshot;
+  readonly requirementDigest: string;
+  /** Immutable reference copied from the Run-level binding snapshot. */
+  readonly binding: ResourceBindingRef;
+}
+
 export interface CallStep extends StepBase {
   readonly kind: "call";
   readonly node: ArtifactRef & { readonly kind: "node" };
@@ -229,6 +283,12 @@ export interface CallStep extends StepBase {
   readonly schemaContract?: RuntimeNodeSchemaContract;
   readonly providerId: string;
   readonly permissionSnapshot: PermissionSnapshot;
+  readonly resourceRequirements?: Readonly<
+    Record<string, BrowserResourceRequirementSnapshot>
+  >;
+  readonly resourceMappings?: Readonly<
+    Record<string, ResourceSlotMappingSnapshot>
+  >;
   readonly dependencies: CallDependencies;
   readonly timeoutMs: number;
   readonly retry: ResolvedRetryPolicy;
@@ -387,6 +447,9 @@ export interface ExecutionPlan {
   readonly workflow: WorkflowRef;
   readonly artifactClosure: ArtifactClosure;
   readonly riskSnapshot: readonly RiskSnapshotEntry[];
+  readonly resourceSlots?: Readonly<
+    Record<string, BrowserResourceRequirementSnapshot>
+  >;
   readonly limits: ExecutionLimits;
   readonly entry: StepKey;
   readonly steps: Readonly<Record<StepKey, ExecutionStep>>;

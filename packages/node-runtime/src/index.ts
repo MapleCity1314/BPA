@@ -2,10 +2,16 @@ import type { RiskSignal, TimingPolicy } from "@bpa/schemas";
 import type {
   ArtifactRef,
   ExecutionIdentity,
+  InvocationResourceBinding,
   JsonValue,
   PermissionSnapshot,
+  ResourceSlotMappingSnapshot,
   RuntimeNodeSchemaContract
 } from "@bpa/workflow-ir";
+import {
+  validateInvocationResourceBinding,
+  type ObservedBrowserSession
+} from "@bpa/resource-binding";
 
 /**
  * Provider-neutral invocation persisted before dispatch. Engine code selects a
@@ -19,6 +25,17 @@ export interface RuntimeInvocation {
   readonly providerId: string;
   readonly input: JsonValue;
   readonly permissionSnapshot: PermissionSnapshot;
+  /**
+   * Exact Run-level browser bindings selected before execution. Providers
+   * must never derive or replace these references from Node input/output.
+   */
+  readonly resourceBindings?: Readonly<
+    Record<string, InvocationResourceBinding>
+  >;
+  /** Frozen Call mappings copied directly from IR2. */
+  readonly resourceMappings?: Readonly<
+    Record<string, ResourceSlotMappingSnapshot>
+  >;
   readonly deadlineAt: number;
   readonly idempotencyKey: string;
   readonly fencingToken: number;
@@ -66,6 +83,104 @@ export interface RuntimeProvider {
     signal: AbortSignal
   ): Promise<RuntimeOutcome>;
   cancel?(invocationId: string, fencingToken: number): Promise<void>;
+}
+
+export interface RuntimeBrowserSessionResolver {
+  getBrowserSession(
+    sessionId: string
+  ): ObservedBrowserSession | undefined | Promise<ObservedBrowserSession | undefined>;
+}
+
+/**
+ * Dispatch adapter for resource-bound invocations. It rejects stale or
+ * changed sessions before any provider code can observe the invocation.
+ */
+export class ResourceValidatedRuntimeDispatcher {
+  constructor(
+    private readonly registry: RuntimeProviderRegistry,
+    private readonly sessions: RuntimeBrowserSessionResolver
+  ) {}
+
+  async invoke(
+    invocation: RuntimeInvocation,
+    signal: AbortSignal
+  ): Promise<RuntimeOutcome> {
+    const mappings = invocation.resourceMappings ?? {};
+    const bindings = invocation.resourceBindings ?? {};
+    for (const name of Object.keys(bindings)) {
+      if (!mappings[name]) {
+        return rejectedResourceOutcome(
+          "RESOURCE_BINDING_UNEXPECTED",
+          `Resource binding ${name} has no immutable Call mapping.`
+        );
+      }
+    }
+    for (const [name, mapping] of Object.entries(mappings)) {
+      const resource = bindings[name];
+      if (!resource) {
+        return rejectedResourceOutcome(
+          "RESOURCE_BINDING_MISSING",
+          `Required resource binding ${name} is missing.`
+        );
+      }
+      if (name !== resource.requirementName) {
+        return rejectedResourceOutcome(
+          "RESOURCE_BINDING_NAME_MISMATCH",
+          `Resource binding key ${name} does not match ${resource.requirementName}.`
+        );
+      }
+      if (
+        mapping.requirementName !== resource.requirementName ||
+        mapping.slotName !== resource.slotName ||
+        mapping.requirementDigest !== resource.requirementDigest
+      ) {
+        return rejectedResourceOutcome(
+          "RESOURCE_MAPPING_MISMATCH",
+          `Resource binding ${name} differs from the immutable Call mapping.`
+        );
+      }
+      const session = await this.sessions.getBrowserSession(
+        resource.binding.sessionId
+      );
+      if (!session) {
+        return rejectedResourceOutcome(
+          "RESOURCE_SESSION_MISSING",
+          `Frozen browser session ${resource.binding.sessionId} is unavailable.`
+        );
+      }
+      const issues = validateInvocationResourceBinding(resource, session);
+      if (issues.length > 0) {
+        return rejectedResourceOutcome(
+          "RESOURCE_BINDING_INVALID",
+          issues.map((issue) => `${issue.code}: ${issue.message}`).join(" "),
+          issues.map((issue) => issue.code)
+        );
+      }
+    }
+    const provider = this.registry.resolve(
+      invocation.providerId,
+      invocation.node
+    );
+    return provider.invoke(invocation, signal);
+  }
+}
+
+function rejectedResourceOutcome(
+  code: string,
+  message: string,
+  issueCodes: readonly string[] = []
+): RuntimeOutcome {
+  return {
+    status: "rejected",
+    error: {
+      code,
+      message,
+      retryable: false,
+      details: { issueCodes }
+    },
+    evidence: [],
+    riskSignals: []
+  };
 }
 
 export class BuiltinRuntimeProvider implements RuntimeProvider {

@@ -1,11 +1,15 @@
 import {
   formatValidationErrors,
   validateNode,
+  validateNodeV1Alpha2,
   validateWorkflow,
   validateWorkflowV1Alpha2,
+  validateWorkflowV1Alpha3,
   type NodeDefinition,
+  type NodeDefinitionV1Alpha2,
   type WorkflowDefinition,
-  type WorkflowDefinitionV1Alpha2
+  type WorkflowDefinitionV1Alpha2,
+  type WorkflowDefinitionV1Alpha3
 } from "@bpa/schemas";
 import {
   mergeTimingPolicy,
@@ -16,6 +20,7 @@ import {
   createExecutionPlan,
   type ArtifactRef,
   type BindingValue,
+  type BrowserResourceRequirementSnapshot,
   type CallRoutes,
   type Condition,
   type ExecutionBlock,
@@ -27,6 +32,7 @@ import {
   type ResolvedRetryPolicy,
   type ResolvedTimingPolicy,
   type RuntimeNodeSchemaContract,
+  type ResourceSlotMappingSnapshot,
   type TerminalStep
 } from "@bpa/workflow-ir";
 import {
@@ -35,7 +41,11 @@ import {
   WorkflowCompileError
 } from "./index.js";
 
-type SourceBlock = WorkflowDefinitionV1Alpha2["spec"]["root"];
+type CanonicalWorkflow =
+  | WorkflowDefinitionV1Alpha2
+  | WorkflowDefinitionV1Alpha3;
+type PublishedNodeDefinition = NodeDefinition | NodeDefinitionV1Alpha2;
+type SourceBlock = CanonicalWorkflow["spec"]["root"];
 type SourceStep = SourceBlock["steps"][number];
 type SourceCall = Extract<SourceStep, { kind: "call" }>;
 type SourceAssistance = Extract<
@@ -63,7 +73,7 @@ export interface CatalogAssistanceProfile {
  * assets. Compiler code never reads a repository, database, or current clock.
  */
 export interface CatalogResolver {
-  getNode(id: string, version: string): NodeDefinition | undefined;
+  getNode(id: string, version: string): PublishedNodeDefinition | undefined;
   getNodeExecution?(
     id: string,
     version: string
@@ -75,6 +85,12 @@ export interface CatalogResolver {
 }
 
 const RISK_RANK = { R0: 0, R1: 1, R2: 2, R3: 3, R4: 4 } as const;
+const AUTHENTICATION_RANK = {
+  anonymous: 0,
+  optional: 1,
+  authenticated: 2,
+  membership: 3
+} as const;
 const FORBIDDEN_AUTHORING_KEYS = new Set([
   "selector",
   "xpath",
@@ -96,8 +112,30 @@ function splitRef(reference: string): [string, string] {
   return [reference.slice(0, at), reference.slice(at + 1)];
 }
 
+function validatePublishedNode(
+  candidate: unknown
+): candidate is PublishedNodeDefinition {
+  return (
+    validateNode(candidate) ||
+    validateNodeV1Alpha2(candidate)
+  );
+}
+
+function publishedNodeValidationErrors(candidate: unknown): string[] {
+  if (
+    candidate &&
+    typeof candidate === "object" &&
+    (candidate as { apiVersion?: unknown }).apiVersion === "bpa/v1alpha2"
+  ) {
+    validateNodeV1Alpha2(candidate);
+    return formatValidationErrors(validateNodeV1Alpha2.errors);
+  }
+  validateNode(candidate);
+  return formatValidationErrors(validateNode.errors);
+}
+
 function toArtifact(
-  definition: NodeDefinition
+  definition: PublishedNodeDefinition
 ): ArtifactRef & { kind: "node" } {
   return {
     kind: "node",
@@ -116,7 +154,7 @@ function jsonSchema(
 }
 
 function schemaContract(
-  definition: NodeDefinition,
+  definition: PublishedNodeDefinition,
   artifact: ArtifactRef & { kind: "node" }
 ): RuntimeNodeSchemaContract {
   const inputSchema = jsonSchema(definition.inputSchema);
@@ -281,7 +319,7 @@ function compileCondition(value: unknown, path: string): Condition {
 }
 
 function timingSnapshot(
-  definition: NodeDefinition,
+  definition: PublishedNodeDefinition,
   source: SourceCall,
   path: string
 ): {
@@ -367,7 +405,7 @@ export function parseCanonicalDuration(value: string): number {
 }
 
 function permissionSnapshot(
-  definition: NodeDefinition,
+  definition: PublishedNodeDefinition,
   execution: CatalogNodeExecution
 ): PermissionSnapshot {
   return {
@@ -378,7 +416,9 @@ function permissionSnapshot(
   };
 }
 
-function defaultExecution(definition: NodeDefinition): CatalogNodeExecution {
+function defaultExecution(
+  definition: PublishedNodeDefinition
+): CatalogNodeExecution {
   if (definition.adapter) {
     throw new WorkflowCompileError([
       `${definition.metadata.id}@${definition.metadata.version} has adapter dependencies but the CatalogResolver did not pin them`
@@ -389,6 +429,149 @@ function defaultExecution(definition: NodeDefinition): CatalogNodeExecution {
     adapters: [],
     policies: [],
     datasetProfiles: []
+  };
+}
+
+function freezeResourceRequirement(
+  requirement: NonNullable<NodeDefinitionV1Alpha2["resources"]>[string]
+): BrowserResourceRequirementSnapshot {
+  return {
+    kind: "browser",
+    capabilities: [...requirement.capabilities].sort(),
+    allowedOrigins: [...requirement.allowedOrigins].sort(),
+    authentication: requirement.authentication,
+    purpose: requirement.purpose
+  };
+}
+
+function workflowResourceSlots(
+  workflow: CanonicalWorkflow
+): Readonly<Record<string, BrowserResourceRequirementSnapshot>> {
+  if (workflow.apiVersion !== "bpa/v1alpha3") return {};
+  return Object.fromEntries(
+    Object.entries(workflow.spec.resourceSlots ?? {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, slot]) => [name, freezeResourceRequirement(slot)])
+  );
+}
+
+function compileResourceMappings(
+  definition: PublishedNodeDefinition,
+  source: SourceCall,
+  workflow: CanonicalWorkflow,
+  path: string
+): {
+  resourceRequirements?: Readonly<
+    Record<string, BrowserResourceRequirementSnapshot>
+  >;
+  resourceMappings?: Readonly<
+    Record<string, ResourceSlotMappingSnapshot>
+  >;
+} {
+  const rawRequirements =
+    definition.apiVersion === "bpa/v1alpha2"
+      ? definition.resources ?? {}
+      : {};
+  const sourceMappings =
+    "resourceMappings" in source
+      ? (source.resourceMappings ?? {})
+      : {};
+  const requirementNames = Object.keys(rawRequirements).sort();
+  const mappingNames = Object.keys(sourceMappings).sort();
+  if (requirementNames.length === 0) {
+    if (mappingNames.length > 0) {
+      throw new WorkflowCompileError([
+        `${path}/resourceMappings cannot map resources not declared by the Node`
+      ]);
+    }
+    return {};
+  }
+  if (definition.runtime !== "browser") {
+    throw new WorkflowCompileError([
+      `${path}/use declares browser resources but its runtime is ${definition.runtime}`
+    ]);
+  }
+  const unknown = mappingNames.filter(
+    (name) => !(name in rawRequirements)
+  );
+  const missing = requirementNames.filter(
+    (name) => !(name in sourceMappings)
+  );
+  const issues = [
+    ...unknown.map(
+      (name) =>
+        `${path}/resourceMappings/${name} references an unknown Node requirement`
+    ),
+    ...missing.map(
+      (name) =>
+        `${path}/resourceMappings/${name} is required for the Node resource`
+    )
+  ];
+  const slots = workflowResourceSlots(workflow);
+  const requirements: Record<
+    string,
+    BrowserResourceRequirementSnapshot
+  > = {};
+  const mappings: Record<string, ResourceSlotMappingSnapshot> = {};
+  for (const name of requirementNames) {
+    const rawRequirement = rawRequirements[name]!;
+    const requirement = freezeResourceRequirement(rawRequirement);
+    requirements[name] = requirement;
+    const riskDomains = new Set(definition.risk.domains ?? []);
+    const outsidePermission = requirement.allowedOrigins.filter(
+      (origin) => !riskDomains.has(origin)
+    );
+    if (outsidePermission.length > 0) {
+      issues.push(
+        `${path}/use resource ${name} expands published risk domains: ${outsidePermission.join(", ")}`
+      );
+    }
+    const slotName = sourceMappings[name];
+    if (!slotName) continue;
+    const slot = slots[slotName];
+    if (!slot) {
+      issues.push(
+        `${path}/resourceMappings/${name} references missing Workflow resource slot ${slotName}`
+      );
+      continue;
+    }
+    const slotCapabilities = new Set(slot.capabilities);
+    const missingCapabilities = requirement.capabilities.filter(
+      (capability) => !slotCapabilities.has(capability)
+    );
+    if (missingCapabilities.length > 0) {
+      issues.push(
+        `${path}/resourceMappings/${name} slot ${slotName} does not include capabilities: ${missingCapabilities.join(", ")}`
+      );
+    }
+    const allowedOrigins = new Set(requirement.allowedOrigins);
+    const expandedOrigins = slot.allowedOrigins.filter(
+      (origin) => !allowedOrigins.has(origin)
+    );
+    if (expandedOrigins.length > 0) {
+      issues.push(
+        `${path}/resourceMappings/${name} slot ${slotName} expands Node allowed origins: ${expandedOrigins.join(", ")}`
+      );
+    }
+    if (
+      AUTHENTICATION_RANK[slot.authentication] <
+      AUTHENTICATION_RANK[requirement.authentication]
+    ) {
+      issues.push(
+        `${path}/resourceMappings/${name} slot ${slotName} downgrades authentication from ${requirement.authentication} to ${slot.authentication}`
+      );
+    }
+    mappings[name] = {
+      requirementName: name,
+      slotName,
+      requirement,
+      requirementDigest: contentDigest(requirement)
+    };
+  }
+  if (issues.length > 0) throw new WorkflowCompileError(issues);
+  return {
+    resourceRequirements: requirements,
+    resourceMappings: mappings
   };
 }
 
@@ -406,7 +589,7 @@ class IrBuilder {
   #generated = 0;
 
   constructor(
-    readonly workflow: WorkflowDefinitionV1Alpha2,
+    readonly workflow: CanonicalWorkflow,
     readonly catalog: CatalogResolver,
     readonly reservedSourceKeys: ReadonlySet<string>
   ) {}
@@ -447,7 +630,7 @@ class IrBuilder {
   }
 
   resolveNode(reference: string, path: string): {
-    definition: NodeDefinition;
+    definition: PublishedNodeDefinition;
     artifact: ArtifactRef & { kind: "node" };
     execution: CatalogNodeExecution;
   } {
@@ -456,9 +639,9 @@ class IrBuilder {
     if (!definition) {
       throw new WorkflowCompileError([`${path}/use is not published: ${reference}`]);
     }
-    if (!validateNode(definition)) {
+    if (!validatePublishedNode(definition)) {
       throw new WorkflowCompileError(
-        formatValidationErrors(validateNode.errors).map(
+        publishedNodeValidationErrors(definition).map(
           (issue) => `${path}/catalog${issue}`
         )
       );
@@ -469,6 +652,15 @@ class IrBuilder {
     ) {
       throw new WorkflowCompileError([
         `${path}/use resolved to mismatched node identity ${definition.metadata.id}@${definition.metadata.version}`
+      ]);
+    }
+    if (
+      definition.apiVersion === "bpa/v1alpha2" &&
+      definition.runtime === "browser" &&
+      !definition.resources
+    ) {
+      throw new WorkflowCompileError([
+        `${path}/use Browser Node v1alpha2 must declare at least one resource requirement`
       ]);
     }
     if (
@@ -744,6 +936,12 @@ class IrBuilder {
 
     const resolved = this.resolveNode(source.use, path);
     const frozen = timingSnapshot(resolved.definition, source, path);
+    const resources = compileResourceMappings(
+      resolved.definition,
+      source,
+      this.workflow,
+      path
+    );
     const failedDefault = this.terminal(steps, "failed", context.scope);
     const cancelledDefault = this.terminal(
       steps,
@@ -813,6 +1011,7 @@ class IrBuilder {
         resolved.definition,
         resolved.execution
       ),
+      ...resources,
       dependencies: {
         adapters: [...resolved.execution.adapters],
         policies: [...resolved.execution.policies],
@@ -910,17 +1109,23 @@ export function compileWorkflowV1Alpha2(
       formatValidationErrors(validateWorkflowV1Alpha2.errors)
     );
   }
+  return compileValidatedCanonicalWorkflow(candidate, catalog);
+}
+
+function compileValidatedCanonicalWorkflow(
+  workflow: CanonicalWorkflow,
+  catalog: CatalogResolver
+): ExecutionPlan {
   const issues: string[] = [];
-  assertSafeAuthoringValue(candidate, "", issues);
+  assertSafeAuthoringValue(workflow, "", issues);
   const reservedSourceKeys = new Set<string>();
   collectSourceKeys(
-    candidate.spec.root,
+    workflow.spec.root,
     reservedSourceKeys,
     issues,
     "/spec/root"
   );
   if (issues.length) throw new WorkflowCompileError(issues);
-  const workflow = candidate;
   const builder = new IrBuilder(workflow, catalog, reservedSourceKeys);
   const steps: Record<string, ExecutionStep> = {};
   const entry = builder.compileSequence(
@@ -945,6 +1150,10 @@ export function compileWorkflowV1Alpha2(
       },
       artifactClosure: { entries: [...builder.artifacts.values()] },
       riskSnapshot: builder.risks,
+      ...(workflow.apiVersion === "bpa/v1alpha3" &&
+      workflow.spec.resourceSlots
+        ? { resourceSlots: workflowResourceSlots(workflow) }
+        : {}),
       limits: { ...workflow.spec.limits },
       entry,
       steps
@@ -954,6 +1163,18 @@ export function compileWorkflowV1Alpha2(
       error instanceof Error ? error.message : String(error)
     ]);
   }
+}
+
+export function compileWorkflowV1Alpha3(
+  candidate: unknown,
+  catalog: CatalogResolver
+): ExecutionPlan {
+  if (!validateWorkflowV1Alpha3(candidate)) {
+    throw new WorkflowCompileError(
+      formatValidationErrors(validateWorkflowV1Alpha3.errors)
+    );
+  }
+  return compileValidatedCanonicalWorkflow(candidate, catalog);
 }
 
 /**
@@ -970,6 +1191,13 @@ export function compileCanonicalWorkflow(
     (candidate as { apiVersion?: unknown }).apiVersion === "bpa/v1alpha2"
   ) {
     return compileWorkflowV1Alpha2(candidate, catalog);
+  }
+  if (
+    candidate &&
+    typeof candidate === "object" &&
+    (candidate as { apiVersion?: unknown }).apiVersion === "bpa/v1alpha3"
+  ) {
+    return compileWorkflowV1Alpha3(candidate, catalog);
   }
   return compileWorkflowV1Alpha1ToIr2(candidate, catalog);
 }
@@ -1051,7 +1279,14 @@ export function compileWorkflowV1Alpha1ToIr2(
   const unsafeIssues: string[] = [];
   assertSafeAuthoringValue(workflow, "", unsafeIssues);
   if (unsafeIssues.length) throw new WorkflowCompileError(unsafeIssues);
-  const legacy = compileWorkflow(workflow, catalog);
+  const legacy = compileWorkflow(workflow, {
+    getNode: (id, version) => {
+      const definition = catalog.getNode(id, version);
+      return definition?.apiVersion === "bpa/v1alpha1"
+        ? definition
+        : undefined;
+    }
+  });
   const steps: Record<string, ExecutionStep> = {};
   const artifacts = new Map<string, ArtifactRef>();
   const risks: ExecutionPlan["riskSnapshot"][number][] = [];

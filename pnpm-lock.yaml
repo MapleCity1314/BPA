@@ -305,6 +305,9 @@ importers:
 
   packages/node-runtime:
     dependencies:
+      '@bpa/resource-binding':
+        specifier: workspace:*
+        version: link:../resource-binding
       '@bpa/schemas':
         specifier: workspace:*
         version: link:../schemas
@@ -358,6 +361,12 @@ importers:
       better-sqlite3:
         specifier: 12.10.0
         version: 12.10.0
+
+  packages/resource-binding:
+    dependencies:
+      '@bpa/workflow-ir':
+        specifier: workspace:*
+        version: link:../workflow-ir
 
   packages/schemas: {}
 

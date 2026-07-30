@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import {
   ARTIFACT_KINDS,
   WORKFLOW_IR_VERSION,
   type ArtifactClosure,
   type ArtifactRef,
   type BindingValue,
+  type BrowserResourceRequirementSnapshot,
   type Condition,
   type ExecutionBlock,
   type ExecutionLimits,
@@ -18,6 +20,9 @@ import {
 } from "./types.js";
 
 const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+const RESOURCE_NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+const CAPABILITY_PATTERN =
+  /^[a-z][a-z0-9]*(?:[.:_-][a-z0-9]+)*$/;
 const DIGEST_PATTERN = /^(?:sha256:)?[a-fA-F0-9]{64}$/;
 const UNSUPPORTED_STEP_KINDS = new Set(["parallel", "paginate", "poll"]);
 const FORBIDDEN_BINDING_KEYS = new Set([
@@ -168,6 +173,44 @@ function normalizeTimingPolicy(
   };
 }
 
+function normalizeResourceRequirement(
+  requirement: BrowserResourceRequirementSnapshot
+): BrowserResourceRequirementSnapshot {
+  return {
+    kind: "browser",
+    capabilities: [...requirement.capabilities]
+      .map((capability) => capability.trim())
+      .sort(),
+    allowedOrigins: [...requirement.allowedOrigins]
+      .map((origin) => origin.trim())
+      .sort(),
+    authentication: requirement.authentication,
+    purpose: requirement.purpose.trim()
+  };
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  return `{${Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
+    .join(",")}}`;
+}
+
+function resourceRequirementDigest(
+  requirement: BrowserResourceRequirementSnapshot
+): string {
+  return `sha256:${createHash("sha256")
+    .update(canonicalJson(normalizeResourceRequirement(requirement)))
+    .digest("hex")}`;
+}
+
 function normalizeStep(step: ExecutionStep): ExecutionStep {
   switch (step.kind) {
     case "call":
@@ -214,6 +257,39 @@ function normalizeStep(step: ExecutionStep): ExecutionStep {
                   .toLowerCase()
               })
         },
+        ...(step.resourceRequirements === undefined
+          ? {}
+          : {
+              resourceRequirements: Object.fromEntries(
+                Object.entries(step.resourceRequirements)
+                  .sort(([left], [right]) => left.localeCompare(right))
+                  .map(([name, requirement]) => [
+                    name.trim(),
+                    normalizeResourceRequirement(requirement)
+                  ])
+              )
+            }),
+        ...(step.resourceMappings === undefined
+          ? {}
+          : {
+              resourceMappings: Object.fromEntries(
+                Object.entries(step.resourceMappings)
+                  .sort(([left], [right]) => left.localeCompare(right))
+                  .map(([name, mapping]) => [
+                    name,
+                    {
+                      requirementName: mapping.requirementName.trim(),
+                      slotName: mapping.slotName.trim(),
+                      requirement: normalizeResourceRequirement(
+                        mapping.requirement
+                      ),
+                      requirementDigest: mapping.requirementDigest
+                        .trim()
+                        .toLowerCase()
+                    }
+                  ])
+              )
+            }),
         dependencies: {
           adapters: normalizeArtifactRefs(step.dependencies.adapters),
           policies: normalizeArtifactRefs(step.dependencies.policies),
@@ -358,6 +434,18 @@ export function normalizeExecutionPlan(plan: ExecutionPlan): ExecutionPlan {
           `${right.level}\u0000${right.code}\u0000${artifactKey(right.source)}`
         )
       ),
+    ...(plan.resourceSlots === undefined
+      ? {}
+      : {
+          resourceSlots: Object.fromEntries(
+            Object.entries(plan.resourceSlots)
+              .sort(([left], [right]) => left.localeCompare(right))
+              .map(([name, requirement]) => [
+                name.trim(),
+                normalizeResourceRequirement(requirement)
+              ])
+          )
+        }),
     limits: { ...plan.limits },
     entry: normalizedBlock.entry,
     steps: normalizedBlock.steps
@@ -775,6 +863,88 @@ export function estimateMaxStepExecutions(plan: ExecutionPlan): bigint {
   return executionCost({ entry: plan.entry, steps: plan.steps });
 }
 
+const AUTHENTICATION_RANK = {
+  anonymous: 0,
+  optional: 1,
+  authenticated: 2,
+  membership: 3
+} as const;
+
+function resourceRequirementIssues(
+  requirement: BrowserResourceRequirementSnapshot,
+  path: string
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  if (requirement.kind !== "browser") {
+    issues.push(
+      issue("INVALID_VALUE", `${path}/kind`, "resource kind must be browser")
+    );
+  }
+  if (
+    requirement.capabilities.length === 0 ||
+    new Set(requirement.capabilities).size !== requirement.capabilities.length ||
+    requirement.capabilities.some(
+      (capability) => !CAPABILITY_PATTERN.test(capability)
+    )
+  ) {
+    issues.push(
+      issue(
+        "INVALID_VALUE",
+        `${path}/capabilities`,
+        "capabilities must contain unique stable identifiers"
+      )
+    );
+  }
+  if (
+    requirement.allowedOrigins.length === 0 ||
+    new Set(requirement.allowedOrigins).size !==
+      requirement.allowedOrigins.length ||
+    requirement.allowedOrigins.some((origin) => {
+      try {
+        const parsed = new URL(origin);
+        return (
+          parsed.protocol !== "https:" ||
+          parsed.origin !== origin ||
+          parsed.pathname !== "/" ||
+          parsed.username !== "" ||
+          parsed.password !== "" ||
+          parsed.search !== "" ||
+          parsed.hash !== ""
+        );
+      } catch {
+        return true;
+      }
+    })
+  ) {
+    issues.push(
+      issue(
+        "INVALID_VALUE",
+        `${path}/allowedOrigins`,
+        "allowedOrigins must contain unique exact HTTPS origins"
+      )
+    );
+  }
+  if (!(requirement.authentication in AUTHENTICATION_RANK)) {
+    issues.push(
+      issue(
+        "INVALID_VALUE",
+        `${path}/authentication`,
+        "authentication level is not supported"
+      )
+    );
+  }
+  if (!requirement.purpose.trim()) {
+    issues.push(
+      issue(
+        "INVALID_VALUE",
+        `${path}/purpose`,
+        "resource purpose must not be empty"
+      )
+    );
+  }
+  return issues;
+}
+
 function maxForeachDepth(block: ExecutionBlock): number {
   let depth = 0;
   for (const step of Object.values(block.steps)) {
@@ -794,6 +964,9 @@ function blockIssues(
   path: string,
   closure: ReadonlySet<string>,
   closureIdentities: ReadonlyMap<string, string>,
+  resourceSlots: Readonly<
+    Record<string, BrowserResourceRequirementSnapshot>
+  >,
   ancestorStepKeys: ReadonlySet<string>,
   blockScope: "plan" | "foreach"
 ): ValidationIssue[] {
@@ -916,6 +1089,176 @@ function blockIssues(
             `${stepPath}/routes`
           )
         );
+        const resourceRequirements = step.resourceRequirements ?? {};
+        for (const [name, requirement] of Object.entries(
+          resourceRequirements
+        )) {
+          if (!RESOURCE_NAME_PATTERN.test(name)) {
+            issues.push(
+              issue(
+                "INVALID_VALUE",
+                `${stepPath}/resourceRequirements/${name}`,
+                "resource requirement name is not a stable identifier"
+              )
+            );
+          }
+          issues.push(
+            ...resourceRequirementIssues(
+              requirement,
+              `${stepPath}/resourceRequirements/${name}`
+            )
+          );
+          const permittedDomains = new Set(
+            step.permissionSnapshot.domains
+          );
+          if (
+            requirement.allowedOrigins.some(
+              (origin) => !permittedDomains.has(origin)
+            )
+          ) {
+            issues.push(
+              issue(
+                "INVALID_VALUE",
+                `${stepPath}/resourceRequirements/${name}/allowedOrigins`,
+                "resource requirement expands the Call permission domains"
+              )
+            );
+          }
+          if (!step.resourceMappings?.[name]) {
+            issues.push(
+              issue(
+                "INVALID_VALUE",
+                `${stepPath}/resourceMappings/${name}`,
+                "every Node resource requirement must be mapped"
+              )
+            );
+          }
+        }
+        if (step.resourceMappings) {
+          for (const [name, mapping] of Object.entries(
+            step.resourceMappings
+          )) {
+            const mappingPath = `${stepPath}/resourceMappings/${name}`;
+            const frozenRequirement = resourceRequirements[name];
+            if (!frozenRequirement) {
+              issues.push(
+                issue(
+                  "INVALID_VALUE",
+                  mappingPath,
+                  "mapping references an unknown Node resource requirement"
+                )
+              );
+            } else if (
+              JSON.stringify(normalizeResourceRequirement(frozenRequirement)) !==
+              JSON.stringify(
+                normalizeResourceRequirement(mapping.requirement)
+              )
+            ) {
+              issues.push(
+                issue(
+                  "INVALID_VALUE",
+                  `${mappingPath}/requirement`,
+                  "mapping requirement differs from the frozen Node requirement"
+                )
+              );
+            }
+            if (
+              !RESOURCE_NAME_PATTERN.test(name) ||
+              mapping.requirementName !== name
+            ) {
+              issues.push(
+                issue(
+                  "INVALID_VALUE",
+                  mappingPath,
+                  "mapping key must equal its stable requirementName"
+                )
+              );
+            }
+            if (!RESOURCE_NAME_PATTERN.test(mapping.slotName)) {
+              issues.push(
+                issue(
+                  "INVALID_VALUE",
+                  `${mappingPath}/slotName`,
+                  "slotName must be a stable resource name"
+                )
+              );
+            }
+            if (!DIGEST_PATTERN.test(mapping.requirementDigest)) {
+              issues.push(
+                issue(
+                  "INVALID_VALUE",
+                  `${mappingPath}/requirementDigest`,
+                  "requirementDigest must be a SHA-256 digest"
+                )
+              );
+            }
+            if (
+              mapping.requirementDigest !==
+              resourceRequirementDigest(mapping.requirement)
+            ) {
+              issues.push(
+                issue(
+                  "INVALID_VALUE",
+                  `${mappingPath}/requirementDigest`,
+                  "requirementDigest does not match the frozen requirement"
+                )
+              );
+            }
+            issues.push(
+              ...resourceRequirementIssues(
+                mapping.requirement,
+                `${mappingPath}/requirement`
+              )
+            );
+            const slot = resourceSlots[mapping.slotName];
+            if (!slot) {
+              issues.push(
+                issue(
+                  "INVALID_VALUE",
+                  `${mappingPath}/slotName`,
+                  `mapped resource slot "${mapping.slotName}" is absent`
+                )
+              );
+              continue;
+            }
+            const slotCapabilities = new Set(slot.capabilities);
+            if (
+              mapping.requirement.capabilities.some(
+                (capability) => !slotCapabilities.has(capability)
+              )
+            ) {
+              issues.push(
+                issue(
+                  "INVALID_VALUE",
+                  mappingPath,
+                  "resource slot does not include every Node capability"
+                )
+              );
+            }
+            const nodeOrigins = new Set(mapping.requirement.allowedOrigins);
+            if (slot.allowedOrigins.some((origin) => !nodeOrigins.has(origin))) {
+              issues.push(
+                issue(
+                  "INVALID_VALUE",
+                  mappingPath,
+                  "resource slot expands the Node allowed origins"
+                )
+              );
+            }
+            if (
+              AUTHENTICATION_RANK[slot.authentication] <
+              AUTHENTICATION_RANK[mapping.requirement.authentication]
+            ) {
+              issues.push(
+                issue(
+                  "INVALID_VALUE",
+                  mappingPath,
+                  "resource slot downgrades the Node authentication requirement"
+                )
+              );
+            }
+          }
+        }
         if (!KEY_PATTERN.test(step.providerId)) {
           issues.push(
             issue(
@@ -1188,6 +1531,7 @@ function blockIssues(
             `${stepPath}/body`,
             closure,
             closureIdentities,
+            resourceSlots,
             new Set([...ancestorStepKeys, ...keys]),
             "foreach"
           )
@@ -1390,6 +1734,21 @@ export function executionPlanIssues(plan: ExecutionPlan): ValidationIssue[] {
     );
   }
   issues.push(...validateLimits(plan.limits, "/limits"));
+  const resourceSlots = plan.resourceSlots ?? {};
+  for (const [name, slot] of Object.entries(resourceSlots)) {
+    if (!RESOURCE_NAME_PATTERN.test(name)) {
+      issues.push(
+        issue(
+          "INVALID_VALUE",
+          `/resourceSlots/${name}`,
+          "resource slot name is not a stable identifier"
+        )
+      );
+    }
+    issues.push(
+      ...resourceRequirementIssues(slot, `/resourceSlots/${name}`)
+    );
+  }
 
   const closure = normalizeArtifactClosure(plan.artifactClosure);
   const closedKeys = new Set<string>();
@@ -1458,6 +1817,7 @@ export function executionPlanIssues(plan: ExecutionPlan): ValidationIssue[] {
       "",
       closedKeys,
       closedIdentities,
+      resourceSlots,
       new Set(),
       "plan"
     )

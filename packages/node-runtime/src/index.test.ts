@@ -10,6 +10,7 @@ import {
   mergeTimingPolicy,
   resolveBindings,
   reserveRateLimit,
+  ResourceValidatedRuntimeDispatcher,
   RuntimeProviderRegistry,
   timingPolicyIssues
 } from "./index.js";
@@ -115,6 +116,121 @@ describe("runtime provider registry", () => {
     };
     expect(() => registry.resolve("missing", node)).toThrow("not registered");
     expect(() => registry.resolve("team", node)).toThrow("does not support");
+  });
+
+  it("validates frozen Resource Bindings before provider dispatch", async () => {
+    let calls = 0;
+    const registry = new RuntimeProviderRegistry();
+    registry.register({
+      ...provider("browser"),
+      invoke: async () => {
+        calls += 1;
+        return {
+          status: "succeeded",
+          output: null,
+          evidence: [],
+          riskSignals: []
+        };
+      }
+    });
+    const session = {
+      sessionId: "session-1",
+      capabilityDigest: "a".repeat(64),
+      capabilities: ["browser.dom.read"],
+      origin: "https://www.chanmama.com",
+      authentication: "authenticated" as const,
+      state: "available" as const
+    };
+    const dispatcher = new ResourceValidatedRuntimeDispatcher(registry, {
+      getBrowserSession: () => session
+    });
+    const invocation = {
+      invocationId: "invocation-resource-1",
+      identity: {
+        runId: "run-1",
+        scopePath: [],
+        iterationKey: "root",
+        stepKey: "metrics",
+        attempt: 1
+      },
+      node: {
+        kind: "node" as const,
+        id: "chanmama.product.metrics.read",
+        version: "1.0.0",
+        digest: "b".repeat(64)
+      },
+      providerId: "browser",
+      input: { untrustedSessionId: "other-session" },
+      permissionSnapshot: {
+        riskLevel: "R1" as const,
+        permissions: ["browser.dom.read"],
+        domains: ["https://www.chanmama.com"]
+      },
+      resourceBindings: {
+        page_session: {
+          requirementName: "page_session",
+          slotName: "metrics_source",
+          requirement: {
+            kind: "browser" as const,
+            capabilities: ["browser.dom.read"],
+            allowedOrigins: ["https://www.chanmama.com"],
+            authentication: "authenticated" as const,
+            purpose: "Read metrics"
+          },
+          requirementDigest: "c".repeat(64),
+          binding: {
+            bindingId: "binding-1",
+            revision: 1,
+            slotName: "metrics_source",
+            sessionId: "session-1",
+            capabilityDigest: "a".repeat(64),
+            origin: "https://www.chanmama.com",
+            authentication: "authenticated" as const,
+            frozenAt: 1_000,
+            approvedBy: "user:test"
+          }
+        }
+      },
+      resourceMappings: {
+        page_session: {
+          requirementName: "page_session",
+          slotName: "metrics_source",
+          requirement: {
+            kind: "browser" as const,
+            capabilities: ["browser.dom.read"],
+            allowedOrigins: ["https://www.chanmama.com"],
+            authentication: "authenticated" as const,
+            purpose: "Read metrics"
+          },
+          requirementDigest: "c".repeat(64)
+        }
+      },
+      deadlineAt: 2_000,
+      idempotencyKey: "run-1:root:metrics:1",
+      fencingToken: 1,
+      traceId: "trace-resource-1"
+    };
+    await expect(
+      dispatcher.invoke(invocation, new AbortController().signal)
+    ).resolves.toMatchObject({ status: "succeeded" });
+    expect(calls).toBe(1);
+
+    const changedDispatcher = new ResourceValidatedRuntimeDispatcher(
+      registry,
+      {
+        getBrowserSession: () => ({
+          ...session,
+          capabilityDigest: "d".repeat(64)
+        })
+      }
+    );
+    await expect(
+      changedDispatcher.invoke(invocation, new AbortController().signal)
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "RESOURCE_BINDING_INVALID", retryable: false }
+    });
+    expect(calls).toBe(1);
   });
 });
 
