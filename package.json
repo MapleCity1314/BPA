@@ -30,9 +30,11 @@
   "dependencies": {
     "@bpa/compiler": "workspace:*",
     "@bpa/engine": "workspace:*",
+    "@bpa/node-runtime": "workspace:*",
     "@bpa/persistence": "workspace:*",
     "@bpa/persistence-sqlite": "workspace:*",
     "@bpa/schemas": "workspace:*",
+    "@bpa/workflow-ir": "workspace:*",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "better-sqlite3": "12.10.0",

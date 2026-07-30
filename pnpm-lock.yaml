@@ -14,6 +14,9 @@ importers:
       '@bpa/engine':
         specifier: workspace:*
         version: link:packages/engine
+      '@bpa/node-runtime':
+        specifier: workspace:*
+        version: link:packages/node-runtime
       '@bpa/persistence':
         specifier: workspace:*
         version: link:packages/persistence
@@ -23,6 +26,9 @@ importers:
       '@bpa/schemas':
         specifier: workspace:*
         version: link:packages/schemas
+      '@bpa/workflow-ir':
+        specifier: workspace:*
+        version: link:packages/workflow-ir
       ajv:
         specifier: ^8.17.1
         version: 8.20.0
