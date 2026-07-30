@@ -19,10 +19,15 @@ import {
   type CatalogResolver
 } from "@bpa/compiler";
 import {
+  CONTROL_HELLO_PROTOCOL_VERSION,
   CONTROL_MAX_MESSAGE_BYTES as CONTROL_V1_MAX_MESSAGE_BYTES,
+  CONTROL_PROTOCOL_VERSION,
   encodeControlEnvelope,
+  negotiateControlHello,
+  parseControlHelloRequest,
   parseControlRequest,
   type ControlErrorCode,
+  type ControlHelloErrorEnvelope,
   type ControlRequestEnvelope,
   type ControlResponseEnvelope
 } from "@bpa/control-protocol";
@@ -1408,8 +1413,84 @@ export class LocalControlServer {
     rmSync(this.socketPath, { force: true });
     const server = createServer((socket) => {
       let nativeConnectionId: string | undefined;
+      let negotiatedControl:
+        | {
+            maxFrameBytes: number;
+            features: readonly string[];
+          }
+        | undefined;
+      let applicationControlSeen = false;
+      // Decoder failures are scoped to this connection. They must never
+      // surface as an unhandled socket error that terminates the daemon.
+      socket.on("error", () => undefined);
       attachControlDecoder(socket, (message, mode) => {
         if (mode === "control-v1") {
+          if (
+            (message as { version?: unknown })?.version ===
+            CONTROL_HELLO_PROTOCOL_VERSION
+          ) {
+            if (negotiatedControl || applicationControlSeen) {
+              const response: ControlHelloErrorEnvelope = {
+                version: CONTROL_HELLO_PROTOCOL_VERSION,
+                kind: "error",
+                requestId: null,
+                error: {
+                  code: "MALFORMED_HELLO",
+                  message:
+                    "Control Hello must be the first and only negotiation envelope"
+                },
+                connection: "close"
+              };
+              socket.end(Buffer.from(encodeControlEnvelope(response)));
+              return;
+            }
+            try {
+              const hello = parseControlHelloRequest(message);
+              const response = negotiateControlHello(hello, {
+                supportedApplicationProtocols: [CONTROL_PROTOCOL_VERSION],
+                runtime: { name: "bpa-core", version: "0.3.0" },
+                maxFrameBytes: CONTROL_V1_MAX_MESSAGE_BYTES,
+                features: [
+                  "control_error_isolation",
+                  "evidence_refs",
+                  "resource_bindings",
+                  "staging_leases"
+                ]
+              });
+              socket.write(Buffer.from(encodeControlEnvelope(response)));
+              if (response.kind === "error") {
+                socket.end();
+                return;
+              }
+              negotiatedControl = {
+                maxFrameBytes: response.maxFrameBytes,
+                features: response.features
+              };
+            } catch (error) {
+              const response: ControlHelloErrorEnvelope = {
+                version: CONTROL_HELLO_PROTOCOL_VERSION,
+                kind: "error",
+                requestId: null,
+                error: {
+                  code: "MALFORMED_HELLO",
+                  message:
+                    error instanceof Error ? error.message : String(error)
+                },
+                connection: "close"
+              };
+              socket.end(Buffer.from(encodeControlEnvelope(response)));
+            }
+            return;
+          }
+          applicationControlSeen = true;
+          if (
+            negotiatedControl &&
+            Buffer.byteLength(JSON.stringify(message), "utf8") + 1 >
+              negotiatedControl.maxFrameBytes
+          ) {
+            socket.end();
+            return;
+          }
           let request: ControlRequestEnvelope;
           try {
             request = parseControlRequest(message);

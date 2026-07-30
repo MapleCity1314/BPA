@@ -9,7 +9,14 @@ import { createCliProgram } from "./program.js";
 
 await createCliProgram({
   client: new ControlClient(
-    new UnixSocketControlTransport(resolveControlSocketPath())
+    new UnixSocketControlTransport(resolveControlSocketPath(), {
+      runtime: { name: "bpa-cli", version: "0.3.0" },
+      features: [
+        "evidence_refs",
+        "resource_bindings",
+        "staging_leases"
+      ]
+    })
   ),
   actor: userInfo().username
 })

@@ -3,11 +3,14 @@ import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  CONTROL_HELLO_PROTOCOL_VERSION,
   CONTROL_MAX_MESSAGE_BYTES,
   CONTROL_PROTOCOL_VERSION,
   decodeControlEnvelope,
   encodeControlEnvelope,
+  parseControlHelloResponse,
   parseControlResponse,
+  type ControlHelloRequestEnvelope,
   type ControlRequestEnvelope,
   type ControlResponseEnvelope
 } from "@bpa/control-protocol";
@@ -26,6 +29,15 @@ export interface ControlClientOptions {
   maxRememberedRequestIds?: number;
   schedule?: (callback: () => void, delayMs: number) => unknown;
   cancelScheduled?: (handle: unknown) => void;
+}
+
+export interface UnixSocketControlTransportOptions {
+  negotiate?: boolean;
+  runtime?: {
+    name: string;
+    version: string;
+  };
+  features?: string[];
 }
 
 export class ControlClientError extends Error {
@@ -168,7 +180,21 @@ export function resolveControlSocketPath(
 }
 
 export class UnixSocketControlTransport implements ControlTransport {
-  constructor(readonly socketPath: string) {}
+  readonly #negotiate: boolean;
+  readonly #runtime: { name: string; version: string };
+  readonly #features: string[];
+
+  constructor(
+    readonly socketPath: string,
+    options: UnixSocketControlTransportOptions = {}
+  ) {
+    this.#negotiate = options.negotiate ?? true;
+    this.#runtime = options.runtime ?? {
+      name: "bpa-control-client",
+      version: "0.4.0"
+    };
+    this.#features = options.features ?? [];
+  }
 
   send(
     request: ControlRequestEnvelope,
@@ -176,8 +202,9 @@ export class UnixSocketControlTransport implements ControlTransport {
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const socket = createConnection(this.socketPath);
-      const chunks: Uint8Array[] = [];
-      let length = 0;
+      let buffered = Buffer.alloc(0);
+      let negotiatedMaxFrameBytes = CONTROL_MAX_MESSAGE_BYTES;
+      let waitingForHello = this.#negotiate;
       let settled = false;
       const finish = (callback: () => void) => {
         if (settled) return;
@@ -189,23 +216,92 @@ export class UnixSocketControlTransport implements ControlTransport {
       const onAbort = () =>
         finish(() => reject(new Error("Control request aborted")));
       signal.addEventListener("abort", onAbort, { once: true });
-      socket.on("connect", () => socket.write(encodeControlEnvelope(request)));
+      const sendApplicationRequest = () => {
+        const encoded = Buffer.from(encodeControlEnvelope(request));
+        if (encoded.byteLength > negotiatedMaxFrameBytes) {
+          finish(() =>
+            reject(
+              new Error("Control request exceeds negotiated maximum size")
+            )
+          );
+          return;
+        }
+        socket.write(encoded);
+      };
+      socket.on("connect", () => {
+        if (!this.#negotiate) {
+          sendApplicationRequest();
+          return;
+        }
+        const hello: ControlHelloRequestEnvelope = {
+          version: CONTROL_HELLO_PROTOCOL_VERSION,
+          kind: "hello",
+          requestId: `${request.requestId.slice(0, 193)}:hello`,
+          supportedApplicationProtocols: [CONTROL_PROTOCOL_VERSION],
+          runtime: this.#runtime,
+          maxFrameBytes: CONTROL_MAX_MESSAGE_BYTES,
+          features: this.#features
+        };
+        socket.write(Buffer.from(encodeControlEnvelope(hello)));
+      });
       socket.on("data", (chunk: Buffer) => {
-        length += chunk.byteLength;
-        if (length > CONTROL_MAX_MESSAGE_BYTES) {
+        buffered = Buffer.concat([buffered, chunk]);
+        if (buffered.byteLength > negotiatedMaxFrameBytes) {
           finish(() => reject(new Error("Control response exceeds maximum size")));
           return;
         }
-        chunks.push(chunk);
-        if (chunk.includes(0x0a)) {
-          finish(() => {
-            const bytes = Buffer.concat(chunks);
+        let newline = buffered.indexOf(0x0a);
+        while (newline >= 0 && !settled) {
+          const bytes = buffered.subarray(0, newline + 1);
+          buffered = buffered.subarray(newline + 1);
+          let message: unknown;
+          try {
+            message = decodeControlEnvelope(bytes);
+          } catch (error) {
+            finish(() => reject(error));
+            return;
+          }
+          if (waitingForHello) {
             try {
-              resolve(decodeControlEnvelope(bytes));
+              const hello = parseControlHelloResponse(message);
+              if (hello.kind === "error") {
+                finish(() =>
+                  reject(
+                    new Error(
+                      `Control negotiation failed: ${hello.error.code}: ${hello.error.message}`
+                    )
+                  )
+                );
+                return;
+              }
+              if (hello.applicationProtocol !== CONTROL_PROTOCOL_VERSION) {
+                finish(() =>
+                  reject(
+                    new Error(
+                      `Unsupported negotiated control protocol: ${hello.applicationProtocol}`
+                    )
+                  )
+                );
+                return;
+              }
+              negotiatedMaxFrameBytes = hello.maxFrameBytes;
+              waitingForHello = false;
+              sendApplicationRequest();
             } catch (error) {
-              reject(error);
+              finish(() =>
+                reject(
+                  new Error(
+                    `Control negotiation response is invalid: ${
+                      error instanceof Error ? error.message : String(error)
+                    }`
+                  )
+                )
+              );
             }
-          });
+            return;
+          }
+          finish(() => resolve(message));
+          newline = buffered.indexOf(0x0a);
         }
       });
       socket.on("error", (error) => finish(() => reject(error)));

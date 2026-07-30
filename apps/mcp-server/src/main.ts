@@ -29,9 +29,13 @@ const server = new McpServer({
 });
 const socket =
   process.env.BPA_CONTROL_SOCKET ?? resolveControlSocketPath();
-const control = new ControlClient(new UnixSocketControlTransport(socket), {
-  timeoutMs: 10_000
-});
+const control = new ControlClient(
+  new UnixSocketControlTransport(socket, {
+    runtime: { name: "bpa-mcp", version: "0.3.0" },
+    features: ["evidence_refs", "resource_bindings", "staging_leases"]
+  }),
+  { timeoutMs: 10_000 }
+);
 
 function result(value: unknown) {
   return {

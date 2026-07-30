@@ -8,6 +8,8 @@ import {
   CONTROL_PROTOCOL_VERSION,
   decodeControlEnvelope,
   encodeControlEnvelope,
+  negotiateControlHello,
+  parseControlHelloRequest,
   parseControlRequest
 } from "@bpa/control-protocol";
 import {
@@ -216,21 +218,42 @@ describe("Unix socket control transport", () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-control-client-"));
     const socketPath = join(directory, "control.sock");
     const server = createServer((socket) => {
-      const chunks: Buffer[] = [];
+      let buffered = Buffer.alloc(0);
+      let negotiated = false;
       socket.on("data", (chunk) => {
-        chunks.push(chunk);
-        if (!chunk.includes(0x0a)) return;
-        const request = parseControlRequest(
-          decodeControlEnvelope(Buffer.concat(chunks))
-        );
-        socket.end(
-          encodeControlEnvelope({
-            version: CONTROL_PROTOCOL_VERSION,
-            kind: "result",
-            requestId: request.requestId,
-            result: { method: request.method }
-          })
-        );
+        buffered = Buffer.concat([buffered, chunk]);
+        let newline = buffered.indexOf(0x0a);
+        while (newline >= 0) {
+          const message = decodeControlEnvelope(
+            buffered.subarray(0, newline + 1)
+          );
+          buffered = buffered.subarray(newline + 1);
+          if (!negotiated) {
+            const hello = parseControlHelloRequest(message);
+            socket.write(
+              encodeControlEnvelope(
+                negotiateControlHello(hello, {
+                  supportedApplicationProtocols: [CONTROL_PROTOCOL_VERSION],
+                  runtime: { name: "test-core", version: "0.4.0" },
+                  maxFrameBytes: CONTROL_MAX_MESSAGE_BYTES,
+                  features: []
+                })
+              )
+            );
+            negotiated = true;
+          } else {
+            const request = parseControlRequest(message);
+            socket.end(
+              encodeControlEnvelope({
+                version: CONTROL_PROTOCOL_VERSION,
+                kind: "result",
+                requestId: request.requestId,
+                result: { method: request.method }
+              })
+            );
+          }
+          newline = buffered.indexOf(0x0a);
+        }
       });
     });
     await new Promise<void>((resolve, reject) => {
