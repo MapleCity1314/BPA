@@ -327,6 +327,8 @@ importers:
         specifier: workspace:*
         version: link:../schemas
 
+  packages/page-readiness: {}
+
   packages/persistence:
     dependencies:
       '@bpa/schemas':
