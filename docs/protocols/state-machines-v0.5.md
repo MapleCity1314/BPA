@@ -1,6 +1,6 @@
 # BPA v0.5 state machines
 
-Status: candidate, awaiting human confirmation
+Status: accepted (human confirmation on 2026-07-30)
 
 This document extends the accepted v0.4 state machines. Run, Assistance,
 Dataset and Decision transitions remain unchanged.

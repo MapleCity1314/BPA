@@ -1,6 +1,6 @@
 # BPA v0.5 compatibility matrix
 
-Status: candidate, awaiting human confirmation
+Status: accepted (human confirmation on 2026-07-30)
 
 | Producer | Accepted source | Frozen runtime form | Compatibility rule |
 | --- | --- | --- | --- |

@@ -1,6 +1,6 @@
 # ADR 0006: Control hello and page readiness contract candidates
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-30
 
 ## Context

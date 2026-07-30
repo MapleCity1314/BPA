@@ -1,6 +1,6 @@
 # ADR 0005: Separate evidence, blobs, sources and browser resources
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-30
 
 ## Context
