@@ -8,6 +8,7 @@
     "./paths": "./src/paths.ts"
   },
   "dependencies": {
+    "@bpa/asset-core": "workspace:*",
     "@bpa/asset-store-local": "workspace:*",
     "@bpa/assistance-core": "workspace:*",
     "@bpa/authoring-core": "workspace:*",

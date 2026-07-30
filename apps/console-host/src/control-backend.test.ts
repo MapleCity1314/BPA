@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CONSOLE_CONTROL_METHODS,
   UdsControlBackend,
@@ -39,12 +39,27 @@ function operationIds(): () => string {
   return () => `operation-${++sequence}`;
 }
 
-function backend(client: FakeRequester) {
+function backend(
+  client: FakeRequester,
+  stagingUploader?: {
+    upload(input: {
+      leaseId: string;
+      token: string;
+      body: Uint8Array;
+      expectedSha256?: string;
+    }): Promise<{
+      leaseId: string;
+      digest: string;
+      sizeBytes: number;
+    }>;
+  }
+) {
   return new UdsControlBackend(client, {
     actorId: "operator:test",
     operationId: operationIds(),
     now: () => new Date("2026-07-30T04:00:00.000Z"),
-    leaseDurationMs: 60_000
+    leaseDurationMs: 60_000,
+    ...(stagingUploader ? { stagingUploader } : {})
   });
 }
 
@@ -396,5 +411,51 @@ describe("UdsControlBackend", () => {
       { method: "download.list", params: { runId: "run-1" } },
       { method: "download.get", params: { downloadId: "download-1" } }
     ]);
+  });
+
+  it("sends upload bytes only through the dedicated staging channel", async () => {
+    const body = new Uint8Array([1, 2, 3]);
+    const uploader = {
+      upload: vi.fn(async () => ({
+        leaseId: "lease-secure",
+        digest: `sha256:${"a".repeat(64)}`,
+        sizeBytes: body.byteLength
+      }))
+    };
+    const client = new FakeRequester().respond(
+      CONSOLE_CONTROL_METHODS.stagingLeaseCreate,
+      {
+        leaseId: "lease-secure",
+        expiresAt: "2026-07-30T04:10:00.000Z",
+        maxBytes: body.byteLength,
+        transferToken: "secret-token"
+      }
+    );
+    const adapter = backend(client, uploader);
+    await adapter.createStagingLease({
+      fileName: "packaging.xlsx",
+      mediaType:
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      sizeBytes: body.byteLength,
+      sha256: "a".repeat(64),
+      purpose: "dataset"
+    });
+    await expect(
+      adapter.uploadStagingLease(
+        "lease-secure",
+        body,
+        "a".repeat(64)
+      )
+    ).resolves.toMatchObject({
+      leaseId: "lease-secure",
+      sizeBytes: body.byteLength
+    });
+    expect(uploader.upload).toHaveBeenCalledWith({
+      leaseId: "lease-secure",
+      token: "secret-token",
+      body,
+      expectedSha256: "a".repeat(64)
+    });
+    expect(JSON.stringify(client.calls)).not.toContain("1,2,3");
   });
 });

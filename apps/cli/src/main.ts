@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   startConsoleHost,
+  UnixSocketStagingUploader,
   UdsControlBackend,
   type ConsoleHostHandle
 } from "@bpa/console-host";
@@ -43,7 +44,8 @@ await createCliProgram({
     if (consoleHost) return { url: consoleHost.launchUrl };
     consoleHost = await startConsoleHost({
       backend: new UdsControlBackend(controlClient, {
-        actorId: userInfo().username
+        actorId: userInfo().username,
+        stagingUploader: new UnixSocketStagingUploader()
       }),
       staticRoot: consoleStaticRoot()
     });

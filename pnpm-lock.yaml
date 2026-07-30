@@ -164,6 +164,9 @@ importers:
 
   apps/local-core:
     dependencies:
+      '@bpa/asset-core':
+        specifier: workspace:*
+        version: link:../../packages/asset-core
       '@bpa/asset-store-local':
         specifier: workspace:*
         version: link:../../packages/asset-store-local

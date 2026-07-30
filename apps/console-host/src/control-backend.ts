@@ -18,6 +18,7 @@ import type {
   WorkflowSummary
 } from "@bpa/operator-console-contracts";
 import { ConsoleUserFacingError } from "./user-facing-error.js";
+import type { StagingUploader } from "./staging-uploader.js";
 
 export const CONSOLE_CONTROL_METHODS = {
   doctor: "doctor",
@@ -48,6 +49,7 @@ export interface UdsControlBackendOptions {
   now?: () => Date;
   operationId?: () => string;
   leaseDurationMs?: number;
+  stagingUploader?: StagingUploader;
 }
 
 interface CachedTask {
@@ -257,7 +259,12 @@ export class UdsControlBackend implements ControlBackend {
   readonly #now: () => Date;
   readonly #operationId: () => string;
   readonly #leaseDurationMs: number;
+  readonly #stagingUploader: StagingUploader | undefined;
   readonly #tasks = new Map<string, CachedTask>();
+  readonly #stagingAuthorizations = new Map<
+    string,
+    { token: string; expectedSha256?: string }
+  >();
 
   constructor(
     client: ConsoleControlRequester,
@@ -268,6 +275,7 @@ export class UdsControlBackend implements ControlBackend {
     this.#now = options.now ?? (() => new Date());
     this.#operationId = options.operationId ?? randomUUID;
     this.#leaseDurationMs = options.leaseDurationMs ?? 5 * 60 * 1000;
+    this.#stagingUploader = options.stagingUploader;
   }
 
   async getDashboard(): Promise<DashboardSnapshot> {
@@ -675,6 +683,16 @@ export class UdsControlBackend implements ControlBackend {
       const lease = record(value);
       const id = text(lease?.id, text(lease?.leaseId));
       if (!lease || !id) throw new Error("invalid lease");
+      const transferToken = text(lease.transferToken);
+      if (this.#stagingUploader && !transferToken) {
+        throw new Error("missing staging transfer authorization");
+      }
+      if (transferToken) {
+        this.#stagingAuthorizations.set(id, {
+          token: transferToken,
+          ...(input.sha256 ? { expectedSha256: input.sha256 } : {})
+        });
+      }
       return {
         id,
         expiresAt: safeTimestamp(
@@ -689,13 +707,40 @@ export class UdsControlBackend implements ControlBackend {
   }
 
   async uploadStagingLease(
-    _leaseId: string,
-    _body: Uint8Array,
-    _expectedSha256?: string
+    leaseId: string,
+    body: Uint8Array,
+    expectedSha256?: string
   ): Promise<UploadReceipt> {
-    throw new ConsoleUserFacingError(
-      "安全文件上传通道尚未启用；文件内容不会通过控制协议发送。"
-    );
+    const authorization = this.#stagingAuthorizations.get(leaseId);
+    if (!this.#stagingUploader || !authorization) {
+      throw new ConsoleUserFacingError(
+        "安全文件上传通道尚未启用；文件内容不会通过控制协议发送。"
+      );
+    }
+    if (
+      authorization.expectedSha256 &&
+      expectedSha256 &&
+      authorization.expectedSha256.toLowerCase() !==
+        expectedSha256.toLowerCase()
+    ) {
+      throw new ConsoleUserFacingError("上传文件摘要与凭证不一致。");
+    }
+    try {
+      const authorizedDigest =
+        expectedSha256 ?? authorization.expectedSha256;
+      const receipt = await this.#stagingUploader.upload({
+        leaseId,
+        token: authorization.token,
+        body,
+        ...(authorizedDigest === undefined
+          ? {}
+          : { expectedSha256: authorizedDigest })
+      });
+      this.#stagingAuthorizations.delete(leaseId);
+      return receipt;
+    } catch {
+      throw failureMessage("安全上传文件");
+    }
   }
 
   async getEvidenceLineage(runId: string): Promise<EvidenceLineageView> {

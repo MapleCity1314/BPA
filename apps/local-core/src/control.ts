@@ -80,6 +80,10 @@ import {
 import type { JsonValue } from "@bpa/workflow-ir";
 import { RuntimeResourceBindingService } from "./runtime-resource-bindings.js";
 import { TrustedEvidenceQueryService } from "./trusted-evidence-queries.js";
+import {
+  StagingTransferService,
+  type StagingLeaseRequest
+} from "./staging-transfer.js";
 
 export const CONTROL_MAX_MESSAGE_BYTES = 512 * 1024;
 
@@ -110,7 +114,8 @@ export class LocalCoreService {
   constructor(
     readonly persistence: Persistence,
     readonly browserGateway?: LocalBrowserGateway,
-    runtimeProviders?: RuntimeProviderRegistry
+    runtimeProviders?: RuntimeProviderRegistry,
+    readonly stagingTransfers?: StagingTransferService
   ) {
     this.engine = new LocalWorkflowEngine(persistence);
     this.datasets = new PackagingDatasetService(persistence);
@@ -529,6 +534,13 @@ export class LocalCoreService {
             Math.max(1, Number(params.limit) || 100)
           )
         }).records;
+      case "staging.lease.create":
+        if (!this.stagingTransfers) {
+          throw new Error("Staging transfer service is unavailable");
+        }
+        return this.stagingTransfers.issue(
+          params as unknown as StagingLeaseRequest
+        );
       case "evidence.lineage.get":
         return this.#trustedEvidence.lineage(String(params.runId));
       case "download.list":

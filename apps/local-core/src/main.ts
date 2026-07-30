@@ -8,6 +8,10 @@ import { BrowserEvidenceReceiver } from "./browser-evidence.js";
 import { LocalControlServer, LocalCoreService } from "./control.js";
 import { resolveBpaPaths } from "./paths.js";
 import { CoreInstanceLock } from "./instance-lock.js";
+import {
+  LocalStagingTransferServer,
+  StagingTransferService
+} from "./staging-transfer.js";
 
 const paths = resolveBpaPaths();
 mkdirSync(dirname(paths.socket), { recursive: true, mode: 0o700 });
@@ -34,7 +38,20 @@ const browserGateway = new LocalBrowserGateway(
   undefined,
   browserEvidence
 );
-const service = new LocalCoreService(persistence, browserGateway);
+const stagingTransfers = new StagingTransferService(
+  persistence,
+  paths.data
+);
+const stagingServer = new LocalStagingTransferServer(
+  paths.transferSocket,
+  stagingTransfers
+);
+const service = new LocalCoreService(
+  persistence,
+  browserGateway,
+  undefined,
+  stagingTransfers
+);
 browserGateway.recoverTerminalResults();
 browserGateway.recoverCancellations();
 const server = new LocalControlServer(
@@ -75,6 +92,7 @@ gatewayTimer.unref();
 const shutdown = async (): Promise<void> => {
   clearInterval(gatewayTimer);
   await server.stop().catch(() => undefined);
+  await stagingServer.stop().catch(() => undefined);
   persistence.close();
   instanceLock.release();
   process.exit(0);
@@ -83,5 +101,9 @@ const shutdown = async (): Promise<void> => {
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());
 
-await server.start();
+await stagingServer.start();
+await server.start().catch(async (error) => {
+  await stagingServer.stop().catch(() => undefined);
+  throw error;
+});
 process.stderr.write(`BPA Local Core listening on ${paths.socket}\n`);

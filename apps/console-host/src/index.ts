@@ -11,3 +11,9 @@ export {
   type UdsControlBackendOptions
 } from "./control-backend.js";
 export { ConsoleUserFacingError } from "./user-facing-error.js";
+export {
+  UnixSocketStagingUploader,
+  resolveStagingSocketPath,
+  type StagingUploader,
+  type StagingUploadInput
+} from "./staging-uploader.js";
