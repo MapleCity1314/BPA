@@ -21,7 +21,7 @@ description: BPA 0.4 candidate 已实现、部分完成和明确未进入的能�
 | 业务入口 | 只监听本机的 Operator Console、运行向导、任务中心、时间线和血缘视图 |
 
 当前仓库门禁报告 30 个 Node、4 个 Workflow、1 个 Adapter、5 个 Assistance
-Profile 和 3 个创作 Skill。整仓基线为 79 个测试文件、526 项测试通过。这些数字
+Profile 和 3 个创作 Skill。整仓基线为 80 个测试文件、527 项测试通过。这些数字
 是当前构建快照，不是公共 API 承诺。
 
 ## 已有基础，但仍需真实验收
@@ -55,3 +55,7 @@ Profile 和 3 个创作 Skill。整仓基线为 79 个测试文件、526 项测�
 6. 仅有 Schema、ADR 或计划。
 
 文档中的“已实现”至少要求进入自动测试；“真实可用”还要求对应业务验收。
+
+日常操作从[使用本地工作台](../../guides/operator-console/)开始；需要判断文档是否
+代表当前事实时，可以读取[机器可读文档](../../reference/machine-readable/)中的
+权威等级和实现状态。

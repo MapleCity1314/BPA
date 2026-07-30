@@ -64,7 +64,7 @@ Session、查看 Run/Task/证据血缘，并通过独立安全通道上传文件
 
 ## 验证基线
 
-- 整仓 `pnpm verify`：79 个测试文件、526 项测试通过。
+- 整仓 `pnpm verify`：80 个测试文件、527 项测试通过。
 - Schema drift、依赖边界、TypeScript strict、Extension MV3、React Console 和协议
   文档构建全部通过。
 - 当前验证的生产闭包为 105 个文件、128,174,457 bytes；包含固定 Node.js 24、
