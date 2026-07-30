@@ -1,6 +1,6 @@
 # BPA v0.5 state machines
 
-Status: accepted for 0.4 evidence/control; authoring additions are candidate
+Status: accepted (authoring additions confirmed on 2026-07-30)
 
 This document extends the accepted v0.4 state machines. Run, Assistance,
 Dataset and Decision transitions remain unchanged.
@@ -110,7 +110,7 @@ connected | hello_received
 An incompatible, malformed or oversized connection is closed independently.
 No connection-level failure may terminate the Core daemon.
 
-## Authoring Session (candidate)
+## Authoring Session
 
 ```text
 intake
@@ -131,7 +131,7 @@ Every transition uses `expected_revision` CAS and an idempotent operation id.
 `candidate` means an immutable Candidate Bundle exists; it does not mean the
 asset is executable or published.
 
-## Design Mode grant (candidate)
+## Design Mode grant
 
 ```text
 requested
@@ -147,7 +147,7 @@ Tab closure, Browser Session identity change or PageEpoch invalidation ends the
 grant. Version 1 grants expire within 15 minutes and cannot be renewed in
 place.
 
-## Authoring snapshot (candidate)
+## Authoring snapshot
 
 ```text
 grant_validated
@@ -165,7 +165,7 @@ Attachment requires a complete Evidence/Asset provenance chain. Raw restricted
 evidence may expire after 24 hours; an attached redacted fixture is a distinct
 content-addressed asset.
 
-## Candidate Bundle (candidate)
+## Candidate Bundle
 
 ```text
 assembling

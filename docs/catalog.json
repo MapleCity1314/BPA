@@ -131,7 +131,7 @@
       "title": "BPA Authoring v1alpha1 协议候选",
       "summary": "ScenarioSpec、创作会话、语义页面快照、Design Mode 与候选包边界。",
       "authority": "normative",
-      "implementation": "planned",
+      "implementation": "partial",
       "audience": ["developer", "integrator", "ai"],
       "since": "0.5.0",
       "public": false
@@ -243,7 +243,7 @@
       "title": "ADR 0007: Author from semantic evidence without granting execution authority",
       "summary": "用受限语义证据创作候选，但不授予执行、源码写入或发布权限。",
       "authority": "architecture",
-      "implementation": "planned",
+      "implementation": "partial",
       "audience": ["developer", "integrator", "ai"],
       "since": "0.5.0",
       "public": false

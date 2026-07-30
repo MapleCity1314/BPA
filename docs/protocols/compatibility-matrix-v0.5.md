@@ -1,6 +1,6 @@
 # BPA v0.5 compatibility matrix
 
-Status: accepted for 0.4 evidence/control; authoring additions are candidate
+Status: accepted (authoring additions confirmed on 2026-07-30)
 
 | Producer | Accepted source | Frozen runtime form | Compatibility rule |
 | --- | --- | --- | --- |

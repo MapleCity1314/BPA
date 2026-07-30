@@ -1,6 +1,6 @@
 # BPA Authoring v1alpha1 协议候选
 
-Status: candidate — waiting for the single 0.5 authoring protocol confirmation
+Status: accepted (human confirmation on 2026-07-30)
 
 Date: 2026-07-30
 

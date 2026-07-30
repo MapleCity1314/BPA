@@ -1,6 +1,6 @@
 # ADR 0007: Author from semantic evidence without granting execution authority
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-30
 
 ## Context
