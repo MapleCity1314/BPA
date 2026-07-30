@@ -1,43 +1,96 @@
 ---
-title: 协议让浏览器执行保持可恢复、可验证
-description: BPA 对外协议、公共数据模型、JSON Schema 与规范消息样例。
+title: 可信地运行真实浏览器流程
+description: BPA 的产品边界、平台架构、执行模型、可信证据和公共协议入口。
 editUrl: false
 ---
 
 import ProtocolFlow from "../../components/ProtocolFlow.astro";
 
 <p class="protocol-lede">
-  BPA Browser Protocol v1 定义 Browser Gateway 与真实浏览器中的 Extension
-  Bridge 如何建立会话、声明能力、发送命令、确认结果并恢复断线。协议把权限、顺序和证据放进可校验的消息，而不是依赖临时推理。
+  BPA（Browser Process Assistance）把经过审核的业务流程编译成版本化
+  Workflow 和 Node，再在用户真实浏览器的登录环境中执行。它优先解决确定性、
+  恢复、权限收敛和证据留存，而不是把页面交给一个可以任意操作的浏览器 Agent。
 </p>
 
 <div class="protocol-status">
-  <span>协议族 bpa.browser/1</span>
-  <span>版本 1.0.0</span>
-  <span>状态 已确认</span>
-  <span>基线 2026-07-27</span>
+  <span>平台 0.4 candidate</span>
+  <span>Browser Protocol 1.0.0</span>
+  <span>Control Hello 已启用</span>
+  <span>基线 2026-07-30</span>
 </div>
+
+<div class="bpa-card-grid">
+  <a class="bpa-card" href="./start/current-status/">
+    <span class="bpa-card__eyebrow">OPERATORS</span>
+    <strong>现在能做什么</strong>
+    <p>查看本地工作台、只读流程、人工任务、Dataset 导入和证据血缘的真实状态。</p>
+  </a>
+  <a class="bpa-card" href="./platform/architecture/">
+    <span class="bpa-card__eyebrow">BUILDERS</span>
+    <strong>平台怎样分层</strong>
+    <p>理解 Compiler、IR2、Engine、Runtime Provider、Gateway、Adapter 和持久化边界。</p>
+  </a>
+  <a class="bpa-card" href="./browser/v1/">
+    <span class="bpa-card__eyebrow">INTEGRATORS</span>
+    <strong>协议怎样保证安全</strong>
+    <p>从 Session、Capability、Permission Grant、Fencing 到 Result 与 Evidence ACK。</p>
+  </a>
+</div>
+
+## 一条执行链路
+
+```text
+Operator Console / CLI / MCP
+            │ bpa.control/hello/1
+            ▼
+        Local Core
+            │
+   Compiler → IR2 → Engine
+            │ Runtime Invocation
+            ▼
+      Provider Registry
+            │
+ Browser Gateway ↔ Native Host ↔ Extension Bridge
+            │
+            ▼
+      reviewed Adapter
+            │
+            ▼
+   real browser page state
+
+Every transition → Event · Evidence · Source · Asset · Audit
+```
+
+Workflow 决定流程结构；Node 描述单步能力；Adapter 保存平台页面逻辑；Engine
+只推进确定性的执行状态。Workflow 不允许携带 selector、XPath、坐标或任意
+JavaScript。
+
+## 三条必须同时成立的边界
+
+### 已审核能力
+
+浏览器只执行 Extension Capability Manifest 中已经注册的精确 Node 和版本。
+AI 可以创建 Candidate，但不能自行批准或发布正式资产。
+
+### 冻结执行计划
+
+Run 创建时保存规范化 IR2、摘要、风险快照和精确资产闭包。恢复使用保存的计划，
+不会重新编译已经变化的源资产。
+
+### 可验证结果
+
+大型正文不进入控制协议或普通 Result。Evidence 先完成分块上传和摘要验证，
+Result 才能引用它并推进 Engine。
 
 <ProtocolFlow />
 
-## 两端只交换受约束的消息
+## 当前不是哪些东西
 
-Gateway 管理任务与浏览器会话之间的连接。Extension Bridge 使用当前浏览器登录状态执行已注册能力，并校验页面、权限和命令上下文。Native Host 只负责 Origin 校验、Chrome framing 与消息转发。
+- 不是可以执行任意网页脚本的通用 Agent。
+- 不是用无头浏览器替代用户真实登录状态的采集器。
+- 不是验证码、会员权限、限流或平台风控的绕过工具。
+- 不是已经开放保存、发布、改价等 R2+ 写动作的系统。
+- 不是云端、多租户或 PostgreSQL 部署。
 
-协议不解释 Workflow，也不允许远程发送任意 JavaScript。每条命令都绑定节点版本、最小权限、截止时间和 Fencing Token。
-
-[阅读 Browser Protocol v1](./browser/v1/)
-
-## 规范分为稳定协议和 Alpha 模型
-
-Browser Protocol、Permission Grant、Execution Event 与 Evidence Metadata 已采用 v1 标识。Workflow 和 Node 仍是 `v1alpha1`，它们可以继续演进，不应被实现方当作稳定接口。
-
-所有机器可读文件都来自仓库中的 JSON Schema。网站只发布经过白名单审核的协议文件与中性样例。
-
-[下载 JSON Schema](./reference/schemas/) · [查看规范消息样例](./reference/examples/)
-
-## 失败必须保持可判断
-
-未知字段、错误序列、无效签名、过期权限或不匹配的会话会被拒绝。写动作已经开始但副作用无法确认时，结果必须是 `uncertain`，不能自动假定失败并重试。
-
-断线恢复从未确认的 Command Sequence 开始。Bridge 先查询本地 Pending Result；已有结果就补发，不重新执行节点。
+从[当前能力](./start/current-status/)开始了解已实现与待验收边界；开发者可以直接进入
+[模块与边界](./platform/architecture/)或[公共 Schema](./reference/schemas/)。

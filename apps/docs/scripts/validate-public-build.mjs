@@ -1,44 +1,26 @@
 import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join, relative } from "node:path";
+import {
+  expectedRoutes,
+  publicExamples,
+  publicSchemas,
+  publicStaticAssets
+} from "./public-specs.mjs";
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const distDir = join(repoRoot, "apps/docs/dist");
 const sourceSchemaDir = join(repoRoot, "packages/schemas/schema");
-const sourceExample = join(
-  repoRoot,
-  "docs/protocols/examples/browser-protocol-v1.messages.json"
-);
+const sourceExampleDir = join(repoRoot, "docs/protocols/examples");
 const publicSpecDir = join(distDir, "specs");
-
-const expectedRoutes = [
-  "index.html",
-  "browser/v1/index.html",
-  "browser/v1/messages/index.html",
-  "browser/v1/security/index.html",
-  "models/workflow/v1alpha1/index.html",
-  "models/node/v1alpha1/index.html",
-  "models/execution-event/v1/index.html",
-  "models/evidence/v1/index.html",
-  "reference/schemas/index.html",
-  "reference/examples/index.html",
-  "404.html"
-];
-
-const publicSchemas = [
-  "browser-protocol-v1.schema.json",
-  "permission.schema.json",
-  "timing-policy.schema.json",
-  "risk-signal.schema.json",
-  "workflow.schema.json",
-  "node.schema.json",
-  "event.schema.json",
-  "evidence.schema.json"
-];
 
 const forbiddenText = [
   "fxg.jinritemai.com",
   "doudian.shop",
+  "chanmama",
+  "douyin",
+  "抖店",
+  "蝉妈妈",
   "本地 v1 运行与验收",
   "bridge-gateway实验报告",
   "/Users/",
@@ -63,6 +45,10 @@ for (const route of expectedRoutes) {
   await readFile(join(distDir, route));
 }
 
+for (const asset of publicStaticAssets) {
+  await readFile(join(distDir, asset));
+}
+
 for (const file of publicSchemas) {
   const [source, built] = await Promise.all([
     readFile(join(sourceSchemaDir, file)),
@@ -73,12 +59,14 @@ for (const file of publicSchemas) {
   }
 }
 
-const [sourceMessages, builtMessages] = await Promise.all([
-  readFile(sourceExample),
-  readFile(join(publicSpecDir, "browser-protocol-v1.messages.json"))
-]);
-if (!sourceMessages.equals(builtMessages)) {
-  throw new Error("Published protocol messages differ from source.");
+for (const file of publicExamples) {
+  const [source, built] = await Promise.all([
+    readFile(join(sourceExampleDir, file)),
+    readFile(join(publicSpecDir, file))
+  ]);
+  if (!source.equals(built)) {
+    throw new Error(`Published example differs from source: ${file}`);
+  }
 }
 
 const files = await collectFiles(distDir);
@@ -103,5 +91,5 @@ if (pagefindFiles.length === 0) {
 }
 
 console.log(
-  `Validated ${expectedRoutes.length} routes, ${publicSchemas.length + 1} artifacts, and the public-content boundary.`
+  `Validated ${expectedRoutes.length} routes, ${publicSchemas.length + publicExamples.length} artifacts, ${publicStaticAssets.length} static assets, and the public-content boundary.`
 );

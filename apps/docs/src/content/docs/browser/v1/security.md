@@ -36,8 +36,16 @@ Bridge 在执行前重新检查：
 
 Blocking Risk Signal 必须停止动作并返回 `rejected`。协议不允许尝试绕过验证码、登录、二次认证或平台风控。
 
+对于 Workflow v1alpha3，Gateway 还会核对 Command 所需的精确 Browser Session。
+Capability Digest、Origin 或认证等级与 Run 的冻结 Binding Snapshot 不一致时，
+Command 不会被派发到“看起来可用”的其他 Session。
+
 ## Evidence 与业务结果分离
 
 普通 Result 只携带结构化输出和 `evidence_refs`。截图、文件或较大的验证材料通过 Evidence 分块传输，正文与 Metadata 分开保存。
 
-Evidence 在完整 ACK 前保留在 Bridge 本地；ACK 后按保留策略清理。
+Evidence 在完整 ACK 前保留在 Bridge 本地；Result 在 Result ACK 前保留。Core 只有
+在 Evidence 已持久化、所有权与当前执行一致时才接受引用。
+
+Console 文件使用另一条受限本机 Staging 通道。控制面只携带一次性租约和不可变上传
+回执，不接收浏览器提交的最终路径。

@@ -159,6 +159,65 @@ header.header {
   font-size: 0.75rem;
 }
 
+.bpa-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-block: 2.5rem 4rem;
+  border: 1px solid var(--sl-color-hairline);
+  background: var(--sl-color-hairline);
+}
+
+.bpa-card {
+  display: flex;
+  min-height: 13rem;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.4rem;
+  background: var(--sl-color-bg);
+  color: var(--sl-color-white);
+  text-decoration: none;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.bpa-card:hover {
+  background: var(--sl-color-accent-low);
+}
+
+.bpa-card:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--sl-color-white);
+  outline-offset: -4px;
+}
+
+.bpa-card strong {
+  font-size: 1.05rem;
+  letter-spacing: -0.025em;
+}
+
+.bpa-card p {
+  margin: auto 0 0 !important;
+  color: var(--sl-color-gray-3);
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.bpa-card__eyebrow {
+  color: var(--sl-color-gray-3);
+  font-family: var(--sl-font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+}
+
+.sl-markdown-content > blockquote {
+  margin-block: 1.75rem;
+  border-inline-start: 2px solid var(--sl-color-white);
+  background: var(--sl-color-gray-6);
+  color: var(--sl-color-gray-2);
+}
+
 .protocol-flow {
   width: 100%;
   margin-block: 3rem 4.5rem;
@@ -320,6 +379,14 @@ header.header {
 }
 
 @media (max-width: 50rem) {
+  .bpa-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .bpa-card {
+    min-height: 9rem;
+  }
+
   .protocol-flow figcaption {
     display: block;
   }

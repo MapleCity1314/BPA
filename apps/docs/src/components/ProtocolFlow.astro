@@ -23,8 +23,20 @@
       <span class="protocol-flow__detail">绑定权限、截止时间与 Fencing Token</span>
     </li>
     <li data-direction="left">
+      <span class="protocol-flow__type">command.ack</span>
+      <span class="protocol-flow__detail">确认接收；不代表执行成功</span>
+    </li>
+    <li data-direction="left">
+      <span class="protocol-flow__type">evidence.begin / chunk / complete</span>
+      <span class="protocol-flow__detail">分块上传正文并校验完整摘要</span>
+    </li>
+    <li data-direction="right">
+      <span class="protocol-flow__type">evidence.ack</span>
+      <span class="protocol-flow__detail">完整落盘后允许 Result 引用</span>
+    </li>
+    <li data-direction="left">
       <span class="protocol-flow__type">command.result</span>
-      <span class="protocol-flow__detail">先持久化结果，再发送最终状态</span>
+      <span class="protocol-flow__detail">引用已确认 Evidence，再发送最终状态</span>
     </li>
     <li data-direction="right">
       <span class="protocol-flow__type">result.ack</span>
@@ -33,6 +45,6 @@
   </ol>
   <p class="protocol-flow__alternative">
     文本说明：Gateway 先建立会话，Bridge 报告能力；命令携带最小权限与
-    Fencing Token，结果经确认后才进入终态。
+    Fencing Token。Evidence 先完整落盘，Result 才能引用，结果经确认后进入终态。
   </p>
 </figure>

@@ -3,7 +3,7 @@ title: Browser Protocol v1
 description: Gateway、Native Host 与 Extension Bridge 之间的消息边界和完整生命周期。
 ---
 
-**状态：已确认 v1**  
+**状态：已确认 v1，Evidence 消息已启用**
 协议族：`bpa.browser/1`  
 Schema 版本：`1.0.0`
 
@@ -73,6 +73,10 @@ READY
 
 Resume Token 最长有效 24 小时。恢复成功后立即轮换，设备撤销时同步失效。Gateway 从未确认的 Command Sequence 开始重放。
 
+恢复沿用原 Browser Session 身份，只轮换 Resume Token。这样已经冻结到 Run 的
+Resource Binding 不会因为 Native Host 或 Extension 重连而失效。恢复仍会重新检查
+Extension ID、Browser Instance、Token 摘要与有效期。
+
 ## Command 生命周期
 
 ```text
@@ -90,5 +94,14 @@ TERMINAL
 ```
 
 `command.ack` 只表示接收。Bridge 必须先持久化 Result，再发送；收到 `result.ack` 后才能删除正文。
+
+如果 Result 引用 Evidence，完整顺序还包括：
+
+```text
+evidence.begin → chunk → complete → evidence.ack
+→ command.result(evidence_refs) → result.ack
+```
+
+未完整、跨 Run、跨 Node Execution 或旧 Fencing Token 的 Evidence 不能推进 Engine。
 
 继续阅读：[消息参考](./messages/) · [安全边界](./security/) · [Timing 与 Risk](./timing-and-risk/)

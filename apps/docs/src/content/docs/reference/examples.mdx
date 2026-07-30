@@ -1,13 +1,36 @@
 ---
 title: 规范消息样例
-description: 覆盖 Browser Protocol v1 全部消息类型的中性 JSON 样例。
+description: Browser Protocol v1 与 Control Hello 的中性、可下载规范样例。
 ---
 
-完整样例覆盖 Session、Capability、Command、Result、Cancel、Heartbeat、Evidence 与恢复消息。示例使用 `example.com` 和通用节点标识，不包含业务适配器或真实凭据。
+Browser 样例覆盖 Session、Capability、Command、Result、Cancel、Heartbeat、
+Evidence 与恢复消息。Control 样例覆盖 Hello、Welcome 和不兼容响应。公开示例使用
+中性标识，不包含业务适配器、真实来源或凭据。
 
 <a class="sl-link-button primary" href={`${import.meta.env.BASE_URL}specs/browser-protocol-v1.messages.json`} download>
-  下载完整 JSON
+  下载 Browser 消息
 </a>
+{" "}
+<a class="sl-link-button" href={`${import.meta.env.BASE_URL}specs/control-hello-v1.example.json`} download>
+  下载 Control Hello
+</a>
+
+## Control Hello
+
+```json
+{
+  "version": "bpa.control/hello/1",
+  "kind": "hello",
+  "requestId": "hello-01",
+  "supportedApplicationProtocols": ["bpa.control/1"],
+  "runtime": {
+    "name": "example-client",
+    "version": "0.4.0"
+  },
+  "maxFrameBytes": 524288,
+  "features": ["evidence_refs", "resource_bindings"]
+}
+```
 
 ## Session Hello
 

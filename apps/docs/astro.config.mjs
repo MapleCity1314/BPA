@@ -13,7 +13,7 @@ const base =
   (process.env.GITHUB_ACTIONS === "true" && repositoryName && !isUserSite
     ? `/${repositoryName}`
     : "/");
-const ogImage = new URL(`${base.replace(/\/$/, "")}/og.png`, site).toString();
+const ogImage = new URL(`${base.replace(/\/$/, "")}/og-v2.png`, site).toString();
 
 export default defineConfig({
   site,
@@ -21,9 +21,9 @@ export default defineConfig({
   integrations: [
     sitemap(),
     starlight({
-      title: "BPA / Protocols",
+      title: "BPA / Docs",
       description:
-        "BPA 对外协议、公共数据模型、JSON Schema 与规范消息样例。",
+        "BPA 架构、执行模型、可信证据、浏览器协议、业务工作台与公共 Schema。",
       favicon: "/favicon.png",
       credits: false,
       lastUpdated: true,
@@ -88,7 +88,7 @@ export default defineConfig({
           attrs: {
             property: "og:image:alt",
             content:
-              "BPA Browser Protocol v1：Gateway 与 Extension Bridge 消息序列"
+              "BPA Docs：可信浏览器工作流的架构、运行时、证据与协议"
           }
         },
         {
@@ -110,8 +110,26 @@ export default defineConfig({
         {
           label: "开始",
           items: [
-            { label: "协议概览", slug: "" },
+            { label: "BPA 概览", slug: "" },
+            { label: "当前能力", slug: "start/current-status" },
+            { label: "核心概念", slug: "start/concepts" },
             { label: "版本与兼容", slug: "reference/versioning" }
+          ]
+        },
+        {
+          label: "平台架构",
+          items: [
+            { label: "模块与边界", slug: "platform/architecture" },
+            { label: "执行、恢复与幂等", slug: "platform/runtime-recovery" },
+            { label: "业务工作台", slug: "platform/operator-console" }
+          ]
+        },
+        {
+          label: "控制与浏览器协议",
+          items: [
+            { label: "Control Hello", slug: "control/hello" },
+            { label: "资源绑定", slug: "control/resource-binding" },
+            { label: "证据与资产", slug: "control/trusted-evidence" }
           ]
         },
         {
@@ -133,7 +151,24 @@ export default defineConfig({
               label: "Workflow v1alpha1",
               slug: "models/workflow/v1alpha1"
             },
+            {
+              label: "Workflow v1alpha2 / v1alpha3",
+              slug: "models/workflow/structured"
+            },
             { label: "Node v1alpha1", slug: "models/node/v1alpha1" },
+            { label: "Node v1alpha2", slug: "models/node/v1alpha2" },
+            {
+              label: "Assistance Task",
+              slug: "models/assistance/v1alpha1"
+            },
+            {
+              label: "Dataset 与 Decision",
+              slug: "models/data/v1alpha1"
+            },
+            {
+              label: "Page Model 与 Readiness",
+              slug: "models/page/v1alpha1"
+            },
             {
               label: "Execution Event v1",
               slug: "models/execution-event/v1"
@@ -142,7 +177,14 @@ export default defineConfig({
           ]
         },
         {
-          label: "Reference",
+          label: "安全与运维",
+          items: [
+            { label: "数据与保留", slug: "operations/data-security" },
+            { label: "安装与升级边界", slug: "operations/runtime" }
+          ]
+        },
+        {
+          label: "参考",
           items: [
             { label: "JSON Schema", slug: "reference/schemas" },
             { label: "规范消息样例", slug: "reference/examples" }

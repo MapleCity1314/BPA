@@ -5,6 +5,9 @@ description: BPA 节点能力、运行时、风险、幂等与 Evidence 契约�
 
 **状态：v1alpha1**
 
+v1alpha1 保持兼容。需要冻结 Browser Session、Origin 与认证等级的新浏览器能力使用
+[Node v1alpha2](../v1alpha2/)。
+
 Node 是提前注册、测试和版本化的能力。Workflow 只能引用 Node，不能在运行时内嵌代码。
 
 ## 必需信息
@@ -35,5 +38,8 @@ non_repeatable
 `runtime: browser` 的节点必须声明至少一个允许域名。实际执行仍需 Command 内的 Permission Grant 同时覆盖该域名和权限。
 
 RiskSignal 可以由页面、Adapter 或 Bridge 产生。Node 的风险配置不能降低全局策略或平台阻断信号。
+
+资源感知 Browser Node 不能通过 Single Node Run 猜测 Session；它必须进入带精确
+Resource Slot 的已发布 Workflow。
 
 [下载 Node Schema](../../../reference/schemas/)
