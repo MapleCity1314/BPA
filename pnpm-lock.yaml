@@ -211,6 +211,9 @@ importers:
       '@bpa/dataset-core':
         specifier: workspace:*
         version: link:../../packages/dataset-core
+      '@bpa/ecommerce-evidence-domain':
+        specifier: workspace:*
+        version: link:../../packages/ecommerce-evidence-domain
       '@bpa/packaging-dataset':
         specifier: workspace:*
         version: link:../../packages/packaging-dataset
@@ -270,6 +273,8 @@ importers:
       '@bpa/schemas':
         specifier: workspace:*
         version: link:../schemas
+
+  packages/ecommerce-evidence-domain: {}
 
   packages/engine:
     dependencies:

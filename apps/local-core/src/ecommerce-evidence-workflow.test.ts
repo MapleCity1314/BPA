@@ -112,7 +112,7 @@ describe("Local Core ecommerce evidence-chain workflow", () => {
         workflowId: "ecommerce.evidence-chain-replay",
         workflowVersion: "1.0.0",
         input: source(
-          "apps/team-worker/src/fixtures/prepackaged-jianbing.input.json"
+          "packages/ecommerce-evidence-domain/src/fixtures/prepackaged-jianbing.input.json"
         )
       }
     });

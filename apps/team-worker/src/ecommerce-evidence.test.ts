@@ -13,7 +13,10 @@ import {
 
 const fixture = JSON.parse(
   readFileSync(
-    new URL("./fixtures/prepackaged-jianbing.input.json", import.meta.url),
+    new URL(
+      "../../../packages/ecommerce-evidence-domain/src/fixtures/prepackaged-jianbing.input.json",
+      import.meta.url
+    ),
     "utf8"
   )
 ) as Record<string, JsonValue>;

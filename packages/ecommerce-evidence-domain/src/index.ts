@@ -1,4 +1,5 @@
-type JsonObject = Record<string, unknown>;
+export type EcommerceEvidenceObject = Record<string, unknown>;
+type JsonObject = EcommerceEvidenceObject;
 
 const DEFAULT_EXCLUSIONS = [
   "与目标商品形态无关的糕点",

@@ -1,4 +1,11 @@
 import {
+  buildCategorySpace,
+  buildComparablePool,
+  buildReferencePack,
+  evaluateViralEvidence,
+  normalizeProductIntent
+} from "@bpa/ecommerce-evidence-domain";
+import {
   buildDeterministicIssueReport,
   MAX_RECONCILE_PRODUCTS,
   PACKAGING_MATCHER_VERSION,
@@ -19,13 +26,6 @@ import {
 } from "@bpa/team-runtime";
 import type { DecisionReuseContext } from "@bpa/dataset-core";
 import type { JsonValue } from "@bpa/workflow-ir";
-import {
-  buildCategorySpace,
-  buildComparablePool,
-  buildReferencePack,
-  evaluateViralEvidence,
-  normalizeProductIntent
-} from "./ecommerce-evidence.js";
 import {
   TEAM_WORKER_CODE_DIGEST,
   TEAM_WORKER_HANDLER_MANIFEST,
