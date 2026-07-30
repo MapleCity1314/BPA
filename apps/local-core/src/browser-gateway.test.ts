@@ -308,7 +308,15 @@ describe("local browser gateway", () => {
     expect(persistence.getEvidenceLink("link-evidence-1")).toMatchObject({
       runId,
       nodeExecutionId: command.payload.node_execution_id,
-      sourceIds: ["source-evidence-1"]
+      sourceIds: ["source-evidence-1"],
+      assetIds: ["asset-evidence-1"]
+    });
+    expect(
+      persistence.getAssetRecord("asset-evidence-1")
+    ).toMatchObject({
+      digest: evidenceDigest,
+      classification: "restricted",
+      retention: { policy: "restricted_24h" }
     });
 
     gateway.handle(result);

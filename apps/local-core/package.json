@@ -12,6 +12,7 @@
     "@bpa/asset-store-local": "workspace:*",
     "@bpa/assistance-core": "workspace:*",
     "@bpa/authoring-core": "workspace:*",
+    "@bpa/candidate-archive": "workspace:*",
     "@bpa/compiler": "workspace:*",
     "@bpa/control-protocol": "workspace:*",
     "@bpa/dataset-core": "workspace:*",

@@ -218,6 +218,7 @@ describe("single Node CLI control mapping", () => {
           input: { value: "run" },
           expectedPreviewDigest: "sha256:preview",
           confirmed: false,
+          resourceBindings: {},
           actor: "cli-user"
         }
       }

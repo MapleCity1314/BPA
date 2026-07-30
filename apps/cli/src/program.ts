@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { Command, InvalidArgumentError } from "commander";
 import { parse } from "yaml";
+import { verifyCandidateArchive } from "@bpa/candidate-archive";
 import { compareShadowRuns } from "@bpa/shadow-run";
 
 export interface ControlRequester {
@@ -175,17 +176,67 @@ export function createCliProgram(options: CliProgramOptions): Command {
       );
     });
 
+  const candidate = program
+    .command("candidate")
+    .description("inspect, export and verify immutable Candidate Bundles");
+
+  candidate
+    .command("inspect")
+    .argument("<candidate-id>", "Candidate Bundle id")
+    .action(async (candidateId) => {
+      output(
+        await client.request(
+          "authoring.candidate-bundle.inspect",
+          { bundleId: candidateId }
+        )
+      );
+    });
+
+  candidate
+    .command("export")
+    .argument("<candidate-id>", "Candidate Bundle id")
+    .action(async (candidateId) => {
+      output(
+        await client.request(
+          "authoring.candidate-bundle.export",
+          {
+            bundleId: candidateId,
+            actor
+          }
+        )
+      );
+    });
+
+  candidate
+    .command("verify")
+    .argument("<archive>", "Candidate Bundle tar archive")
+    .action(async (archive) => {
+      output(
+        verifyCandidateArchive(
+          await readFile(resolve(archive))
+        )
+      );
+    });
+
   program
     .command("run")
     .argument("<workflow>", "workflow id")
     .requiredOption("--version <version>", "published workflow version")
     .option("--input <json>", "workflow input JSON", "{}")
+    .option(
+      "--resource-bindings <json>",
+      "exact Workflow resource-slot to Browser Session mapping",
+      "{}"
+    )
     .action(async (workflow, commandOptions) => {
       output(
         await client.request("run.create", {
           workflowId: workflow,
           workflowVersion: commandOptions.version as string,
-          input: JSON.parse(commandOptions.input as string)
+          input: JSON.parse(commandOptions.input as string),
+          resourceBindings: JSON.parse(
+            commandOptions.resourceBindings as string
+          )
         })
       );
     });
@@ -230,6 +281,11 @@ export function createCliProgram(options: CliProgramOptions): Command {
     .argument("<node>", "published node id")
     .requiredOption("--version <version>", "published node version")
     .option("--input <json>", "node input JSON", "{}")
+    .option(
+      "--resource-bindings <json>",
+      "exact Node requirement to Browser Session mapping",
+      "{}"
+    )
     .option("--yes", "confirm an R1 permission preview")
     .action(async (node, commandOptions) => {
       const input = JSON.parse(commandOptions.input as string);
@@ -252,6 +308,9 @@ export function createCliProgram(options: CliProgramOptions): Command {
         input,
         expectedPreviewDigest: preview.previewDigest,
         confirmed: Boolean(commandOptions.yes),
+        resourceBindings: JSON.parse(
+          commandOptions.resourceBindings as string
+        ),
         actor
       });
       output({ preview, run });

@@ -68,7 +68,8 @@ import {
 } from "@bpa/schemas";
 import {
   validateElementContractDefinition,
-  validatePageModel as validatePageModelDefinition
+  validatePageModel as validatePageModelDefinition,
+  type PageAssetCandidate
 } from "@bpa/page-model";
 import type { LocalBrowserGateway } from "./browser-gateway.js";
 import { Ir2WorkflowRuntime } from "./ir2-workflow-runtime.js";
@@ -91,6 +92,7 @@ import {
   StagingTransferService,
   type StagingLeaseRequest
 } from "./staging-transfer.js";
+import { LocalCandidateArchiveService } from "./candidate-archive-service.js";
 
 export const CONTROL_MAX_MESSAGE_BYTES = 512 * 1024;
 
@@ -114,6 +116,7 @@ export class LocalCoreService {
   readonly ir2Runtime: Ir2WorkflowRuntime;
   readonly assistance: AssistanceTaskService;
   readonly authoring: LocalAuthoringService;
+  readonly candidateArchives: LocalCandidateArchiveService | undefined;
   readonly datasets: PackagingDatasetService;
   readonly #resourceBindings: RuntimeResourceBindingService;
   readonly #trustedEvidence: TrustedEvidenceQueryService;
@@ -122,7 +125,8 @@ export class LocalCoreService {
     readonly persistence: Persistence,
     readonly browserGateway?: LocalBrowserGateway,
     runtimeProviders?: RuntimeProviderRegistry,
-    readonly stagingTransfers?: StagingTransferService
+    readonly stagingTransfers?: StagingTransferService,
+    candidateArchiveDataDirectory?: string
   ) {
     this.engine = new LocalWorkflowEngine(persistence);
     this.datasets = new PackagingDatasetService(persistence);
@@ -224,7 +228,19 @@ export class LocalCoreService {
         return published?.digest === profile.digest;
       }
     });
-    this.authoring = new LocalAuthoringService(persistence);
+    this.candidateArchives = candidateArchiveDataDirectory
+      ? new LocalCandidateArchiveService(
+          persistence,
+          candidateArchiveDataDirectory
+        )
+      : undefined;
+    this.authoring = new LocalAuthoringService(
+      persistence,
+      this.candidateArchives
+        ? (storageRef) =>
+            this.candidateArchives!.readAsset(storageRef)
+        : undefined
+    );
   }
 
   handle(request: ControlRequest): ControlResponse {
@@ -601,6 +617,51 @@ export class LocalCoreService {
           occurredAt: String(params.occurredAt),
           snapshot: params.snapshot as PageSnapshotDefinition
         });
+      case "authoring.snapshot.complete":
+        return this.authoring.completeSnapshot({
+          sessionId: String(params.sessionId),
+          expectedRevision: Number(params.expectedRevision),
+          operationId: String(params.operationId),
+          actor: String(params.actor),
+          occurredAt: String(params.occurredAt),
+          runId: String(params.runId),
+          snapshotId: String(params.snapshotId)
+        });
+      case "authoring.snapshot.query":
+        return this.authoring.querySnapshot({
+          snapshotId: String(params.snapshotId),
+          ...(params.offset === undefined
+            ? {}
+            : { offset: Number(params.offset) }),
+          ...(params.limit === undefined
+            ? {}
+            : { limit: Number(params.limit) }),
+          ...(params.role === undefined
+            ? {}
+            : { role: String(params.role) }),
+          ...(params.text === undefined
+            ? {}
+            : { text: String(params.text) })
+        });
+      case "authoring.page-candidate.validate":
+        return this.authoring.validatePageCandidate({
+          sessionId: String(params.sessionId),
+          expectedRevision: Number(params.expectedRevision),
+          candidate: params.candidate as PageAssetCandidate
+        });
+      case "authoring.page-candidate.save":
+        return this.authoring.savePageCandidate({
+          sessionId: String(params.sessionId),
+          expectedRevision: Number(params.expectedRevision),
+          actor: String(params.actor),
+          candidate: params.candidate as PageAssetCandidate
+        });
+      case "authoring.candidate-bundle.validate":
+        return this.authoring.validateCandidateBundle({
+          sessionId: String(params.sessionId),
+          expectedRevision: Number(params.expectedRevision),
+          bundle: params.bundle as CandidateBundleDefinition
+        });
       case "authoring.candidate-bundle.save":
         return this.authoring.saveCandidateBundle({
           sessionId: String(params.sessionId),
@@ -612,6 +673,18 @@ export class LocalCoreService {
         });
       case "authoring.candidate-bundle.get":
         return this.authoring.getCandidateBundle(String(params.bundleId));
+      case "authoring.candidate-bundle.inspect":
+        return this.#candidateArchives().inspect(
+          String(params.bundleId)
+        );
+      case "authoring.candidate-bundle.export":
+        return this.#candidateArchives().export({
+          bundleId: String(params.bundleId),
+          actor: String(params.actor),
+          occurredAt: String(
+            params.occurredAt ?? new Date().toISOString()
+          )
+        });
       case "dataset.inspect":
         return this.datasets.get(String(params.id), String(params.version));
       case "dataset.read":
@@ -689,7 +762,8 @@ export class LocalCoreService {
           input: params.input ?? {},
           expectedPreviewDigest: String(params.expectedPreviewDigest),
           confirmed: params.confirmed === true,
-          actor: String(params.actor || userInfo().username)
+          actor: String(params.actor || userInfo().username),
+          resourceBindings: params.resourceBindings
         });
       case "run.inspect": {
         const runId = String(params.runId);
@@ -725,6 +799,15 @@ export class LocalCoreService {
       default:
         throw new Error(`Unknown control method: ${method}`);
     }
+  }
+
+  #candidateArchives(): LocalCandidateArchiveService {
+    if (!this.candidateArchives) {
+      throw new Error(
+        "Candidate archive service is unavailable in this Core process"
+      );
+    }
+    return this.candidateArchives;
   }
 
   #validateAsset(assetType: string, content: unknown): unknown {
@@ -1224,15 +1307,6 @@ export class LocalCoreService {
         "SingleNodeRun is limited to R0/R1; use a published Workflow with the formal approval path for R2+"
       );
     }
-    if (
-      node.apiVersion === "bpa/v1alpha2" &&
-      node.resources &&
-      Object.keys(node.resources).length > 0
-    ) {
-      throw new Error(
-        "SingleNodeRun cannot invent Browser Resource Bindings; use a published v1alpha3 Workflow"
-      );
-    }
     const safeInput = JSON.parse(JSON.stringify(input)) as JsonValue;
     const validateInput = compileDataValidator(node.inputSchema);
     if (!validateInput(safeInput)) {
@@ -1250,8 +1324,21 @@ export class LocalCoreService {
       },
       input: safeInput
     }).slice("sha256:".length, "sha256:".length + 32);
-    const workflow: WorkflowDefinitionV1Alpha2 = {
-      apiVersion: "bpa/v1alpha2",
+    const resourceSlots =
+      node.apiVersion === "bpa/v1alpha2" && node.resources
+        ? Object.fromEntries(
+            Object.entries(node.resources).map(
+              ([name, requirement]) => [
+                name,
+                structuredClone(requirement)
+              ]
+            )
+          )
+        : undefined;
+    const workflow:
+      | WorkflowDefinitionV1Alpha2
+      | WorkflowDefinitionV1Alpha3 = {
+      apiVersion: resourceSlots ? "bpa/v1alpha3" : "bpa/v1alpha2",
       kind: "Workflow",
       metadata: {
         id: `single-node.${identityDigest}`,
@@ -1268,6 +1355,7 @@ export class LocalCoreService {
         // terminals, so the bounded wrapper contains more than its two authored
         // steps even though only one Node invocation can occur.
         limits: { maxDepth: 1, maxStepExecutions: 8 },
+        ...(resourceSlots ? { resourceSlots } : {}),
         root: {
           kind: "sequence",
           steps: [
@@ -1276,6 +1364,16 @@ export class LocalCoreService {
               kind: "call",
               use: `${node.metadata.id}@${node.metadata.version}`,
               with: "${input}",
+              ...(resourceSlots
+                ? {
+                    resourceMappings: Object.fromEntries(
+                      Object.keys(resourceSlots).map((name) => [
+                        name,
+                        name
+                      ])
+                    )
+                  }
+                : {}),
               retry: { maxAttempts: 1 }
             },
             {
@@ -1316,6 +1414,7 @@ export class LocalCoreService {
       riskLevel: prepared.node.risk.level,
       permissions: [...prepared.node.risk.permissions],
       domains: [...(prepared.node.risk.domains ?? [])],
+      resourceSlots: prepared.plan.resourceSlots ?? {},
       artifactClosure: prepared.plan.artifactClosure,
       riskSnapshot: prepared.plan.riskSnapshot,
       previewDigest: prepared.previewDigest,
@@ -1330,6 +1429,7 @@ export class LocalCoreService {
     expectedPreviewDigest: string;
     confirmed: boolean;
     actor: string;
+    resourceBindings: unknown;
   }): unknown {
     const prepared = this.#singleNodePlan(
       input.nodeId,
@@ -1344,14 +1444,27 @@ export class LocalCoreService {
     if (prepared.node.risk.level === "R1" && !input.confirmed) {
       throw new Error("R1 SingleNodeRun requires explicit human confirmation");
     }
-    return this.ir2Runtime.start(prepared.plan, prepared.input, {
-      mode: "single_node",
-      actor: input.actor,
-      nodeId: prepared.node.metadata.id,
-      nodeVersion: prepared.node.metadata.version,
-      previewDigest: prepared.previewDigest,
-      confirmed: input.confirmed
-    });
+    const bindResources = this.#resourceBindings.prepare(
+      prepared.plan,
+      input.resourceBindings,
+      input.actor
+    );
+    return this.ir2Runtime.start(
+      prepared.plan,
+      prepared.input,
+      {
+        mode: "single_node",
+        actor: input.actor,
+        nodeId: prepared.node.metadata.id,
+        nodeVersion: prepared.node.metadata.version,
+        previewDigest: prepared.previewDigest,
+        confirmed: input.confirmed,
+        resourceSlots: Object.keys(
+          prepared.plan.resourceSlots ?? {}
+        ).sort()
+      },
+      bindResources
+    );
   }
 
   #completeHumanStep(

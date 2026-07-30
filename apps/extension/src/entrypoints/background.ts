@@ -654,7 +654,7 @@ export default defineBackground(() => {
         page_epoch: pageEpoch
       };
     try {
-      const evidenceId = crypto.randomUUID();
+      const evidenceId = `evidence-${crypto.randomUUID()}`;
       const pageUrl = new URL(executionUrl);
       const evidenceUpload = await createJsonEvidenceUpload({
         evidenceId,

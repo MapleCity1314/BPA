@@ -1426,6 +1426,20 @@ export class SqlitePersistence implements Persistence {
     })();
   }
 
+  getCandidate(
+    assetType: ArtifactType,
+    assetId: string,
+    version: string
+  ): ArtifactRecord | undefined {
+    const row = this.#db
+      .prepare(
+        `SELECT * FROM artifacts
+         WHERE asset_type = ? AND asset_id = ? AND version = ? AND status = 'candidate'`
+      )
+      .get(assetType, assetId, version) as SqlRow | undefined;
+    return row ? this.#readArtifact(row) : undefined;
+  }
+
   getPublished(
     assetType: ArtifactType,
     assetId: string,

@@ -1,6 +1,13 @@
-import { readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
+import { verifyCandidateArchive } from "@bpa/candidate-archive";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { LocalCoreService } from "./control.js";
 
@@ -192,7 +199,16 @@ describe("Local Core incremental authoring", () => {
 
   it("creates a governed Authoring Session and saves an inert Candidate Bundle", () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
-    const service = new LocalCoreService(persistence);
+    const dataDirectory = mkdtempSync(
+      join(tmpdir(), "bpa-candidate-export-")
+    );
+    const service = new LocalCoreService(
+      persistence,
+      undefined,
+      undefined,
+      undefined,
+      dataDirectory
+    );
     const scenario = fixture(
       "docs/protocols/examples/authoring-scenario-spec-v1alpha1.example.json"
     );
@@ -386,6 +402,25 @@ describe("Local Core incremental authoring", () => {
       revision: session.revision
     };
     bundle.createdAt = "2026-07-30T03:00:07.000Z";
+    const candidateNode = persistence.saveCandidate({
+      assetType: "node",
+      assetId: "chanmama.product.metrics.read",
+      version: "0.1.0",
+      digest: `sha256:${"3".repeat(64)}`,
+      content: { kind: "Node", status: "candidate" },
+      actor: "codex:local"
+    });
+    bundle.artifacts = [
+      {
+        kind: "node",
+        id: candidateNode.assetId,
+        version: candidateNode.version,
+        digest: candidateNode.digest,
+        status: "candidate"
+      }
+    ];
+    bundle.files = [];
+    bundle.dependencyClosure = [];
 
     const tooRisky = structuredClone(bundle);
     tooRisky.riskReport.ceiling = "R2";
@@ -451,6 +486,35 @@ describe("Local Core incremental authoring", () => {
         ]
       }
     });
+    const exported = service.handle({
+      id: "bundle-export",
+      method: "authoring.candidate-bundle.export",
+      params: {
+        bundleId: bundle.metadata.id,
+        actor: "codex:local",
+        occurredAt: "2026-07-30T03:00:08.000Z"
+      }
+    });
+    expect(exported).toMatchObject({
+      ok: true,
+      result: {
+        export: {
+          bundleId: bundle.metadata.id,
+          actor: "codex:local"
+        },
+        verification: { valid: true }
+      }
+    });
+    const archivePath = (
+      exported.result as { archivePath: string }
+    ).archivePath;
+    expect(
+      verifyCandidateArchive(readFileSync(archivePath))
+    ).toMatchObject({
+      valid: true,
+      manifest: { bundleId: bundle.metadata.id }
+    });
     persistence.close();
+    rmSync(dataDirectory, { recursive: true, force: true });
   });
 });

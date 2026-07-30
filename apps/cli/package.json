@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@bpa/candidate-archive": "workspace:*",
     "@bpa/console-host": "workspace:*",
     "@bpa/control-client": "workspace:*",
     "@bpa/shadow-run": "workspace:*",

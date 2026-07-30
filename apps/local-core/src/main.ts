@@ -50,7 +50,8 @@ const service = new LocalCoreService(
   persistence,
   browserGateway,
   undefined,
-  stagingTransfers
+  stagingTransfers,
+  paths.data
 );
 browserGateway.recoverTerminalResults();
 browserGateway.recoverCancellations();

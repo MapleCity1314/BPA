@@ -81,6 +81,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@bpa/candidate-archive':
+        specifier: workspace:*
+        version: link:../../packages/candidate-archive
       '@bpa/console-host':
         specifier: workspace:*
         version: link:../console-host
@@ -176,6 +179,9 @@ importers:
       '@bpa/authoring-core':
         specifier: workspace:*
         version: link:../../packages/authoring-core
+      '@bpa/candidate-archive':
+        specifier: workspace:*
+        version: link:../../packages/candidate-archive
       '@bpa/compiler':
         specifier: workspace:*
         version: link:../../packages/compiler
@@ -349,6 +355,8 @@ importers:
       '@bpa/gateway-core':
         specifier: workspace:*
         version: link:../gateway-core
+
+  packages/candidate-archive: {}
 
   packages/compiler:
     dependencies:

@@ -86,6 +86,11 @@ export interface PublishArtifactInput {
 export interface RegistryStore {
   saveCandidate(input: PublishArtifactInput): ArtifactRecord;
   publish(input: PublishArtifactInput): ArtifactRecord;
+  getCandidate(
+    assetType: ArtifactType,
+    assetId: string,
+    version: string
+  ): ArtifactRecord | undefined;
   getPublished(
     assetType: ArtifactType,
     assetId: string,
