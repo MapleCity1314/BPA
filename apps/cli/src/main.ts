@@ -19,7 +19,7 @@ import { createCliProgram } from "./program.js";
 
 const controlClient = new ControlClient(
   new UnixSocketControlTransport(resolveControlSocketPath(), {
-    runtime: { name: "bpa-cli", version: "0.4.0" },
+    runtime: { name: "bpa-cli", version: "0.6.0" },
     features: [
       "evidence_refs",
       "resource_bindings",
@@ -28,6 +28,25 @@ const controlClient = new ControlClient(
   })
 );
 let consoleHost: ConsoleHostHandle | undefined;
+
+function openConsoleUrl(url: string): void {
+  const command =
+    process.platform === "darwin"
+      ? { file: "open", arguments: [url] }
+      : process.platform === "win32"
+        ? {
+            file: "rundll32.exe",
+            arguments: ["url.dll,FileProtocolHandler", url]
+          }
+        : { file: "xdg-open", arguments: [url] };
+  execFile(command.file, command.arguments, (error) => {
+    if (error) {
+      process.stderr.write(
+        "BPA Console 已启动，但无法自动打开浏览器；请复制上方 URL。\n"
+      );
+    }
+  });
+}
 
 function consoleStaticRoot(): string {
   const configured = process.env.BPA_CONSOLE_STATIC_ROOT?.trim();
@@ -50,18 +69,12 @@ await createCliProgram({
       staticRoot: consoleStaticRoot()
     });
     if (process.env.BPA_CONSOLE_NO_OPEN !== "1") {
-      execFile("open", [consoleHost.launchUrl], (error) => {
-        if (error) {
-          process.stderr.write(
-            "BPA Console 已启动，但无法自动打开浏览器；请复制上方 URL。\n"
-          );
-        }
-      });
+      openConsoleUrl(consoleHost.launchUrl);
     }
     return { url: consoleHost.launchUrl };
   }
 })
-  .version("0.4.0", "--cli-version", "show CLI version")
+  .version("0.6.0", "--cli-version", "show CLI version")
   .parseAsync();
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

@@ -30,6 +30,21 @@ test("derives one deterministic RC identity from exact release inputs", () => {
   );
 });
 
+test("derives a Windows x64 archive from the same immutable inputs", () => {
+  const release = createReleaseMetadata({
+    runtimeVersion: "0.4.0",
+    gitCommit: commit,
+    nodeVersion: "24.14.0",
+    platform: "win32",
+    architecture: "x64"
+  });
+  assert.deepEqual(validateReleaseMetadata(release), release);
+  assert.equal(
+    expectedArchiveBasename(release),
+    "bpa-local-v0.4.0-rc.45012e05d932-windows-x64.zip"
+  );
+});
+
 test("rejects legacy names and metadata drift", () => {
   const release = createReleaseMetadata({
     runtimeVersion: "0.4.0",

@@ -1,5 +1,4 @@
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { loadOrCreateCoreSigningKey } from "@bpa/gateway-core";
 import { LocalWorkflowEngine } from "./compatibility/local-workflow-engine.js";
@@ -14,7 +13,7 @@ import {
 } from "./staging-transfer.js";
 
 const paths = resolveBpaPaths();
-mkdirSync(dirname(paths.socket), { recursive: true, mode: 0o700 });
+mkdirSync(paths.run, { recursive: true, mode: 0o700 });
 mkdirSync(paths.logs, { recursive: true, mode: 0o700 });
 const instanceLock = new CoreInstanceLock(paths.lock);
 instanceLock.acquire();

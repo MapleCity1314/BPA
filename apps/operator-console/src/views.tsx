@@ -20,13 +20,8 @@ export type ViewId =
   | "datasets"
   | "evidence"
   | "reports"
-  | "authoring";
-
-const attentionLabel = {
-  normal: "无需监管",
-  attention: "请关注",
-  action: "需要操作"
-} as const;
+  | "authoring"
+  | "diagnostics";
 
 function formatTime(value: string): string {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -46,45 +41,103 @@ export function StatusPill({
 }
 
 export function OverviewView({
-  dashboard
+  dashboard,
+  workflows,
+  tasks,
+  downloads,
+  onNavigate
 }: {
   dashboard: DashboardSnapshot;
+  workflows: WorkflowSummary[];
+  tasks: TaskView[];
+  downloads: DownloadView[];
+  onNavigate(view: ViewId): void;
 }) {
+  const ready = dashboard.attention === "normal";
   return (
     <div className="view-stack">
-      <section className="hero-card">
+      <section className={`hero-card operator-hero ${ready ? "quiet" : "needs-action"}`}>
         <div>
-          <p className="eyebrow">当前运行状态</p>
-          <h2>{dashboard.headline}</h2>
-          <p className="muted">Runtime {dashboard.runtimeVersion}</p>
+          <p className="eyebrow">{ready ? "准备就绪" : "需要处理"}</p>
+          <h2>{ready ? "今天想让 BPA 做什么？" : "BPA 需要处理"}</h2>
+          <p className="muted">
+            {ready
+              ? `已有 ${workflows.length} 个自动化可以直接开始。`
+              : dashboard.headline}
+          </p>
         </div>
-        <StatusPill tone={dashboard.attention}>
-          {attentionLabel[dashboard.attention]}
-        </StatusPill>
+        <button
+          className="hero-action"
+          onClick={() => onNavigate(ready ? "start" : "tasks")}
+          type="button"
+        >
+          {ready ? "开始新任务" : "查看处理项"}
+        </button>
       </section>
-      <section className="metrics-grid" aria-label="业务概览">
-        <article className="metric-card">
+      <section className="operator-home-grid" aria-label="业务概览">
+        <button onClick={() => onNavigate("start")} type="button">
+          <span>开始</span>
+          <strong>新任务</strong>
+          <small>{workflows[0]?.title ?? "查看可用自动化"}</small>
+        </button>
+        <button onClick={() => onNavigate("tasks")} type="button">
+          <span>需要处理</span>
+          <strong>{tasks.length}</strong>
+          <small>{tasks.length === 0 ? "当前无需介入" : "集中处理后自动继续"}</small>
+        </button>
+        <button onClick={() => onNavigate("runs")} type="button">
+          <span>正在运行</span>
           <strong>{dashboard.activeRunCount}</strong>
-          <span>进行中的任务</span>
-        </article>
-        <article className="metric-card">
-          <strong>{dashboard.pendingTaskCount}</strong>
-          <span>等待处理</span>
-        </article>
-        <article className="metric-card">
-          <strong>{dashboard.browserSessions.filter((item) => item.status === "ready").length}</strong>
-          <span>可用浏览器会话</span>
-        </article>
+          <small>可随时查看业务进度</small>
+        </button>
+        <button onClick={() => onNavigate("reports")} type="button">
+          <span>最近结果</span>
+          <strong>{downloads.length}</strong>
+          <small>{downloads[0]?.title ?? "暂无可下载结果"}</small>
+        </button>
       </section>
-      <section className="panel">
+      {tasks.length > 0 ? (
+        <section className="panel attention-preview">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">需要你处理</p>
+              <h3>{tasks[0]?.title}</h3>
+              <p className="muted">{tasks[0]?.guidance}</p>
+            </div>
+            <button onClick={() => onNavigate("tasks")} type="button">
+              集中处理 {tasks.length} 项
+            </button>
+          </div>
+        </section>
+      ) : null}
+      {downloads.length > 0 ? (
+        <section className="panel recent-result-preview">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">最近得到的结果</p>
+              <h3>{downloads[0]?.title}</h3>
+              <p className="muted">
+                {formatTime(downloads[0]!.createdAt)} · 可安全下载
+              </p>
+            </div>
+            <button onClick={() => onNavigate("reports")} type="button">
+              查看全部结果
+            </button>
+          </div>
+        </section>
+      ) : null}
+      {!ready ? (
+        <section className="panel compact-health">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">SYSTEM HEALTH</p>
-            <h3>系统健康</h3>
+              <p className="eyebrow">无法自动解决</p>
+              <h3>按提示完成后，任务会自动继续</h3>
           </div>
         </div>
         <div className="health-list">
-          {dashboard.components.map((component) => (
+            {dashboard.components
+              .filter((component) => component.status !== "healthy")
+              .map((component) => (
             <article className="health-row" key={component.id}>
               <span className={`health-dot health-${component.status}`} />
               <div>
@@ -101,7 +154,7 @@ export function OverviewView({
           ))}
         </div>
       </section>
-      <SessionList sessions={dashboard.browserSessions} />
+      ) : null}
     </div>
   );
 }
@@ -146,6 +199,49 @@ export function SessionList({ sessions }: { sessions: BrowserSessionView[] }) {
         </div>
       )}
     </section>
+  );
+}
+
+export function DiagnosticsView({
+  dashboard
+}: {
+  dashboard: DashboardSnapshot;
+}) {
+  return (
+    <div className="view-stack">
+      <section className="panel">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">开发者模式</p>
+            <h2>系统诊断</h2>
+            <p className="muted">
+              普通任务不需要查看这些信息。这里保留完整的运行与连接追溯入口。
+            </p>
+          </div>
+          <StatusPill tone={dashboard.attention}>
+            Runtime {dashboard.runtimeVersion}
+          </StatusPill>
+        </div>
+        <div className="health-list">
+          {dashboard.components.map((component) => (
+            <article className="health-row" key={component.id}>
+              <span className={`health-dot health-${component.status}`} />
+              <div>
+                <strong>{component.label}</strong>
+                <p>{component.summary}</p>
+                {component.technicalDetails ? (
+                  <details>
+                    <summary>查看技术细节</summary>
+                    <code>{component.technicalDetails}</code>
+                  </details>
+                ) : null}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+      <SessionList sessions={dashboard.browserSessions} />
+    </div>
   );
 }
 

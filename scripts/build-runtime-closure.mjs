@@ -23,6 +23,21 @@ import {
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const outputRoot = resolve(process.argv[2] ?? "");
+const targetPlatform = process.env.BPA_TARGET_PLATFORM ?? process.platform;
+const targetArchitecture =
+  process.env.BPA_TARGET_ARCHITECTURE ?? process.arch;
+const targetNodeVersion =
+  process.env.BPA_TARGET_NODE_VERSION ?? process.versions.node;
+const targetNodeExecutable = resolve(
+  process.env.BPA_TARGET_NODE_EXECUTABLE ?? process.execPath
+);
+const targetSqliteBinary = process.env.BPA_TARGET_SQLITE_BINARY
+  ? resolve(process.env.BPA_TARGET_SQLITE_BINARY)
+  : undefined;
+const targetNativeHostExecutable =
+  process.env.BPA_TARGET_NATIVE_HOST_EXECUTABLE
+    ? resolve(process.env.BPA_TARGET_NATIVE_HOST_EXECUTABLE)
+    : undefined;
 const maximumBytes = Number(
   process.env.BPA_RUNTIME_MAX_BYTES ?? 160 * 1024 * 1024
 );
@@ -35,13 +50,34 @@ if (
 ) {
   throw new Error("Provide a dedicated runtime closure output directory");
 }
+if (process.versions.node.split(".")[0] !== "24") {
+  throw new Error(
+    "Runtime closure must be built by Node.js 24"
+  );
+}
+const supportedTarget =
+  (targetPlatform === "darwin" && targetArchitecture === "arm64") ||
+  (targetPlatform === "win32" && targetArchitecture === "x64");
+if (!supportedTarget) {
+  throw new Error(
+    `Runtime closure target is unsupported: ${targetPlatform}-${targetArchitecture}`
+  );
+}
+if (!/^24\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u.test(targetNodeVersion)) {
+  throw new Error(`Target Node.js version is invalid: ${targetNodeVersion}`);
+}
 if (
-  process.platform !== "darwin" ||
-  process.arch !== "arm64" ||
-  process.versions.node.split(".")[0] !== "24"
+  (targetPlatform !== process.platform ||
+    targetArchitecture !== process.arch) &&
+  !targetSqliteBinary
 ) {
   throw new Error(
-    "Runtime closure must be built by the packaged Node.js 24 darwin-arm64 executable"
+    "Cross-platform closure requires BPA_TARGET_SQLITE_BINARY"
+  );
+}
+if (targetPlatform === "win32" && !targetNativeHostExecutable) {
+  throw new Error(
+    "Windows closure requires BPA_TARGET_NATIVE_HOST_EXECUTABLE"
   );
 }
 const trackedChanges = execFileSync(
@@ -205,10 +241,17 @@ await copyDirectory(
 const betterSqlite = await copyRuntimeDependency("better-sqlite3", [
   "package.json",
   "LICENSE",
-  "lib",
-  "build/Release/better_sqlite3.node"
+  "lib"
 ]);
 const betterSqlitePath = await packageDirectory("better-sqlite3", repositoryRoot);
+await copyFile(
+  targetSqliteBinary ??
+    join(betterSqlitePath, "build/Release/better_sqlite3.node"),
+  join(
+    outputRoot,
+    "node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+  )
+);
 const bindings = await copyRuntimeDependency(
   "bindings",
   ["package.json", "LICENSE.md", "bindings.js"],
@@ -220,8 +263,20 @@ const fileUriToPath = await copyRuntimeDependency(
   ["package.json", "LICENSE", "index.js"],
   bindingsPath
 );
-await copyFile(process.execPath, join(outputRoot, "node/bin/node"));
-await chmod(join(outputRoot, "node/bin/node"), 0o755);
+const packagedNodeRelative =
+  targetPlatform === "win32" ? "node/node.exe" : "node/bin/node";
+await copyFile(
+  targetNodeExecutable,
+  join(outputRoot, packagedNodeRelative)
+);
+if (targetPlatform !== "win32") {
+  await chmod(join(outputRoot, packagedNodeRelative), 0o755);
+} else {
+  await copyFile(
+    targetNativeHostExecutable,
+    join(outputRoot, "bin/bpa-native-host.exe")
+  );
+}
 
 const rootPackage = JSON.parse(
   await readFile(join(repositoryRoot, "package.json"), "utf8")
@@ -229,9 +284,9 @@ const rootPackage = JSON.parse(
 const release = createReleaseMetadata({
   runtimeVersion: String(rootPackage.version),
   gitCommit,
-  nodeVersion: process.versions.node,
-  platform: process.platform,
-  architecture: process.arch
+  nodeVersion: targetNodeVersion,
+  platform: targetPlatform,
+  architecture: targetArchitecture
 });
 const migrationSource = await readFile(
   join(repositoryRoot, "packages/persistence-sqlite/src/migrations.ts"),

@@ -195,14 +195,18 @@ function mockApi(): OperatorConsoleApi {
 
 async function renderReady(api = mockApi()) {
   render(<App api={api} />);
-  await screen.findByRole("heading", { name: "系统健康" });
+  await screen.findByRole("heading", { name: "BPA 需要处理" });
   return api;
 }
 
 describe("Operator Console", () => {
-  it("shows business health and keeps technical details collapsed", async () => {
+  it("shows business work first and keeps diagnostics in advanced mode", async () => {
+    const user = userEvent.setup();
     await renderReady();
     expect(screen.getAllByText("需要操作").length).toBeGreaterThan(0);
+    expect(screen.queryByText("抖店商品管理")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /高级设置/ }));
+    await user.click(screen.getByRole("button", { name: /系统诊断/ }));
     expect(screen.getByText("抖店商品管理")).toBeInTheDocument();
     const details = screen.getByText("查看技术细节").closest("details");
     expect(details).not.toHaveAttribute("open");
@@ -212,7 +216,7 @@ describe("Operator Console", () => {
   it("starts a workflow with an exact browser session binding", async () => {
     const user = userEvent.setup();
     const api = await renderReady();
-    await user.click(screen.getByRole("button", { name: /启动流程/ }));
+    await user.click(screen.getByRole("button", { name: /自动化/ }));
     await user.type(screen.getByLabelText("检查范围"), "全部在售商品");
     await user.selectOptions(screen.getByLabelText("抖店会话"), "session-1");
     await user.click(screen.getByRole("button", { name: "确认并启动" }));
@@ -230,7 +234,7 @@ describe("Operator Console", () => {
   it("handles a task and refreshes the task center", async () => {
     const user = userEvent.setup();
     const api = await renderReady();
-    await user.click(screen.getByRole("button", { name: /任务中心/ }));
+    await user.click(screen.getByRole("button", { name: /^02任务1$/ }));
     expect(screen.getByText("确认可比商品")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "确认选择" }));
     await waitFor(() =>
@@ -256,7 +260,8 @@ describe("Operator Console", () => {
       ]
     });
     await renderReady(api);
-    await user.click(screen.getByRole("button", { name: /创作授权/ }));
+    await user.click(screen.getByRole("button", { name: /高级设置/ }));
+    await user.click(screen.getByRole("button", { name: /创作模式/ }));
     await user.type(
       screen.getByLabelText(/创作会话编号/),
       "authoring.session-1"
@@ -309,6 +314,7 @@ describe("Operator Console", () => {
   it("imports a browser File through the staging lease abstraction", async () => {
     const user = userEvent.setup();
     const api = await renderReady();
+    await user.click(screen.getByRole("button", { name: /高级设置/ }));
     await user.click(screen.getByRole("button", { name: /数据导入/ }));
     const file = new File(["xlsx"], "master.xlsx", {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -328,13 +334,14 @@ describe("Operator Console", () => {
   it("renders evidence lineage and authenticated report downloads", async () => {
     const user = userEvent.setup();
     await renderReady();
+    await user.click(screen.getByRole("button", { name: /高级设置/ }));
     await user.click(screen.getByRole("button", { name: /证据血缘/ }));
     await user.type(screen.getByLabelText("任务编号"), "run-1");
     await user.click(screen.getByRole("button", { name: "查看血缘" }));
     expect(await screen.findByText("商品字段观察")).toBeInTheDocument();
     expect(screen.getByText("重点项报告")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /报告与资产/ }));
+    await user.click(screen.getByRole("button", { name: /结果/ }));
     const download = screen.getByRole("link", { name: "下载" });
     expect(download).toHaveAttribute("href", "/api/downloads/download-1");
   });

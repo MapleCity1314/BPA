@@ -408,7 +408,7 @@ export class UdsControlBackend implements ControlBackend {
               : pendingTaskCount > 0
                 ? `有 ${pendingTaskCount} 项等待处理`
                 : "系统运行正常",
-        runtimeVersion: "0.4.0",
+        runtimeVersion: "0.6.0",
         components: [
           {
             id: "core",
@@ -453,7 +453,7 @@ export class UdsControlBackend implements ControlBackend {
       return {
         attention: "action",
         headline: "BPA 本地服务尚未连接",
-        runtimeVersion: "0.4.0",
+        runtimeVersion: "0.6.0",
         components: [
           {
             id: "core",

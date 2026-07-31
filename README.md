@@ -45,7 +45,7 @@ Workflow 决定流程，Node 定义单步能力，Extension Bridge 校验页面�
 
 | 范围 | 版本 / 状态 | 说明 |
 | --- | --- | --- |
-| BPA Runtime | `0.4.0` | 已完成可信 Evidence、资源绑定和本地业务工作台基础闭环；真实平台验收仍按当前实况单独标记 |
+| BPA Runtime | `0.6.0` | Windows x64 RC 与低负担业务工作台进入部分实现；真实平台验收仍按当前实况单独标记 |
 | Browser Protocol | `bpa.browser/1` · `1.0.0` | 已确认；双向独立序列、ACK、Resume、Cancel 与 Fencing |
 | Permission / Event / Evidence | `v1` | 稳定公共模型 |
 | Workflow / Node | Workflow `v1alpha1` / `v1alpha2` / `v1alpha3`；Node `v1alpha1` / `v1alpha2` | Alpha；v1alpha3 增加冻结 Browser Resource Slot |
@@ -62,7 +62,7 @@ Workflow 决定流程，Node 定义单步能力，Extension Bridge 校验页面�
 │   ├── console-host/        # Loopback 工作台 Host 与安全文件通道
 │   ├── docs/                # Astro + Starlight 协议站
 │   ├── extension/           # WXT Chrome Extension
-│   ├── local-core/          # 本地控制面与 Unix Socket API
+│   ├── local-core/          # 本地控制面、Unix Socket / Windows Named Pipe
 │   ├── mcp-server/          # Workflow / Node 创作工具
 │   ├── native-host/         # Chrome Native Messaging Host
 │   └── operator-console/    # React 本地业务工作台
@@ -72,6 +72,9 @@ Workflow 决定流程，Node 定义单步能力，Extension Bridge 校验页面�
 │   ├── gateway-core/        # Browser Protocol 会话与投递
 │   ├── browser-bridge/      # Bridge 端协议、Pending Result
 │   ├── node-runtime/        # Node 执行契约
+│   ├── attention-core/      # 人工关注项与批量聚合
+│   ├── interaction-policy/  # 静默恢复、延后、聚合和打断策略
+│   ├── operator-read-model/ # 面向业务人员的任务与结果投影
 │   ├── asset-core/          # 不可变 Asset / Blob 契约
 │   ├── asset-store-local/   # 本地 SHA-256 内容寻址存储
 │   ├── evidence-core/       # Evidence 生命周期与分块语义
@@ -113,7 +116,8 @@ pnpm bpa doctor
 pnpm docs:dev
 ```
 
-Chrome 扩展、Native Host、首个只读 Workflow 和 macOS 安装流程见[本地 v1 运行与验收](docs/operations/local-v1-operations.md)。
+Chrome 扩展、Native Host、首个只读 Workflow 和 macOS 安装流程见[本地 v1 运行与验收](docs/operations/local-v1-operations.md)。Windows RC 的安装和验收见
+[Windows x64 RC 安装与验证](docs/operations/windows-x64-rc.md)。
 
 ## 从资产到执行
 

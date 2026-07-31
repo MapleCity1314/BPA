@@ -1,6 +1,6 @@
 {
   "name": "@bpa/local-core",
-  "version": "0.4.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -21,6 +21,7 @@
     "@bpa/gateway-core": "workspace:*",
     "@bpa/node-runtime": "workspace:*",
     "@bpa/page-model": "workspace:*",
+    "@bpa/platform-runtime": "workspace:*",
     "@bpa/packaging-dataset": "workspace:*",
     "@bpa/persistence": "workspace:*",
     "@bpa/persistence-sqlite": "workspace:*",

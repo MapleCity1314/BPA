@@ -48,6 +48,17 @@
       "public": false
     },
     {
+      "id": "repo.current-state-cross-platform-0.6",
+      "source": "docs/current/cross-platform-current-state-v0.6.md",
+      "title": "BPA 0.6 跨平台与低负担工作台当前实况",
+      "summary": "Windows x64 RC、跨平台 IPC、低负担工作台和剩余真实验收门。",
+      "authority": "current-state",
+      "implementation": "partial",
+      "audience": ["operator", "developer", "integrator", "ai"],
+      "since": "0.6.0",
+      "public": false
+    },
+    {
       "id": "repo.normative.platform",
       "source": "docs/normative/BPA通用技术方案-v1.0.md",
       "title": "BPA 通用技术方案 v1.0",
@@ -73,8 +84,8 @@
     {
       "id": "repo.normative.release-safety",
       "source": "docs/normative/release-safety.md",
-      "title": "BPA macOS arm64 发布安全门禁",
-      "summary": "生产闭包、安装、升级、回滚与数据保护约束。",
+      "title": "BPA 桌面端发布安全门禁",
+      "summary": "macOS arm64 与 Windows x64 的生产闭包、安装、升级、回滚和数据保护约束。",
       "authority": "normative",
       "implementation": "active",
       "audience": ["developer", "ai"],
@@ -104,6 +115,17 @@
       "public": false
     },
     {
+      "id": "repo.operations.windows-x64-rc",
+      "source": "docs/operations/windows-x64-rc.md",
+      "title": "Windows x64 RC 安装与验证",
+      "summary": "Windows 当前用户安装、诊断、回滚、卸载与真实验收门。",
+      "authority": "operations",
+      "implementation": "partial",
+      "audience": ["operator", "developer", "ai"],
+      "since": "0.6.0",
+      "public": false
+    },
+    {
       "id": "repo.plan.authoring-0.4",
       "source": "docs/plans/basic-scenarios-and-ai-authoring-v0.4.md",
       "title": "BPA 基础场景、工程闭环与 AI 创作设计 v0.4",
@@ -112,6 +134,17 @@
       "implementation": "partial",
       "audience": ["developer", "ai"],
       "since": "0.4.0",
+      "public": false
+    },
+    {
+      "id": "repo.plan.low-burden-operator-0.6",
+      "source": "docs/plans/low-burden-operator-workspace-v0.6.md",
+      "title": "BPA 0.6：低负担业务工作台",
+      "summary": "减负优先、治理下沉、异常聚合、结果先行的产品与架构计划。",
+      "authority": "plan",
+      "implementation": "partial",
+      "audience": ["operator", "developer", "ai"],
+      "since": "0.6.0",
       "public": false
     },
     {

@@ -31,6 +31,7 @@ import {
   type ControlRequestEnvelope,
   type ControlResponseEnvelope
 } from "@bpa/control-protocol";
+import { isWindowsNamedPipe } from "@bpa/platform-runtime";
 import { LocalWorkflowEngine } from "./compatibility/local-workflow-engine.js";
 import type { ArtifactType, Persistence } from "@bpa/persistence";
 import {
@@ -1746,7 +1747,9 @@ export class LocalControlServer {
 
   async start(): Promise<void> {
     if (this.#server) throw new Error("Control server already started");
-    rmSync(this.socketPath, { force: true });
+    if (!isWindowsNamedPipe(this.socketPath)) {
+      rmSync(this.socketPath, { force: true });
+    }
     const server = createServer((socket) => {
       let nativeConnectionId: string | undefined;
       let negotiatedControl:
@@ -1784,7 +1787,7 @@ export class LocalControlServer {
               const hello = parseControlHelloRequest(message);
               const response = negotiateControlHello(hello, {
                 supportedApplicationProtocols: [CONTROL_PROTOCOL_VERSION],
-                runtime: { name: "bpa-core", version: "0.4.0" },
+                runtime: { name: "bpa-core", version: "0.6.0" },
                 maxFrameBytes: CONTROL_V1_MAX_MESSAGE_BYTES,
                 features: [
                   "control_error_isolation",
@@ -1976,9 +1979,11 @@ export class LocalControlServer {
       server.once("error", reject);
       server.listen(this.socketPath, () => resolve());
     });
-    await import("node:fs/promises").then(({ chmod }) =>
-      chmod(this.socketPath, 0o600)
-    );
+    if (!isWindowsNamedPipe(this.socketPath)) {
+      await import("node:fs/promises").then(({ chmod }) =>
+        chmod(this.socketPath, 0o600)
+      );
+    }
   }
 
   async stop(): Promise<void> {
@@ -1988,7 +1993,9 @@ export class LocalControlServer {
       server.close((error) => (error ? reject(error) : resolve()))
     );
     this.#server = undefined;
-    rmSync(this.socketPath, { force: true });
+    if (!isWindowsNamedPipe(this.socketPath)) {
+      rmSync(this.socketPath, { force: true });
+    }
   }
 }
 

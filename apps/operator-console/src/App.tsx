@@ -11,6 +11,7 @@ import type { OperatorConsoleApi } from "./api.js";
 import {
   DatasetImport,
   DesignModeView,
+  DiagnosticsView,
   EvidenceView,
   OverviewView,
   ReportsView,
@@ -21,18 +22,27 @@ import {
 } from "./views.js";
 
 const navigation: Array<{ id: ViewId; label: string; marker: string }> = [
-  { id: "overview", label: "运行总览", marker: "01" },
-  { id: "start", label: "启动流程", marker: "02" },
-  { id: "runs", label: "运行记录", marker: "03" },
-  { id: "tasks", label: "任务中心", marker: "04" },
-  { id: "datasets", label: "数据导入", marker: "05" },
-  { id: "evidence", label: "证据血缘", marker: "06" },
-  { id: "reports", label: "报告与资产", marker: "07" },
-  { id: "authoring", label: "创作授权", marker: "08" }
+  { id: "overview", label: "首页", marker: "01" },
+  { id: "tasks", label: "任务", marker: "02" },
+  { id: "reports", label: "结果", marker: "03" },
+  { id: "start", label: "自动化", marker: "04" }
+];
+
+const advancedNavigation: Array<{
+  id: ViewId;
+  label: string;
+  marker: string;
+}> = [
+  { id: "diagnostics", label: "系统诊断", marker: "A1" },
+  { id: "authoring", label: "创作模式", marker: "A2" },
+  { id: "runs", label: "运行诊断", marker: "A3" },
+  { id: "datasets", label: "数据导入", marker: "A4" },
+  { id: "evidence", label: "证据血缘", marker: "A5" }
 ];
 
 export function App({ api }: { api: OperatorConsoleApi }) {
   const [view, setView] = useState<ViewId>("overview");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [dashboard, setDashboard] = useState<DashboardSnapshot>();
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [tasks, setTasks] = useState<TaskView[]>([]);
@@ -42,6 +52,20 @@ export function App({ api }: { api: OperatorConsoleApi }) {
   const [lineage, setLineage] = useState<EvidenceLineageView>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [darkTheme, setDarkTheme] = useState(() => {
+    const saved = window.localStorage.getItem("bpa-operator-theme");
+    return saved
+      ? saved === "dark"
+      : window.matchMedia?.("(prefers-color-scheme: dark)").matches === true;
+  });
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = darkTheme ? "dark" : "light";
+    window.localStorage.setItem(
+      "bpa-operator-theme",
+      darkTheme ? "dark" : "light"
+    );
+  }, [darkTheme]);
 
   async function reloadTasks() {
     setTasks(await api.listTasks());
@@ -148,19 +172,59 @@ export function App({ api }: { api: OperatorConsoleApi }) {
             </button>
           ))}
         </nav>
+        <button
+          className="advanced-toggle"
+          aria-expanded={advancedOpen}
+          onClick={() => setAdvancedOpen((current) => !current)}
+          type="button"
+        >
+          <span>•••</span>
+          高级设置
+        </button>
+        {advancedOpen ? (
+          <nav aria-label="高级功能" className="advanced-navigation">
+            {advancedNavigation.map((item) => (
+              <button
+                aria-current={view === item.id ? "page" : undefined}
+                key={item.id}
+                onClick={() => setView(item.id)}
+                type="button"
+              >
+                <span>{item.marker}</span>
+                {item.label}
+              </button>
+            ))}
+          </nav>
+        ) : null}
         <div className="sidebar-foot">
           <span className="health-dot health-healthy" />
           <div>
             <strong>仅本机可访问</strong>
             <small>安全会话将在闲置后结束</small>
           </div>
+          <button
+            aria-label={darkTheme ? "切换到浅色主题" : "切换到深色主题"}
+            className="theme-toggle"
+            onClick={() => setDarkTheme((current) => !current)}
+            type="button"
+          >
+            {darkTheme ? "☀" : "◐"}
+          </button>
         </div>
       </aside>
       <main className="main-content">
         <header className="topbar">
           <div>
-            <p className="eyebrow">LOCAL OPERATIONS</p>
-            <h1>{navigation.find((item) => item.id === view)?.label}</h1>
+            <p className="eyebrow">
+              {advancedNavigation.some((item) => item.id === view)
+                ? "高级视图"
+                : "BPA 工作台"}
+            </p>
+            <h1>
+              {[...navigation, ...advancedNavigation].find(
+                (item) => item.id === view
+              )?.label}
+            </h1>
           </div>
           <div className="attention-summary">
             <span className={`attention-orb attention-${dashboard.attention}`} />
@@ -184,7 +248,15 @@ export function App({ api }: { api: OperatorConsoleApi }) {
             </button>
           </div>
         ) : null}
-        {view === "overview" ? <OverviewView dashboard={dashboard} /> : null}
+        {view === "overview" ? (
+          <OverviewView
+            dashboard={dashboard}
+            downloads={downloads}
+            tasks={tasks}
+            workflows={workflows}
+            onNavigate={setView}
+          />
+        ) : null}
         {view === "start" ? (
           <WorkflowWizard
             api={api}
@@ -219,6 +291,9 @@ export function App({ api }: { api: OperatorConsoleApi }) {
             api={api}
             sessions={dashboard.browserSessions}
           />
+        ) : null}
+        {view === "diagnostics" ? (
+          <DiagnosticsView dashboard={dashboard} />
         ) : null}
       </main>
     </div>

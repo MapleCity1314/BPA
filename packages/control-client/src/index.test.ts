@@ -15,6 +15,7 @@ import {
 import {
   ControlClient,
   ControlClientError,
+  resolveControlEndpoint,
   resolveControlSocketPath,
   UnixSocketControlTransport,
   type ControlTransport
@@ -203,6 +204,9 @@ describe("injectable ControlClient", () => {
     expect(resolveControlSocketPath("/tmp/bpa-test")).toBe(
       "/tmp/bpa-test/run/core.sock"
     );
+    expect(
+      resolveControlEndpoint("C:\\BPA", "win32")
+    ).toMatch(/^\\\\\.\\pipe\\bpa-[a-f0-9]{16}-core$/u);
     expect(
       () =>
         new ControlClient(

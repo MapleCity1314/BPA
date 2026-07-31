@@ -8,6 +8,7 @@ import {
 } from "./release-gates.mjs";
 
 const root = resolve(process.argv[2] ?? "");
+const staticHostVerification = process.argv.includes("--static-host");
 if (!process.argv[2] || root === "/") {
   throw new Error("Provide the exact runtime closure directory");
 }
@@ -40,16 +41,25 @@ if (
   manifest.databaseSchemaVersion < 1 ||
   manifest.platform !== release.platform ||
   manifest.architecture !== release.architecture ||
-  process.versions.node !== release.nodeVersion ||
-  process.platform !== release.platform ||
-  process.arch !== release.architecture ||
+  (!staticHostVerification && process.versions.node !== release.nodeVersion) ||
+  (!staticHostVerification && process.platform !== release.platform) ||
+  (!staticHostVerification && process.arch !== release.architecture) ||
   !Array.isArray(manifest.files)
 ) {
   throw new Error("Runtime manifest identity is invalid");
 }
 
+const nodeExecutable =
+  release.platform === "win32" ? "node/node.exe" : "node/bin/node";
+const wrapperSuffix = release.platform === "win32" ? ".cmd" : "";
+const wrapperFiles = [
+  `bin/bpa${wrapperSuffix}`,
+  `bin/bpa-core${wrapperSuffix}`,
+  `bin/bpa-native-host${wrapperSuffix}`,
+  `bin/bpa-mcp${wrapperSuffix}`
+];
 const requiredFiles = [
-  "node/bin/node",
+  nodeExecutable,
   "bin/bpa.js",
   "bin/bpa-core.js",
   "bin/bpa-native-host.js",
@@ -62,12 +72,12 @@ const requiredFiles = [
   "extension/manifest.json",
   "console/index.html"
 ];
+if (release.platform === "win32") {
+  requiredFiles.push("bin/bpa-native-host.exe");
+}
 const expected = new Set([
   "runtime-manifest.json",
-  "bin/bpa",
-  "bin/bpa-core",
-  "bin/bpa-native-host",
-  "bin/bpa-mcp",
+  ...wrapperFiles,
   ...manifest.files.map((file) => String(file.path))
 ]);
 if (expected.size !== manifest.files.length + 5) {
@@ -82,9 +92,7 @@ for (const path of actual) {
 for (const path of expected) {
   if (
     !actual.includes(path) &&
-    !["bin/bpa", "bin/bpa-core", "bin/bpa-native-host", "bin/bpa-mcp"].includes(
-      path
-    )
+    !wrapperFiles.includes(path)
   ) {
     throw new Error(`Runtime closure file is missing: ${path}`);
   }

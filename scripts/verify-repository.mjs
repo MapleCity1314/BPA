@@ -93,6 +93,21 @@ async function verifyRuntimeVersions() {
     'EXPECTED_BASENAME="bpa-local-${RELEASE_IDENTITY}-macos-arm64.tar.gz"',
     "Package immutable release filename"
   );
+  await expectFileContains(
+    join(root, "scripts/package-windows-x64.ps1"),
+    "bpa-local-$ReleaseIdentity-windows-x64.zip",
+    "Windows package immutable release filename"
+  );
+  await expectFileContains(
+    join(root, "scripts/install-windows-x64.ps1"),
+    "Software\\Google\\Chrome\\NativeMessagingHosts\\com.bpa.browser",
+    "Windows current-user Native Host registration"
+  );
+  await expectFileContains(
+    join(root, "scripts/install-windows-x64.ps1"),
+    "runtime-manifest.json",
+    "Windows installer immutable release identity"
+  );
   return version;
 }
 

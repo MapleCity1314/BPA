@@ -71,9 +71,12 @@ export function createReleaseMetadata(input) {
     NODE_VERSION_PATTERN,
     "Node.js version"
   );
-  if (input.platform !== "darwin" || input.architecture !== "arm64") {
+  const supported =
+    (input.platform === "darwin" && input.architecture === "arm64") ||
+    (input.platform === "win32" && input.architecture === "x64");
+  if (!supported) {
     throw new Error(
-      `Release platform must be darwin-arm64, received ${input.platform}-${input.architecture}`
+      `Release platform must be darwin-arm64 or win32-x64, received ${input.platform}-${input.architecture}`
     );
   }
   return {
@@ -111,7 +114,9 @@ export function validateReleaseMetadata(candidate) {
 
 export function expectedArchiveBasename(release) {
   const exact = validateReleaseMetadata(release);
-  return `bpa-local-${exact.identity}-macos-${exact.architecture}.tar.gz`;
+  return exact.platform === "darwin"
+    ? `bpa-local-${exact.identity}-macos-${exact.architecture}.tar.gz`
+    : `bpa-local-${exact.identity}-windows-${exact.architecture}.zip`;
 }
 
 export function assertArchiveBasename(name, release) {

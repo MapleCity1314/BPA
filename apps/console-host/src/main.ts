@@ -16,7 +16,7 @@ const socketPath =
   process.env.BPA_SOCKET?.trim() || resolveControlSocketPath();
 const controlClient = new ControlClient(
   new UnixSocketControlTransport(socketPath, {
-    runtime: { name: "bpa-console-host", version: "0.4.0" },
+    runtime: { name: "bpa-console-host", version: "0.6.0" },
     features: ["operator-console", "staging-lease", "trusted-evidence"]
   })
 );
