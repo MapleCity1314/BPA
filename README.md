@@ -91,7 +91,8 @@ Workflow 决定流程，Node 定义单步能力，Extension Bridge 校验页面�
 
 ## 开始开发
 
-要求 Node.js 24 LTS 和 pnpm 10.32.1。
+要求 `.nvmrc` 固定的 Node.js 24.18.0 和 pnpm 10.32.1；发布构建拒绝
+Node patch 漂移。
 
 ```bash
 git clone https://github.com/MapleCity1314/BPA.git

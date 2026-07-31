@@ -7,23 +7,25 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+$RuntimeHelpers = Join-Path `
+  (Split-Path -Parent $MyInvocation.MyCommand.Path) `
+  "runtime-common.ps1"
+if (-not (Test-Path -LiteralPath $RuntimeHelpers -PathType Leaf)) {
+  throw "BPA Windows runtime helpers are missing."
+}
+. $RuntimeHelpers
+
 $RunRegistry = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $NativeHostRegistry =
   "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.bpa.browser"
-$LockPath = Join-Path $InstallRoot "run\core.lock"
-
-if (Test-Path -LiteralPath $LockPath -PathType Leaf) {
-  $OwnerPid = 0
-  if (
-    [int]::TryParse(
-      (Get-Content -LiteralPath $LockPath -Raw).Trim(),
-      [ref]$OwnerPid
-    ) -and
-    $OwnerPid -gt 0
-  ) {
-    Stop-Process -Id $OwnerPid -Force -ErrorAction SilentlyContinue
-  }
+$CurrentPointer = Join-Path $InstallRoot "runtime\current.txt"
+$ExpectedIdentity = $null
+if (Test-Path -LiteralPath $CurrentPointer -PathType Leaf) {
+  $ExpectedIdentity = Get-BpaRuntimeIdentity -PointerPath $CurrentPointer
 }
+Stop-BpaCoreSafely `
+  -InstallRoot $InstallRoot `
+  -ExpectedRuntimeIdentity $ExpectedIdentity
 Remove-ItemProperty `
   -Path $RunRegistry `
   -Name "BPA Core" `

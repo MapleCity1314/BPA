@@ -21,7 +21,8 @@ if (git status --porcelain=v1 --untracked-files=no) {
 $RuntimeVersion = node -p 'require("./package.json").version'
 $NodeVersion = node -p 'process.versions.node'
 $GitCommit = git rev-parse HEAD
-$ReleaseIdentity = "v$RuntimeVersion-rc.$($GitCommit.Substring(0, 12))"
+$ReleaseIdentity =
+  "v$RuntimeVersion-rc.$($GitCommit.Substring(0, 12)).node$NodeVersion"
 $ExpectedName = "bpa-local-$ReleaseIdentity-windows-x64.zip"
 if (-not $Output) {
   $Output = Join-Path $ProjectRoot "artifacts\$ExpectedName"
@@ -111,6 +112,9 @@ try {
   Copy-Item `
     -LiteralPath (Join-Path $ProjectRoot "scripts\uninstall-windows.ps1") `
     -Destination (Join-Path $BpaRoot "uninstall.ps1")
+  Copy-Item `
+    -LiteralPath (Join-Path $ProjectRoot "scripts\windows-runtime-common.ps1") `
+    -Destination (Join-Path $BpaRoot "runtime-common.ps1")
 
   Push-Location $RuntimeRoot
   try {

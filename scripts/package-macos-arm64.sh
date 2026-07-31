@@ -19,8 +19,9 @@ if [[ -n "$(git status --porcelain=v1 --untracked-files=no)" ]]; then
   exit 1
 fi
 RUNTIME_VERSION="$("$BUNDLED_NODE" -p 'require("./package.json").version')"
+NODE_VERSION="$("$BUNDLED_NODE" -p 'process.versions.node')"
 GIT_COMMIT="$(git rev-parse HEAD)"
-RELEASE_IDENTITY="v${RUNTIME_VERSION}-rc.$(print -n "$GIT_COMMIT" | cut -c1-12)"
+RELEASE_IDENTITY="v${RUNTIME_VERSION}-rc.$(print -n "$GIT_COMMIT" | cut -c1-12).node${NODE_VERSION}"
 EXPECTED_BASENAME="bpa-local-${RELEASE_IDENTITY}-macos-arm64.tar.gz"
 OUTPUT="${BPA_PACKAGE_OUTPUT:-$PROJECT_ROOT/artifacts/$EXPECTED_BASENAME}"
 OUTPUT="${OUTPUT:A}"

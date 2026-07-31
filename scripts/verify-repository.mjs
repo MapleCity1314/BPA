@@ -51,6 +51,27 @@ function parseSkillFrontmatter(content, path) {
 async function verifyRuntimeVersions() {
   const rootPackage = await readJson(join(root, "package.json"));
   const version = rootPackage.version;
+  const pinnedNodeVersion = (
+    await readFile(join(root, ".nvmrc"), "utf8")
+  ).trim();
+  if (!/^24\.[0-9]+\.[0-9]+$/u.test(pinnedNodeVersion)) {
+    issues.push(`.nvmrc must pin an exact Node.js 24 patch, got ${pinnedNodeVersion}`);
+  }
+  for (const workflow of [
+    ".github/workflows/ci.yml",
+    ".github/workflows/docs-pages.yml"
+  ]) {
+    await expectFileContains(
+      join(root, workflow),
+      "node-version-file: .nvmrc",
+      "CI pinned Node.js toolchain"
+    );
+  }
+  await expectFileContains(
+    join(root, "scripts/build-runtime-closure.mjs"),
+    "targetNodeVersion !== pinnedNodeVersion",
+    "Runtime closure pinned Node.js toolchain"
+  );
   const runtimePackages = [
     "apps/cli/package.json",
     "apps/extension/package.json",

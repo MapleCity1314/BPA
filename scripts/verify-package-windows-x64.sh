@@ -21,6 +21,7 @@ for required in \
   install.ps1 \
   rollback.ps1 \
   uninstall.ps1 \
+  runtime-common.ps1 \
   runtime/runtime-manifest.json \
   runtime/node/node.exe \
   runtime/bin/bpa-native-host.exe \

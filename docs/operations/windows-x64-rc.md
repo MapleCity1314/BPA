@@ -48,8 +48,10 @@ Host 注册。
 .\bpa\rollback.ps1
 ```
 
-回滚不会自动执行数据库 down migration。如果旧 Runtime 不兼容当前数据库，应
-停止并使用安装前备份人工恢复。
+回滚先验证旧 Runtime 闭包及其数据库 Schema 上限；不兼容时会在停止 Core 前
+直接拒绝。兼容时按“安全核验并停止 Core、原子切换 Runtime 与 Extension、重启、
+Doctor”执行，任一步失败都会恢复原指针、Extension 和 Core。回滚不会执行数据库
+down migration，也不会自动用旧备份覆盖包含新业务写入的数据。
 
 默认卸载保留业务数据与备份：
 
@@ -62,6 +64,10 @@ Host 注册。
 ```powershell
 .\bpa\uninstall.ps1 -PurgeData
 ```
+
+安装、回滚和卸载只会终止经结构化锁、Runtime identity、可执行文件路径与命令行
+共同验证的 BPA Core。锁文件过期或 PID 被其他进程复用时，脚本会拒绝结束该进程
+并给出错误，而不会强制杀进程。
 
 ## 当前验收门
 

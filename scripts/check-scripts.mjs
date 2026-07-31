@@ -51,6 +51,54 @@ for (const path of powerShellScripts) {
   if (/Remove-Item\s+(?:-Recurse\s+)?-Force\s+["']?[A-Z]:\\?\s*$/imu.test(source)) {
     throw new Error(`PowerShell script contains a broad destructive target: ${path}`);
   }
+  if (/Stop-Process[^\r\n]*-Force/iu.test(source)) {
+    throw new Error(
+      `PowerShell script must not force-stop an unverified process: ${path}`
+    );
+  }
+}
+
+const runtimeCommon = await readFile(
+  join(scriptsRoot, "windows-runtime-common.ps1"),
+  "utf8"
+);
+for (const required of [
+  "Get-CimInstance",
+  "Test-BpaPathEqual",
+  "ExecutablePath",
+  "CommandLine",
+  "ExpectedRuntimeIdentity"
+]) {
+  if (!runtimeCommon.includes(required)) {
+    throw new Error(`Windows process identity gate is missing ${required}`);
+  }
+}
+for (const name of [
+  "install-windows-x64.ps1",
+  "rollback-windows.ps1",
+  "uninstall-windows.ps1"
+]) {
+  const source = await readFile(join(scriptsRoot, name), "utf8");
+  if (
+    !source.includes("runtime-common.ps1") ||
+    !source.includes("Stop-BpaCoreSafely")
+  ) {
+    throw new Error(`${name} must use the shared safe Core lifecycle`);
+  }
+}
+const rollback = await readFile(
+  join(scriptsRoot, "rollback-windows.ps1"),
+  "utf8"
+);
+for (const required of [
+  "databaseSchemaVersion",
+  "Set-BpaRuntimePointer",
+  "Wait-BpaCoreHealthy",
+  "throw $Failure"
+]) {
+  if (!rollback.includes(required)) {
+    throw new Error(`Windows rollback recovery gate is missing ${required}`);
+  }
 }
 
 process.stdout.write(

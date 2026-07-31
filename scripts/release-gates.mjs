@@ -7,7 +7,7 @@ const NODE_VERSION_PATTERN =
   /^24\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
 const GIT_COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const RELEASE_IDENTITY_PATTERN =
-  /^v(?<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-rc\.(?<commit>[a-f0-9]{12})$/u;
+  /^v(?<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-rc\.(?<commit>[a-f0-9]{12})\.node(?<node>24\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$/u;
 
 const SENSITIVE_PATTERNS = [
   {
@@ -80,7 +80,7 @@ export function createReleaseMetadata(input) {
     );
   }
   return {
-    identity: `v${runtimeVersion}-rc.${gitCommit.slice(0, 12)}`,
+    identity: `v${runtimeVersion}-rc.${gitCommit.slice(0, 12)}.node${nodeVersion}`,
     channel: "rc",
     runtimeVersion,
     gitCommit,
@@ -105,7 +105,8 @@ export function validateReleaseMetadata(candidate) {
   if (
     !identity?.groups ||
     identity.groups.version !== candidate.runtimeVersion ||
-    identity.groups.commit !== candidate.gitCommit.slice(0, 12)
+    identity.groups.commit !== candidate.gitCommit.slice(0, 12) ||
+    identity.groups.node !== candidate.nodeVersion
   ) {
     throw new Error("Release identity is malformed");
   }

@@ -23,10 +23,10 @@ test("derives one deterministic RC identity from exact release inputs", () => {
     architecture: "arm64"
   });
   assert.deepEqual(validateReleaseMetadata(release), release);
-  assert.equal(release.identity, "v0.4.0-rc.45012e05d932");
+  assert.equal(release.identity, "v0.4.0-rc.45012e05d932.node24.18.0");
   assert.equal(
     expectedArchiveBasename(release),
-    "bpa-local-v0.4.0-rc.45012e05d932-macos-arm64.tar.gz"
+    "bpa-local-v0.4.0-rc.45012e05d932.node24.18.0-macos-arm64.tar.gz"
   );
 });
 
@@ -41,8 +41,26 @@ test("derives a Windows x64 archive from the same immutable inputs", () => {
   assert.deepEqual(validateReleaseMetadata(release), release);
   assert.equal(
     expectedArchiveBasename(release),
-    "bpa-local-v0.4.0-rc.45012e05d932-windows-x64.zip"
+    "bpa-local-v0.4.0-rc.45012e05d932.node24.14.0-windows-x64.zip"
   );
+});
+
+test("uses the exact Node.js patch in the immutable RC identity", () => {
+  const first = createReleaseMetadata({
+    runtimeVersion: "0.4.0",
+    gitCommit: commit,
+    nodeVersion: "24.14.0",
+    platform: "win32",
+    architecture: "x64"
+  });
+  const second = createReleaseMetadata({
+    runtimeVersion: "0.4.0",
+    gitCommit: commit,
+    nodeVersion: "24.18.0",
+    platform: "win32",
+    architecture: "x64"
+  });
+  assert.notEqual(first.identity, second.identity);
 });
 
 test("rejects legacy names and metadata drift", () => {

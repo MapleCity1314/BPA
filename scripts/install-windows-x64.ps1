@@ -6,6 +6,14 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+$RuntimeHelpers = Join-Path `
+  (Split-Path -Parent $MyInvocation.MyCommand.Path) `
+  "runtime-common.ps1"
+if (-not (Test-Path -LiteralPath $RuntimeHelpers -PathType Leaf)) {
+  throw "BPA Windows runtime helpers are missing."
+}
+. $RuntimeHelpers
+
 if (-not $env:LOCALAPPDATA) {
   throw "LOCALAPPDATA is required."
 }
@@ -60,7 +68,10 @@ if (($Manifest.nodeVersion -split "\.")[0] -ne "24") {
   throw "BPA requires the bundled Node.js 24 runtime."
 }
 $Version = [string]$Manifest.release.identity
-if ($Version -notmatch "^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[a-f0-9]{12}$") {
+if (
+  $Version -notmatch
+    "^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[a-f0-9]{12}\.node24\.[0-9]+\.[0-9]+$"
+) {
   throw "Runtime identity is invalid."
 }
 $VersionRoot = Join-Path $RuntimeRoot $Version
@@ -93,9 +104,7 @@ $RuntimeSwitched = $false
 $ExtensionSwitched = $false
 
 function Set-CurrentRuntime([string]$Identity) {
-  $Next = "$CurrentPointer.next"
-  [IO.File]::WriteAllText($Next, "$Identity`r`n", [Text.UTF8Encoding]::new($false))
-  Move-Item -LiteralPath $Next -Destination $CurrentPointer -Force
+  Set-BpaRuntimePointer -PointerPath $CurrentPointer -Identity $Identity
 }
 
 function Invoke-CurrentRuntime(
@@ -113,36 +122,20 @@ function Invoke-CurrentRuntime(
 }
 
 function Stop-BpaCore {
-  $LockPath = Join-Path $RunRoot "core.lock"
-  if (-not (Test-Path -LiteralPath $LockPath -PathType Leaf)) {
-    return
+  $ExpectedIdentity = $null
+  if (Test-Path -LiteralPath $CurrentPointer -PathType Leaf) {
+    $ExpectedIdentity = Get-BpaRuntimeIdentity -PointerPath $CurrentPointer
   }
-  $OwnerText = (Get-Content -LiteralPath $LockPath -Raw).Trim()
-  $OwnerPid = 0
-  if ([int]::TryParse($OwnerText, [ref]$OwnerPid) -and $OwnerPid -gt 0) {
-    $Process = Get-Process -Id $OwnerPid -ErrorAction SilentlyContinue
-    if ($Process) {
-      Stop-Process -Id $OwnerPid -Force
-      $Process.WaitForExit(5000)
-    }
-  }
+  Stop-BpaCoreSafely `
+    -InstallRoot $InstallRoot `
+    -ExpectedRuntimeIdentity $ExpectedIdentity
 }
 
 function Start-BpaCore {
   $Identity = (Get-Content -LiteralPath $CurrentPointer -Raw).Trim()
-  $Root = Join-Path $RuntimeRoot $Identity
-  $PreviousHome = $env:BPA_HOME
-  try {
-    $env:BPA_HOME = $InstallRoot
-    Start-Process `
-      -FilePath (Join-Path $Root "node\node.exe") `
-      -ArgumentList @((Join-Path $Root "bin\bpa-core.js")) `
-      -WindowStyle Hidden `
-      -RedirectStandardOutput (Join-Path $LogRoot "core.stdout.log") `
-      -RedirectStandardError (Join-Path $LogRoot "core.stderr.log")
-  } finally {
-    $env:BPA_HOME = $PreviousHome
-  }
+  Start-BpaCoreProcess `
+    -InstallRoot $InstallRoot `
+    -RuntimeIdentity $Identity
 }
 
 function Test-SqliteDatabase([string]$DatabasePath, [string]$RuntimePath) {
@@ -180,6 +173,7 @@ function Write-Launchers {
 setlocal
 set "BPA_HOME=$InstallRoot"
 set /p BPA_RUNTIME_ID=<"$CurrentPointer"
+set "BPA_RUNTIME_ID=%BPA_RUNTIME_ID%"
 "$RuntimeRoot\%BPA_RUNTIME_ID%\node\node.exe" "$RuntimeRoot\%BPA_RUNTIME_ID%\bin\$($Pair.Value)" %*
 "@
     [IO.File]::WriteAllText(

@@ -15,7 +15,7 @@ jobs:
           run_install: false
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
@@ -30,7 +30,7 @@ jobs:
           run_install: false
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
@@ -46,7 +46,7 @@ jobs:
           run_install: false
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: pnpm
       - name: Verify release build host
         run: |
@@ -64,7 +64,8 @@ jobs:
         run: |
           commit="$(git rev-parse HEAD)"
           version="$(node -p 'require("./package.json").version')"
-          identity="v${version}-rc.${commit:0:12}"
+          node_version="$(node -p 'process.versions.node')"
+          identity="v${version}-rc.${commit:0:12}.node${node_version}"
           archive="$RUNNER_TEMP/bpa-local-${identity}-macos-arm64.tar.gz"
           BPA_BUNDLED_NODE="$(command -v node)" \
             BPA_PACKAGE_OUTPUT="$archive" \
@@ -90,7 +91,7 @@ jobs:
           run_install: false
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Build and verify immutable Windows RC archive
@@ -98,7 +99,8 @@ jobs:
         run: |
           $commit = git rev-parse HEAD
           $version = node -p 'require("./package.json").version'
-          $identity = "v$version-rc.$($commit.Substring(0, 12))"
+          $nodeVersion = node -p 'process.versions.node'
+          $identity = "v$version-rc.$($commit.Substring(0, 12)).node$nodeVersion"
           $archive = Join-Path $env:RUNNER_TEMP "bpa-local-$identity-windows-x64.zip"
           ./scripts/package-windows-x64.ps1 -Output $archive
           ./scripts/verify-package-windows-x64.ps1 -Archive $archive

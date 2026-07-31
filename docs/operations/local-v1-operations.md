@@ -119,7 +119,7 @@ pnpm mcp
 ```bash
 BPA_BUNDLED_NODE=/absolute/path/to/node24 \
   ./scripts/package-macos-arm64.sh
-tar -xzf artifacts/bpa-local-v0.4.0-rc.<commit>-macos-arm64.tar.gz
+tar -xzf artifacts/bpa-local-v0.4.0-rc.<commit>.node24.18.0-macos-arm64.tar.gz
 cd bpa
 ./install.sh
 ./rollback.sh

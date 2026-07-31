@@ -28,7 +28,7 @@ fi
 RUNTIME_VERSION="$("$BUNDLED_NODE" -p 'require("./package.json").version')"
 NODE_VERSION="$("$BUNDLED_NODE" -p 'process.versions.node')"
 GIT_COMMIT="$(git rev-parse HEAD)"
-RELEASE_IDENTITY="v${RUNTIME_VERSION}-rc.$(print -n "$GIT_COMMIT" | cut -c1-12)"
+RELEASE_IDENTITY="v${RUNTIME_VERSION}-rc.$(print -n "$GIT_COMMIT" | cut -c1-12).node${NODE_VERSION}"
 EXPECTED_BASENAME="bpa-local-${RELEASE_IDENTITY}-windows-x64.zip"
 OUTPUT="${BPA_PACKAGE_OUTPUT:-$PROJECT_ROOT/artifacts/$EXPECTED_BASENAME}"
 OUTPUT="${OUTPUT:A}"
@@ -134,6 +134,8 @@ BPA_TARGET_NATIVE_HOST_EXECUTABLE="$SEA_ROOT/bpa-native-host.exe" \
 cp "$PROJECT_ROOT/scripts/install-windows-x64.ps1" "$PACKAGE_ROOT/bpa/install.ps1"
 cp "$PROJECT_ROOT/scripts/rollback-windows.ps1" "$PACKAGE_ROOT/bpa/rollback.ps1"
 cp "$PROJECT_ROOT/scripts/uninstall-windows.ps1" "$PACKAGE_ROOT/bpa/uninstall.ps1"
+cp "$PROJECT_ROOT/scripts/windows-runtime-common.ps1" \
+  "$PACKAGE_ROOT/bpa/runtime-common.ps1"
 
 "$BUNDLED_NODE" \
   "$PACKAGE_ROOT/bpa/runtime/bin/bpa-runtime-verify.js" \

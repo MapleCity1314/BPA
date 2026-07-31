@@ -22,6 +22,9 @@ import {
 } from "./release-gates.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
+const pinnedNodeVersion = (
+  await readFile(join(repositoryRoot, ".nvmrc"), "utf8")
+).trim();
 const outputRoot = resolve(process.argv[2] ?? "");
 const targetPlatform = process.env.BPA_TARGET_PLATFORM ?? process.platform;
 const targetArchitecture =
@@ -51,9 +54,9 @@ if (
 ) {
   throw new Error("Provide a dedicated runtime closure output directory");
 }
-if (process.versions.node.split(".")[0] !== "24") {
+if (process.versions.node !== pinnedNodeVersion) {
   throw new Error(
-    "Runtime closure must be built by Node.js 24"
+    `Runtime closure must be built by pinned Node.js ${pinnedNodeVersion}`
   );
 }
 const supportedTarget =
@@ -66,6 +69,11 @@ if (!supportedTarget) {
 }
 if (!/^24\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u.test(targetNodeVersion)) {
   throw new Error(`Target Node.js version is invalid: ${targetNodeVersion}`);
+}
+if (targetNodeVersion !== pinnedNodeVersion) {
+  throw new Error(
+    `Target Node.js ${targetNodeVersion} does not match pinned ${pinnedNodeVersion}`
+  );
 }
 if (
   (targetPlatform !== process.platform ||
