@@ -202,7 +202,9 @@ if (!/^[a-f0-9]{64}$/.test(generatedIndexDigest)) {
   throw new Error("Failed to digest the documentation index.");
 }
 
-const pagefindFiles = files.filter((file) => file.includes("/pagefind/"));
+const pagefindFiles = files.filter((file) =>
+  relative(distDir, file).split(/[\\/]/u).includes("pagefind")
+);
 if (pagefindFiles.length === 0) {
   throw new Error("Pagefind search index was not generated.");
 }
