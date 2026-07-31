@@ -37,7 +37,7 @@ const schemas = [
   "browser-protocol-v1.schema.json"
 ];
 const check = process.argv.includes("--check");
-const normalizeGeneratedText = (value) => value.replaceAll("\r\n", "\n");
+const normalizeGeneratedText = (value) => value.replace(/\r\n?/gu, "\n");
 
 await mkdir(outputDirectory, { recursive: true });
 const mismatches = [];
@@ -110,7 +110,9 @@ for (const filename of schemas) {
   );
   const outputPath = join(outputDirectory, outputName);
   if (check) {
-    const current = await readFile(outputPath, "utf8").catch(() => "");
+    const current = normalizeGeneratedText(
+      await readFile(outputPath, "utf8").catch(() => "")
+    );
     if (current !== generated) mismatches.push(outputName);
   } else {
     await writeFile(outputPath, generated);
@@ -153,7 +155,9 @@ const validatorSource = normalizeGeneratedText(
 const validatorName = "browser_protocol_v1.validator.ts";
 const validatorPath = join(outputDirectory, validatorName);
 if (check) {
-  const current = await readFile(validatorPath, "utf8").catch(() => "");
+  const current = normalizeGeneratedText(
+    await readFile(validatorPath, "utf8").catch(() => "")
+  );
   if (current !== validatorSource) mismatches.push(validatorName);
 } else {
   await writeFile(validatorPath, validatorSource);
