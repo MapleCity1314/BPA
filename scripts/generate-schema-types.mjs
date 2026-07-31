@@ -37,6 +37,7 @@ const schemas = [
   "browser-protocol-v1.schema.json"
 ];
 const check = process.argv.includes("--check");
+const normalizeGeneratedText = (value) => value.replaceAll("\r\n", "\n");
 
 await mkdir(outputDirectory, { recursive: true });
 const mismatches = [];
@@ -93,18 +94,20 @@ for (const filename of schemas) {
   }
   const outputName = `${basename(filename, ".schema.json")
     .replaceAll("-", "_")}.d.ts`;
-  const generated = await compile(schema, schema.title, {
-    bannerComment:
-      "/* Generated from canonical JSON Schema. Do not edit manually. */",
-    cwd: schemaDirectory,
-    ignoreMinAndMaxItems: true,
-    style: {
-      singleQuote: false,
-      semi: true,
-      tabWidth: 2,
-      trailingComma: "none"
-    }
-  });
+  const generated = normalizeGeneratedText(
+    await compile(schema, schema.title, {
+      bannerComment:
+        "/* Generated from canonical JSON Schema. Do not edit manually. */",
+      cwd: schemaDirectory,
+      ignoreMinAndMaxItems: true,
+      style: {
+        singleQuote: false,
+        semi: true,
+        tabWidth: 2,
+        trailingComma: "none"
+      }
+    })
+  );
   const outputPath = join(outputDirectory, outputName);
   if (check) {
     const current = await readFile(outputPath, "utf8").catch(() => "");
@@ -139,12 +142,14 @@ ajv.addSchema(permissionSchema);
 ajv.addSchema(timingPolicySchema);
 ajv.addSchema(riskSignalSchema);
 const browserProtocolValidator = ajv.compile(browserProtocolSchema);
-const validatorSource = [
-  "/* Generated from canonical JSON Schema. Do not edit manually. */",
-  "// @ts-nocheck",
-  standaloneCode(ajv, browserProtocolValidator),
-  ""
-].join("\n");
+const validatorSource = normalizeGeneratedText(
+  [
+    "/* Generated from canonical JSON Schema. Do not edit manually. */",
+    "// @ts-nocheck",
+    standaloneCode(ajv, browserProtocolValidator),
+    ""
+  ].join("\n")
+);
 const validatorName = "browser_protocol_v1.validator.ts";
 const validatorPath = join(outputDirectory, validatorName);
 if (check) {
