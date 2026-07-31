@@ -4,10 +4,12 @@ export * from "./dom-readers.js";
 export * from "./browser-actions.js";
 export * from "./editor-inspector.js";
 export * from "./scope-collector.js";
+export * from "./alliance-retired.js";
 
 export const DOUDIAN_ADAPTER_ID = "doudian";
 export const DOUDIAN_ADAPTER_VERSION = "1.1.0";
 export const DOUDIAN_ORIGIN = "https://fxg.jinritemai.com";
+export const DOUDIAN_BUYIN_ORIGIN = "https://buyin.jinritemai.com";
 export const DOUDIAN_LIST_PATH = "/ffa/g/list";
 
 export interface DoudianShopContext {
@@ -42,7 +44,12 @@ export function detectDoudianRiskSignals(
       }
     ];
   }
-  if (url.origin !== DOUDIAN_ORIGIN) return [];
+  if (
+    url.origin !== DOUDIAN_ORIGIN &&
+    url.origin !== DOUDIAN_BUYIN_ORIGIN
+  ) {
+    return [];
+  }
   if (/login|passport|signin|authorize/i.test(url.pathname)) {
     return [
       {

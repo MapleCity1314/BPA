@@ -45,7 +45,7 @@
       "additionalProperties": false,
       "required": ["scope", "minIntervalMs", "maxQueueMs"],
       "properties": {
-        "scope": { "enum": ["domain", "shop", "tab"] },
+        "scope": { "enum": ["domain", "authentication_context", "tab"] },
         "minIntervalMs": {
           "type": "integer",
           "minimum": 0,

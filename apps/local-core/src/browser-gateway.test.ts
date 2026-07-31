@@ -24,7 +24,158 @@ function fixture(path: string): unknown {
 }
 
 describe("local browser gateway", () => {
-  it("completes a signed, idempotent browser workflow", () => {
+  it("rejects an old Bridge without exact page observation features", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const gateway = new LocalBrowserGateway(
+      persistence,
+      new LocalWorkflowEngine(persistence),
+      {
+        keyId: "core-feature-key",
+        privateKey,
+        publicKey,
+        publicKeySpkiBase64: exportPublicKeySpkiBase64(publicKey)
+      }
+    );
+    const outgoing: Array<Record<string, any>> = [];
+    gateway.attach(
+      `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      (message) => outgoing.push(message)
+    );
+    gateway.handle({
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
+      message_id: "hello-old-bridge",
+      session_id: "new",
+      seq: 0,
+      sent_at: new Date().toISOString(),
+      type: "session.hello",
+      trace_id: "trace-old-bridge",
+      payload: {
+        browser_instance_id: "browser-old",
+        extension_id: DEFAULT_BPA_EXTENSION_ID,
+        extension_version: "0.5.0",
+        supported_protocols: ["bpa.browser/2"],
+        last_acked_command_seq: 0
+      }
+    });
+    expect(gateway.status()).toMatchObject({
+      connected: true,
+      ready: false,
+      lastError: "BROWSER_BRIDGE_FEATURE_MISMATCH"
+    });
+    expect(outgoing).toEqual([]);
+    persistence.close();
+  });
+
+  it("persists per-tab observations and invalidates them on disconnect", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const gateway = new LocalBrowserGateway(
+      persistence,
+      new LocalWorkflowEngine(persistence),
+      {
+        keyId: "core-observation-key",
+        privateKey,
+        publicKey,
+        publicKeySpkiBase64: exportPublicKeySpkiBase64(publicKey)
+      }
+    );
+    const outgoing: Array<Record<string, any>> = [];
+    const connectionId = gateway.attach(
+      `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      (message) => outgoing.push(message)
+    );
+    gateway.handle(
+      {
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
+        message_id: "hello-observation",
+        session_id: "new",
+        seq: 0,
+        sent_at: new Date().toISOString(),
+        type: "session.hello",
+        trace_id: "trace-observation",
+        payload: {
+          browser_instance_id: "browser-observation",
+          extension_id: DEFAULT_BPA_EXTENSION_ID,
+          extension_version: "0.6.0",
+          supported_protocols: ["bpa.browser/2"],
+          features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
+          last_acked_command_seq: 0
+        }
+      },
+      connectionId
+    );
+    const sessionId = String(outgoing.at(-1)!.session_id);
+    gateway.handle(
+      {
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
+        message_id: "capability-observation",
+        session_id: sessionId,
+        seq: 1,
+        sent_at: new Date().toISOString(),
+        type: "capability.report",
+        trace_id: "trace-observation",
+        payload: {
+          capabilities: [],
+          features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
+          manifest_digest: `sha256:${"a".repeat(64)}`
+        }
+      },
+      connectionId
+    );
+    gateway.handle(
+      {
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
+        message_id: "page-observation",
+        session_id: sessionId,
+        seq: 2,
+        sent_at: new Date().toISOString(),
+        type: "page.observation",
+        trace_id: "trace-observation",
+        payload: {
+          tab_ref: {
+            browser_instance_id: "browser-observation",
+            tab_id: 42,
+            window_id: 7,
+            origin: "https://fxg.jinritemai.com"
+          },
+          pathname: "/ffa/g/list",
+          content_script_ready: true,
+          authentication: {
+            state: "authenticated",
+            context_ref: "auth-context-shop-1"
+          },
+          observation_state: "ready",
+          page_epoch: "tab-42:1:test",
+          observation_revision: 1,
+          observer_capability_id: "doudian.page",
+          observed_at: new Date().toISOString(),
+        }
+      },
+      connectionId
+    );
+    expect(
+      persistence.getBrowserPageObservation(sessionId, 42)
+    ).toMatchObject({
+      observationState: "ready",
+      authentication: "authenticated",
+      authenticationContextRef: "auth-context-shop-1"
+    });
+    gateway.detach(connectionId);
+    expect(
+      persistence.getBrowserPageObservation(sessionId, 42)
+    ).toMatchObject({
+      observationState: "stale",
+      reasonCode: "BROWSER_BRIDGE_DISCONNECTED"
+    });
+    persistence.close();
+  });
+
+  it("completes a signed, idempotent browser workflow", async () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const dataDirectory = mkdtempSync(join(tmpdir(), "bpa-browser-evidence-"));
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");
@@ -45,7 +196,7 @@ describe("local browser gateway", () => {
     for (const path of [
       "nodes/core/control.start.node.yaml",
       "nodes/core/control.succeed.node.yaml",
-      "nodes/core/doudian.shop.context.read.node.yaml"
+      "nodes/core/doudian.shop.context.read@1.3.0.node.yaml"
     ]) {
       const content = fixture(path) as Record<string, any>;
       if (path.includes("doudian.shop.context.read")) {
@@ -63,6 +214,25 @@ describe("local browser gateway", () => {
         }).ok
       ).toBe(true);
     }
+    const adapter = fixture(
+      "adapters/doudian/doudian.adapter.yaml"
+    ) as Record<string, any>;
+    adapter.capabilities = adapter.capabilities.filter(
+      (capability: Record<string, unknown>) =>
+        capability.nodeId === "doudian.shop.context.read"
+    );
+    const adapterPublish = service.handle({
+        id: "adapter",
+        method: "asset.publish",
+        params: {
+          assetType: "adapter",
+          content: adapter,
+          actor: "test"
+        }
+      });
+    expect(adapterPublish, JSON.stringify(adapterPublish)).toMatchObject({
+      ok: true
+    });
     const workflowPublish = service.handle({
       id: "workflow",
       method: "asset.publish",
@@ -77,27 +247,14 @@ describe("local browser gateway", () => {
     expect(workflowPublish, JSON.stringify(workflowPublish)).toMatchObject({
       ok: true
     });
-    const started = service.handle({
-      id: "run",
-      method: "run.create",
-      params: {
-        workflowId: "doudian.shop-context-observe",
-        workflowVersion: "1.2.0",
-        input: {}
-      }
-    });
-    expect(started.ok).toBe(true);
-    const runId = (started.result as { id: string }).id;
-    expect(persistence.getRun(runId)?.status).toBe("waiting_browser");
-
     const outgoing: Array<Record<string, any>> = [];
     gateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
       (message) => outgoing.push(message)
     );
     gateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "hello-1",
       session_id: "new",
       seq: 0,
@@ -108,7 +265,8 @@ describe("local browser gateway", () => {
         browser_instance_id: "browser-test",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
         extension_version: "0.3.0",
-        supported_protocols: ["bpa.browser/1"],
+        supported_protocols: ["bpa.browser/2"],
+        features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         last_acked_command_seq: 0
       }
     });
@@ -116,8 +274,8 @@ describe("local browser gateway", () => {
     expect(welcome.type).toBe("session.welcome");
     const sessionId = String(welcome.session_id);
     gateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "capability-1",
       session_id: sessionId,
       seq: 1,
@@ -128,17 +286,65 @@ describe("local browser gateway", () => {
         capabilities: [
           {
             node_id: "doudian.shop.context.read",
-            versions: ["1.0.0", "1.1.0", "1.2.0"],
+            versions: ["1.0.0", "1.1.0", "1.2.0", "1.3.0"],
             risk_level: "R0",
             permissions: ["browser.dom.read", "browser.tabs.read"],
+            routes: [
+              {
+                origin: "https://fxg.jinritemai.com",
+                pathname_prefixes: ["/ffa/g/list"],
+                observer_capability_id: "doudian.page"
+              }
+            ],
             adapter_id: "doudian",
             adapter_version: "1.1.0"
           }
         ],
+        features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         manifest_digest:
           "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       }
     });
+    persistence.upsertBrowserPageObservation({
+      sessionId,
+      browserInstanceId: "browser-test",
+      tabId: 42,
+      windowId: 7,
+      origin: "https://fxg.jinritemai.com",
+      pathname: "/ffa/g/list",
+      contentScriptReady: true,
+      authentication: "authenticated",
+      authenticationContextRef: "auth-context-gateway-test",
+      observationState: "ready",
+      pageEpoch: "tab-42:1:gateway-test",
+      observerCapabilityId: "doudian.page",
+      revision: 1,
+      observedAt: new Date().toISOString()
+    });
+    const resourceBindings = {
+      doudian_page: {
+        sessionId,
+        browserInstanceId: "browser-test",
+        tabId: 42,
+        observationRevision: 1
+      }
+    };
+    const started = service.handle({
+      id: "run",
+      method: "run.create",
+      params: {
+        workflowId: "doudian.shop-context-observe",
+        workflowVersion: "2.0.0",
+        input: {},
+        resourceBindings,
+        actor: "test"
+      }
+    });
+    expect(started.ok).toBe(true);
+    const runId = (started.result as { id: string }).id;
+    expect(persistence.getRun(runId)?.status).toBe("waiting_browser");
+    const firstDrain = service.ir2Runtime.drainOnce();
+    await new Promise<void>((resolve) => setImmediate(resolve));
     const command = outgoing.find(
       (message) => message.type === "command.dispatch"
     )!;
@@ -155,8 +361,8 @@ describe("local browser gateway", () => {
     ).toBe(true);
 
     gateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "command-ack-1",
       session_id: sessionId,
       seq: 2,
@@ -182,8 +388,8 @@ describe("local browser gateway", () => {
       .update(evidenceBody)
       .digest("hex")}`;
     gateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "evidence-begin-1",
       session_id: sessionId,
       seq: 3,
@@ -203,8 +409,8 @@ describe("local browser gateway", () => {
       }
     });
     gateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "evidence-out-of-order-1",
       session_id: sessionId,
       seq: 4,
@@ -228,8 +434,8 @@ describe("local browser gateway", () => {
       }
     });
     gateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "evidence-chunk-1",
       session_id: sessionId,
       seq: 5,
@@ -244,8 +450,8 @@ describe("local browser gateway", () => {
       }
     });
     gateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "evidence-complete-1",
       session_id: sessionId,
       seq: 6,
@@ -263,8 +469,8 @@ describe("local browser gateway", () => {
       payload: { evidence_id: "evidence-1", accepted: true }
     });
     const result = {
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "result-1",
       session_id: sessionId,
       seq: 7,
@@ -298,6 +504,7 @@ describe("local browser gateway", () => {
       }
     };
     gateway.handle(result);
+    await firstDrain;
     expect(persistence.getRun(runId)?.status).toBe("succeeded");
     expect(outgoing.at(-1)?.type).toBe("result.ack");
     expect(persistence.getEvidenceTransfer("evidence-1")).toMatchObject({
@@ -324,7 +531,7 @@ describe("local browser gateway", () => {
     expect(
       persistence
         .listEvents(runId)
-        .filter((event) => event.type === "RUN_SUCCEEDED")
+        .filter((event) => event.type === "RUNTIME_RESULT_APPLIED")
     ).toHaveLength(1);
 
     const riskRun = service.handle({
@@ -332,17 +539,21 @@ describe("local browser gateway", () => {
       method: "run.create",
       params: {
         workflowId: "doudian.shop-context-observe",
-        workflowVersion: "1.2.0",
-        input: {}
+        workflowVersion: "2.0.0",
+        input: {},
+        resourceBindings,
+        actor: "test"
       }
     });
     const riskRunId = (riskRun.result as { id: string }).id;
+    const riskDrain = service.ir2Runtime.drainOnce();
+    await new Promise<void>((resolve) => setImmediate(resolve));
     const riskCommand = outgoing
       .filter((message) => message.type === "command.dispatch")
       .at(-1)!;
     gateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "risk-command-ack",
       session_id: sessionId,
       seq: 8,
@@ -358,8 +569,8 @@ describe("local browser gateway", () => {
       }
     });
     gateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "risk-result",
       session_id: sessionId,
       seq: 9,
@@ -395,12 +606,15 @@ describe("local browser gateway", () => {
         evidence_refs: []
       }
     });
-    expect(persistence.getRun(riskRunId)?.status).toBe("failed");
+    await riskDrain;
+    expect(persistence.getRun(riskRunId)?.status).toBe("uncertain");
     expect(
       persistence
         .listEvents(riskRunId)
-        .find((event) => event.type === "NODE_REJECTED")?.payload
+        .find((event) => event.type === "RUNTIME_RESULT_APPLIED")?.payload
     ).toMatchObject({
+      outcomeStatus: "rejected",
+      errorCode: "CAPTCHA_REQUIRED",
       riskSignals: [{ code: "CAPTCHA_REQUIRED", severity: "blocking" }]
     });
     persistence.close();
@@ -426,8 +640,8 @@ describe("local browser gateway", () => {
       (message) => outgoing.push(message)
     );
     gateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "hello-resume-first",
       session_id: "new",
       seq: 0,
@@ -438,7 +652,8 @@ describe("local browser gateway", () => {
         browser_instance_id: "browser-resume",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
         extension_version: "0.4.0",
-        supported_protocols: ["bpa.browser/1"],
+        supported_protocols: ["bpa.browser/2"],
+        features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         last_acked_command_seq: 0
       }
     });
@@ -456,8 +671,8 @@ describe("local browser gateway", () => {
       (message) => outgoing.push(message)
     );
     gateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "hello-resume-second",
       session_id: "new",
       seq: 0,
@@ -468,7 +683,8 @@ describe("local browser gateway", () => {
         browser_instance_id: "browser-resume",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
         extension_version: "0.4.0",
-        supported_protocols: ["bpa.browser/1"],
+        supported_protocols: ["bpa.browser/2"],
+        features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         last_acked_command_seq: 0,
         resume_token: resumeToken
       }

@@ -1,13 +1,13 @@
 ---
 title: 规范消息样例
-description: Browser Protocol v1 与 Control Hello 的中性、可下载规范样例。
+description: Browser Protocol v2 与 Control Hello 的中性、可下载规范样例。
 ---
 
 Browser 样例覆盖 Session、Capability、Command、Result、Cancel、Heartbeat、
 Evidence 与恢复消息。Control 样例覆盖 Hello、Welcome 和不兼容响应。公开示例使用
 中性标识，不包含业务适配器、真实来源或凭据。
 
-<a class="sl-link-button primary" href={`${import.meta.env.BASE_URL}specs/browser-protocol-v1.messages.json`} download>
+<a class="sl-link-button primary" href={`${import.meta.env.BASE_URL}specs/browser-protocol-v2.messages.json`} download>
   下载 Browser 消息
 </a>
 {" "}
@@ -36,8 +36,8 @@ Evidence 与恢复消息。Control 样例覆盖 Hello、Welcome 和不兼容响�
 
 ```json
 {
-  "protocol": "bpa.browser/1",
-  "version": "1.0.0",
+  "protocol": "bpa.browser/2",
+  "version": "2.0.0",
   "message_id": "message-hello",
   "session_id": "new",
   "seq": 0,
@@ -48,7 +48,8 @@ Evidence 与恢复消息。Control 样例覆盖 Hello、Welcome 和不兼容响�
     "browser_instance_id": "browser-example-01",
     "extension_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "extension_version": "0.2.0",
-    "supported_protocols": ["bpa.browser/1"],
+    "supported_protocols": ["bpa.browser/2"],
+    "features": ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
     "last_acked_command_seq": 0
   }
 }
@@ -58,8 +59,8 @@ Evidence 与恢复消息。Control 样例覆盖 Hello、Welcome 和不兼容响�
 
 ```json
 {
-  "protocol": "bpa.browser/1",
-  "version": "1.0.0",
+  "protocol": "bpa.browser/2",
+  "version": "2.0.0",
   "message_id": "message-command",
   "session_id": "session-01",
   "seq": 2,

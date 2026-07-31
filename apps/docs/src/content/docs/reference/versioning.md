@@ -5,11 +5,11 @@ description: BPA 协议族、Schema 版本、Alpha 模型和兼容性规则。
 
 ## Protocol 与 version
 
-`protocol` 表示不兼容的协议族和 Major，例如 `bpa.browser/1`。`version` 是该 Major 内的完整 Schema 版本，例如 `1.0.0`。
+`protocol` 表示不兼容的协议族和 Major，例如 `bpa.browser/2`。`version` 是该 Major 内的完整 Schema 版本，例如 `2.0.0`。
 
 连接双方先协商协议族，再按完整 Schema 校验每条消息。
 
-## v1 兼容规则
+## v2 兼容规则
 
 - 未知字段严格失败，不以猜测方式兼容。
 - 新增消息或字段需要发布新的完整 Schema 版本，并通过双端兼容测试。
@@ -37,7 +37,7 @@ Workflow Alpha 版本变化；Run 恢复使用保存的 IR2 和资产闭包。
 
 ## 公共文档基线
 
-当前文档以 2026-07-30 的已确认 Browser Protocol v1、Control Hello 和资源/证据
+当前文档以 2026-07-31 的已确认 Browser Protocol v2、Control Hello 和资源/证据
 协议边界为基线。页面状态与下载 Schema 必须一致；网站解释不能覆盖机器规范。
 
 ## 兼容矩阵
@@ -49,6 +49,6 @@ Workflow Alpha 版本变化；Run 恢复使用保存的 IR2 和资产闭包。
 | 资源感知 Workflow | v1alpha3 | IR2 + Resource Binding Snapshot |
 | 旧 Node | v1alpha1 | 不可变 Node Closure |
 | 资源感知 Node | v1alpha2 | Requirement + Node Closure |
-| Browser Runtime | `bpa.browser/1@1.0.0` | Session、Command 和 Evidence 状态 |
+| Browser Runtime | `bpa.browser/2@2.0.0` | Session、页面观察、定向 Command 和 Evidence 状态 |
 
 已有 Run 不会自动获得新的 Resource Slot、Adapter Readiness 或资产版本。

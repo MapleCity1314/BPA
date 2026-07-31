@@ -29,16 +29,17 @@ Fencing 解决的是过期执行者问题，不代替幂等键，也不证明页
 Bridge 在执行前重新检查：
 
 1. Deadline 是否仍有剩余时间。
-2. 当前活动 Tab、Origin 与 Page Epoch 是否匹配。
+2. 冻结的确切 Tab、Origin、Observation Revision 与 Page Epoch 是否匹配。
 3. Permission Grant 是否覆盖目标域名和动作。
 4. 页面是否稳定，是否出现验证码、登录或风险控制。
 5. Timing Policy 的等待是否会越过 Deadline。
 
 Blocking Risk Signal 必须停止动作并返回 `rejected`。协议不允许尝试绕过验证码、登录、二次认证或平台风控。
 
-对于 Workflow v1alpha3，Gateway 还会核对 Command 所需的精确 Browser Session。
-Capability Digest、Origin 或认证等级与 Run 的冻结 Binding Snapshot 不一致时，
-Command 不会被派发到“看起来可用”的其他 Session。
+对于 Workflow v1alpha3，Gateway 还会核对 Command 所需的精确 Browser Instance、
+Tab、Capability Digest、Origin/path、认证上下文、Observation Revision 与 Page Epoch。
+任一事实与冻结 Binding Snapshot 不一致时，Command 不会被派发到当前活动页或其他
+“看起来可用”的 Session。
 
 ## Evidence 与业务结果分离
 

@@ -135,9 +135,14 @@ describe("runtime provider registry", () => {
     });
     const session = {
       sessionId: "session-1",
+      browserInstanceId: "browser-1",
+      tabId: 42,
+      observationRevision: 1,
       capabilityDigest: "a".repeat(64),
       capabilities: ["browser.dom.read"],
       origin: "https://www.chanmama.com",
+      pathname: "/metrics",
+      pageEpoch: "tab-42:1:test",
       authentication: "authenticated" as const,
       state: "available" as const
     };
@@ -183,8 +188,12 @@ describe("runtime provider registry", () => {
             revision: 1,
             slotName: "metrics_source",
             sessionId: "session-1",
+            browserInstanceId: "browser-1",
+            tabId: 42,
             capabilityDigest: "a".repeat(64),
             origin: "https://www.chanmama.com",
+            pathname: "/metrics",
+            pageEpoch: "tab-42:1:test",
             authentication: "authenticated" as const,
             frozenAt: 1_000,
             approvedBy: "user:test"

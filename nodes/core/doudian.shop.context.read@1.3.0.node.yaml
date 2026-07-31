@@ -1,4 +1,4 @@
-apiVersion: bpa/v1alpha1
+apiVersion: bpa/v1alpha2
 kind: Node
 metadata:
   id: doudian.shop.context.read
@@ -68,6 +68,13 @@ risk:
     - browser.tabs.read
   domains:
     - https://fxg.jinritemai.com
+resources:
+  browser:
+    kind: browser
+    capabilities: [browser.dom.read, browser.tabs.read]
+    allowedOrigins: [https://fxg.jinritemai.com]
+    authentication: authenticated
+    purpose: 读取冻结标签页上的当前抖店认证上下文
 execution:
   timeoutDefault: 15s
   idempotency: repeatable_read

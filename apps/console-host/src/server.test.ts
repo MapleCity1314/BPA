@@ -271,7 +271,14 @@ describe("Console Host security boundary", () => {
         workflowId: "priority-check",
         workflowVersion: "1.0.0",
         inputs: { scope: "all" },
-        resourceBindings: { shop: "session-1" }
+        resourceBindings: {
+          shop: {
+            sessionId: "session-1",
+            browserInstanceId: "chrome-profile-1",
+            tabId: 7,
+            observationRevision: 3
+          }
+        }
       })
     });
     expect(run.status).toBe(201);

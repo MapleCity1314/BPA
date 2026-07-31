@@ -1,6 +1,6 @@
 import type {
-  BPABrowserProtocolV1Message
-} from "./generated/browser_protocol_v1.js";
+  BPABrowserProtocolV2Message
+} from "./generated/browser_protocol_v2.js";
 import type { BPANodeDefinition } from "./generated/node.js";
 import type {
   BPANodeDefinitionV1Alpha2
@@ -65,7 +65,7 @@ import type {
 } from "./generated/candidate_bundle.js";
 
 export type {
-  BPABrowserProtocolV1Message,
+  BPABrowserProtocolV2Message,
   BPAAdapterManifestV1Alpha1,
   BPAAssistanceProfileV1Alpha1,
   BPAAssistanceTaskV1Alpha1,
@@ -104,7 +104,7 @@ export type NodeDefinitionV1Alpha2 = BPANodeDefinitionV1Alpha2;
 export type SourceRecordDefinition = BPASourceRecordV1Alpha1;
 export type AssetRecordDefinition = BPAAssetRecordV1Alpha1;
 export type EvidenceLinkDefinition = BPAEvidenceLinkV1Alpha1;
-export type BrowserProtocolMessage = BPABrowserProtocolV1Message;
+export type BrowserProtocolMessage = BPABrowserProtocolV2Message;
 export type AssistanceTaskDefinition = BPAAssistanceTaskV1Alpha1;
 export type AdapterManifestDefinition = BPAAdapterManifestV1Alpha1;
 export type AssistanceProfileDefinition = BPAAssistanceProfileV1Alpha1;

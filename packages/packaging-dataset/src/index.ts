@@ -5,7 +5,12 @@ import {
   digestPackagingValue,
   type PackagingMasterRecord
 } from "@bpa/packaging-domain";
-import { strFromU8, unzipSync } from "fflate";
+import {
+  Unzip,
+  UnzipInflate,
+  UnzipPassThrough,
+  strFromU8
+} from "fflate";
 import { XMLParser } from "fast-xml-parser";
 
 export const PACKAGING_DATASET_PROFILE = Object.freeze({
@@ -23,6 +28,10 @@ export const PACKAGING_REQUIRED_COLUMNS = [
 const MAX_SOURCE_BYTES = 50 * 1024 * 1024;
 const MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024;
 const MAX_ZIP_ENTRIES = 1_000;
+const MAX_ZIP_ENTRY_BYTES = 64 * 1024 * 1024;
+const MAX_ZIP_COMPRESSION_RATIO = 200;
+const MAX_ZIP_PARSE_MS = 15_000;
+const MAX_ZIP_RSS_GROWTH_BYTES = 384 * 1024 * 1024;
 const MAX_ROWS = 1_000_000;
 
 export interface PackagingDatasetImport {
@@ -95,6 +104,114 @@ interface WorkbookRow {
   readonly values: Readonly<Record<string, string>>;
 }
 
+function boundedUnzip(bytes: Uint8Array): Record<string, Uint8Array> {
+  if (
+    bytes.byteLength < 4 ||
+    bytes[0] !== 0x50 ||
+    bytes[1] !== 0x4b ||
+    !(
+      (bytes[2] === 0x03 && bytes[3] === 0x04) ||
+      (bytes[2] === 0x05 && bytes[3] === 0x06) ||
+      (bytes[2] === 0x07 && bytes[3] === 0x08)
+    )
+  ) {
+    throw new Error("Excel ZIP 容器无法解析");
+  }
+  const files: Record<string, Uint8Array> = {};
+  const startedAt = Date.now();
+  const startingRss = process.memoryUsage().rss;
+  let entries = 0;
+  let totalExpanded = 0;
+  let failure: Error | undefined;
+  const fail = (message: string): never => {
+    failure ??= new Error(message);
+    throw failure;
+  };
+  const checkBudget = (): void => {
+    if (Date.now() - startedAt > MAX_ZIP_PARSE_MS) {
+      fail("Excel ZIP 解压耗时超过安全上限");
+    }
+    if (
+      process.memoryUsage().rss - startingRss >
+      MAX_ZIP_RSS_GROWTH_BYTES
+    ) {
+      fail("Excel ZIP 解压内存增长超过安全上限");
+    }
+  };
+  const unzip = new Unzip((file) => {
+    entries += 1;
+    checkBudget();
+    if (entries > MAX_ZIP_ENTRIES) {
+      fail("Excel ZIP 条目数量超过安全上限");
+    }
+    if (
+      file.name.startsWith("/") ||
+      file.name.includes("\\") ||
+      file.name.split("/").some((segment) => segment === "..")
+    ) {
+      fail("Excel ZIP 包含不安全路径");
+    }
+    if (
+      file.originalSize !== undefined &&
+      file.originalSize > MAX_ZIP_ENTRY_BYTES
+    ) {
+      fail("Excel ZIP 单个条目超过安全上限");
+    }
+    if (
+      file.size !== undefined &&
+      file.originalSize !== undefined &&
+      file.originalSize > 0 &&
+      file.originalSize / Math.max(1, file.size) >
+        MAX_ZIP_COMPRESSION_RATIO
+    ) {
+      fail("Excel ZIP 条目压缩比超过安全上限");
+    }
+    const chunks: Uint8Array[] = [];
+    let expanded = 0;
+    file.ondata = (error, chunk, final) => {
+      if (failure) return;
+      if (error) fail("Excel ZIP 容器无法解析");
+      checkBudget();
+      expanded += chunk.byteLength;
+      totalExpanded += chunk.byteLength;
+      if (expanded > MAX_ZIP_ENTRY_BYTES) {
+        fail("Excel ZIP 单个条目超过安全上限");
+      }
+      if (totalExpanded > MAX_UNCOMPRESSED_BYTES) {
+        fail("Excel 解压后大小超过安全上限");
+      }
+      if (
+        file.size !== undefined &&
+        expanded / Math.max(1, file.size) > MAX_ZIP_COMPRESSION_RATIO
+      ) {
+        fail("Excel ZIP 条目压缩比超过安全上限");
+      }
+      if (chunk.byteLength > 0) chunks.push(Uint8Array.from(chunk));
+      if (final) {
+        const content = new Uint8Array(expanded);
+        let offset = 0;
+        for (const part of chunks) {
+          content.set(part, offset);
+          offset += part.byteLength;
+        }
+        files[file.name] = content;
+      }
+    };
+    file.start();
+  });
+  unzip.register(UnzipPassThrough);
+  unzip.register(UnzipInflate);
+  for (let offset = 0; offset < bytes.byteLength; offset += 64 * 1024) {
+    checkBudget();
+    const end = Math.min(bytes.byteLength, offset + 64 * 1024);
+    unzip.push(bytes.subarray(offset, end), end === bytes.byteLength);
+    if (failure) throw failure;
+  }
+  if (failure) throw failure;
+  if (entries === 0) throw new Error("Excel ZIP 容器无法解析");
+  return files;
+}
+
 function extractWorkbookRows(bytes: Uint8Array): {
   sheetName?: string;
   rows: readonly WorkbookRow[];
@@ -108,9 +225,16 @@ function extractWorkbookRows(bytes: Uint8Array): {
   }
   let files: Record<string, Uint8Array>;
   try {
-    files = unzipSync(bytes);
-  } catch {
-    return { rows: [], errors: ["Excel ZIP 容器无法解析"] };
+    files = boundedUnzip(bytes);
+  } catch (error) {
+    return {
+      rows: [],
+      errors: [
+        error instanceof Error
+          ? error.message
+          : "Excel ZIP 容器无法解析"
+      ]
+    };
   }
   const entries = Object.entries(files);
   if (entries.length > MAX_ZIP_ENTRIES) {

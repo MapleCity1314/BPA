@@ -10,5 +10,9 @@
     "@bpa/compiler": "workspace:*",
     "@bpa/page-model": "workspace:*",
     "@bpa/schemas": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^21.1.7",
+    "jsdom": "^27.0.1"
   }
 }

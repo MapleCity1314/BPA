@@ -122,6 +122,18 @@ async function verifyRuntimeVersions() {
     "bpa-local-$ReleaseIdentity-windows-x64.zip",
     "Windows package immutable release filename"
   );
+  for (const releaseScript of [
+    "scripts/package-windows-x64.sh",
+    "scripts/package-windows-x64.ps1",
+    "scripts/package-macos-arm64.sh",
+    "scripts/build-runtime-closure.mjs"
+  ]) {
+    await expectFileContains(
+      join(root, releaseScript),
+      "--untracked-files=all",
+      "Release dirty-tree gate including untracked files"
+    );
+  }
   await expectFileContains(
     join(root, "scripts/install-windows-x64.ps1"),
     "Software\\Google\\Chrome\\NativeMessagingHosts\\com.bpa.browser",
@@ -681,6 +693,18 @@ const assets = await verifyAssets();
 const skillCount = await verifySkills();
 const shellScriptCount = await verifyScripts();
 const sourceFileCount = await verifyDependencyBoundaries();
+try {
+  await execFileAsync(
+    process.execPath,
+    [join(root, "scripts/verify-doudian-alliance-skill.mjs"), "--source"]
+  );
+} catch (error) {
+  issues.push(
+    `Doudian alliance Skill delivery verification failed: ${
+      error instanceof Error ? error.message : String(error)
+    }`
+  );
+}
 
 if (issues.length > 0) {
   process.stderr.write(

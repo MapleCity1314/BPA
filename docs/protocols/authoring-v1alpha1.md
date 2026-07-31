@@ -190,7 +190,7 @@ the bundle digest, archive digest, destination lease and actor in Audit.
 
 ## 8. Compatibility
 
-- `bpa.browser/1@1.0.0` does not change.
+- Authoring does not bypass `bpa.browser/2@2.0.0` observation or exact-tab binding.
 - Snapshot bodies use the accepted Evidence chunk/ACK flow; large bodies do
   not enter Control frames.
 - Existing Workflow and Node schemas, IR2 plans, Runs, PageModels and

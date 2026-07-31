@@ -1,7 +1,7 @@
 [
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-hello",
     "session_id": "new",
     "seq": 0,
@@ -12,13 +12,18 @@
       "browser_instance_id": "browser-example-01",
       "extension_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "extension_version": "0.4.0",
-      "supported_protocols": ["bpa.browser/1"],
+      "supported_protocols": ["bpa.browser/2"],
+      "features": [
+        "page_observation_v2",
+        "exact_tab_binding_v2",
+        "active_page_probe_v1"
+      ],
       "last_acked_command_seq": 0
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-welcome",
     "session_id": "session-01",
     "seq": 1,
@@ -26,7 +31,7 @@
     "type": "session.welcome",
     "trace_id": "trace-session",
     "payload": {
-      "selected_protocol": "bpa.browser/1",
+      "selected_protocol": "bpa.browser/2",
       "heartbeat_ms": 20000,
       "resume_token": "resume-token-01",
       "resume_token_expires_at": "2026-07-28T06:00:00.010Z",
@@ -39,8 +44,8 @@
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-capabilities",
     "session_id": "session-01",
     "seq": 1,
@@ -54,16 +59,28 @@
           "versions": ["1.0.0", "1.1.0", "1.2.0"],
           "risk_level": "R0",
           "permissions": ["browser.dom.read", "browser.tabs.read"],
+          "routes": [
+            {
+              "origin": "https://example.com",
+              "pathname_prefixes": ["/"],
+              "observer_capability_id": "example.page"
+            }
+          ],
           "adapter_id": "example",
           "adapter_version": "1.1.0"
         }
+      ],
+      "features": [
+        "page_observation_v2",
+        "exact_tab_binding_v2",
+        "active_page_probe_v1"
       ],
       "manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-command",
     "session_id": "session-01",
     "seq": 2,
@@ -123,12 +140,20 @@
         "grant_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "authorization_tag": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
       },
-      "deadline": "2026-07-27T06:00:11.000Z"
+      "deadline": "2026-07-27T06:00:11.000Z",
+      "tab_ref": {
+        "browser_instance_id": "browser-example-01",
+        "tab_id": 100,
+        "origin": "https://example.com"
+      },
+      "page_epoch": "page-epoch-01",
+      "observation_revision": 1,
+      "authentication_context_ref": "auth-context-example-01"
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-command-ack",
     "session_id": "session-01",
     "seq": 2,
@@ -144,8 +169,8 @@
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-result",
     "session_id": "session-01",
     "seq": 3,
@@ -183,8 +208,8 @@
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-result-ack",
     "session_id": "session-01",
     "seq": 3,
@@ -198,8 +223,8 @@
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-heartbeat",
     "session_id": "session-01",
     "seq": 4,
@@ -211,8 +236,8 @@
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-heartbeat-pong",
     "session_id": "session-01",
     "seq": 4,
@@ -224,8 +249,8 @@
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-cancel-request",
     "session_id": "session-01",
     "seq": 5,
@@ -240,8 +265,8 @@
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-cancel-ack",
     "session_id": "session-01",
     "seq": 5,
@@ -257,8 +282,8 @@
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-cancel-effective",
     "session_id": "session-01",
     "seq": 6,
@@ -274,8 +299,8 @@
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-evidence-begin",
     "session_id": "session-01",
     "seq": 7,
@@ -295,8 +320,8 @@
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-evidence-chunk",
     "session_id": "session-01",
     "seq": 8,
@@ -311,8 +336,8 @@
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-evidence-complete",
     "session_id": "session-01",
     "seq": 9,
@@ -326,11 +351,82 @@
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
-    "message_id": "message-evidence-ack",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-page-observation",
+    "session_id": "session-01",
+    "seq": 10,
+    "sent_at": "2026-07-27T06:02:00.025Z",
+    "type": "page.observation",
+    "trace_id": "trace-page-observation",
+    "payload": {
+      "tab_ref": {
+        "browser_instance_id": "browser-example-01",
+        "tab_id": 42,
+        "window_id": 7,
+        "origin": "https://merchant.example.com"
+      },
+      "pathname": "/products",
+      "content_script_ready": true,
+      "authentication": {
+        "state": "authenticated",
+        "context_ref": "auth-context-example-shop"
+      },
+      "observation_state": "ready",
+      "page_epoch": "tab-42:1722059999000:example",
+      "observation_revision": 1,
+      "observer_capability_id": "example.page",
+      "observed_at": "2026-07-27T06:02:00.025Z",
+      "reason_code": "PAGE_READY"
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-page-probe-request",
     "session_id": "session-01",
     "seq": 6,
+    "sent_at": "2026-07-27T06:02:00.026Z",
+    "type": "page.probe.request",
+    "trace_id": "trace-page-probe",
+    "payload": {
+      "request_id": "probe-request-01",
+      "tab_ref": {
+        "browser_instance_id": "browser-example-01",
+        "tab_id": 42,
+        "window_id": 7,
+        "origin": "https://merchant.example.com"
+      },
+      "deadline": "2026-07-27T06:02:05.026Z"
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-page-probe-result",
+    "session_id": "session-01",
+    "seq": 11,
+    "sent_at": "2026-07-27T06:02:00.027Z",
+    "type": "page.probe.result",
+    "trace_id": "trace-page-probe",
+    "payload": {
+      "request_id": "probe-request-01",
+      "tab_ref": {
+        "browser_instance_id": "browser-example-01",
+        "tab_id": 42,
+        "window_id": 7,
+        "origin": "https://merchant.example.com"
+      },
+      "accepted": true,
+      "observation_revision": 1
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-evidence-ack",
+    "session_id": "session-01",
+    "seq": 7,
     "sent_at": "2026-07-27T06:02:00.030Z",
     "type": "evidence.ack",
     "trace_id": "trace-run-03",
@@ -341,11 +437,11 @@
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-session-resume",
     "session_id": "session-01",
-    "seq": 7,
+    "seq": 8,
     "sent_at": "2026-07-27T06:03:00.000Z",
     "type": "session.resume",
     "trace_id": "trace-session",
@@ -355,11 +451,11 @@
     }
   },
   {
-    "protocol": "bpa.browser/1",
-    "version": "1.0.0",
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
     "message_id": "message-session-error",
     "session_id": "session-01",
-    "seq": 8,
+    "seq": 9,
     "sent_at": "2026-07-27T06:04:00.000Z",
     "type": "session.error",
     "trace_id": "trace-session",

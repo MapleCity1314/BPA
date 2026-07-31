@@ -3,7 +3,7 @@ title: Timing 与 Risk
 description: TimingPolicy 的有界等待与 RiskSignal 的明确阻断语义。
 ---
 
-Browser Protocol v1 允许 `command.dispatch` 携带已经由 Compiler 解析的 `timing_policy`，并允许 `command.result` 返回结构化 `risk_signals`。
+Browser Protocol v2 允许 `command.dispatch` 携带已经由 Compiler 解析的 `timing_policy`，并允许 `command.result` 返回结构化 `risk_signals`。
 
 这些字段不会授权新动作，也不能扩大 Permission Grant。
 
@@ -16,7 +16,7 @@ TimingPolicy 可以定义四类有界行为：
 | `readiness` | 等待页面就绪并保持稳定 | 超时不超过 120 秒 |
 | `dispatchJitter` | 在有限区间内分散调度 | 最大 10 秒 |
 | `retryBackoff` | 固定或指数退避 | 最大等待 120 秒 |
-| `rateLimit` | 按域名、店铺或 Tab 限速 | 队列上限 120 秒 |
+| `rateLimit` | 按域名、认证上下文或 Tab 限速 | 队列上限 120 秒 |
 
 所有实际等待都受 Command Deadline 约束。若等待会越过 Deadline，Bridge 不得继续执行。
 

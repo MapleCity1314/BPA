@@ -1,6 +1,15 @@
 export type AttentionLevel = "normal" | "attention" | "action";
 export type HealthStatus = "healthy" | "degraded" | "unavailable";
 
+export interface ConsoleLaunchHandle {
+  readonly launchUrl: string;
+  close(): Promise<void>;
+}
+
+export interface ConsoleLaunchService {
+  launch(): Promise<ConsoleLaunchHandle>;
+}
+
 export interface HealthComponent {
   id: string;
   label: string;
@@ -17,6 +26,14 @@ export interface BrowserSessionView {
   role?: string;
   authenticated: boolean;
   lastSeenAt: string;
+  binding?: BrowserPageBindingSelection;
+}
+
+export interface BrowserPageBindingSelection {
+  sessionId: string;
+  browserInstanceId: string;
+  tabId: number;
+  observationRevision: number;
 }
 
 export interface DashboardSnapshot {
@@ -55,7 +72,7 @@ export interface CreateRunInput {
   workflowId: string;
   workflowVersion: string;
   inputs: Record<string, string | number | boolean>;
-  resourceBindings: Record<string, string>;
+  resourceBindings: Record<string, BrowserPageBindingSelection>;
 }
 
 export interface CreateRunResult {

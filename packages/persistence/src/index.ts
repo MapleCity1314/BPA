@@ -550,6 +550,22 @@ export interface GatewayDeliveryUnitOfWork {
     | "evidence_invalid";
 }
 
+export interface GatewayCommandStore extends GatewayDeliveryUnitOfWork {
+  listPendingEngineOutbox(): OutboxMessage[];
+  listPendingGatewayCommands(
+    afterCommandSeq?: number
+  ): GatewayCommandRecord[];
+  listGatewayCommandsForRun(runId: string): GatewayCommandRecord[];
+  listGatewayCommandsNeedingApplication(): GatewayCommandRecord[];
+  getGatewayCommand(id: string): GatewayCommandRecord | undefined;
+  markGatewayCommandState(
+    id: string,
+    state: GatewayCommandRecord["state"],
+    updatedAt: string
+  ): GatewayCommandRecord;
+  nextGatewayCommandSequence(): number;
+}
+
 export type BrowserSessionRole =
   | "general"
   | "metrics_source"
@@ -561,6 +577,40 @@ export type BrowserSessionObservationState =
   | "available"
   | "auth_required"
   | "revoked";
+
+export type BrowserPageAuthentication =
+  | "unknown"
+  | "anonymous"
+  | "authenticated"
+  | "membership";
+
+export type BrowserPageObservationState =
+  | "content_script_missing"
+  | "loading"
+  | "probing"
+  | "auth_required"
+  | "challenge"
+  | "ready"
+  | "departed"
+  | "stale";
+
+export interface BrowserPageObservationRecord {
+  sessionId: string;
+  browserInstanceId: string;
+  tabId: number;
+  windowId?: number;
+  origin: string;
+  pathname: string;
+  contentScriptReady: boolean;
+  authentication: BrowserPageAuthentication;
+  authenticationContextRef?: string;
+  observationState: BrowserPageObservationState;
+  pageEpoch: string;
+  observerCapabilityId: string;
+  revision: number;
+  observedAt: string;
+  reasonCode?: string;
+}
 
 export interface BrowserSessionRecord {
   id: string;
@@ -595,6 +645,65 @@ export interface BrowserCapabilityRecord {
   nodeVersion: string;
   riskLevel: string;
   permissions: string[];
+  routes?: Array<{
+    origin: string;
+    pathnamePrefixes: string[];
+    observerCapabilityId: string;
+  }>;
+  adapterId?: string;
+  adapterVersion?: string;
+}
+
+/**
+ * Narrow, platform-neutral browser resource port. Consumers receive only
+ * observed browser facts and capability projections; SQLite details and
+ * ecommerce identities are intentionally absent.
+ */
+export interface BrowserObservationStore {
+  openBrowserSession(input: OpenBrowserSessionInput): {
+    session: BrowserSessionRecord;
+    resumedFrom?: BrowserSessionRecord;
+  };
+  updateBrowserSession(input: {
+    id: string;
+    incomingSeq?: number;
+    outgoingSeq?: number;
+    lastAckedCommandSeq?: number;
+    capabilityDigest?: string;
+    disconnectedAt?: string;
+  }): BrowserSessionRecord;
+  getBrowserSession(id: string): BrowserSessionRecord | undefined;
+  listBrowserSessions(input: {
+    limit: number;
+    role?: BrowserSessionRole;
+    observationState?: BrowserSessionObservationState;
+    cursor?: EvidenceListCursor;
+  }): EvidenceListPage<BrowserSessionRecord>;
+  upsertBrowserPageObservation(
+    input: BrowserPageObservationRecord
+  ): BrowserPageObservationRecord;
+  getBrowserPageObservation(
+    sessionId: string,
+    tabId: number
+  ): BrowserPageObservationRecord | undefined;
+  listBrowserPageObservations(input: {
+    limit: number;
+    sessionId?: string;
+    browserInstanceId?: string;
+  }): BrowserPageObservationRecord[];
+  invalidateBrowserPageObservations(input: {
+    sessionId: string;
+    observedAt: string;
+    reasonCode: string;
+  }): number;
+  pruneBrowserPageObservations(input: {
+    observedBefore: string;
+  }): number;
+  replaceBrowserCapabilities(
+    sessionId: string,
+    capabilities: BrowserCapabilityRecord[]
+  ): void;
+  listBrowserCapabilities(sessionId: string): BrowserCapabilityRecord[];
 }
 
 export interface ExecutionStore {
@@ -1027,7 +1136,9 @@ export interface Persistence
     SourceAssetStore,
     EvidenceTransferUnitOfWork,
     TrustedLineageStore,
-    ExportStore {
+    ExportStore,
+    BrowserObservationStore,
+    GatewayCommandStore {
   health(): {
     adapter: string;
     schemaVersion: number;
@@ -1074,6 +1185,26 @@ export interface Persistence
     observationState: BrowserSessionObservationState;
     observedAt: string;
   }): BrowserSessionRecord;
+  upsertBrowserPageObservation(
+    input: BrowserPageObservationRecord
+  ): BrowserPageObservationRecord;
+  getBrowserPageObservation(
+    sessionId: string,
+    tabId: number
+  ): BrowserPageObservationRecord | undefined;
+  listBrowserPageObservations(input: {
+    limit: number;
+    sessionId?: string;
+    browserInstanceId?: string;
+  }): BrowserPageObservationRecord[];
+  invalidateBrowserPageObservations(input: {
+    sessionId: string;
+    observedAt: string;
+    reasonCode: string;
+  }): number;
+  pruneBrowserPageObservations(input: {
+    observedBefore: string;
+  }): number;
   replaceBrowserCapabilities(
     sessionId: string,
     capabilities: BrowserCapabilityRecord[]

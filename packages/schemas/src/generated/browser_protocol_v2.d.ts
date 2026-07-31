@@ -1,10 +1,13 @@
 /* Generated from canonical JSON Schema. Do not edit manually. */
 
-export type BPABrowserProtocolV1Message =
+export type BPABrowserProtocolV2Message =
   | SessionHello
   | SessionWelcome
   | SessionResume
   | CapabilityReport
+  | PageObservation
+  | PageProbeRequest
+  | PageProbeResult
   | Command
   | CommandAck
   | CommandResult
@@ -20,12 +23,19 @@ export type BPABrowserProtocolV1Message =
   | EvidenceAck;
 export type Id = string;
 export type Timestamp = string;
+/**
+ * @minItems 3
+ */
+export type BrowserFeatures = {
+  [k: string]: unknown;
+} & BrowserFeatures1;
+export type BrowserFeatures1 = ("page_observation_v2" | "exact_tab_binding_v2" | "active_page_probe_v1")[];
 export type Digest = string;
 export type ResultStatus = "succeeded" | "rejected" | "failed" | "timed_out" | "cancelled" | "uncertain";
 
 export interface SessionHello {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: "new";
   seq: 0;
@@ -39,14 +49,15 @@ export interface SessionHello {
     /**
      * @minItems 1
      */
-    supported_protocols: "bpa.browser/1"[];
+    supported_protocols: "bpa.browser/2"[];
+    features: BrowserFeatures;
     last_acked_command_seq: number;
     resume_token?: Id;
   };
 }
 export interface SessionWelcome {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;
@@ -54,7 +65,7 @@ export interface SessionWelcome {
   type: "session.welcome";
   trace_id: Id;
   payload: {
-    selected_protocol: "bpa.browser/1";
+    selected_protocol: "bpa.browser/2";
     heartbeat_ms: number;
     resume_token: Id;
     resume_token_expires_at: Timestamp;
@@ -68,8 +79,8 @@ export interface CoreSigningKey {
   public_key_spki_base64: string;
 }
 export interface SessionResume {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;
@@ -83,8 +94,8 @@ export interface SessionResume {
   };
 }
 export interface CapabilityReport {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;
@@ -97,6 +108,7 @@ export interface CapabilityReport {
      */
     capabilities: Capability[];
     manifest_digest: Digest;
+    features: BrowserFeatures;
   };
 }
 export interface Capability {
@@ -107,12 +119,91 @@ export interface Capability {
   versions: Id[];
   risk_level: "R0" | "R1" | "R2" | "R3" | "R4";
   permissions: Id[];
+  /**
+   * @minItems 1
+   */
+  routes: {
+    origin: string;
+    /**
+     * @minItems 1
+     */
+    pathname_prefixes: string[];
+    observer_capability_id: Id;
+  }[];
   adapter_id?: Id;
   adapter_version?: Id;
 }
+export interface PageObservation {
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
+  message_id: Id;
+  session_id: Id;
+  seq: number;
+  sent_at: Timestamp;
+  type: "page.observation";
+  trace_id: Id;
+  payload: {
+    tab_ref: TabRef;
+    pathname: string;
+    content_script_ready: boolean;
+    authentication:
+      | {
+          state: "unknown" | "anonymous";
+        }
+      | {
+          state: "authenticated" | "membership";
+          context_ref: Id;
+        };
+    observation_state:
+      "content_script_missing" | "loading" | "probing" | "auth_required" | "challenge" | "ready" | "departed" | "stale";
+    page_epoch: Id;
+    observation_revision: number;
+    observer_capability_id: Id;
+    observed_at: Timestamp;
+    reason_code?: Id;
+  };
+}
+export interface TabRef {
+  browser_instance_id: Id;
+  tab_id: number;
+  window_id?: number;
+  origin: string;
+}
+export interface PageProbeRequest {
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
+  message_id: Id;
+  session_id: Id;
+  seq: number;
+  sent_at: Timestamp;
+  type: "page.probe.request";
+  trace_id: Id;
+  payload: {
+    request_id: Id;
+    tab_ref: TabRef;
+    deadline: Timestamp;
+  };
+}
+export interface PageProbeResult {
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
+  message_id: Id;
+  session_id: Id;
+  seq: number;
+  sent_at: Timestamp;
+  type: "page.probe.result";
+  trace_id: Id;
+  payload: {
+    request_id: Id;
+    tab_ref: TabRef;
+    accepted: boolean;
+    observation_revision: number;
+    reason_code?: Id;
+  };
+}
 export interface Command {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;
@@ -137,8 +228,10 @@ export interface Command {
     permission_grant: BPASignedPermissionGrant;
     deadline: Timestamp;
     timing_policy?: BPATimingPolicyV1;
-    tab_ref?: TabRef;
-    page_epoch?: Id;
+    tab_ref: TabRef;
+    page_epoch: Id;
+    observation_revision: number;
+    authentication_context_ref?: Id;
     approval_token_ref?: Id;
   };
 }
@@ -176,20 +269,14 @@ export interface BPATimingPolicyV1 {
     jitterRatio: number;
   };
   rateLimit?: {
-    scope: "domain" | "shop" | "tab";
+    scope: "domain" | "authentication_context" | "tab";
     minIntervalMs: number;
     maxQueueMs: number;
   };
 }
-export interface TabRef {
-  browser_instance_id: Id;
-  tab_id: number;
-  window_id?: number;
-  origin: string;
-}
 export interface CommandAck {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;
@@ -206,8 +293,8 @@ export interface CommandAck {
   };
 }
 export interface CommandResult {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;
@@ -251,8 +338,8 @@ export interface BPARiskSignalV1 {
   detail?: string;
 }
 export interface ResultAck {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;
@@ -267,8 +354,8 @@ export interface ResultAck {
   };
 }
 export interface CancelRequest {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;
@@ -283,8 +370,8 @@ export interface CancelRequest {
   };
 }
 export interface CancelAck {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;
@@ -301,8 +388,8 @@ export interface CancelAck {
   };
 }
 export interface CancelEffective {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;
@@ -318,8 +405,8 @@ export interface CancelEffective {
   };
 }
 export interface Heartbeat {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;
@@ -331,8 +418,8 @@ export interface Heartbeat {
   };
 }
 export interface SessionError {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;
@@ -347,8 +434,8 @@ export interface SessionError {
   };
 }
 export interface EvidenceBegin {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;
@@ -368,8 +455,8 @@ export interface EvidenceBegin {
   };
 }
 export interface EvidenceChunk {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;
@@ -384,8 +471,8 @@ export interface EvidenceChunk {
   };
 }
 export interface EvidenceComplete {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;
@@ -399,8 +486,8 @@ export interface EvidenceComplete {
   };
 }
 export interface EvidenceAck {
-  protocol: "bpa.browser/1";
-  version: "1.0.0";
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
   message_id: Id;
   session_id: Id;
   seq: number;

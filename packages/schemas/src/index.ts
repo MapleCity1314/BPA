@@ -75,8 +75,8 @@ export const permissionSchema = loadSchema("permission.schema.json");
 export const evidenceSchema = loadSchema("evidence.schema.json");
 export const timingPolicySchema = loadSchema("timing-policy.schema.json");
 export const riskSignalSchema = loadSchema("risk-signal.schema.json");
-export const browserProtocolV1Schema = loadSchema(
-  "browser-protocol-v1.schema.json"
+export const browserProtocolV2Schema = loadSchema(
+  "browser-protocol-v2.schema.json"
 );
 
 interface AjvLike {
@@ -163,7 +163,7 @@ export const validateEvidence = ajv.compile(evidenceSchema);
 export const validateTimingPolicy = ajv.compile(timingPolicySchema);
 export const validateRiskSignal = ajv.compile(riskSignalSchema);
 export const validateBrowserProtocolMessage = ajv.compile(
-  browserProtocolV1Schema
+  browserProtocolV2Schema
 ) as ValidateFunction<BrowserProtocolMessage>;
 
 export function validateJsonSchemaDefinition(

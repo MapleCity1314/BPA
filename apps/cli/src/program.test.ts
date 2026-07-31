@@ -22,6 +22,35 @@ class RecordingClient implements ControlRequester {
         requiresConfirmation: false
       } as TResult;
     }
+    if (method === "browser.resource-binding.resolve") {
+      return {
+        browserInstanceId: "browser-instance-1",
+        resourceBindings: {
+          alliance_browser: {
+            sessionId: "browser-session-1",
+            browserInstanceId: "browser-instance-1",
+            tabId: 42,
+            observationRevision: 3
+          }
+        }
+      } as TResult;
+    }
+    if (method === "run.create") {
+      return {
+        id: "run-monitor",
+        workflowId: "doudian.alliance-retired-products-monitor",
+        workflowVersion: "2.0.0",
+        status: "succeeded",
+        output: {
+          alert: false,
+          scan: {
+            businessDate: "2026-07-31",
+            status: "complete_empty",
+            retiredProductCount: 0
+          }
+        }
+      } as TResult;
+    }
     return { ok: true } as TResult;
   }
 }
@@ -231,6 +260,51 @@ describe("single Node CLI control mapping", () => {
         },
         run: { ok: true }
       }
+    ]);
+  });
+});
+
+describe("generic Workflow run CLI", () => {
+  it("resolves public resource slots and runs an arbitrary Workflow", async () => {
+    const { client, output, program } = fixture();
+    await program.parseAsync([
+      "node",
+      "bpa",
+      "workflow-run",
+      "doudian.alliance-retired-products-monitor",
+      "--version",
+      "2.0.0",
+      "--input",
+      '{"maxShops":100}'
+    ]);
+    expect(client.calls).toEqual([
+      {
+        method: "browser.resource-binding.resolve",
+        params: {
+          workflowId: "doudian.alliance-retired-products-monitor",
+          workflowVersion: "2.0.0"
+        }
+      },
+      {
+        method: "run.create",
+        params: {
+          workflowId: "doudian.alliance-retired-products-monitor",
+          workflowVersion: "2.0.0",
+          input: { maxShops: 100 },
+          resourceBindings: {
+            alliance_browser: {
+              sessionId: "browser-session-1",
+              browserInstanceId: "browser-instance-1",
+              tabId: 42,
+              observationRevision: 3
+            }
+          },
+          actor: "cli-user"
+        }
+      }
+    ]);
+    expect(output).toEqual([
+      expect.objectContaining({ id: "run-monitor", status: "succeeded" })
     ]);
   });
 });

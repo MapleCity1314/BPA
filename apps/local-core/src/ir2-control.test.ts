@@ -229,6 +229,21 @@ describe("Local Core IR2 control integration", () => {
         permissions: [...resourceNode.risk.permissions]
       }
     ]);
+    persistence.upsertBrowserPageObservation({
+      sessionId: "session-resource",
+      browserInstanceId: "browser-test",
+      tabId: 42,
+      origin: "https://example.com",
+      pathname: "/source",
+      contentScriptReady: true,
+      authentication: "authenticated",
+      authenticationContextRef: "auth-context-resource",
+      observationState: "ready",
+      pageEpoch: "tab-42:1:test",
+      observerCapabilityId: "test.page",
+      revision: 1,
+      observedAt: new Date().toISOString(),
+    });
     const created = service.handle({
       id: "create-resource-run",
       method: "run.create",
@@ -236,7 +251,14 @@ describe("Local Core IR2 control integration", () => {
         workflowId: resourceWorkflow.metadata.id,
         workflowVersion: resourceWorkflow.metadata.version,
         input: {},
-        resourceBindings: { source: "session-resource" },
+        resourceBindings: {
+          source: {
+            sessionId: "session-resource",
+            browserInstanceId: "browser-test",
+            tabId: 42,
+            observationRevision: 1
+          }
+        },
         actor: "operator"
       }
     });
@@ -255,17 +277,23 @@ describe("Local Core IR2 control integration", () => {
       bindings: {
         source: {
           sessionId: "session-resource",
+          browserInstanceId: "browser-test",
+          tabId: 42,
           origin: "https://example.com",
+          pathname: "/source",
+          pageEpoch: "tab-42:1:test",
           authentication: "authenticated",
           approvedBy: "operator"
         }
       }
     });
-    expect(persistence.getBrowserSession("session-resource")).toMatchObject({
-      observationRevision: 1,
-      observationState: "available",
-      observedOrigin: "https://example.com",
-      observedAuthentication: "authenticated"
+    expect(
+      persistence.getBrowserPageObservation("session-resource", 42)
+    ).toMatchObject({
+      revision: 1,
+      observationState: "ready",
+      origin: "https://example.com",
+      authentication: "authenticated"
     });
     persistence.close();
   });
@@ -461,6 +489,21 @@ describe("Local Core IR2 control integration", () => {
         permissions: [...resourceNode.risk.permissions]
       }
     ]);
+    persistence.upsertBrowserPageObservation({
+      sessionId: "session-resource-node",
+      browserInstanceId: "browser-test",
+      tabId: 84,
+      origin: "https://example.com",
+      pathname: "/source",
+      contentScriptReady: true,
+      authentication: "authenticated",
+      authenticationContextRef: "auth-context-resource-node",
+      observationState: "ready",
+      pageEpoch: "tab-84:1:test",
+      observerCapabilityId: "test.page",
+      revision: 1,
+      observedAt: new Date().toISOString(),
+    });
     const service = new LocalCoreService(persistence);
     const preview = service.handle({
       id: "resource-node-preview",
@@ -508,7 +551,12 @@ describe("Local Core IR2 control integration", () => {
         confirmed: true,
         actor: "operator",
         resourceBindings: {
-          page_session: "session-resource-node"
+          page_session: {
+            sessionId: "session-resource-node",
+            browserInstanceId: "browser-test",
+            tabId: 84,
+            observationRevision: 1
+          }
         }
       }
     });

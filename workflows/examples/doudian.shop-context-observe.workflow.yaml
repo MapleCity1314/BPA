@@ -1,10 +1,10 @@
-apiVersion: bpa/v1alpha1
+apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: doudian.shop-context-observe
-  version: 1.2.0
+  version: 2.0.0
   title: 读取当前抖店店铺上下文
-  description: 只读验证 BPA Engine 到真实浏览器 DOM 的纵向链路。
+  description: 通过 Protocol v2 页面观察冻结确切标签页，再只读验证 Engine 到 Adapter DOM 的纵向链路。
 spec:
   riskLevel: R0
   inputSchema:
@@ -13,72 +13,80 @@ spec:
   outputSchema:
     type: object
     additionalProperties: false
-    required:
-      - supported
-      - shop
-      - tab_ref
-      - page_epoch
+    required: [supported, shop, tab_ref, page_epoch]
     properties:
-      supported:
-        type: boolean
-        const: true
+      supported: { type: boolean, const: true }
       shop:
         type: object
         additionalProperties: false
-        required:
-          - id
-          - name
-          - identity_confirmed
+        required: [id, name, identity_confirmed]
         properties:
-          id:
-            type: string
-            minLength: 1
-          name:
-            type: string
-            minLength: 1
-          identity_confirmed:
-            type: boolean
-      url:
-        type: string
-        format: uri
+          id: { type: string, minLength: 1 }
+          name: { type: string, minLength: 1 }
+          identity_confirmed: { type: boolean }
+      url: { type: string, format: uri }
       tab_ref:
         type: object
         additionalProperties: false
-        required:
-          - browser_instance_id
-          - tab_id
-          - window_id
-          - origin
+        required: [browser_instance_id, tab_id, window_id, origin]
         properties:
-          browser_instance_id:
-            type: string
-            minLength: 1
-          tab_id:
-            type: integer
-          window_id:
-            type: integer
-          origin:
-            type: string
-            format: uri
-      page_epoch:
-        type: string
-        minLength: 1
-  start: start
-  nodes:
-    start:
-      use: control.start@1.1.0
-      next: observe_shop
-    observe_shop:
-      use: doudian.shop.context.read@1.2.0
-      timeout: 15s
-      retry:
-        maxAttempts: 2
-        backoff: 1s
-        retryableErrors:
-          - PAGE_LOADING
-          - BROWSER_DISCONNECTED
-      next: finish
-    finish:
-      use: control.succeed@1.1.0
-      with:
-        output: "${previous}"
+          browser_instance_id: { type: string, minLength: 1 }
+          tab_id: { type: integer, minimum: 0 }
+          window_id: { type: integer, minimum: 0 }
+          origin: { type: string, format: uri }
+      page_epoch: { type: string, minLength: 1 }
+  limits:
+    maxDepth: 1
+    maxStepExecutions: 10
+  resourceSlots:
+    doudian_page:
+      kind: browser
+      capabilities: [browser.dom.read, browser.tabs.read]
+      allowedOrigins: [https://fxg.jinritemai.com]
+      authentication: authenticated
+      purpose: 读取一个确切且经过 Adapter observer 认证的抖店标签页
+  root:
+    kind: sequence
+    steps:
+      - key: observe_shop
+        kind: call
+        use: doudian.shop.context.read@1.3.0
+        timeout: 15s
+        resourceMappings:
+          browser: doudian_page
+        retry:
+          maxAttempts: 2
+          backoff: 1s
+          retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED]
+        handlers:
+          failure:
+            kind: sequence
+            steps:
+              - key: observe_failed
+                kind: terminal
+                status: failed
+                error:
+                  code: DOUDIAN_SHOP_CONTEXT_FAILED
+                  message: 当前标签页的店铺上下文读取失败。
+          rejected:
+            kind: sequence
+            steps:
+              - key: observe_blocked
+                kind: terminal
+                status: uncertain
+                error:
+                  code: DOUDIAN_SHOP_CONTEXT_BLOCKED
+                  message: 登录、验证码、风控或页面身份阻断了读取。
+          timeout:
+            kind: sequence
+            steps:
+              - key: observe_timeout
+                kind: terminal
+                status: failed
+                error:
+                  code: DOUDIAN_SHOP_CONTEXT_TIMEOUT
+                  message: 当前标签页的店铺上下文读取超时。
+      - key: completed
+        kind: terminal
+        status: succeeded
+        output: ${steps.observe_shop.output}

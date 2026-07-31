@@ -3,7 +3,7 @@ import {
   verifyCommandAuthorization,
   type BrowserCommandPayload
 } from "@bpa/browser-bridge";
-import validateMessage from "@bpa/schemas/browser-protocol-v1.validator";
+import validateMessage from "@bpa/schemas/browser-protocol-v2.validator";
 import {
   firstBlockingRiskSignal,
   reserveRateLimit
@@ -30,16 +30,24 @@ import {
 } from "../lib/assistance-panel";
 import {
   BROWSER_PROTOCOL,
+  BROWSER_FEATURES,
   bridgeCapabilityFor,
   capabilityReport,
+  resolveCapability,
   validPageEpoch,
   validateCapabilityRoute
 } from "../lib/capability-manifest";
+import {
+  observerCapabilityForUrl,
+  type PageAuthenticationState,
+  type PageObservationState
+} from "../lib/page-observer-registry";
 import { resolveNavigationTarget } from "../lib/navigation-target";
+import { executeRegisteredAdapterNode } from "../lib/adapter-node-registry";
 
 const NATIVE_HOST = "com.bpa.browser";
 const PROTOCOL = BROWSER_PROTOCOL;
-const VERSION = "1.0.0";
+const VERSION = "2.0.0";
 
 interface SessionState {
   sessionId?: string;
@@ -54,8 +62,25 @@ export default defineBackground(() => {
   let port: Browser.runtime.Port | undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   const activeCommands = new Set<string>();
+  const activeTabCommands = new Map<number, string>();
   const cancelledCommands = new Set<string>();
   const pacingReservations = new Map<string, number>();
+  const observedTabs = new Map<
+    number,
+    {
+      url: string;
+      pageEpoch: string;
+      observerCapabilityId: string;
+      revision: number;
+      lastObservationSignature?: string;
+      contentScriptReady?: boolean;
+      observationState?: PageObservationState;
+      authenticationState?: PageAuthenticationState;
+      authenticationContextRef?: string;
+      windowId?: number;
+    }
+  >();
+  const probeGenerations = new Map<number, number>();
   const assistancePanel = new AssistancePanelRepository({
     get: (key) => browser.storage.local.get(key),
     set: (value) => browser.storage.local.set(value)
@@ -117,14 +142,273 @@ export default defineBackground(() => {
     port.postMessage(message);
   };
 
-  const sendCapabilities = (): void => {
+  const sendCapabilities = async (): Promise<
+    Awaited<ReturnType<typeof capabilityReport>>
+  > => {
+    const report = await capabilityReport();
     send(
       envelope(
         "capability.report",
-        capabilityReport(),
+        { ...report },
         "trace-capabilities"
       )
     );
+    return report;
+  };
+
+  const supportedSourceUrl = (
+    value: string | undefined
+  ): URL | undefined => {
+    if (!value) return undefined;
+    try {
+      const url = new URL(value);
+      return observerCapabilityForUrl(url.href) ? url : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const pageEpochFor = (
+    tabId: number,
+    url: string,
+    windowId?: number,
+    forceNew = false
+  ): string => {
+    const current = observedTabs.get(tabId);
+    if (!forceNew && current?.url === url) return current.pageEpoch;
+    const pageEpoch = createPageEpoch(tabId);
+    const observerCapabilityId = observerCapabilityForUrl(url);
+    if (!observerCapabilityId) throw new Error("PAGE_OBSERVER_NOT_FOUND");
+    observedTabs.set(tabId, {
+      url,
+      pageEpoch,
+      observerCapabilityId,
+      revision: current?.revision ?? 0,
+      ...(windowId === undefined ? {} : { windowId })
+    });
+    return pageEpoch;
+  };
+
+  const reportPage = async (input: {
+    tabId: number;
+    windowId?: number;
+    url: URL;
+    contentScriptReady: boolean;
+    authentication: {
+      state: PageAuthenticationState;
+      contextRef?: string;
+    };
+    observationState: PageObservationState;
+    pageEpoch: string;
+    observerCapabilityId: string;
+    reasonCode?: string;
+  }): Promise<void> => {
+    if (!port || !session.sessionId) return;
+    const stored = await browser.storage.local.get("browserInstanceId");
+    if (typeof stored.browserInstanceId !== "string") return;
+    const signature = JSON.stringify({
+      url: input.url.href,
+      contentScriptReady: input.contentScriptReady,
+      authentication: input.authentication,
+      observationState: input.observationState,
+      pageEpoch: input.pageEpoch,
+      observerCapabilityId: input.observerCapabilityId,
+      reasonCode: input.reasonCode
+    });
+    const tracked = observedTabs.get(input.tabId);
+    const revision =
+      tracked?.lastObservationSignature === signature
+        ? tracked.revision
+        : (tracked?.revision ?? 0) + 1;
+    observedTabs.set(input.tabId, {
+      url: input.url.href,
+      pageEpoch: input.pageEpoch,
+      observerCapabilityId: input.observerCapabilityId,
+      revision,
+      lastObservationSignature: signature,
+      contentScriptReady: input.contentScriptReady,
+      observationState: input.observationState,
+      authenticationState: input.authentication.state,
+      ...(input.authentication.contextRef === undefined
+        ? {}
+        : { authenticationContextRef: input.authentication.contextRef }),
+      ...(input.windowId === undefined ? {} : { windowId: input.windowId })
+    });
+    send(
+      envelope(
+        "page.observation",
+        {
+          tab_ref: {
+            browser_instance_id: stored.browserInstanceId,
+            tab_id: input.tabId,
+            ...(input.windowId === undefined
+              ? {}
+              : { window_id: input.windowId }),
+            origin: input.url.origin
+          },
+          pathname: input.url.pathname,
+          content_script_ready: input.contentScriptReady,
+          authentication: {
+            state: input.authentication.state,
+            ...(input.authentication.contextRef
+              ? { context_ref: input.authentication.contextRef }
+              : {})
+          },
+          observation_state: input.observationState,
+          page_epoch: input.pageEpoch,
+          observation_revision: revision,
+          observer_capability_id: input.observerCapabilityId,
+          observed_at: new Date().toISOString(),
+          ...(input.reasonCode ? { reason_code: input.reasonCode } : {})
+        },
+        `trace-page-${input.tabId}`
+      )
+    );
+  };
+
+  const invalidateTrackedTab = async (
+    tabId: number,
+    reasonCode: string
+  ): Promise<void> => {
+    const tracked = observedTabs.get(tabId);
+    if (!tracked) return;
+    const url = supportedSourceUrl(tracked.url);
+    if (url) {
+      await reportPage({
+        tabId,
+        ...(tracked.windowId === undefined
+          ? {}
+          : { windowId: tracked.windowId }),
+        url,
+        contentScriptReady: false,
+        authentication: { state: "unknown" },
+        observationState: "departed",
+        pageEpoch: tracked.pageEpoch,
+        observerCapabilityId: tracked.observerCapabilityId,
+        reasonCode
+      });
+    }
+    observedTabs.delete(tabId);
+  };
+
+  const probeTab = async (
+    tabId: number,
+    options: { forceNewEpoch?: boolean } = {}
+  ): Promise<void> => {
+    const generation = (probeGenerations.get(tabId) ?? 0) + 1;
+    probeGenerations.set(tabId, generation);
+    const isCurrentProbe = (pageEpoch: string): boolean =>
+      probeGenerations.get(tabId) === generation &&
+      observedTabs.get(tabId)?.pageEpoch === pageEpoch;
+    let tab: Browser.tabs.Tab;
+    try {
+      tab = await browser.tabs.get(tabId);
+    } catch {
+      await invalidateTrackedTab(tabId, "TAB_CLOSED");
+      return;
+    }
+    const url = supportedSourceUrl(tab.url);
+    if (!url) {
+      await invalidateTrackedTab(tabId, "PAGE_LEFT_SUPPORTED_SCOPE");
+      return;
+    }
+    const observerCapabilityId = observerCapabilityForUrl(url.href);
+    if (!observerCapabilityId) {
+      await invalidateTrackedTab(tabId, "PAGE_OBSERVER_NOT_FOUND");
+      return;
+    }
+    const pageEpoch = pageEpochFor(
+      tabId,
+      url.href,
+      tab.windowId,
+      options.forceNewEpoch
+    );
+    if (tab.status !== "complete") {
+      await reportPage({
+        tabId,
+        windowId: tab.windowId,
+        url,
+        contentScriptReady: false,
+        authentication: { state: "unknown" },
+        observationState: "loading",
+        pageEpoch,
+        observerCapabilityId,
+        reasonCode: "PAGE_LOADING"
+      });
+      return;
+    }
+    try {
+      const response = (await browser.tabs.sendMessage(tabId, {
+        type: "bpa.content.probe",
+        pageEpoch
+      })) as {
+        pageEpoch?: string;
+        observerCapabilityId?: string;
+        authentication?: {
+          state: PageAuthenticationState;
+          contextRef?: string;
+        };
+        observationState?:
+          | "loading"
+          | "probing"
+          | "auth_required"
+          | "challenge"
+          | "ready"
+          | "departed"
+          | "stale";
+        reasonCode?: string;
+      };
+      if (
+        response?.pageEpoch !== pageEpoch ||
+        response.observerCapabilityId !== observerCapabilityId ||
+        !response.authentication ||
+        !response.observationState
+      ) {
+        throw new Error("CONTENT_PROBE_INVALID");
+      }
+      if (!isCurrentProbe(pageEpoch)) return;
+      const tracked = observedTabs.get(tabId);
+      const authenticationChanged =
+        tracked?.lastObservationSignature !== undefined &&
+        (tracked.authenticationState !== response.authentication.state ||
+          tracked.authenticationContextRef !==
+            response.authentication.contextRef);
+      const observationEpoch = authenticationChanged
+        ? pageEpochFor(tabId, url.href, tab.windowId, true)
+        : pageEpoch;
+      await reportPage({
+        tabId,
+        windowId: tab.windowId,
+        url,
+        contentScriptReady: true,
+        authentication: response.authentication,
+        observationState: response.observationState,
+        pageEpoch: observationEpoch,
+        observerCapabilityId,
+        ...(response.reasonCode ? { reasonCode: response.reasonCode } : {})
+      });
+    } catch {
+      if (!isCurrentProbe(pageEpoch)) return;
+      await reportPage({
+        tabId,
+        windowId: tab.windowId,
+        url,
+        contentScriptReady: false,
+        authentication: { state: "unknown" },
+        observationState: "content_script_missing",
+        pageEpoch,
+        observerCapabilityId,
+        reasonCode: "BROWSER_CONTENT_SCRIPT_MISSING"
+      });
+    }
+  };
+
+  const probeAllSourceTabs = async (): Promise<void> => {
+    for (const tab of await browser.tabs.query({})) {
+      if (tab.id != null && supportedSourceUrl(tab.url)) {
+        await probeTab(tab.id);
+      }
+    }
   };
 
   const sendStoredResult = async (
@@ -204,10 +488,14 @@ export default defineBackground(() => {
   ): Promise<void> => {
     const payload = message.payload as BrowserCommandPayload &
       Record<string, any>;
-    const [tab] = await browser.tabs.query({
-      active: true,
-      currentWindow: true
-    });
+    const boundTabId =
+      typeof payload.tab_ref?.tab_id === "number"
+        ? payload.tab_ref.tab_id
+        : undefined;
+    const tab =
+      boundTabId === undefined
+        ? undefined
+        : await browser.tabs.get(boundTabId).catch(() => undefined);
     const currentUrl = tab?.url ?? "";
     const navigationTarget = resolveNavigationTarget({
       nodeId: payload.node.id,
@@ -249,7 +537,27 @@ export default defineBackground(() => {
             valid: false as const,
             reason: route.valid ? "SESSION_KEY_MISSING" : route.reason
           };
-    if (!authorization.valid || tab?.id == null) {
+    const storedBrowser = await browser.storage.local.get(
+      "browserInstanceId"
+    );
+    const trackedPage =
+      tab?.id == null ? undefined : observedTabs.get(tab.id);
+    const boundPageValid =
+      boundTabId === undefined ||
+      (payload.tab_ref.browser_instance_id ===
+        storedBrowser.browserInstanceId &&
+        tab?.id === boundTabId &&
+        (payload.tab_ref.window_id === undefined ||
+          tab?.windowId === payload.tab_ref.window_id) &&
+        (() => {
+          try {
+            return new URL(currentUrl).origin === payload.tab_ref.origin;
+          } catch {
+            return false;
+          }
+        })() &&
+        trackedPage?.pageEpoch === payload.page_epoch);
+    if (!authorization.valid || tab?.id == null || !boundPageValid) {
       send(
         envelope(
           "command.ack",
@@ -259,9 +567,11 @@ export default defineBackground(() => {
             node_execution_id: payload.node_execution_id,
             accepted: false,
             fencing_token: payload.fencing_token,
-            reason_code: authorization.valid
-              ? "ACTIVE_TAB_MISSING"
-              : authorization.reason
+            reason_code: !authorization.valid
+              ? authorization.reason
+              : tab?.id == null
+                ? "BROWSER_PAGE_NOT_FOUND"
+                : "BROWSER_OBSERVATION_STALE"
           },
           String(message.trace_id)
         )
@@ -296,12 +606,35 @@ export default defineBackground(() => {
       });
       return;
     }
+    const executingTabId = tab.id;
+    const commandId = String(payload.command_id);
+    const occupyingCommand = activeTabCommands.get(executingTabId);
+    if (occupyingCommand && occupyingCommand !== commandId) {
+      send(
+        envelope(
+          "command.ack",
+          {
+            command_seq: payload.command_seq,
+            command_id: payload.command_id,
+            node_execution_id: payload.node_execution_id,
+            accepted: false,
+            fencing_token: payload.fencing_token,
+            reason_code: "BROWSER_TAB_BUSY"
+          },
+          String(message.trace_id)
+        )
+      );
+      return;
+    }
     const nodeInput =
       payload.input && typeof payload.input === "object"
         ? (payload.input as Record<string, unknown>)
         : {};
     let pageEpoch =
-      payload.node.id === "browser.design.snapshot.capture" &&
+      typeof payload.page_epoch === "string" &&
+      validPageEpoch(payload.page_epoch, tab.id)
+        ? payload.page_epoch
+        : payload.node.id === "browser.design.snapshot.capture" &&
       validPageEpoch(nodeInput.pageEpoch, tab.id)
         ? nodeInput.pageEpoch
         : createPageEpoch(tab.id);
@@ -319,7 +652,13 @@ export default defineBackground(() => {
       )
     );
     activeCommands.add(String(payload.command_id));
-    const commandId = String(payload.command_id);
+    activeTabCommands.set(executingTabId, commandId);
+    const releaseCommand = (): void => {
+      activeCommands.delete(commandId);
+      if (activeTabCommands.get(executingTabId) === commandId) {
+        activeTabCommands.delete(executingTabId);
+      }
+    };
     const sendCancelled = (): void => {
       send(
         envelope(
@@ -358,14 +697,13 @@ export default defineBackground(() => {
       const timingPolicy = payload.timing_policy as TimingPolicy | undefined;
       const origin = new URL(executionUrl).origin;
       const rateScope = timingPolicy?.rateLimit?.scope ?? "tab";
-      const shopId = String(
-        nodeInput.shop_id ?? nodeInput.shopId ?? ""
-      );
       const rateKey =
         rateScope === "domain"
           ? `domain:${origin}`
-          : rateScope === "shop"
-            ? `shop:${origin}:${shopId || "unresolved"}`
+          : rateScope === "authentication_context"
+            ? `authentication-context:${origin}:${String(
+                payload.authentication_context_ref ?? "anonymous"
+              )}`
             : `tab:${origin}:${tab.id}`;
       const rateStorageKey = `bpaPacing:${rateKey}`;
       const storedPacing =
@@ -397,17 +735,14 @@ export default defineBackground(() => {
         );
       }
       if (cancelledCommands.delete(commandId)) {
-        activeCommands.delete(commandId);
+        releaseCommand();
         sendCancelled();
         return;
       }
       if (Date.now() >= Date.parse(payload.deadline)) {
         throw new Error("DEADLINE_EXCEEDED");
       }
-      let [currentTab] = await browser.tabs.query({
-        active: true,
-        currentWindow: true
-      });
+      let currentTab = await browser.tabs.get(tab.id).catch(() => undefined);
       let navigationReady = true;
       let navigationBlocked = false;
       if (
@@ -444,10 +779,7 @@ export default defineBackground(() => {
             payload.deadline
           );
         }
-        [currentTab] = await browser.tabs.query({
-          active: true,
-          currentWindow: true
-        });
+        currentTab = await browser.tabs.get(tab.id).catch(() => undefined);
         pageEpoch = createPageEpoch(tab.id);
       }
       if (navigationBlocked) {
@@ -509,22 +841,35 @@ export default defineBackground(() => {
           ]
         };
       } else {
-        await browser.storage.local.set({
-          [rateStorageKey]: Date.now()
-        });
-        adapterResponse = await browser.tabs.sendMessage(tab.id, {
-          type: "bpa.execute",
-          node: payload.node,
-          input: nodeInput,
-          pageEpoch,
-          grantedPermissions,
-          timingPolicy,
-          deadline: payload.deadline
-        });
-        const [completedTab] = await browser.tabs.query({
-          active: true,
-          currentWindow: true
-        });
+        const registeredResponse = await executeRegisteredAdapterNode(
+          payload.node.id,
+          nodeInput,
+          {
+            sourceTabId: tab.id,
+            deadline: String(payload.deadline),
+            isCancelled: () => cancelledCommands.has(commandId)
+          }
+        );
+        if (registeredResponse) {
+          adapterResponse = { ...registeredResponse, pageEpoch };
+          await probeTab(tab.id);
+        } else {
+          await browser.storage.local.set({
+            [rateStorageKey]: Date.now()
+          });
+          adapterResponse = await browser.tabs.sendMessage(tab.id, {
+            type: "bpa.execute",
+            node: payload.node,
+            input: nodeInput,
+            pageEpoch,
+            grantedPermissions,
+            timingPolicy,
+            deadline: payload.deadline
+          });
+        }
+        const completedTab = await browser.tabs
+          .get(tab.id)
+          .catch(() => undefined);
         if (
           completedTab?.id !== tab.id ||
           completedTab.url !== executionUrl
@@ -533,7 +878,7 @@ export default defineBackground(() => {
             ok: false,
             error: {
               code: "PAGE_CONTEXT_CHANGED",
-              message: "The active page changed before result validation.",
+              message: "The bound page changed before result validation.",
               retryable: false
             },
             riskSignals: [
@@ -601,7 +946,7 @@ export default defineBackground(() => {
       };
     }
     if (cancelledCommands.delete(commandId)) {
-      activeCommands.delete(commandId);
+      releaseCommand();
       sendCancelled();
       return;
     }
@@ -622,9 +967,10 @@ export default defineBackground(() => {
           ? {
               output: {
                 ...adapterResponse.output,
-                ...(payload.node.id === "doudian.shop.context.read" ||
-                payload.node.id === "doudian.product.editor.open" ||
-                payload.node.id === "browser.design.snapshot.capture"
+                ...(resolveCapability(
+                  payload.node.id,
+                  payload.node.version
+                )?.includePageContext
                   ? {
                       page_epoch: pageEpoch,
                       tab_ref: {
@@ -695,7 +1041,7 @@ export default defineBackground(() => {
       });
       await sendEvidenceUpload(evidenceUpload);
     } finally {
-      activeCommands.delete(commandId);
+      releaseCommand();
     }
     if (adapterResponse.ok) {
       await assistancePanel.remove(String(payload.node_execution_id));
@@ -780,6 +1126,7 @@ export default defineBackground(() => {
           resumeToken: message.payload.resume_token,
           resumeTokenExpiresAt: message.payload.resume_token_expires_at
         });
+        const capabilityReportPayload = await sendCapabilities();
         await updateStatus({
           host: "connected",
           core: "connected",
@@ -787,20 +1134,59 @@ export default defineBackground(() => {
           sessionId: session.sessionId,
           permissions: [
             ...new Set(
-              capabilityReport().capabilities.flatMap(
+              capabilityReportPayload.capabilities.flatMap(
                 (capability) => capability.permissions
               )
             )
           ],
           lastError: undefined
         });
-        sendCapabilities();
+        await probeAllSourceTabs();
         await sendPending();
         break;
       }
       case "session.resume":
         await sendPending();
         break;
+      case "page.probe.request": {
+        const requestId = message.payload.request_id;
+        const tabRef = message.payload.tab_ref;
+        const deadline = Date.parse(message.payload.deadline);
+        const stored = await browser.storage.local.get("browserInstanceId");
+        const validInstance =
+          stored.browserInstanceId === tabRef.browser_instance_id;
+        const validDeadline = Number.isFinite(deadline) && Date.now() < deadline;
+        const tab = validInstance
+          ? await browser.tabs.get(tabRef.tab_id).catch(() => undefined)
+          : undefined;
+        let accepted = false;
+        let reasonCode: string | undefined;
+        if (!validInstance) reasonCode = "BROWSER_INSTANCE_MISMATCH";
+        else if (!validDeadline) reasonCode = "PAGE_PROBE_DEADLINE_EXCEEDED";
+        else if (!tab?.url) reasonCode = "BROWSER_PAGE_NOT_FOUND";
+        else if (new URL(tab.url).origin !== tabRef.origin) {
+          reasonCode = "BROWSER_ORIGIN_MISMATCH";
+        } else {
+          await probeTab(tabRef.tab_id);
+          accepted = observedTabs.has(tabRef.tab_id);
+          if (!accepted) reasonCode = "BROWSER_OBSERVATION_PENDING";
+        }
+        send(
+          envelope(
+            "page.probe.result",
+            {
+              request_id: requestId,
+              tab_ref: tabRef,
+              accepted,
+              observation_revision:
+                observedTabs.get(tabRef.tab_id)?.revision ?? 1,
+              ...(reasonCode ? { reason_code: reasonCode } : {})
+            },
+            message.trace_id
+          )
+        );
+        break;
+      }
       case "command.dispatch":
         await handleCommand(message);
         break;
@@ -948,6 +1334,7 @@ export default defineBackground(() => {
             extension_id: browser.runtime.id,
             extension_version: browser.runtime.getManifest().version,
             supported_protocols: [PROTOCOL],
+            features: [...BROWSER_FEATURES],
             last_acked_command_seq: Number(
               stored.lastAckedCommandSeq ?? 0
             ),
@@ -968,5 +1355,73 @@ export default defineBackground(() => {
     }
   };
 
+  browser.runtime.onMessage.addListener((message, sender) => {
+    if (
+      message &&
+      typeof message === "object" &&
+      (message as { type?: unknown }).type ===
+        "bpa.page.observation.get"
+    ) {
+      const tabId = Number((message as { tabId?: unknown }).tabId);
+      if (!Number.isSafeInteger(tabId) || tabId < 0) {
+        return Promise.resolve({
+          ok: false,
+          error: "BROWSER_PAGE_NOT_FOUND"
+        });
+      }
+      return (async () => {
+        await probeTab(tabId);
+        const tracked = observedTabs.get(tabId);
+        const tab = await browser.tabs.get(tabId).catch(() => undefined);
+        const stored = await browser.storage.local.get("browserInstanceId");
+        if (!tracked || !tab?.url || !stored.browserInstanceId) {
+          return { ok: false, error: "BROWSER_OBSERVATION_PENDING" };
+        }
+        const url = new URL(tab.url);
+        return {
+          ok: true,
+          observation: {
+            browserInstanceId: stored.browserInstanceId,
+            tabId,
+            ...(tracked.windowId === undefined
+              ? {}
+              : { windowId: tracked.windowId }),
+            origin: url.origin,
+            pathname: url.pathname,
+            pageEpoch: tracked.pageEpoch,
+            revision: tracked.revision,
+            contentScriptReady: tracked.contentScriptReady === true,
+            authentication: tracked.authenticationState ?? "unknown",
+            observationState: tracked.observationState ?? "probing"
+          }
+        };
+      })();
+    }
+    if (
+      message &&
+      typeof message === "object" &&
+      (message as { type?: unknown }).type === "bpa.content.ready" &&
+      sender.tab?.id != null
+    ) {
+      if (!activeTabCommands.has(sender.tab.id)) {
+        void probeTab(sender.tab.id);
+      }
+    }
+    return undefined;
+  });
+  browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (changeInfo.status === "loading") {
+      void probeTab(tabId, { forceNewEpoch: true });
+    } else if (changeInfo.status === "complete" || changeInfo.url) {
+      void probeTab(tabId);
+    }
+  });
+  browser.tabs.onActivated.addListener(({ tabId }) => {
+    void probeTab(tabId);
+  });
+  browser.tabs.onRemoved.addListener((tabId) => {
+    void invalidateTrackedTab(tabId, "TAB_CLOSED");
+  });
+  setInterval(() => void probeAllSourceTabs(), 10_000);
   void connect();
 });

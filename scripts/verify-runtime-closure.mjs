@@ -34,6 +34,9 @@ const manifest = JSON.parse(
 const release = validateReleaseMetadata(manifest.release);
 if (
   manifest.schemaVersion !== 2 ||
+  manifest.browserProtocol !== "bpa.browser/2" ||
+  manifest.source?.gitCommit !== release.gitCommit ||
+  manifest.source?.dirty !== false ||
   manifest.runtimeVersion !== release.runtimeVersion ||
   manifest.gitCommit !== release.gitCommit ||
   manifest.nodeVersion !== release.nodeVersion ||
@@ -61,6 +64,7 @@ const wrapperFiles = [
 const requiredFiles = [
   nodeExecutable,
   "bin/bpa.js",
+  "bin/bpa-console-host.js",
   "bin/bpa-core.js",
   "bin/bpa-native-host.js",
   "bin/bpa-mcp.js",
@@ -69,6 +73,12 @@ const requiredFiles = [
   "bin/bpa-release-scan.js",
   "package.json",
   "sbom.spdx.json",
+  "schema/browser-protocol-v2.schema.json",
+  "assets/adapters/doudian-alliance.adapter.yaml",
+  "assets/nodes/doudian.alliance.shops.discover.node.yaml",
+  "assets/nodes/doudian.alliance.shop.retired-products.scan.node.yaml",
+  "assets/nodes/doudian.alliance.retired-products.aggregate.node.yaml",
+  "assets/workflows/doudian.alliance-retired-products-monitor.workflow.yaml",
   "extension/manifest.json",
   "console/index.html"
 ];
@@ -159,6 +169,53 @@ const extensionManifest = JSON.parse(
 );
 if (extensionManifest.version !== release.runtimeVersion) {
   throw new Error("Extension version differs from the Runtime release");
+}
+const browserProtocolSchema = JSON.parse(
+  await readFile(
+    join(root, "schema/browser-protocol-v2.schema.json"),
+    "utf8"
+  )
+);
+if (
+  browserProtocolSchema.$defs?.pageObservation?.properties?.type?.const !==
+    "page.observation" ||
+  !browserProtocolSchema.$defs?.command?.properties?.payload?.properties
+    ?.observation_revision
+) {
+  throw new Error(
+    "Runtime Browser Protocol omits page observations or observation revisions"
+  );
+}
+const backgroundScript = extensionManifest.background?.service_worker;
+const contentScripts = extensionManifest.content_scripts?.flatMap(
+  (entry) => entry.js ?? []
+);
+if (
+  typeof backgroundScript !== "string" ||
+  !Array.isArray(contentScripts) ||
+  contentScripts.length === 0
+) {
+  throw new Error("Extension manifest omits its observation scripts");
+}
+const backgroundSource = await readFile(
+  join(root, "extension", backgroundScript),
+  "utf8"
+);
+const contentSource = (
+  await Promise.all(
+    contentScripts.map((path) =>
+      readFile(join(root, "extension", path), "utf8")
+    )
+  )
+).join("\n");
+if (
+  !backgroundSource.includes("page.observation") ||
+  !backgroundSource.includes("bpa.content.probe") ||
+  !contentSource.includes("bpa.content.ready")
+) {
+  throw new Error(
+    "Packaged extension omits the page-observation readiness handshake"
+  );
 }
 const sbom = JSON.parse(await readFile(join(root, "sbom.spdx.json"), "utf8"));
 if (

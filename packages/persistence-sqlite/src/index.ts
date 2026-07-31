@@ -31,6 +31,7 @@ import {
   type AssistanceTaskListFilter,
   type AuditRecord,
   type BrowserCapabilityRecord,
+  type BrowserPageObservationRecord,
   type BrowserSessionObservationState,
   type BrowserSessionRecord,
   type BrowserSessionRole,
@@ -3409,6 +3410,199 @@ export class SqlitePersistence implements Persistence {
     return this.#getBrowserSession(input.id)!;
   }
 
+  upsertBrowserPageObservation(
+    input: BrowserPageObservationRecord
+  ): BrowserPageObservationRecord {
+    if (
+      !Number.isSafeInteger(input.tabId) ||
+      input.tabId < 0 ||
+      (input.windowId !== undefined &&
+        (!Number.isSafeInteger(input.windowId) || input.windowId < 0)) ||
+      !Number.isFinite(Date.parse(input.observedAt)) ||
+      !input.pathname.startsWith("/") ||
+      !input.pageEpoch.trim() ||
+      !input.observerCapabilityId.trim() ||
+      !Number.isSafeInteger(input.revision) ||
+      input.revision < 1
+    ) {
+      throw new Error("Browser page observation is invalid");
+    }
+    const session = this.#getBrowserSession(input.sessionId);
+    if (
+      !session ||
+      session.browserInstanceId !== input.browserInstanceId
+    ) {
+      throw new Error("Browser page observation Session does not match");
+    }
+    const parsedOrigin = new URL(input.origin);
+    if (
+      parsedOrigin.protocol !== "https:" ||
+      parsedOrigin.origin !== input.origin
+    ) {
+      throw new Error("Browser page observation Origin must be exact HTTPS");
+    }
+    if (
+      input.observationState === "ready" &&
+      !input.contentScriptReady
+    ) {
+      throw new Error(
+        "A ready browser page requires ready content"
+      );
+    }
+    if (
+      ["authenticated", "membership"].includes(input.authentication) &&
+      !input.authenticationContextRef
+    ) {
+      throw new Error(
+        "Authenticated browser pages require an authentication context"
+      );
+    }
+    const current = this.getBrowserPageObservation(input.sessionId, input.tabId);
+    if (
+      current &&
+      Date.parse(input.observedAt) < Date.parse(current.observedAt)
+    ) {
+      return current;
+    }
+    if (current && input.revision < current.revision) return current;
+    if (
+      current &&
+      input.revision === current.revision &&
+      (current.browserInstanceId !== input.browserInstanceId ||
+        current.windowId !== input.windowId ||
+        current.origin !== input.origin ||
+        current.pathname !== input.pathname ||
+        current.contentScriptReady !== input.contentScriptReady ||
+        current.authentication !== input.authentication ||
+        current.authenticationContextRef !==
+          input.authenticationContextRef ||
+        current.observationState !== input.observationState ||
+        current.pageEpoch !== input.pageEpoch ||
+        current.observerCapabilityId !== input.observerCapabilityId ||
+        current.reasonCode !== input.reasonCode)
+    ) {
+      throw new RevisionConflictError(
+        "Browser page observation changed without a new revision"
+      );
+    }
+    this.#db
+      .prepare(
+        `INSERT INTO browser_page_observations(
+           session_id, browser_instance_id, tab_id, window_id, origin, pathname,
+           content_script_ready, authentication, authentication_context_ref,
+           observation_state, page_epoch, observer_capability_id, revision,
+           observed_at, reason_code
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(session_id, tab_id) DO UPDATE SET
+           browser_instance_id = excluded.browser_instance_id,
+           window_id = excluded.window_id,
+           origin = excluded.origin,
+           pathname = excluded.pathname,
+           content_script_ready = excluded.content_script_ready,
+           authentication = excluded.authentication,
+           authentication_context_ref = excluded.authentication_context_ref,
+           observation_state = excluded.observation_state,
+           page_epoch = excluded.page_epoch,
+           observer_capability_id = excluded.observer_capability_id,
+           revision = excluded.revision,
+           observed_at = excluded.observed_at,
+           reason_code = excluded.reason_code`
+      )
+      .run(
+        input.sessionId,
+        input.browserInstanceId,
+        input.tabId,
+        input.windowId ?? null,
+        input.origin,
+        input.pathname,
+        input.contentScriptReady ? 1 : 0,
+        input.authentication,
+        input.authenticationContextRef ?? null,
+        input.observationState,
+        input.pageEpoch,
+        input.observerCapabilityId,
+        input.revision,
+        input.observedAt,
+        input.reasonCode ?? null
+      );
+    return this.getBrowserPageObservation(input.sessionId, input.tabId)!;
+  }
+
+  getBrowserPageObservation(
+    sessionId: string,
+    tabId: number
+  ): BrowserPageObservationRecord | undefined {
+    const row = this.#db
+      .prepare(
+        "SELECT * FROM browser_page_observations WHERE session_id = ? AND tab_id = ?"
+      )
+      .get(sessionId, tabId) as SqlRow | undefined;
+    return row ? this.#readBrowserPageObservation(row) : undefined;
+  }
+
+  listBrowserPageObservations(input: {
+    limit: number;
+    sessionId?: string;
+    browserInstanceId?: string;
+  }): BrowserPageObservationRecord[] {
+    this.#assertLineageLimit(input.limit);
+    return (
+      this.#db
+        .prepare(
+          `SELECT * FROM browser_page_observations
+           WHERE (? IS NULL OR session_id = ?)
+             AND (? IS NULL OR browser_instance_id = ?)
+           ORDER BY observed_at DESC, session_id, tab_id
+           LIMIT ?`
+        )
+        .all(
+          input.sessionId ?? null,
+          input.sessionId ?? null,
+          input.browserInstanceId ?? null,
+          input.browserInstanceId ?? null,
+          input.limit
+        ) as SqlRow[]
+    ).map((row) => this.#readBrowserPageObservation(row));
+  }
+
+  invalidateBrowserPageObservations(input: {
+    sessionId: string;
+    observedAt: string;
+    reasonCode: string;
+  }): number {
+    if (!Number.isFinite(Date.parse(input.observedAt))) {
+      throw new Error("Browser page invalidation time is invalid");
+    }
+    return this.#db
+      .prepare(
+        `UPDATE browser_page_observations
+         SET observation_state = 'stale',
+             authentication = 'unknown',
+             authentication_context_ref = NULL,
+             content_script_ready = 0,
+             revision = revision + 1,
+             observed_at = ?,
+             reason_code = ?
+         WHERE session_id = ? AND observation_state <> 'stale'`
+      )
+      .run(input.observedAt, input.reasonCode, input.sessionId).changes;
+  }
+
+  pruneBrowserPageObservations(input: {
+    observedBefore: string;
+  }): number {
+    if (!Number.isFinite(Date.parse(input.observedBefore))) {
+      throw new Error("Browser page observation retention time is invalid");
+    }
+    return this.#db
+      .prepare(
+        `DELETE FROM browser_page_observations
+         WHERE observed_at < ?
+           AND observation_state IN ('departed', 'stale')`
+      )
+      .run(input.observedBefore).changes;
+  }
+
   replaceBrowserCapabilities(
     sessionId: string,
     capabilities: BrowserCapabilityRecord[]
@@ -3419,8 +3613,9 @@ export class SqlitePersistence implements Persistence {
         .run(sessionId);
       const insert = this.#db.prepare(
         `INSERT INTO browser_capabilities(
-          session_id, node_id, node_version, risk_level, permissions_json
-        ) VALUES (?, ?, ?, ?, ?)`
+          session_id, node_id, node_version, risk_level, permissions_json,
+          routes_json, adapter_id, adapter_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       );
       for (const capability of capabilities) {
         insert.run(
@@ -3428,7 +3623,10 @@ export class SqlitePersistence implements Persistence {
           capability.nodeId,
           capability.nodeVersion,
           capability.riskLevel,
-          json(capability.permissions)
+          json(capability.permissions),
+          json(capability.routes ?? []),
+          capability.adapterId ?? null,
+          capability.adapterVersion ?? null
         );
       }
     })();
@@ -3446,7 +3644,16 @@ export class SqlitePersistence implements Persistence {
       nodeId: String(row.node_id),
       nodeVersion: String(row.node_version),
       riskLevel: String(row.risk_level),
-      permissions: parseJson(row.permissions_json) as string[]
+      permissions: parseJson(row.permissions_json) as string[],
+      routes: parseJson(row.routes_json) as NonNullable<
+        BrowserCapabilityRecord["routes"]
+      >,
+      ...(row.adapter_id == null
+        ? {}
+        : { adapterId: String(row.adapter_id) }),
+      ...(row.adapter_version == null
+        ? {}
+        : { adapterVersion: String(row.adapter_version) })
     }));
   }
 
@@ -4697,14 +4904,30 @@ export class SqlitePersistence implements Persistence {
     assertResourceBindingSnapshotForPlan(runId, snapshot, plan.planJson);
     for (const [slotName, binding] of Object.entries(snapshot.bindings)) {
       const session = this.#getBrowserSession(binding.sessionId);
+      const page = this.getBrowserPageObservation(
+        binding.sessionId,
+        binding.tabId
+      );
+      const normalizedAuthentication =
+        page?.authentication === "membership"
+          ? "membership"
+          : page?.authentication === "authenticated"
+            ? "authenticated"
+            : "anonymous";
       if (
         !session ||
-        session.observationRevision === undefined ||
-        session.observationRevision < 1 ||
-        session.observationState !== "available" ||
+        !page ||
+        page.revision !== binding.revision ||
+        page.browserInstanceId !== binding.browserInstanceId ||
+        page.observationState !== "ready" ||
+        page.pageEpoch !== binding.pageEpoch ||
+        page.observerCapabilityId !== binding.observerCapabilityId ||
+        page.authenticationContextRef !==
+          binding.authenticationContextRef ||
+        page.pathname !== binding.pathname ||
+        page.origin !== binding.origin ||
         session.capabilityDigest !== binding.capabilityDigest ||
-        session.observedOrigin !== binding.origin ||
-        session.observedAuthentication !== binding.authentication
+        binding.authentication !== normalizedAuthentication
       ) {
         throw new Error(
           `Resource Binding Snapshot session observation drifted for slot ${slotName}`
@@ -5940,6 +6163,38 @@ export class SqlitePersistence implements Persistence {
       ...(row.observed_at == null
         ? {}
         : { observedAt: String(row.observed_at) })
+    };
+  }
+
+  #readBrowserPageObservation(row: SqlRow): BrowserPageObservationRecord {
+    return {
+      sessionId: String(row.session_id),
+      browserInstanceId: String(row.browser_instance_id),
+      tabId: Number(row.tab_id),
+      ...(row.window_id == null ? {} : { windowId: Number(row.window_id) }),
+      origin: String(row.origin),
+      pathname: String(row.pathname),
+      contentScriptReady: Number(row.content_script_ready) === 1,
+      authentication:
+        String(row.authentication) as BrowserPageObservationRecord["authentication"],
+      ...(row.authentication_context_ref == null
+        ? {}
+        : {
+            authenticationContextRef: String(
+              row.authentication_context_ref
+            )
+          }),
+      observationState:
+        String(
+          row.observation_state
+        ) as BrowserPageObservationRecord["observationState"],
+      pageEpoch: String(row.page_epoch),
+      observerCapabilityId: String(row.observer_capability_id),
+      revision: Number(row.revision),
+      observedAt: String(row.observed_at),
+      ...(row.reason_code == null
+        ? {}
+        : { reasonCode: String(row.reason_code) })
     };
   }
 }

@@ -68,7 +68,7 @@ describe("UdsControlBackend", () => {
     const client = new FakeRequester()
       .respond(CONSOLE_CONTROL_METHODS.doctor, {
         status: "ok",
-        protocol: "bpa.browser/1",
+        protocol: "bpa.browser/2",
         persistence: {
           adapter: "sqlite",
           schemaVersion: 8,
@@ -84,7 +84,21 @@ describe("UdsControlBackend", () => {
       .respond(CONSOLE_CONTROL_METHODS.taskList, [
         { taskId: "task-1" }
       ])
-      .respond(CONSOLE_CONTROL_METHODS.browserSessionList, []);
+      .respond(CONSOLE_CONTROL_METHODS.browserPageObservationList, [
+        {
+          sessionId: "session-1",
+          browserInstanceId: "chrome-profile-1",
+          tabId: 7,
+          origin: "https://fxg.jinritemai.com",
+          pathname: "/ffa/g/list",
+          contentScriptReady: true,
+          authentication: "authenticated",
+          observationState: "ready",
+          pageEpoch: "tab-7:1",
+          revision: 3,
+          observedAt: "2026-07-30T03:59:30.000Z"
+        }
+      ]);
     const result = await backend(client).getDashboard();
     expect(result).toMatchObject({
       attention: "attention",
@@ -95,7 +109,9 @@ describe("UdsControlBackend", () => {
         { id: "persistence", status: "healthy" },
         { id: "browser", status: "healthy" }
       ],
-      browserSessions: [{ id: "session-1", status: "ready" }]
+      browserSessions: [
+        { id: "chrome-profile-1:7:3", status: "ready" }
+      ]
     });
     expect(client.calls).toEqual([
       { method: "doctor", params: {} },
@@ -113,8 +129,8 @@ describe("UdsControlBackend", () => {
         }
       },
       {
-        method: "browser.session.list",
-        params: { limit: 100 }
+        method: "browser.page-observation.list",
+        params: { limit: 200 }
       }
     ]);
   });
@@ -245,7 +261,14 @@ describe("UdsControlBackend", () => {
         workflowId: "research",
         workflowVersion: "1.0.0",
         inputs: { keyword: "煎饼" },
-        resourceBindings: { metrics: "session-1" }
+        resourceBindings: {
+          metrics: {
+            sessionId: "session-1",
+            browserInstanceId: "chrome-profile-1",
+            tabId: 7,
+            observationRevision: 3
+          }
+        }
       })
     ).resolves.toEqual({ runId: "run-1" });
     const run = await adapter.getRun("run-1");
@@ -267,7 +290,14 @@ describe("UdsControlBackend", () => {
           workflowId: "research",
           workflowVersion: "1.0.0",
           input: { keyword: "煎饼" },
-          resourceBindings: { metrics: "session-1" }
+          resourceBindings: {
+            metrics: {
+              sessionId: "session-1",
+              browserInstanceId: "chrome-profile-1",
+              tabId: 7,
+              observationRevision: 3
+            }
+          }
         }
       },
       { method: "run.inspect", params: { runId: "run-1" } },

@@ -754,13 +754,50 @@ server.registerTool(
           "The built-in Design capture Node unexpectedly requires R1 confirmation."
       });
     }
+    const observations = await core<Array<Record<string, unknown>>>(
+      "browser.page-observation.list",
+      {
+        sessionId: browser_session_id,
+        limit: 200
+      }
+    );
+    const pageObservation = observations.find(
+      (observation) =>
+        observation.sessionId === browser_session_id &&
+        observation.tabId === grant.tabId &&
+        observation.origin === grant.origin &&
+        observation.pageEpoch === grant.pageEpoch &&
+        observation.observationState === "ready" &&
+        observation.contentScriptReady === true &&
+        typeof observation.observedAt === "string" &&
+        Date.now() - Date.parse(observation.observedAt) <= 30_000
+    );
+    if (
+      !pageObservation ||
+      typeof pageObservation.browserInstanceId !== "string" ||
+      typeof pageObservation.tabId !== "number" ||
+      typeof pageObservation.revision !== "number"
+    ) {
+      return result({
+        status: "authorization_required",
+        reason:
+          "BROWSER_OBSERVATION_STALE: the authorized page is no longer available at the frozen tab binding."
+      });
+    }
     const run = await core("run.node.create", {
       nodeId: "browser.design.snapshot.capture",
       nodeVersion: "1.0.0",
       input: captureInput,
       expectedPreviewDigest: preview.previewDigest,
       confirmed: false,
-      resourceBindings: { design_page: browser_session_id },
+      resourceBindings: {
+        design_page: {
+          sessionId: browser_session_id,
+          browserInstanceId: pageObservation.browserInstanceId,
+          tabId: pageObservation.tabId,
+          observationRevision: pageObservation.revision
+        }
+      },
       actor: "codex:mcp"
     });
     return result({

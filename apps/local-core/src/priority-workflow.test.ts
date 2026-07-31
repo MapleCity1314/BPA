@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import {
-  compileWorkflowV1Alpha2,
+  compileWorkflowV1Alpha3,
   contentDigest,
   parseWorkflowYaml,
   type CatalogResolver
@@ -15,7 +15,7 @@ import {
   validateAssistanceProfile,
   validateNode,
   validateNodeV1Alpha2,
-  validateWorkflowV1Alpha2,
+  validateWorkflowV1Alpha3,
   type AssistanceProfileDefinition,
   type NodeDefinition,
   type NodeDefinitionV1Alpha2
@@ -126,10 +126,10 @@ function compilePriorityWorkflow() {
     "workflows/examples/doudian.priority-items-readonly-inspect.workflow.yaml"
   );
   expect(
-    validateWorkflowV1Alpha2(workflow),
-    formatValidationErrors(validateWorkflowV1Alpha2.errors).join("; ")
+    validateWorkflowV1Alpha3(workflow),
+    formatValidationErrors(validateWorkflowV1Alpha3.errors).join("; ")
   ).toBe(true);
-  return compileWorkflowV1Alpha2(workflow, catalog());
+  return compileWorkflowV1Alpha3(workflow, catalog());
 }
 
 function dependencies(): EngineDependencies {

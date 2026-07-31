@@ -1,9 +1,9 @@
-# BPA Browser Protocol v1
+# BPA Browser Protocol v2
 
-> 状态：已确认 v1（2026-07-27）
-> 协议族：`bpa.browser/1`
-> Schema：[`browser-protocol-v1.schema.json`](../../packages/schemas/schema/browser-protocol-v1.schema.json)
-> 规范样例：[`browser-protocol-v1.messages.json`](examples/browser-protocol-v1.messages.json)
+> 状态：已确认 v2（2026-07-31）
+> 协议族：`bpa.browser/2`
+> Schema：[`browser-protocol-v2.schema.json`](../../packages/schemas/schema/browser-protocol-v2.schema.json)
+> 规范样例：[`browser-protocol-v2.messages.json`](examples/browser-protocol-v2.messages.json)
 
 ## 1. 边界
 
@@ -22,8 +22,8 @@ Native Host 不解释 Workflow，不执行 Node，也不修改消息中的权限
 每条消息固定包含：
 
 ```text
-protocol       bpa.browser/1
-version        1.0.0
+protocol       bpa.browser/2
+version        2.0.0
 message_id     全局唯一；完全相同的 ID 视为重复投递
 session_id     hello 使用 new，其余使用已建立 Session
 seq            每个方向单调递增
@@ -51,7 +51,17 @@ payload        按 type 严格校验
 - Blocking RiskSignal 必须停止当前动作并返回 `rejected`；不得尝试绕过验证码、登录或平台风控。
 - 详细语义见 [`timing-and-risk-policy-v1.md`](../timing-and-risk-policy-v1.md)。
 
-## 3. Session 状态机
+## 3. Session 与页面观察
+
+Session 就绪只证明 Browser Bridge 已连接且能力完成协商，不证明任何页面可执行。
+Content Script 与 Adapter observer 产生通用 `page.observation`；Core 可通过
+`page.probe.request` 主动请求短时探测，并只按冻结的确切标签页执行命令。
+
+页面观察只包含通用事实：Browser Instance、Tab/Window、Origin/path、Content
+Script 状态、认证状态与不可解析的 `authentication.context_ref`、observer capability、
+revision、page epoch 和过期时间。平台身份由 Adapter Node 读取，不进入协议或 Core。
+
+### 3.1 Session 状态机
 
 ```text
 DISCONNECTED
@@ -146,9 +156,10 @@ evidence.begin
 
 - `protocol` 表示不兼容的协议族和 Major。
 - `version` 是该 Major 内的完整 Schema 版本。
-- v1 对未知字段严格失败，不以猜测方式兼容。
+- v2 对未知字段严格失败，不以猜测方式兼容。
 - 添加消息或字段需要发布新的完整 Schema 版本并经过双端兼容测试。
 - 删除字段、改变含义或放宽安全约束必须升级 Major。
+- v1 Runtime/Extension 只能收到明确升级错误，不得与 v2 资产混合执行。
 
 ## 9. 已确认决策
 
@@ -156,4 +167,5 @@ evidence.begin
 2. 两个方向使用独立序列空间。
 3. Resume Token 最长 24 小时、成功恢复即轮换、设备撤销即失效。
 4. Command 内嵌由 Core Ed25519 签名的完整 Permission Grant。
-5. Evidence Chunk 保留在 v1；首个只读 Workflow 不使用。
+5. Evidence Chunk 保留在 v2；首个只读 Workflow 不使用。
+6. 页面事实、业务身份和 Workflow 策略分属 Protocol、Adapter Node 和 Workflow，禁止互相穿透。

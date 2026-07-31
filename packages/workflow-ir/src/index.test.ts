@@ -114,7 +114,7 @@ function callStep(
         distribution: "uniform"
       },
       rateLimit: {
-        scope: "shop",
+        scope: "authentication_context",
         minIntervalMs: 100,
         maxQueueMs: 10_000
       }

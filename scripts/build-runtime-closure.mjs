@@ -91,7 +91,7 @@ if (targetPlatform === "win32" && !targetNativeHostExecutable) {
 }
 const trackedChanges = execFileSync(
   "git",
-  ["status", "--porcelain=v1", "--untracked-files=no"],
+  ["status", "--porcelain=v1", "--untracked-files=all"],
   { cwd: repositoryRoot, encoding: "utf8" }
 ).trim();
 if (trackedChanges.length > 0) {
@@ -107,6 +107,10 @@ const gitCommit = execFileSync("git", ["rev-parse", "HEAD"], {
 const entryPoints = {
   "bpa-core": join(repositoryRoot, "apps/local-core/src/main.ts"),
   bpa: join(repositoryRoot, "apps/cli/src/main.ts"),
+  "bpa-console-host": join(
+    repositoryRoot,
+    "apps/console-host/src/main.ts"
+  ),
   "bpa-native-host": join(
     repositoryRoot,
     "apps/native-host/src/main.ts"
@@ -237,6 +241,10 @@ await copyDirectory(
 await copyFile(
   join(repositoryRoot, "adapters/doudian/doudian.adapter.yaml"),
   join(outputRoot, "assets/adapters/doudian.adapter.yaml")
+);
+await copyFile(
+  join(repositoryRoot, "adapters/doudian/doudian-alliance.adapter.yaml"),
+  join(outputRoot, "assets/adapters/doudian-alliance.adapter.yaml")
 );
 await copyDirectory(
   join(repositoryRoot, "assistance-profiles/core"),
@@ -411,7 +419,12 @@ await writeFile(
     {
       schemaVersion: 2,
       runtimeVersion: rootPackage.version,
+      browserProtocol: "bpa.browser/2",
       databaseSchemaVersion,
+      source: {
+        gitCommit: release.gitCommit,
+        dirty: false
+      },
       release,
       gitCommit: release.gitCommit,
       nodeVersion: release.nodeVersion,

@@ -13,7 +13,7 @@ description: BPA 0.4 candidate 已实现、部分完成和明确未进入的能�
 | 本地控制面 | CLI、Console 和 MCP 先进行 Control Hello，再通过本机 Socket 调用 Core |
 | 执行模型 | Workflow v1alpha1/v1alpha2/v1alpha3 编译到同一 IR2；计划与资产闭包随 Run 冻结 |
 | 恢复 | Run Checkpoint、Inbox/Outbox、幂等结果、Lease 与 Fencing 已持久化 |
-| 浏览器 | Browser Protocol v1、Capability、签名权限、Session 恢复和精确资源绑定 |
+| 浏览器 | Browser Protocol v2、页面观察、主动探测、签名权限和精确标签页绑定 |
 | 可信证据 | Evidence 分块、断点恢复、整体摘要、Result 引用门禁和 Evidence Link |
 | 本地资产 | SHA-256 内容寻址 Blob、Source/Asset 元数据、保留策略和引用保护 |
 | Dataset | 安全上传、格式校验、规范化记录、不可覆盖发布和分页读取 |

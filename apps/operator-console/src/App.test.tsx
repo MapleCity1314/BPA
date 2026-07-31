@@ -43,7 +43,13 @@ const dashboard: DashboardSnapshot = {
       status: "ready",
       origin: "https://fxg.jinritemai.com",
       authenticated: true,
-      lastSeenAt: "2026-07-30T01:00:00.000Z"
+      lastSeenAt: "2026-07-30T01:00:00.000Z",
+      binding: {
+        sessionId: "session-1",
+        browserInstanceId: "chrome-profile-1",
+        tabId: 7,
+        observationRevision: 3
+      }
     }
   ]
 };
@@ -225,7 +231,14 @@ describe("Operator Console", () => {
         workflowId: "doudian.priority-check",
         workflowVersion: "1.0.0",
         inputs: { scope: "全部在售商品" },
-        resourceBindings: { shop: "session-1" }
+        resourceBindings: {
+          shop: {
+            sessionId: "session-1",
+            browserInstanceId: "chrome-profile-1",
+            tabId: 7,
+            observationRevision: 3
+          }
+        }
       })
     );
     expect(await screen.findByText("已检查 35 / 100 件商品")).toBeInTheDocument();

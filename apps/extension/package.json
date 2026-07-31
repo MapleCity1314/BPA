@@ -15,5 +15,9 @@
     "@bpa/node-runtime": "workspace:*",
     "@bpa/schemas": "workspace:*",
     "wxt": "0.21.1"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^21.1.7",
+    "jsdom": "^27.0.1"
   }
 }

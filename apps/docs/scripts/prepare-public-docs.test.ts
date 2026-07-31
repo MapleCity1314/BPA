@@ -26,7 +26,7 @@ describe("public documentation artifacts", () => {
       "docs-index.json",
       "robots.txt",
       "raw/index.md",
-      "raw/browser/v1.md"
+      "raw/browser/v2.md"
     ]) {
       const [left, right] = await Promise.all([
         readFile(join(first, file), "utf8"),

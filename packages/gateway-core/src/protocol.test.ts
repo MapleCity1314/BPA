@@ -13,7 +13,7 @@ import {
 const examples = JSON.parse(
   readFileSync(
     new URL(
-      "../../../docs/protocols/examples/browser-protocol-v1.messages.json",
+      "../../../docs/protocols/examples/browser-protocol-v2.messages.json",
       import.meta.url
     ),
     "utf8"
@@ -31,6 +31,7 @@ describe("browser protocol v1", () => {
     const gatewayTypes = new Set([
       "session.welcome",
       "session.resume",
+      "page.probe.request",
       "command.dispatch",
       "result.ack",
       "cancel.request",
@@ -50,6 +51,9 @@ describe("browser protocol v1", () => {
         "session.welcome",
         "session.resume",
         "capability.report",
+        "page.observation",
+        "page.probe.request",
+        "page.probe.result",
         "command.dispatch",
         "command.ack",
         "command.result",

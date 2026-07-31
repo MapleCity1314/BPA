@@ -5,8 +5,8 @@
   "type": "module",
   "dependencies": {
     "@bpa/candidate-archive": "workspace:*",
-    "@bpa/console-host": "workspace:*",
     "@bpa/control-client": "workspace:*",
+    "@bpa/operator-console-contracts": "workspace:*",
     "@bpa/shadow-run": "workspace:*",
     "commander": "^14.0.2",
     "yaml": "^2.8.1"

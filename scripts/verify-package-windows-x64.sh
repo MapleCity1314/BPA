@@ -46,7 +46,7 @@ fi
   if (
     manifest.platform !== "win32" ||
     manifest.architecture !== "x64" ||
-    !String(manifest.nodeVersion).startsWith("24.")
+    String(manifest.nodeVersion) !== "24.18.0"
   ) process.exit(1);
 ' "$ROOT/runtime/runtime-manifest.json"
 if [[ "$(file "$ROOT/runtime/node/node.exe")" != *"PE32+"*"x86-64"* ]]; then

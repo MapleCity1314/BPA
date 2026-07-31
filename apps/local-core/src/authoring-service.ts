@@ -490,7 +490,7 @@ export class LocalAuthoringService {
         "Design Mode Grant must bind an exact HTTPS Origin, Tab, PageEpoch, operator and TTL of at most 15 minutes."
       );
     }
-    let browserSession = this.persistence.getBrowserSession(
+    const browserSession = this.persistence.getBrowserSession(
       input.browserSessionId
     );
     if (!browserSession || browserSession.disconnectedAt) {
@@ -498,27 +498,20 @@ export class LocalAuthoringService {
         "Design Mode Browser Session is unavailable or has a different Origin."
       );
     }
-    if ((browserSession.observationState ?? "unknown") === "unknown") {
-      // The operator-approved page binding is sufficient to freeze the exact
-      // Design Mode Origin, but it does not prove an authenticated account.
-      // Runtime Nodes must still validate their stronger authentication
-      // requirement independently before execution.
-      browserSession = this.persistence.updateBrowserSessionObservation({
-        id: browserSession.id,
-        expectedRevision: browserSession.observationRevision ?? 0,
-        role: "design_mode",
-        observedOrigin: input.origin,
-        observedAuthentication: "optional",
-        observationState: "available",
-        observedAt: input.issuedAt
-      });
-    }
+    const page = this.persistence.getBrowserPageObservation(
+      input.browserSessionId,
+      input.tabId
+    );
     if (
-      browserSession.observationState !== "available" ||
-      browserSession.observedOrigin !== input.origin
+      !page ||
+      page.observationState !== "ready" ||
+      !page.contentScriptReady ||
+      page.origin !== input.origin ||
+      page.pageEpoch !== input.pageEpoch ||
+      Date.now() - Date.parse(page.observedAt) > 30_000
     ) {
       throw new Error(
-        "Design Mode Browser Session is unavailable or has a different Origin."
+        "Design Mode page observation is unavailable, stale, or has a different Origin."
       );
     }
     const grant: DesignModeGrantRecord = {
@@ -561,13 +554,23 @@ export class LocalAuthoringService {
     const browserSession = this.persistence.getBrowserSession(
       grant.browserSessionId
     );
+    const page = this.persistence.getBrowserPageObservation(
+      grant.browserSessionId,
+      grant.tabId
+    );
     if (
       grant.state !== "requested" ||
       Date.parse(grant.expiresAt) <= Date.parse(input.occurredAt) ||
       !browserSession ||
       browserSession.disconnectedAt ||
-      browserSession.observationState !== "available" ||
-      browserSession.observedOrigin !== grant.origin
+      !page ||
+      page.observationState !== "ready" ||
+      !page.contentScriptReady ||
+      page.origin !== grant.origin ||
+      page.pageEpoch !== grant.pageEpoch ||
+      Math.abs(
+        Date.parse(input.occurredAt) - Date.parse(page.observedAt)
+      ) > 30_000
     ) {
       throw new Error(
         "Design Mode Grant cannot be activated because its page resource is no longer exact and available."

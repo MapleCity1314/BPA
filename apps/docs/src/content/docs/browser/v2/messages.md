@@ -1,9 +1,9 @@
 ---
 title: 消息参考
-description: Browser Protocol v1 的 18 种消息及其方向和作用。
+description: Browser Protocol v2 的页面观察、探测、命令和证据消息语义。
 ---
 
-v1 定义 18 种严格消息。Gateway → Bridge 与 Bridge → Gateway 使用独立序列空间；同一方向的非重复消息必须严格大于已接受序号。
+v2 使用严格消息联合。Gateway → Bridge 与 Bridge → Gateway 使用独立序列空间；同一方向的非重复消息必须严格大于已接受序号。
 
 ## Session 与能力
 
@@ -16,6 +16,17 @@ v1 定义 18 种严格消息。Gateway → Bridge 与 Bridge → Gateway 使用�
 | `session.error` | Gateway → Bridge | 返回协议或会话级错误 |
 
 新会话固定使用 `session_id: "new"` 与 `seq: 0`。恢复请求携带上次 `resume_token` 和 `last_acked_command_seq`。
+
+## 页面观察与主动探测
+
+| 类型 | 方向 | 作用 |
+| --- | --- | --- |
+| `page.observation` | Bridge → Gateway | 上报标签页通用事实、认证上下文摘要、revision 与 page epoch |
+| `page.probe.request` | Gateway → Bridge | 请求对确切标签页执行短时探测 |
+| `page.probe.result` | Bridge → Gateway | 返回探测是否完成以及对应 observation revision |
+
+页面观察不是 Workflow 的期望值。只有 Adapter observer 实际读取到的事实才能上报；
+重复的同语义 ready 只刷新观察时间，导航、文档替换或认证上下文变化才推进 epoch。
 
 ## Command 与结果
 

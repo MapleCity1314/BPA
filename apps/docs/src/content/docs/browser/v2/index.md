@@ -1,13 +1,13 @@
 ---
-title: Browser Protocol v1
+title: Browser Protocol v2
 description: Gateway、Native Host 与 Extension Bridge 之间的消息边界和完整生命周期。
 ---
 
-**状态：已确认 v1，Evidence 消息已启用**
-协议族：`bpa.browser/1`  
-Schema 版本：`1.0.0`
+**状态：已确认 v2，页面观察与定向绑定已启用**
+协议族：`bpa.browser/2`
+Schema 版本：`2.0.0`
 
-Browser Protocol v1 连接 Browser Gateway 与 Extension Bridge。首个 Transport 是 Chrome Native Messaging，但 Workflow、Node 和执行语义不依赖具体 Transport。
+Browser Protocol v2 连接 Browser Gateway 与 Extension Bridge。首个 Transport 是 Chrome Native Messaging，但 Workflow、Node 和执行语义不依赖具体 Transport。
 
 ## 组件边界
 
@@ -39,8 +39,8 @@ Native Host 不解释 Workflow，不执行 Node，也不修改权限或业务参
 
 | 字段 | 含义 |
 | --- | --- |
-| `protocol` | 固定为 `bpa.browser/1` |
-| `version` | 当前 Schema 版本 `1.0.0` |
+| `protocol` | 固定为 `bpa.browser/2` |
+| `version` | 当前 Schema 版本 `2.0.0` |
 | `message_id` | 全局唯一；相同 ID 表示重复投递 |
 | `session_id` | 新会话使用 `new`，其余使用已建立 Session |
 | `seq` | 每个方向独立、单调递增 |
@@ -73,9 +73,15 @@ READY
 
 Resume Token 最长有效 24 小时。恢复成功后立即轮换，设备撤销时同步失效。Gateway 从未确认的 Command Sequence 开始重放。
 
-恢复沿用原 Browser Session 身份，只轮换 Resume Token。这样已经冻结到 Run 的
-Resource Binding 不会因为 Native Host 或 Extension 重连而失效。恢复仍会重新检查
-Extension ID、Browser Instance、Token 摘要与有效期。
+恢复沿用稳定的 Browser Instance 身份并重新解析当前标签页。临时 Session ID 和 Tab ID
+不能作为长期配置；旧 Binding 在重启或 page epoch 变化后进入 `needs_rebind`。
+
+## 页面观察与资源绑定
+
+Session 就绪不等于页面可执行。Content Script 加载、导航、SPA 路由、认证上下文变化和
+标签页离开都会触发 Adapter observer 探测。Core 只看到通用页面事实和不可解析的认证
+上下文摘要，并冻结 Browser Instance、Tab、Origin/path、capability、revision 与 page
+epoch。命令只能发往这个确切标签页，不回退到当前活动标签页。
 
 ## Command 生命周期
 

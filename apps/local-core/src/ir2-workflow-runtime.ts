@@ -514,7 +514,18 @@ export class Ir2WorkflowRuntime {
               errorCode: schemaFailureCode
             }
           }
-        : {}),
+        : {
+            eventPayload: {
+              invocationId: input.invocationId,
+              outcomeStatus: outcome.status,
+              ...(outcome.status === "succeeded"
+                ? {}
+                : {
+                    errorCode: outcome.error.code,
+                    riskSignals: jsonValue(outcome.riskSignals)
+                  })
+            }
+          }),
       inbox: {
         id: input.inboxMessageId,
         topic: "runtime.result",

@@ -14,7 +14,7 @@ if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
 if ((node -p 'process.platform + ":" + process.arch + ":" + process.versions.node.split(".")[0]') -ne "win32:x64:24") {
   throw "BPA Windows release must use Node.js 24 x64."
 }
-if (git status --porcelain=v1 --untracked-files=no) {
+if (git status --porcelain=v1 --untracked-files=all) {
   throw "Release packages must be built from a clean tracked Git checkout."
 }
 

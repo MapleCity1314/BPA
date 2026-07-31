@@ -276,10 +276,18 @@ export function createResourceBindingSnapshot(
 
 export interface ObservedBrowserSession {
   readonly sessionId: string;
+  readonly browserInstanceId: string;
+  readonly tabId: number;
+  readonly windowId?: number;
+  readonly observationRevision: number;
   readonly capabilityDigest: string;
   readonly capabilities: readonly string[];
   readonly origin: string;
+  readonly pathname: string;
+  readonly pageEpoch: string;
+  readonly observerCapabilityId?: string;
   readonly authentication: ResourceAuthentication;
+  readonly authenticationContextRef?: string;
   readonly state: "available" | "auth_required" | "revoked";
 }
 
@@ -288,9 +296,16 @@ export interface ResourceBindingValidationIssue {
     | "BINDING_SLOT_MISMATCH"
     | "SESSION_NOT_AVAILABLE"
     | "SESSION_MISMATCH"
+    | "BROWSER_INSTANCE_MISMATCH"
+    | "TAB_MISMATCH"
+    | "OBSERVATION_REVISION_MISMATCH"
     | "CAPABILITY_DIGEST_MISMATCH"
     | "CAPABILITY_MISSING"
     | "ORIGIN_MISMATCH"
+    | "PATHNAME_MISMATCH"
+    | "PAGE_EPOCH_MISMATCH"
+    | "OBSERVER_CAPABILITY_MISMATCH"
+    | "AUTHENTICATION_CONTEXT_MISMATCH"
     | "ORIGIN_NOT_ALLOWED"
     | "AUTHENTICATION_MISMATCH"
     | "AUTHENTICATION_INSUFFICIENT";
@@ -356,7 +371,16 @@ export function assertResourceBindingSnapshotForPlan(
       binding.slotName !== slotName ||
       !binding.bindingId.trim() ||
       !binding.sessionId.trim() ||
+      !binding.browserInstanceId.trim() ||
+      !Number.isSafeInteger(binding.tabId) ||
+      binding.tabId < 0 ||
+      (binding.windowId !== undefined &&
+        (!Number.isSafeInteger(binding.windowId) || binding.windowId < 0)) ||
       !/^sha256:[a-f0-9]{64}$/.test(binding.capabilityDigest) ||
+      !binding.pathname.startsWith("/") ||
+      !binding.pageEpoch.trim() ||
+      typeof binding.observerCapabilityId !== "string" ||
+      !binding.observerCapabilityId.trim() ||
       !Number.isSafeInteger(binding.revision) ||
       binding.revision < 1 ||
       !Number.isSafeInteger(binding.frozenAt) ||
@@ -410,6 +434,27 @@ export function validateInvocationResourceBinding(
       message: "Browser session differs from the frozen binding."
     });
   }
+  if (session.browserInstanceId !== binding.browserInstanceId) {
+    issues.push({
+      code: "BROWSER_INSTANCE_MISMATCH",
+      message: "Browser instance differs from the frozen binding."
+    });
+  }
+  if (
+    session.tabId !== binding.tabId ||
+    session.windowId !== binding.windowId
+  ) {
+    issues.push({
+      code: "TAB_MISMATCH",
+      message: "Browser tab differs from the frozen binding."
+    });
+  }
+  if (session.observationRevision !== binding.revision) {
+    issues.push({
+      code: "OBSERVATION_REVISION_MISMATCH",
+      message: "Page observation revision differs from the frozen binding."
+    });
+  }
   if (session.capabilityDigest !== binding.capabilityDigest) {
     issues.push({
       code: "CAPABILITY_DIGEST_MISMATCH",
@@ -431,6 +476,32 @@ export function validateInvocationResourceBinding(
     issues.push({
       code: "ORIGIN_MISMATCH",
       message: "Browser origin differs from the frozen binding."
+    });
+  }
+  if (session.pathname !== binding.pathname) {
+    issues.push({
+      code: "PATHNAME_MISMATCH",
+      message: "Browser pathname differs from the frozen binding."
+    });
+  }
+  if (session.pageEpoch !== binding.pageEpoch) {
+    issues.push({
+      code: "PAGE_EPOCH_MISMATCH",
+      message: "Browser page epoch differs from the frozen binding."
+    });
+  }
+  if (session.observerCapabilityId !== binding.observerCapabilityId) {
+    issues.push({
+      code: "OBSERVER_CAPABILITY_MISMATCH",
+      message: "Page observer capability differs from the frozen binding."
+    });
+  }
+  if (
+    session.authenticationContextRef !== binding.authenticationContextRef
+  ) {
+    issues.push({
+      code: "AUTHENTICATION_CONTEXT_MISMATCH",
+      message: "Authentication context differs from the frozen binding."
     });
   }
   if (!resource.requirement.allowedOrigins.includes(session.origin)) {

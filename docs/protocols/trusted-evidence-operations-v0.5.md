@@ -15,7 +15,7 @@
 - 编译进 Adapter 的页面就绪条件。
 
 它不开放浏览器写操作，不改变 IR2 执行身份、Assistance 授权边界或
-`bpa.browser/1@1.0.0` 的 Wire Schema。
+`bpa.browser/2@2.0.0` 的页面观察、定向绑定和 Wire Schema。
 
 ## 2. Source、Asset 与 Evidence
 

@@ -14,7 +14,7 @@ if [[ "$("$BUNDLED_NODE" -p 'process.platform + ":" + process.arch + ":" + proce
 fi
 
 cd "$PROJECT_ROOT"
-if [[ -n "$(git status --porcelain=v1 --untracked-files=no)" ]]; then
+if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
   print -u2 "Release packages must be built from a clean tracked Git checkout."
   exit 1
 fi

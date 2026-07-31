@@ -21,6 +21,11 @@ import {
   type ContentActionRequest
 } from "../lib/content-action-router";
 import { captureSemanticSnapshot } from "../lib/semantic-snapshot";
+import {
+  executeAllianceRetiredStage,
+  type AllianceRetiredStageRequest
+} from "../lib/alliance-retired-content";
+import { probeObservedPage } from "../lib/page-observer-registry";
 
 function waitForPageChange(maxWaitMs: number): Promise<void> {
   return new Promise((resolve) => {
@@ -287,19 +292,111 @@ export default defineContentScript({
   matches: [
     "https://fxg.jinritemai.com/ffa/g/list*",
     "https://fxg.jinritemai.com/ffa/g/create*",
+    "https://buyin.jinritemai.com/dashboard*",
     "https://www.chanmama.com/*"
   ],
   main() {
+    const announceReady = (): void => {
+      void browser.runtime.sendMessage({
+        type: "bpa.content.ready",
+        href: location.href,
+        observedAt: new Date().toISOString()
+      });
+    };
+    announceReady();
+    const notifyRouteChange = (): void => queueMicrotask(announceReady);
+    addEventListener("popstate", notifyRouteChange);
+    addEventListener("hashchange", notifyRouteChange);
+    const originalPushState = history.pushState.bind(history);
+    history.pushState = (data, unused, url) => {
+      originalPushState(data, unused, url);
+      notifyRouteChange();
+    };
+    const originalReplaceState = history.replaceState.bind(history);
+    history.replaceState = (data, unused, url) => {
+      originalReplaceState(data, unused, url);
+      notifyRouteChange();
+    };
+    let observationTimer: ReturnType<typeof setTimeout> | undefined;
+    const observationChanges =
+      document.documentElement && typeof MutationObserver !== "undefined"
+        ? new MutationObserver(() => {
+            if (observationTimer) clearTimeout(observationTimer);
+            observationTimer = setTimeout(announceReady, 500);
+          })
+        : undefined;
+    observationChanges?.observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true
+    });
     browser.runtime.onMessage.addListener(
       (
-        request: ContentActionRequest,
+        request: ContentActionRequest & {
+          type: string;
+          pageEpoch?: string;
+        },
         _sender,
         sendResponse
       ) => {
+        if (request.type === "bpa.content.probe") {
+          void probeObservedPage(document, location.href)
+            .then((result) =>
+              sendResponse({
+                pageEpoch: request.pageEpoch,
+                observerCapabilityId: result.observerCapabilityId,
+                authentication: result.authentication,
+                observationState: result.observationState,
+                ...(result.reasonCode
+                  ? { reasonCode: result.reasonCode }
+                  : {})
+              })
+            )
+            .catch((error) =>
+              sendResponse({
+                pageEpoch: request.pageEpoch,
+                observerCapabilityId: "unknown.page",
+                authentication: { state: "unknown" },
+                observationState: "stale",
+                reasonCode:
+                  error instanceof Error
+                    ? error.message
+                    : "PAGE_OBSERVER_FAILED"
+              })
+            );
+          return true;
+        }
         if (request.type === "bpa.risk.preflight") {
           sendResponse({
             riskSignals: detectDoudianRiskSignals(document, location.href)
           });
+          return true;
+        }
+        if (request.type === "bpa.doudian.alliance.stage") {
+          void executeAllianceRetiredStage(
+            (
+              request as ContentActionRequest & {
+                request: AllianceRetiredStageRequest;
+              }
+            ).request
+          )
+            .then((result) => sendResponse({ ok: true, result }))
+            .catch((error) =>
+              sendResponse({
+                ok: false,
+                error: {
+                  code:
+                    error instanceof Error
+                      ? error.message
+                      : "ALLIANCE_STAGE_FAILED",
+                  message:
+                    error instanceof Error
+                      ? error.message
+                      : String(error)
+                }
+              })
+            );
           return true;
         }
         if (request.type !== "bpa.execute") return undefined;

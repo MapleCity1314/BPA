@@ -1,0 +1,81 @@
+apiVersion: bpa/v1alpha2
+kind: Node
+metadata:
+  id: doudian.alliance.shops.discover
+  version: 1.0.0
+  title: 发现抖店联盟店铺
+  description: 从已绑定的抖店商品管理标签页读取完整可切换店铺列表，并冻结当前源店铺供后续逐店恢复。
+runtime: browser
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [maxShops]
+  properties:
+    maxShops:
+      type: integer
+      minimum: 1
+      maximum: 100
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [shops, sourceShop, discoveredShopCount, activeShopCount, skippedShopCount, observedAt]
+  properties:
+    shops:
+      type: array
+      minItems: 1
+      maxItems: 100
+      items: { $ref: "#/$defs/shop" }
+    sourceShop: { $ref: "#/$defs/shop" }
+    discoveredShopCount: { type: integer, minimum: 1, maximum: 100 }
+    activeShopCount: { type: integer, minimum: 1, maximum: 100 }
+    skippedShopCount: { type: integer, minimum: 0, maximum: 100 }
+    observedAt: { type: string, format: date-time }
+  $defs:
+    shop:
+      type: object
+      additionalProperties: false
+      required: [key, name, status, statusText]
+      properties:
+        key: { type: string, minLength: 3, maxLength: 120 }
+        id: { type: string, pattern: "^[0-9]{5,30}$" }
+        name: { type: string, minLength: 2, maxLength: 80 }
+        status: { enum: [active, blocked] }
+        statusText: { type: string, maxLength: 200 }
+risk:
+  level: R2
+  permissions: [browser.dom.read, browser.dom.write, browser.tabs.read, browser.tabs.navigate]
+  domains: [https://fxg.jinritemai.com]
+resources:
+  browser:
+    kind: browser
+    capabilities: [browser.dom.read, browser.dom.write, browser.tabs.read, browser.tabs.navigate]
+    allowedOrigins: [https://fxg.jinritemai.com]
+    authentication: authenticated
+    purpose: 从已认证抖店页面完整枚举当前账号可切换店铺
+execution:
+  timeoutDefault: 2m
+  idempotency: repeatable_read
+  retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED]
+  cancellable: true
+errors:
+  - AUTH_REQUIRED
+  - CAPTCHA_REQUIRED
+  - RISK_CONTROL
+  - SESSION_EXPIRED
+  - PAGE_MISMATCH
+  - PAGE_URL_INVALID
+  - ALLIANCE_STAGE_FAILED
+  - SHOP_SWITCH_DIALOG_TIMEOUT
+  - CURRENT_SHOP_NOT_IN_LIST
+  - SHOP_LIST_EMPTY
+  - SHOP_LIST_DUPLICATED
+  - SHOP_LIST_INCOMPLETE
+  - SHOP_LIMIT_EXCEEDED
+  - SHOP_IDENTITY_AMBIGUOUS
+  - SHOP_IDENTITY_DRIFT
+  - SHOP_IDENTITY_UNCONFIRMED
+  - DOUDIAN_ALLIANCE_MAX_SHOPS_INVALID
+  - DEADLINE_EXCEEDED
+  - COMMAND_CANCELLED
+evidence: { required: [result, error] }
+adapter: { id: doudian-alliance, versions: [1.0.0] }

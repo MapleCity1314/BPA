@@ -27,6 +27,7 @@ import type { StagingUploader } from "./staging-uploader.js";
 export const CONSOLE_CONTROL_METHODS = {
   doctor: "doctor",
   browserSessionList: "browser.session.list",
+  browserPageObservationList: "browser.page-observation.list",
   catalogList: "catalog.list",
   runCreate: "run.create",
   runInspect: "run.inspect",
@@ -319,7 +320,7 @@ export class UdsControlBackend implements ControlBackend {
   async getDashboard(): Promise<DashboardSnapshot> {
     const observedAt = this.#now().toISOString();
     try {
-      const [doctorValue, taskValue, sessionValue] = await Promise.all([
+      const [doctorValue, taskValue, pageValue] = await Promise.all([
         this.#client.request<unknown>(CONSOLE_CONTROL_METHODS.doctor),
         this.#client
           .request<unknown>(CONSOLE_CONTROL_METHODS.taskList, {
@@ -334,9 +335,10 @@ export class UdsControlBackend implements ControlBackend {
           })
           .catch(() => []),
         this.#client
-          .request<unknown>(CONSOLE_CONTROL_METHODS.browserSessionList, {
-            limit: 100
-          })
+          .request<unknown>(
+            CONSOLE_CONTROL_METHODS.browserPageObservationList,
+            { limit: 200 }
+          )
           .catch(() => [])
       ]);
       const doctor = record(doctorValue) ?? {};
@@ -344,52 +346,65 @@ export class UdsControlBackend implements ControlBackend {
       const browser = record(doctor.browser) ?? {};
       const browserReady = boolean(browser.ready);
       const browserConnected = boolean(browser.connected);
-      const persistedSessions = records(sessionValue);
+      const observedPages = records(pageValue);
       const browserSessions: BrowserSessionView[] =
-        persistedSessions.length > 0
-          ? persistedSessions.slice(-20).map((session) => {
+        observedPages.length > 0
+          ? observedPages.slice(0, 20).map((page) => {
               const observationState = text(
-                session.observationState,
+                page.observationState,
                 "unknown"
               );
-              const disconnected = typeof session.disconnectedAt === "string";
+              const contentReady = boolean(page.contentScriptReady);
+              const authentication = text(page.authentication);
+              const sessionId = text(page.sessionId);
+              const browserInstanceId = text(page.browserInstanceId);
+              const tabId = integer(page.tabId, -1);
+              const observationRevision = integer(page.revision, -1);
+              const validBinding =
+                sessionId.length > 0 &&
+                browserInstanceId.length > 0 &&
+                tabId >= 0 &&
+                observationRevision >= 1;
               return {
-                id: text(session.id),
-                label:
-                  text(session.role, "general") === "general"
-                    ? "Chrome 业务会话"
-                    : `Chrome · ${text(session.role)}`,
+                id: `${browserInstanceId}:${tabId}:${observationRevision}`,
+                label: `Chrome 标签页 ${tabId}`,
                 status:
-                  disconnected || observationState === "revoked"
+                  ["departed", "stale"].includes(observationState)
                     ? "offline"
-                    : observationState === "available"
+                    : observationState === "ready" && contentReady
                       ? "ready"
                       : "attention",
-                origin: text(session.observedOrigin, "等待选择业务来源"),
-                role: text(session.role, "浏览器自动化"),
+                origin: text(page.origin, "等待选择业务来源"),
+                role: text(page.observerCapabilityId, "浏览器页面"),
                 authenticated: ["authenticated", "membership"].includes(
-                  text(session.observedAuthentication)
+                  authentication
                 ),
-                lastSeenAt: safeTimestamp(
-                  session.observedAt,
-                  safeTimestamp(session.connectedAt, observedAt)
-                )
+                lastSeenAt: safeTimestamp(page.observedAt, observedAt),
+                ...(validBinding
+                  ? {
+                      binding: {
+                        sessionId,
+                        browserInstanceId,
+                        tabId,
+                        observationRevision
+                      }
+                    }
+                  : {})
               };
             })
           : browserConnected
             ? [
-            {
-              id: text(browser.sessionId, "browser-pending"),
-              label: browserReady ? "已连接的 Chrome" : "Chrome 正在准备",
-              status: browserReady ? "ready" : "attention",
-              origin: `chrome-extension://${text(
-                browser.extensionId,
-                "bpa-extension"
-              )}`,
-              role: "浏览器自动化",
-              authenticated: browserReady,
-              lastSeenAt: observedAt
-            }
+                {
+                  id: "browser-pending",
+                  label: browserReady
+                    ? "Chrome 已连接，等待页面"
+                    : "Chrome 正在准备",
+                  status: "attention",
+                  origin: "等待 Content Script 页面观察",
+                  role: "浏览器自动化",
+                  authenticated: false,
+                  lastSeenAt: observedAt
+                }
               ]
             : [];
       const pendingTaskCount = records(taskValue).length;

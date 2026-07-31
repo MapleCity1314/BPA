@@ -77,9 +77,13 @@ function invocation(
           revision: 1,
           slotName: "design_mode",
           sessionId: grant.browserSessionId,
+          browserInstanceId: "browser-1",
+          tabId: grant.tabId,
           capabilityDigest:
             "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           origin: grant.origin,
+          pathname: "/ffa/g/create",
+          pageEpoch: grant.pageEpoch,
           authentication: "authenticated",
           approvedBy: "operator",
           frozenAt: 1

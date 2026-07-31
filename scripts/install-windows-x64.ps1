@@ -64,8 +64,8 @@ $Manifest = Get-Content -LiteralPath $ManifestPath -Raw |
 if ($Manifest.platform -ne "win32" -or $Manifest.architecture -ne "x64") {
   throw "This package is not a Windows x64 BPA runtime."
 }
-if (($Manifest.nodeVersion -split "\.")[0] -ne "24") {
-  throw "BPA requires the bundled Node.js 24 runtime."
+if ([string]$Manifest.nodeVersion -ne "24.18.0") {
+  throw "BPA requires the pinned bundled Node.js 24.18.0 runtime."
 }
 $Version = [string]$Manifest.release.identity
 if (

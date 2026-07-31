@@ -1,0 +1,216 @@
+apiVersion: bpa/v1alpha3
+kind: Workflow
+metadata:
+  id: doudian.alliance-retired-products-monitor
+  version: 2.0.0
+  title: 抖店精选联盟逐店清退商品巡检
+  description: 枚举店铺后由 Workflow 逐店调用 Adapter Node，按店铺形成检查点并聚合完整性；调度时间不属于本 Workflow。
+spec:
+  riskLevel: R2
+  inputSchema:
+    type: object
+    additionalProperties: false
+    required: [maxShops]
+    properties:
+      maxShops: { type: integer, minimum: 1, maximum: 100, default: 100 }
+  outputSchema:
+    type: object
+    additionalProperties: false
+    required: [alert, notification, dailyRecord, scan]
+    properties:
+      alert: { type: boolean }
+      notification: { type: object }
+      dailyRecord: { type: object }
+      scan: { type: object }
+  limits:
+    maxDepth: 3
+    maxStepExecutions: 1000
+  resourceSlots:
+    alliance_browser:
+      kind: browser
+      capabilities: [browser.dom.read, browser.dom.write, browser.tabs.read, browser.tabs.navigate]
+      allowedOrigins: [https://fxg.jinritemai.com]
+      authentication: authenticated
+      purpose: 绑定一个确切且已认证的抖店商品管理标签页，由 Adapter 事务性进入联盟并恢复源店铺
+  root:
+    kind: sequence
+    steps:
+      - key: discover_shops
+        kind: call
+        use: doudian.alliance.shops.discover@1.0.0
+        with:
+          maxShops: ${input.maxShops}
+        timeout: 2m
+        resourceMappings:
+          browser: alliance_browser
+        retry:
+          maxAttempts: 2
+          backoff: 2s
+          retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED]
+        handlers:
+          failure:
+            kind: sequence
+            steps:
+              - key: discovery_failed
+                kind: terminal
+                status: uncertain
+                error:
+                  code: DOUDIAN_ALLIANCE_DISCOVERY_INCOMPLETE
+                  message: 店铺列表完整性未得到证明，禁止生成正常结论。
+          rejected:
+            kind: sequence
+            steps:
+              - key: discovery_blocked
+                kind: terminal
+                status: uncertain
+                error:
+                  code: DOUDIAN_ALLIANCE_DISCOVERY_BLOCKED
+                  message: 登录、验证码、风控或页面身份阻断了店铺发现。
+          timeout:
+            kind: sequence
+            steps:
+              - key: discovery_timeout
+                kind: terminal
+                status: uncertain
+                error:
+                  code: DOUDIAN_ALLIANCE_DISCOVERY_TIMEOUT
+                  message: 店铺发现超时，扫描完整性未知。
+      - key: scan_shops
+        kind: foreach
+        items: ${steps.discover_shops.output.shops}
+        itemName: shop
+        indexName: shop_index
+        itemKey: ${item.key}
+        maxItems: 100
+        maxDuration: 8h
+        onItemError: stop
+        body:
+          kind: sequence
+          steps:
+            - key: scan_shop
+              kind: call
+              use: doudian.alliance.shop.retired-products.scan@1.0.0
+              with:
+                shop: ${item}
+                sourceShop: ${steps.discover_shops.output.sourceShop}
+              timeout: 5m
+              resourceMappings:
+                browser: alliance_browser
+              retry:
+                maxAttempts: 2
+                backoff: 2s
+                retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED, ALLIANCE_TAB_TIMEOUT]
+              handlers:
+                failure:
+                  kind: sequence
+                  steps:
+                    - key: shop_failed
+                      kind: terminal
+                      status: failed
+                      error:
+                        code: DOUDIAN_ALLIANCE_SHOP_FAILED
+                        message: 当前店铺未完成，最终结果必须标记为部分完成。
+                rejected:
+                  kind: sequence
+                  steps:
+                    - key: shop_blocked
+                      kind: terminal
+                      status: failed
+                      error:
+                        code: DOUDIAN_ALLIANCE_SHOP_BLOCKED
+                        message: 阻断信号使剩余店铺不可安全继续；foreach 必须立即停止。
+                timeout:
+                  kind: sequence
+                  steps:
+                    - key: shop_timeout
+                      kind: terminal
+                      status: failed
+                      error:
+                        code: DOUDIAN_ALLIANCE_SHOP_TIMEOUT
+                        message: 当前店铺超时，最终结果必须标记为部分完成。
+      - key: aggregate_scan
+        kind: call
+        use: doudian.alliance.retired-products.aggregate@1.0.0
+        with:
+          foreachOutcome: ${steps.scan_shops.output}
+        timeout: 10s
+        resourceMappings:
+          browser: alliance_browser
+      - key: completeness_gate
+        kind: decision
+        condition:
+          kind: compare
+          operator: equals
+          left:
+            kind: binding
+            binding: ${steps.aggregate_scan.output.status}
+          right: { kind: literal, value: partial }
+        then:
+          kind: sequence
+          steps:
+            - key: partial_result
+              kind: terminal
+              status: uncertain
+              output:
+                alert: false
+                notification:
+                  shouldNotify: true
+                  level: error
+                  title: 精选联盟清退商品巡检不完整
+                  message: 部分店铺未完成，禁止发布今日正常结论。
+                dailyRecord:
+                  businessDate: ${steps.aggregate_scan.output.businessDate}
+                  observedAt: ${steps.aggregate_scan.output.observedAt}
+                  status: partial
+                scan: ${steps.aggregate_scan.output}
+              error:
+                code: DOUDIAN_ALLIANCE_SCAN_PARTIAL
+                message: 巡检结果不完整，需要运营处理失败店铺。
+        else:
+          kind: sequence
+          steps:
+            - key: alert_gate
+              kind: decision
+              condition:
+                kind: compare
+                operator: equals
+                left:
+                  kind: binding
+                  binding: ${steps.aggregate_scan.output.status}
+                right: { kind: literal, value: complete_with_items }
+              then:
+                kind: sequence
+                steps:
+                  - key: items_found
+                    kind: terminal
+                    status: succeeded
+                    output:
+                      alert: true
+                      notification:
+                        shouldNotify: true
+                        level: warning
+                        title: 精选联盟发现已清退商品
+                        message: 请运营立即查看逐店明细并处理。
+                      dailyRecord:
+                        businessDate: ${steps.aggregate_scan.output.businessDate}
+                        observedAt: ${steps.aggregate_scan.output.observedAt}
+                        status: complete_with_items
+                      scan: ${steps.aggregate_scan.output}
+              else:
+                kind: sequence
+                steps:
+                  - key: complete_empty
+                    kind: terminal
+                    status: succeeded
+                    output:
+                      alert: false
+                      notification:
+                        shouldNotify: false
+                        level: info
+                        title: 精选联盟清退商品日巡检完成
+                        message: 所有店铺完整扫描，未发现已清退商品。
+                      dailyRecord:
+                        businessDate: ${steps.aggregate_scan.output.businessDate}
+                        observedAt: ${steps.aggregate_scan.output.observedAt}
+                        status: complete_empty
+                      scan: ${steps.aggregate_scan.output}

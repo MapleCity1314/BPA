@@ -19,6 +19,11 @@ function scenario(): unknown {
 
 describe("Local Core Design Mode authorization", () => {
   it("binds an active Authoring Session to an exact available page resource", () => {
+    const issuedAt = new Date().toISOString();
+    const activatedAt = new Date(Date.parse(issuedAt) + 1_000).toISOString();
+    const expiresAt = new Date(
+      Date.parse(issuedAt) + 15 * 60_000
+    ).toISOString();
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const service = new LocalCoreService(persistence);
     expect(
@@ -50,6 +55,21 @@ describe("Local Core Design Mode authorization", () => {
       },
       now: "2026-07-30T04:00:00.000Z"
     });
+    persistence.upsertBrowserPageObservation({
+      sessionId: "browser-session-1",
+      browserInstanceId: "browser-1",
+      tabId: 7,
+      windowId: 3,
+      origin: "https://www.chanmama.com",
+      pathname: "/product/1001",
+      contentScriptReady: true,
+      authentication: "unknown",
+      observationState: "ready",
+      pageEpoch: "tab-7:1999999999999:design-1",
+      observerCapabilityId: "chanmama.page",
+      revision: 1,
+      observedAt: issuedAt
+    });
     const requested = service.handle({
       id: "design-request",
       method: "authoring.design-mode.request",
@@ -63,8 +83,8 @@ describe("Local Core Design Mode authorization", () => {
         origin: "https://www.chanmama.com",
         pageEpoch: "tab-7:1999999999999:design-1",
         screenshotApproved: false,
-        issuedAt: "2026-07-30T04:00:02.000Z",
-        expiresAt: "2026-07-30T04:15:02.000Z"
+        issuedAt,
+        expiresAt
       }
     });
     expect(requested).toMatchObject({
@@ -75,12 +95,13 @@ describe("Local Core Design Mode authorization", () => {
         allowedOperations: ["semantic_snapshot"]
       }
     });
-    expect(persistence.getBrowserSession("browser-session-1")).toMatchObject({
-      role: "design_mode",
-      observedOrigin: "https://www.chanmama.com",
-      observedAuthentication: "optional",
-      observationState: "available",
-      observationRevision: 1
+    expect(
+      persistence.getBrowserPageObservation("browser-session-1", 7)
+    ).toMatchObject({
+      origin: "https://www.chanmama.com",
+      authentication: "unknown",
+      observationState: "ready",
+      revision: 1
     });
     expect(
       service.handle({
@@ -90,7 +111,7 @@ describe("Local Core Design Mode authorization", () => {
           grantId: "design.grant-1",
           expectedRevision: 0,
           actor: "operator:test",
-          occurredAt: "2026-07-30T04:00:03.000Z"
+          occurredAt: activatedAt
         }
       })
     ).toMatchObject({
@@ -112,8 +133,8 @@ describe("Local Core Design Mode authorization", () => {
           origin: "https://fxg.jinritemai.com",
           pageEpoch: "tab-7:1999999999999:design-2",
           screenshotApproved: false,
-          issuedAt: "2026-07-30T04:00:02.000Z",
-          expiresAt: "2026-07-30T04:15:02.000Z"
+          issuedAt,
+          expiresAt
         }
       })
     ).toMatchObject({ ok: false });

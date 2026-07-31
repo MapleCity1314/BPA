@@ -1,5 +1,6 @@
 import { useMemo, useState, type FormEvent } from "react";
 import type {
+  BrowserPageBindingSelection,
   BrowserSessionView,
   DashboardSnapshot,
   DesignModeGrantInput,
@@ -450,7 +451,9 @@ export function WorkflowWizard({
     workflows[0] ? `${workflows[0].id}@${workflows[0].version}` : ""
   );
   const [inputs, setInputs] = useState<Record<string, string | number | boolean>>({});
-  const [bindings, setBindings] = useState<Record<string, string>>({});
+  const [bindings, setBindings] = useState<
+    Record<string, BrowserPageBindingSelection>
+  >({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const workflow = workflows.find(
@@ -553,19 +556,33 @@ export function WorkflowWizard({
                     {slot.label}
                     <select
                       required
-                      value={bindings[slot.key] ?? ""}
-                      onChange={(event) =>
-                        setBindings((current) => ({
-                          ...current,
-                          [slot.key]: event.target.value
-                        }))
+                      value={
+                        sessions.find(
+                          (session) =>
+                            session.binding === bindings[slot.key]
+                        )?.id ?? ""
                       }
+                      onChange={(event) => {
+                        const selected = sessions.find(
+                          (session) => session.id === event.target.value
+                        );
+                        setBindings((current) => {
+                          const next = { ...current };
+                          if (selected?.binding) {
+                            next[slot.key] = selected.binding;
+                          } else {
+                            delete next[slot.key];
+                          }
+                          return next;
+                        });
+                      }}
                     >
                       <option value="">请选择浏览器会话</option>
                       {sessions
                         .filter(
                           (session) =>
                             session.status === "ready" &&
+                            session.binding !== undefined &&
                             (!slot.requiredOrigin ||
                               session.origin.startsWith(slot.requiredOrigin))
                         )

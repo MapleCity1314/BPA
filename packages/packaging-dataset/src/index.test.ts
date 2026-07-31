@@ -152,4 +152,27 @@ describe("packaging-master-v1 Excel profile", () => {
       })
     ).toThrow("safe .xlsx");
   });
+
+  it("rejects unsafe ZIP paths and extreme compression before XML parsing", () => {
+    const unsafePath = parsePackagingDataset({
+      bytes: zipSync({ "../xl/workbook.xml": strToU8("<workbook/>") }),
+      fileName: "master.xlsx",
+      version: "1.0.0"
+    });
+    expect(unsafePath.status).toBe("invalid");
+    expect(unsafePath.errors[0]).toContain("不安全路径");
+
+    const compressedBomb = parsePackagingDataset({
+      bytes: zipSync(
+        {
+          "xl/workbook.xml": new Uint8Array(2 * 1024 * 1024).fill(65)
+        },
+        { level: 9 }
+      ),
+      fileName: "master.xlsx",
+      version: "1.0.0"
+    });
+    expect(compressedBomb.status).toBe("invalid");
+    expect(compressedBomb.errors[0]).toContain("压缩比");
+  });
 });

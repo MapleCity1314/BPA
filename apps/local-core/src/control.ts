@@ -172,8 +172,8 @@ export class LocalCoreService {
       resolveResourceBindingSnapshot: (runId) =>
         persistence.getRunResourceBindingSnapshot(runId),
       browserSessions: {
-        getBrowserSession: (sessionId) =>
-          this.#resourceBindings.resolveBrowserSession(sessionId)
+        getBrowserSession: (binding) =>
+          this.#resourceBindings.resolveBrowserBinding(binding)
       }
     });
     const assistanceValidator: AssistanceResultValidator = {
@@ -444,7 +444,7 @@ export class LocalCoreService {
         return {
           status: "ok",
           persistence: this.persistence.health(),
-          protocol: "bpa.browser/1",
+          protocol: "bpa.browser/2",
           browser: this.browserGateway?.status() ?? {
             connected: false,
             ready: false
@@ -714,7 +714,50 @@ export class LocalCoreService {
             200,
             Math.max(1, Number(params.limit) || 100)
           )
-        }).records;
+        }).records.map((session) => ({
+          ...session,
+          capabilities: this.persistence
+            .listBrowserCapabilities(session.id)
+            .map((capability) => ({
+              nodeId: capability.nodeId,
+              nodeVersion: capability.nodeVersion,
+              permissions: capability.permissions
+            }))
+        }));
+      case "browser.page-observation.list":
+        return this.persistence.listBrowserPageObservations({
+          limit: Math.min(500, Math.max(1, Number(params.limit) || 200)),
+          ...(params.sessionId === undefined
+            ? {}
+            : { sessionId: String(params.sessionId) }),
+          ...(params.browserInstanceId === undefined
+            ? {}
+            : { browserInstanceId: String(params.browserInstanceId) })
+        });
+      case "browser.page-observation.probe":
+        if (!this.browserGateway) {
+          throw new Error("BROWSER_BRIDGE_DISCONNECTED");
+        }
+        return this.browserGateway.requestPageProbe({
+          sessionId: String(params.sessionId),
+          browserInstanceId: String(params.browserInstanceId),
+          tabId: Number(params.tabId),
+          ...(params.windowId === undefined
+            ? {}
+            : { windowId: Number(params.windowId) }),
+          origin: String(params.origin),
+          ...(params.timeoutMs === undefined
+            ? {}
+            : { timeoutMs: Number(params.timeoutMs) })
+        });
+      case "browser.resource-binding.resolve":
+        return this.#resolveWorkflowResources(
+          String(params.workflowId),
+          String(params.workflowVersion),
+          params.browserInstanceId === undefined
+            ? undefined
+            : String(params.browserInstanceId)
+        );
       case "staging.lease.create":
         if (!this.stagingTransfers) {
           throw new Error("Staging transfer service is unavailable");
@@ -1283,6 +1326,40 @@ export class LocalCoreService {
     const run = this.engine.start(compiled, safeInput);
     this.browserGateway?.dispatchPending();
     return run;
+  }
+
+  #resolveWorkflowResources(
+    workflowId: string,
+    workflowVersion: string,
+    browserInstanceId?: string
+  ): unknown {
+    const artifact = this.persistence.getPublished(
+      "workflow",
+      workflowId,
+      workflowVersion
+    );
+    if (!artifact) {
+      throw new Error(
+        `Published workflow not found: ${workflowId}@${workflowVersion}`
+      );
+    }
+    if (
+      artifact.content === null ||
+      typeof artifact.content !== "object" ||
+      !["bpa/v1alpha2", "bpa/v1alpha3"].includes(
+        String((artifact.content as { apiVersion?: unknown }).apiVersion)
+      )
+    ) {
+      throw new Error("BROWSER_RESOURCE_RESOLUTION_REQUIRES_IR2");
+    }
+    const plan = compileCanonicalWorkflow(
+      artifact.content,
+      this.#ir2Catalog()
+    );
+    return this.#resourceBindings.resolveForPlan(
+      plan,
+      browserInstanceId
+    );
   }
 
   #singleNodePlan(

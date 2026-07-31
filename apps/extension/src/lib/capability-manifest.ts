@@ -1,9 +1,15 @@
 import type { BridgeCapability } from "@bpa/browser-bridge";
 
-export const BROWSER_PROTOCOL = "bpa.browser/1";
+export const BROWSER_PROTOCOL = "bpa.browser/2";
 export const DOUDIAN_ADAPTER_VERSION = "1.2.0";
 export const DOUDIAN_ORIGIN = "https://fxg.jinritemai.com";
+export const DOUDIAN_BUYIN_ORIGIN = "https://buyin.jinritemai.com";
 export const CHANMAMA_ORIGIN = "https://www.chanmama.com";
+export const BROWSER_FEATURES = [
+  "page_observation_v2",
+  "exact_tab_binding_v2",
+  "active_page_probe_v1"
+] as const;
 
 export type ExtensionNodeId =
   | "browser.design.snapshot.capture"
@@ -11,19 +17,27 @@ export type ExtensionNodeId =
   | "doudian.product.scope.collect"
   | "doudian.product.scope.restore"
   | "doudian.product.editor.open"
-  | "doudian.editor.priority-items.inspect";
+  | "doudian.editor.priority-items.inspect"
+  | "doudian.alliance.shops.discover"
+  | "doudian.alliance.shop.retired-products.scan"
+  | "doudian.alliance.retired-products.aggregate";
 
 export interface ExtensionCapability {
   readonly nodeId: ExtensionNodeId;
   readonly versions: readonly string[];
-  readonly riskLevel: "R0";
+  readonly riskLevel: "R0" | "R2";
   readonly permissions: readonly string[];
-  readonly origins: readonly string[];
-  readonly pathnames?: readonly string[];
+  readonly routes: readonly {
+    readonly origin: string;
+    readonly pathnamePrefixes: readonly string[];
+    readonly observerCapabilityId: string;
+  }[];
   readonly adapter?: {
-    readonly id: "doudian";
-    readonly version: typeof DOUDIAN_ADAPTER_VERSION;
+    readonly id: "doudian" | "doudian-alliance";
+    readonly version: string;
   };
+  readonly executionTarget?: "background";
+  readonly includePageContext?: boolean;
 }
 
 const READ_ONLY_PERMISSIONS = [
@@ -41,24 +55,47 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
       "browser.tabs.read",
       "page-model.design.read"
     ],
-    origins: [DOUDIAN_ORIGIN, CHANMAMA_ORIGIN]
+    routes: [
+      {
+        origin: DOUDIAN_ORIGIN,
+        pathnamePrefixes: ["/ffa/"],
+        observerCapabilityId: "doudian.page"
+      },
+      {
+        origin: CHANMAMA_ORIGIN,
+        pathnamePrefixes: ["/"],
+        observerCapabilityId: "chanmama.page"
+      }
+    ],
+    includePageContext: true
   },
   {
     nodeId: "doudian.shop.context.read",
     versions: ["1.0.0", "1.1.0", "1.2.0", "1.3.0"],
     riskLevel: "R0",
     permissions: READ_ONLY_PERMISSIONS,
-    origins: [DOUDIAN_ORIGIN],
-    pathnames: ["/ffa/g/list"],
-    adapter: { id: "doudian", version: DOUDIAN_ADAPTER_VERSION }
+    routes: [
+      {
+        origin: DOUDIAN_ORIGIN,
+        pathnamePrefixes: ["/ffa/g/list"],
+        observerCapabilityId: "doudian.page"
+      }
+    ],
+    adapter: { id: "doudian", version: DOUDIAN_ADAPTER_VERSION },
+    includePageContext: true
   },
   {
     nodeId: "doudian.product.scope.collect",
     versions: ["1.0.0", "1.1.0"],
     riskLevel: "R0",
     permissions: READ_ONLY_PERMISSIONS,
-    origins: [DOUDIAN_ORIGIN],
-    pathnames: ["/ffa/g/list"],
+    routes: [
+      {
+        origin: DOUDIAN_ORIGIN,
+        pathnamePrefixes: ["/ffa/g/list"],
+        observerCapabilityId: "doudian.page"
+      }
+    ],
     adapter: { id: "doudian", version: DOUDIAN_ADAPTER_VERSION }
   },
   {
@@ -70,8 +107,13 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
       "browser.tabs.read",
       "browser.tabs.navigate"
     ],
-    origins: [DOUDIAN_ORIGIN],
-    pathnames: ["/ffa/g/list"],
+    routes: [
+      {
+        origin: DOUDIAN_ORIGIN,
+        pathnamePrefixes: ["/ffa/g/list"],
+        observerCapabilityId: "doudian.page"
+      }
+    ],
     adapter: { id: "doudian", version: DOUDIAN_ADAPTER_VERSION }
   },
   {
@@ -83,54 +125,196 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
       "browser.tabs.read",
       "browser.tabs.navigate"
     ],
-    origins: [DOUDIAN_ORIGIN],
-    pathnames: ["/ffa/g/create"],
-    adapter: { id: "doudian", version: DOUDIAN_ADAPTER_VERSION }
+    routes: [
+      {
+        origin: DOUDIAN_ORIGIN,
+        pathnamePrefixes: ["/ffa/g/create"],
+        observerCapabilityId: "doudian.page"
+      }
+    ],
+    adapter: { id: "doudian", version: DOUDIAN_ADAPTER_VERSION },
+    includePageContext: true
   },
   {
     nodeId: "doudian.editor.priority-items.inspect",
     versions: ["1.0.0", "1.1.0"],
     riskLevel: "R0",
     permissions: READ_ONLY_PERMISSIONS,
-    origins: [DOUDIAN_ORIGIN],
-    pathnames: ["/ffa/g/create"],
+    routes: [
+      {
+        origin: DOUDIAN_ORIGIN,
+        pathnamePrefixes: ["/ffa/g/create"],
+        observerCapabilityId: "doudian.page"
+      }
+    ],
     adapter: { id: "doudian", version: DOUDIAN_ADAPTER_VERSION }
+  },
+  {
+    nodeId: "doudian.alliance.shops.discover",
+    versions: ["1.0.0"],
+    riskLevel: "R2",
+    permissions: [
+      "browser.dom.read",
+      "browser.dom.write",
+      "browser.tabs.read",
+      "browser.tabs.navigate"
+    ],
+    routes: [
+      {
+        origin: DOUDIAN_ORIGIN,
+        pathnamePrefixes: ["/ffa/g/list"],
+        observerCapabilityId: "doudian.page"
+      }
+    ],
+    adapter: { id: "doudian-alliance", version: "1.0.0" },
+    executionTarget: "background"
+  },
+  {
+    nodeId: "doudian.alliance.shop.retired-products.scan",
+    versions: ["1.0.0"],
+    riskLevel: "R2",
+    permissions: [
+      "browser.dom.read",
+      "browser.dom.write",
+      "browser.tabs.read",
+      "browser.tabs.navigate"
+    ],
+    routes: [
+      {
+        origin: DOUDIAN_ORIGIN,
+        pathnamePrefixes: ["/ffa/g/list"],
+        observerCapabilityId: "doudian.page"
+      },
+      {
+        origin: DOUDIAN_BUYIN_ORIGIN,
+        pathnamePrefixes: ["/dashboard"],
+        observerCapabilityId: "buyin.page"
+      }
+    ],
+    adapter: { id: "doudian-alliance", version: "1.0.0" },
+    executionTarget: "background"
+  },
+  {
+    nodeId: "doudian.alliance.retired-products.aggregate",
+    versions: ["1.0.0"],
+    riskLevel: "R0",
+    permissions: READ_ONLY_PERMISSIONS,
+    routes: [
+      {
+        origin: DOUDIAN_ORIGIN,
+        pathnamePrefixes: ["/ffa/g/list"],
+        observerCapabilityId: "doudian.page"
+      }
+    ],
+    adapter: { id: "doudian-alliance", version: "1.0.0" },
+    executionTarget: "background"
   }
 ];
 
-/**
- * Digest of the canonical public projection in `capabilityReport`.
- * Updating a capability requires updating this value and its fixture test.
- */
-export const CAPABILITY_MANIFEST_DIGEST =
-  "sha256:def82ff7eb616e77fc73d5fab278461a487752fc2addd88500e9e974c4d86aac";
-
-export function capabilityReport(): {
+export interface ExtensionCapabilityReport {
   capabilities: Array<{
     node_id: ExtensionNodeId;
     versions: string[];
-    risk_level: "R0";
+    risk_level: "R0" | "R2";
     permissions: string[];
-    adapter_id?: "doudian";
-    adapter_version?: typeof DOUDIAN_ADAPTER_VERSION;
+    routes: Array<{
+      origin: string;
+      pathname_prefixes: string[];
+      observer_capability_id: string;
+    }>;
+    adapter_id?: "doudian" | "doudian-alliance";
+    adapter_version?: string;
   }>;
-  manifest_digest: typeof CAPABILITY_MANIFEST_DIGEST;
-} {
-  return {
-    capabilities: EXTENSION_CAPABILITIES.map((capability) => ({
+  manifest_digest: `sha256:${string}`;
+  features: [...typeof BROWSER_FEATURES];
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, child]) => child !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function publicCapabilities(): ExtensionCapabilityReport["capabilities"] {
+  return EXTENSION_CAPABILITIES.map((capability) => ({
       node_id: capability.nodeId,
       versions: [...capability.versions],
       risk_level: capability.riskLevel,
       permissions: [...capability.permissions],
+      routes: capability.routes.map((route) => ({
+        origin: route.origin,
+        pathname_prefixes: [...route.pathnamePrefixes],
+        observer_capability_id: route.observerCapabilityId
+      })),
       ...(capability.adapter
         ? {
             adapter_id: capability.adapter.id,
             adapter_version: capability.adapter.version
           }
         : {})
-    })),
-    manifest_digest: CAPABILITY_MANIFEST_DIGEST
+    }));
+}
+
+export async function capabilityReport(): Promise<ExtensionCapabilityReport> {
+  const capabilities = publicCapabilities();
+  const features = [...BROWSER_FEATURES] as [...typeof BROWSER_FEATURES];
+  const bytes = new TextEncoder().encode(
+    canonicalJson({ capabilities, features })
+  );
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const hex = [...new Uint8Array(digest)]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+  return {
+    capabilities,
+    features,
+    manifest_digest: `sha256:${hex}`
   };
+}
+
+export function capabilityForUrl(value: string): ExtensionCapability | undefined {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+  return EXTENSION_CAPABILITIES.find(
+    (capability) =>
+      capability.routes.some(
+        (route) =>
+          route.origin === url.origin &&
+          route.pathnamePrefixes.some((prefix) =>
+            url.pathname.startsWith(prefix)
+          )
+      )
+  );
+}
+
+export function observerCapabilityForUrl(value: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+  for (const capability of EXTENSION_CAPABILITIES) {
+    const route = capability.routes.find(
+      (candidate) =>
+        candidate.origin === url.origin &&
+        candidate.pathnamePrefixes.some((prefix) =>
+          url.pathname.startsWith(prefix)
+        )
+    );
+    if (route) return route.observerCapabilityId;
+  }
+  return undefined;
 }
 
 export type CapabilityRouteResult =
@@ -181,13 +365,13 @@ export function validateCapabilityRoute(input: {
   } catch {
     return { valid: false, reason: "PAGE_URL_INVALID" };
   }
-  if (!knownNode.origins.includes(url.origin)) {
+  const route = knownNode.routes.find(
+    (candidate) => candidate.origin === url.origin
+  );
+  if (!route) {
     return { valid: false, reason: "PAGE_ORIGIN_MISMATCH" };
   }
-  if (
-    knownNode.pathnames &&
-    !knownNode.pathnames.includes(url.pathname)
-  ) {
+  if (!route.pathnamePrefixes.some((prefix) => url.pathname.startsWith(prefix))) {
     return { valid: false, reason: "PAGE_PATH_MISMATCH" };
   }
   if (

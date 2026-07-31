@@ -27,7 +27,7 @@ import {
 const examples = JSON.parse(
   readFileSync(
     new URL(
-      "../../../docs/protocols/examples/browser-protocol-v1.messages.json",
+      "../../../docs/protocols/examples/browser-protocol-v2.messages.json",
       import.meta.url
     ),
     "utf8"

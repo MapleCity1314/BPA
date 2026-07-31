@@ -175,7 +175,7 @@ export interface ResolvedTimingPolicy {
     readonly distribution: "uniform";
   };
   readonly rateLimit?: {
-    readonly scope: "domain" | "shop" | "tab";
+    readonly scope: "domain" | "authentication_context" | "tab";
     readonly minIntervalMs: number;
     readonly maxQueueMs: number;
   };
@@ -245,12 +245,20 @@ export interface ResourceSlotMappingSnapshot {
 
 export interface ResourceBindingRef {
   readonly bindingId: string;
+  /** Exact per-tab observation revision frozen for this Run. */
   readonly revision: number;
   readonly slotName: string;
   readonly sessionId: string;
+  readonly browserInstanceId: string;
+  readonly tabId: number;
+  readonly windowId?: number;
   readonly capabilityDigest: string;
   readonly origin: string;
+  readonly pathname: string;
+  readonly pageEpoch: string;
+  readonly observerCapabilityId?: string;
   readonly authentication: ResourceAuthentication;
+  readonly authenticationContextRef?: string;
   readonly frozenAt: number;
   readonly approvedBy: string;
 }

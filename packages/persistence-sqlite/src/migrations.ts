@@ -1080,5 +1080,118 @@ export const migrations: Migration[] = [
         SELECT RAISE(ABORT, 'candidate exports are immutable');
       END;
     `
+  },
+  {
+    version: 10,
+    sql: `
+      CREATE TABLE browser_page_observations (
+        session_id TEXT NOT NULL
+          REFERENCES browser_sessions(id) ON DELETE CASCADE,
+        browser_instance_id TEXT NOT NULL,
+        tab_id INTEGER NOT NULL CHECK (tab_id >= 0),
+        window_id INTEGER CHECK (window_id IS NULL OR window_id >= 0),
+        origin TEXT NOT NULL,
+        pathname TEXT NOT NULL,
+        content_script_ready INTEGER NOT NULL CHECK (
+          content_script_ready IN (0, 1)
+        ),
+        authentication TEXT NOT NULL CHECK (
+          authentication IN (
+            'unknown', 'anonymous', 'authenticated', 'membership'
+          )
+        ),
+        observation_state TEXT NOT NULL CHECK (
+          observation_state IN (
+            'content_script_missing', 'loading', 'auth_required',
+            'challenge', 'available', 'invalidated'
+          )
+        ),
+        page_epoch TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        observed_at TEXT NOT NULL,
+        shop_identity_json TEXT,
+        reason_code TEXT,
+        PRIMARY KEY(session_id, tab_id)
+      ) STRICT;
+
+      CREATE INDEX browser_page_observations_instance_page
+        ON browser_page_observations(
+          browser_instance_id, origin, pathname, observation_state, observed_at
+        );
+      CREATE INDEX browser_page_observations_session
+        ON browser_page_observations(session_id, observed_at);
+    `
+  },
+  {
+    version: 11,
+    sql: `
+      ALTER TABLE browser_capabilities
+        ADD COLUMN routes_json TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE browser_capabilities ADD COLUMN adapter_id TEXT;
+      ALTER TABLE browser_capabilities ADD COLUMN adapter_version TEXT;
+
+      CREATE TABLE browser_page_observations_v11 (
+        session_id TEXT NOT NULL
+          REFERENCES browser_sessions(id) ON DELETE CASCADE,
+        browser_instance_id TEXT NOT NULL,
+        tab_id INTEGER NOT NULL CHECK (tab_id >= 0),
+        window_id INTEGER CHECK (window_id IS NULL OR window_id >= 0),
+        origin TEXT NOT NULL,
+        pathname TEXT NOT NULL,
+        content_script_ready INTEGER NOT NULL CHECK (
+          content_script_ready IN (0, 1)
+        ),
+        authentication TEXT NOT NULL CHECK (
+          authentication IN (
+            'unknown', 'anonymous', 'authenticated', 'membership'
+          )
+        ),
+        authentication_context_ref TEXT,
+        observation_state TEXT NOT NULL CHECK (
+          observation_state IN (
+            'content_script_missing', 'loading', 'probing',
+            'auth_required', 'challenge', 'ready', 'departed', 'stale'
+          )
+        ),
+        page_epoch TEXT NOT NULL,
+        observer_capability_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        observed_at TEXT NOT NULL,
+        reason_code TEXT,
+        PRIMARY KEY(session_id, tab_id),
+        CHECK (
+          authentication NOT IN ('authenticated', 'membership') OR
+          authentication_context_ref IS NOT NULL
+        )
+      ) STRICT;
+
+      INSERT INTO browser_page_observations_v11(
+        session_id, browser_instance_id, tab_id, window_id, origin, pathname,
+        content_script_ready, authentication, authentication_context_ref,
+        observation_state, page_epoch, observer_capability_id, revision,
+        observed_at, reason_code
+      )
+      SELECT
+        session_id, browser_instance_id, tab_id, window_id, origin, pathname,
+        0, 'unknown', NULL, 'stale', page_epoch, 'legacy.unknown', revision + 1,
+        observed_at, 'PROTOCOL_V2_REBIND_REQUIRED'
+      FROM browser_page_observations;
+
+      DROP TABLE browser_page_observations;
+      ALTER TABLE browser_page_observations_v11
+        RENAME TO browser_page_observations;
+
+      CREATE INDEX browser_page_observations_instance_page
+        ON browser_page_observations(
+          browser_instance_id, origin, pathname, observation_state, observed_at
+        );
+      CREATE INDEX browser_page_observations_session
+        ON browser_page_observations(session_id, observed_at);
+      CREATE INDEX browser_page_observations_expiry
+        ON browser_page_observations(observation_state, observed_at);
+      CREATE INDEX workflow_runs_active_updated
+        ON workflow_runs(status, updated_at)
+        WHERE status NOT IN ('succeeded', 'failed', 'cancelled', 'uncertain');
+    `
   }
 ];

@@ -5,8 +5,7 @@ import {
 } from "@bpa/adapter-doudian";
 import {
   validPageEpoch,
-  validateCapabilityRoute,
-  type ExtensionNodeId
+  validateCapabilityRoute
 } from "./capability-manifest";
 
 export interface ContentActionRequest {
@@ -316,8 +315,15 @@ export async function routeContentAction(input: {
     );
   }
 
+  if (route.capability.executionTarget === "background") {
+    return failure(
+      "BACKGROUND_ORCHESTRATION_REQUIRED",
+      "该跨标签页能力只能由受信任的扩展后台编排。",
+      request.pageEpoch
+    );
+  }
   const handler = input.handlers[
-    route.capability.nodeId as ExtensionNodeId
+    route.capability.nodeId as keyof ContentActionHandlers
   ] as (
     actionInput: Readonly<Record<string, unknown>>,
     actionRequest: ContentActionRequest

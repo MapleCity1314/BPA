@@ -232,12 +232,25 @@ function parseRunInput(value: unknown): CreateRunInput {
       throw new HttpError(400, "INVALID_REQUEST", "工作流输入字段无效。");
     }
   }
-  const resourceBindings: Record<string, string> = {};
+  const resourceBindings: CreateRunInput["resourceBindings"] = {};
   for (const [key, binding] of Object.entries(bindings)) {
-    if (typeof binding !== "string" || !binding) {
+    const candidate = asRecord(binding);
+    if (
+      typeof candidate.sessionId !== "string" ||
+      !candidate.sessionId ||
+      typeof candidate.browserInstanceId !== "string" ||
+      !candidate.browserInstanceId ||
+      !Number.isSafeInteger(candidate.tabId) ||
+      !Number.isSafeInteger(candidate.observationRevision)
+    ) {
       throw new HttpError(400, "INVALID_REQUEST", "浏览器资源绑定无效。");
     }
-    resourceBindings[key] = binding;
+    resourceBindings[key] = {
+      sessionId: candidate.sessionId,
+      browserInstanceId: candidate.browserInstanceId,
+      tabId: candidate.tabId as number,
+      observationRevision: candidate.observationRevision as number
+    };
   }
   return {
     workflowId: requiredString(record, "workflowId"),

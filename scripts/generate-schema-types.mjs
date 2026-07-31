@@ -34,7 +34,7 @@ const schemas = [
   "evidence.schema.json",
   "timing-policy.schema.json",
   "risk-signal.schema.json",
-  "browser-protocol-v1.schema.json"
+  "browser-protocol-v2.schema.json"
 ];
 const check = process.argv.includes("--check");
 const normalizeGeneratedText = (value) => value.replace(/\r\n?/gu, "\n");
@@ -51,7 +51,7 @@ for (const filename of schemas) {
     filename === "workflow.schema.json" ||
     filename === "workflow-v1alpha2.schema.json" ||
     filename === "workflow-v1alpha3.schema.json" ||
-    filename === "browser-protocol-v1.schema.json"
+    filename === "browser-protocol-v2.schema.json"
   ) {
     const timingPolicySchema = JSON.parse(
       await readFile(
@@ -70,7 +70,7 @@ for (const filename of schemas) {
     );
     schema = JSON.parse(serialized);
   }
-  if (filename === "browser-protocol-v1.schema.json") {
+  if (filename === "browser-protocol-v2.schema.json") {
     const permissionSchema = JSON.parse(
       await readFile(
         join(schemaDirectory, "permission.schema.json"),
@@ -124,7 +124,7 @@ const permissionSchema = JSON.parse(
 );
 const browserProtocolSchema = JSON.parse(
   await readFile(
-    join(schemaDirectory, "browser-protocol-v1.schema.json"),
+    join(schemaDirectory, "browser-protocol-v2.schema.json"),
     "utf8"
   )
 );
@@ -152,7 +152,7 @@ const validatorSource = normalizeGeneratedText(
     ""
   ].join("\n")
 );
-const validatorName = "browser_protocol_v1.validator.ts";
+const validatorName = "browser_protocol_v2.validator.ts";
 const validatorPath = join(outputDirectory, validatorName);
 if (check) {
   const current = normalizeGeneratedText(

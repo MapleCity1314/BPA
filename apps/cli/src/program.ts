@@ -44,6 +44,14 @@ function integerOption(value: string): number {
   return parsed;
 }
 
+function waitSecondsOption(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 86_400) {
+    throw new InvalidArgumentError("must be an integer between 1 and 86400");
+  }
+  return parsed;
+}
+
 export function createCliProgram(options: CliProgramOptions): Command {
   const { client, actor } = options;
   const output = options.writeOutput ?? defaultOutput;
@@ -239,6 +247,139 @@ export function createCliProgram(options: CliProgramOptions): Command {
           )
         })
       );
+    });
+
+  program
+    .command("browser-sessions")
+    .description("list bounded local Browser Sessions")
+    .option("--limit <limit>", "maximum sessions", integerOption, 100)
+    .action(async (commandOptions) => {
+      output(
+        await client.request("browser.session.list", {
+          limit: commandOptions.limit as number
+        })
+      );
+    });
+
+  program
+    .command("browser-pages")
+    .description("list bounded per-tab Browser page observations")
+    .option("--limit <limit>", "maximum observations", integerOption, 200)
+    .option("--browser-instance-id <instance>", "stable Browser Instance")
+    .action(async (commandOptions) => {
+      output(
+        await client.request("browser.page-observation.list", {
+          limit: commandOptions.limit as number,
+          ...(commandOptions.browserInstanceId
+            ? {
+                browserInstanceId:
+                  commandOptions.browserInstanceId as string
+              }
+            : {})
+        })
+      );
+    });
+
+  program
+    .command("workflow-run")
+    .description("resolve browser resources and run any published Workflow")
+    .argument("<workflow-id>", "published Workflow ID")
+    .requiredOption("--version <version>", "published Workflow version")
+    .option("--input <json>", "Workflow input JSON", "{}")
+    .option(
+      "--browser-instance-id <instance>",
+      "stable Chrome Browser Instance"
+    )
+    .option(
+      "--wait-seconds <seconds>",
+      "terminal wait limit",
+      waitSecondsOption,
+      28_800
+    )
+    .action(async (workflowId, commandOptions) => {
+      const workflowVersion = commandOptions.version as string;
+      let input: unknown;
+      try {
+        input = JSON.parse(commandOptions.input as string);
+      } catch {
+        throw new InvalidArgumentError("--input must be valid JSON");
+      }
+      const observationDeadline = Date.now() + 10_000;
+      let resourceBindings: Record<string, unknown> | undefined;
+      let lastObservationError: unknown;
+      while (!resourceBindings && Date.now() < observationDeadline) {
+        try {
+          const resolution = await client.request<{
+            resourceBindings: Record<string, unknown>;
+          }>("browser.resource-binding.resolve", {
+            workflowId,
+            workflowVersion,
+            ...(commandOptions.browserInstanceId
+              ? {
+                  browserInstanceId:
+                    commandOptions.browserInstanceId as string
+                }
+              : {})
+          });
+          resourceBindings = resolution.resourceBindings;
+        } catch (error) {
+          lastObservationError = error;
+          if (
+            error instanceof Error &&
+            error.message === "BROWSER_SESSION_AMBIGUOUS"
+          ) {
+            throw error;
+          }
+          const pages = await client.request<
+            Array<{
+              sessionId: string;
+              browserInstanceId: string;
+              tabId: number;
+              windowId?: number;
+              origin: string;
+            }>
+          >("browser.page-observation.list", {
+            limit: 200,
+            ...(commandOptions.browserInstanceId
+              ? {
+                  browserInstanceId:
+                    commandOptions.browserInstanceId as string
+                }
+              : {})
+          });
+          await Promise.allSettled(
+            pages.map((page) =>
+              client.request("browser.page-observation.probe", {
+                sessionId: page.sessionId,
+                browserInstanceId: page.browserInstanceId,
+                tabId: page.tabId,
+                ...(page.windowId === undefined
+                  ? {}
+                  : { windowId: page.windowId }),
+                origin: page.origin,
+                timeoutMs: 2_000
+              })
+            )
+          );
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
+        }
+      }
+      if (!resourceBindings) {
+        throw lastObservationError ?? new Error("BROWSER_OBSERVATION_PENDING");
+      }
+      let run = await client.request<{ id: string; status: string }>(
+        "run.create",
+        { workflowId, workflowVersion, input, resourceBindings, actor }
+      );
+      const terminal = new Set(["succeeded", "failed", "cancelled", "uncertain"]);
+      const deadline =
+        Date.now() + Number(commandOptions.waitSeconds) * 1_000;
+      while (!terminal.has(run.status) && Date.now() < deadline) {
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 2_000));
+        run = await client.request("run.inspect", { runId: run.id });
+      }
+      if (!terminal.has(run.status)) throw new Error("WORKFLOW_RUN_TIMEOUT");
+      output(run);
     });
 
   program

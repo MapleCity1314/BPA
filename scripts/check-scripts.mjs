@@ -4,13 +4,20 @@ import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 const scriptsRoot = join(root, "scripts");
+const skillsRoot = join(root, "skills");
 const files = await readdir(scriptsRoot);
+const skillFiles = await readdir(skillsRoot, { recursive: true });
 const shellScripts = files
   .filter((name) => name.endsWith(".sh"))
   .map((name) => join(scriptsRoot, name));
 const powerShellScripts = files
   .filter((name) => name.endsWith(".ps1"))
-  .map((name) => join(scriptsRoot, name));
+  .map((name) => join(scriptsRoot, name))
+  .concat(
+    skillFiles
+      .filter((name) => name.endsWith(".ps1"))
+      .map((name) => join(skillsRoot, name))
+  );
 
 if (process.platform !== "win32") {
   const checked = spawnSync("zsh", ["-n", ...shellScripts], {

@@ -10,6 +10,7 @@ export default defineConfig({
     permissions: ["nativeMessaging", "storage", "tabs"],
     host_permissions: [
       "https://fxg.jinritemai.com/*",
+      "https://buyin.jinritemai.com/*",
       "https://www.chanmama.com/*"
     ],
     action: {

@@ -1,4 +1,4 @@
-apiVersion: bpa/v1alpha1
+apiVersion: bpa/v1alpha2
 kind: Node
 metadata:
   id: doudian.product.editor.open
@@ -95,6 +95,13 @@ risk:
     - browser.tabs.navigate
   domains:
     - https://fxg.jinritemai.com
+resources:
+  browser:
+    kind: browser
+    capabilities: [browser.dom.read, browser.tabs.read, browser.tabs.navigate]
+    allowedOrigins: [https://fxg.jinritemai.com]
+    authentication: authenticated
+    purpose: 只在冻结标签页中导航到经过校验的商品编辑页
 execution:
   timeoutDefault: 30s
   idempotency: repeatable_read
