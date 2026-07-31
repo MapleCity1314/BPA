@@ -243,7 +243,19 @@ describe("Operator Console", () => {
 
   it("opens and stops an exact 15-minute Design Mode grant", async () => {
     const user = userEvent.setup();
-    const api = await renderReady();
+    const api = mockApi();
+    vi.mocked(api.getDashboard).mockResolvedValue({
+      ...dashboard,
+      browserSessions: [
+        {
+          ...dashboard.browserSessions[0]!,
+          status: "attention",
+          origin: "等待选择业务来源",
+          authenticated: false
+        }
+      ]
+    });
+    await renderReady(api);
     await user.click(screen.getByRole("button", { name: /创作授权/ }));
     await user.type(
       screen.getByLabelText(/创作会话编号/),

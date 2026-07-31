@@ -294,7 +294,7 @@ export function DesignModeView({
               >
                 <option value="">请选择当前 Chrome 会话</option>
                 {sessions
-                  .filter((session) => session.status === "ready")
+                  .filter((session) => session.status !== "offline")
                   .map((session) => (
                     <option key={session.id} value={session.id}>
                       {session.label} · {session.origin}

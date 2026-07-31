@@ -50,15 +50,6 @@ describe("Local Core Design Mode authorization", () => {
       },
       now: "2026-07-30T04:00:00.000Z"
     });
-    persistence.updateBrowserSessionObservation({
-      id: "browser-session-1",
-      expectedRevision: 0,
-      role: "design_mode",
-      observedOrigin: "https://www.chanmama.com",
-      observedAuthentication: "membership",
-      observationState: "available",
-      observedAt: "2026-07-30T04:00:01.000Z"
-    });
     const requested = service.handle({
       id: "design-request",
       method: "authoring.design-mode.request",
@@ -83,6 +74,13 @@ describe("Local Core Design Mode authorization", () => {
         revision: 0,
         allowedOperations: ["semantic_snapshot"]
       }
+    });
+    expect(persistence.getBrowserSession("browser-session-1")).toMatchObject({
+      role: "design_mode",
+      observedOrigin: "https://www.chanmama.com",
+      observedAuthentication: "optional",
+      observationState: "available",
+      observationRevision: 1
     });
     expect(
       service.handle({

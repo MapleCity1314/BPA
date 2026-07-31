@@ -465,19 +465,6 @@ export class LocalAuthoringService {
         "Design Mode requires an active Authoring Session."
       );
     }
-    const browserSession = this.persistence.getBrowserSession(
-      input.browserSessionId
-    );
-    if (
-      !browserSession ||
-      browserSession.disconnectedAt ||
-      browserSession.observationState !== "available" ||
-      browserSession.observedOrigin !== input.origin
-    ) {
-      throw new Error(
-        "Design Mode Browser Session is unavailable or has a different Origin."
-      );
-    }
     const issuedAt = Date.parse(input.issuedAt);
     const expiresAt = Date.parse(input.expiresAt);
     let origin: URL;
@@ -501,6 +488,37 @@ export class LocalAuthoringService {
     ) {
       throw new Error(
         "Design Mode Grant must bind an exact HTTPS Origin, Tab, PageEpoch, operator and TTL of at most 15 minutes."
+      );
+    }
+    let browserSession = this.persistence.getBrowserSession(
+      input.browserSessionId
+    );
+    if (!browserSession || browserSession.disconnectedAt) {
+      throw new Error(
+        "Design Mode Browser Session is unavailable or has a different Origin."
+      );
+    }
+    if ((browserSession.observationState ?? "unknown") === "unknown") {
+      // The operator-approved page binding is sufficient to freeze the exact
+      // Design Mode Origin, but it does not prove an authenticated account.
+      // Runtime Nodes must still validate their stronger authentication
+      // requirement independently before execution.
+      browserSession = this.persistence.updateBrowserSessionObservation({
+        id: browserSession.id,
+        expectedRevision: browserSession.observationRevision ?? 0,
+        role: "design_mode",
+        observedOrigin: input.origin,
+        observedAuthentication: "optional",
+        observationState: "available",
+        observedAt: input.issuedAt
+      });
+    }
+    if (
+      browserSession.observationState !== "available" ||
+      browserSession.observedOrigin !== input.origin
+    ) {
+      throw new Error(
+        "Design Mode Browser Session is unavailable or has a different Origin."
       );
     }
     const grant: DesignModeGrantRecord = {
