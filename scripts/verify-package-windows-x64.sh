@@ -30,7 +30,7 @@ for required in \
     exit 1
   fi
 done
-if find "$ROOT" -type l -print -quit | rg . >/dev/null; then
+if [[ -n "$(find "$ROOT" -type l -print -quit)" ]]; then
   print -u2 "Windows package contains a symbolic link."
   exit 1
 fi
