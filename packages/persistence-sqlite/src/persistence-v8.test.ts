@@ -150,7 +150,10 @@ function createBoundRun(
 
 describe("SQLite v8 Resource Binding and Session observation", () => {
   it("freezes an exact Resource Binding Snapshot with the recoverable Run", () => {
-    const database = new SqlitePersistence({ path: ":memory:" });
+    const database = new SqlitePersistence({
+      path: ":memory:",
+      clock: () => new Date(timestamp)
+    });
     const observed = openObservedSession(database);
     expect(observed).toMatchObject({
       observationRevision: 1,
@@ -167,7 +170,10 @@ describe("SQLite v8 Resource Binding and Session observation", () => {
   });
 
   it("rejects slot drift, observed Session drift, and stale CAS", () => {
-    const database = new SqlitePersistence({ path: ":memory:" });
+    const database = new SqlitePersistence({
+      path: ":memory:",
+      clock: () => new Date(timestamp)
+    });
     openObservedSession(database);
     expect(() =>
       database.updateBrowserSessionObservation({
@@ -471,7 +477,10 @@ function seedLineage(database: SqlitePersistence) {
 
 describe("SQLite v8 lineage and Export metadata", () => {
   it("uses bounded stable cursors without returning Blob bodies", () => {
-    const database = new SqlitePersistence({ path: ":memory:" });
+    const database = new SqlitePersistence({
+      path: ":memory:",
+      clock: () => new Date(timestamp)
+    });
     const seeded = seedLineage(database);
     const first = database.listEvidenceTransfersForRun({
       runId: seeded.runId,
@@ -520,7 +529,10 @@ describe("SQLite v8 lineage and Export metadata", () => {
   });
 
   it("stores immutable Export metadata and AssetRefs only", () => {
-    const database = new SqlitePersistence({ path: ":memory:" });
+    const database = new SqlitePersistence({
+      path: ":memory:",
+      clock: () => new Date(timestamp)
+    });
     const seeded = seedLineage(database);
     const exportBody = Buffer.from([0xff, 0xd8, 0xff, 0xee]);
     const exportDigest = digestBytes(exportBody);
