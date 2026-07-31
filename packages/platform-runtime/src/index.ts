@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { posix, win32 } from "node:path";
 
 export type SupportedDesktopPlatform = "darwin" | "win32";
 export type LocalIpcChannel = "core" | "staging";
@@ -19,13 +19,18 @@ function supportedPlatform(
   throw new Error(`BPA desktop runtime does not support ${platform}`);
 }
 
+function pathsFor(platform: SupportedDesktopPlatform) {
+  return platform === "win32" ? win32 : posix;
+}
+
 export function resolveDefaultBpaHome(
   environment: DesktopPathEnvironment = {}
 ): string {
-  if (environment.bpaHome?.trim()) {
-    return resolve(environment.bpaHome.trim());
-  }
   const platform = supportedPlatform(environment.platform ?? process.platform);
+  const paths = pathsFor(platform);
+  if (environment.bpaHome?.trim()) {
+    return paths.resolve(environment.bpaHome.trim());
+  }
   const homeDirectory = environment.homeDirectory ?? homedir();
   if (platform === "win32") {
     const localAppData =
@@ -33,19 +38,20 @@ export function resolveDefaultBpaHome(
     if (!localAppData) {
       throw new Error("LOCALAPPDATA is required by the BPA Windows runtime");
     }
-    return resolve(localAppData, "BPA");
+    return paths.resolve(localAppData, "BPA");
   }
-  return resolve(homeDirectory, "Library", "Application Support", "BPA");
+  return paths.resolve(homeDirectory, "Library", "Application Support", "BPA");
 }
 
 export function resolveDefaultBpaLogRoot(
   environment: DesktopPathEnvironment = {}
 ): string {
   const platform = supportedPlatform(environment.platform ?? process.platform);
+  const paths = pathsFor(platform);
   if (platform === "win32") {
-    return join(resolveDefaultBpaHome(environment), "logs");
+    return paths.join(resolveDefaultBpaHome(environment), "logs");
   }
-  return resolve(
+  return paths.resolve(
     environment.homeDirectory ?? homedir(),
     "Library",
     "Logs",
@@ -59,11 +65,12 @@ export function resolveLocalIpcEndpoint(
   platform: NodeJS.Platform = process.platform
 ): string {
   const supported = supportedPlatform(platform);
+  const paths = pathsFor(supported);
   if (supported === "darwin") {
-    return join(resolve(root), "run", `${channel}.sock`);
+    return paths.join(paths.resolve(root), "run", `${channel}.sock`);
   }
   const identity = createHash("sha256")
-    .update(resolve(root).toLowerCase(), "utf8")
+    .update(paths.resolve(root).toLowerCase(), "utf8")
     .digest("hex")
     .slice(0, 16);
   return `\\\\.\\pipe\\bpa-${identity}-${channel}`;

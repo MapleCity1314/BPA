@@ -12,6 +12,7 @@ import {
 } from "@bpa/control-protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
+import { resolveLocalIpcEndpoint } from "@bpa/platform-runtime";
 import {
   LocalControlServer,
   LocalCoreService,
@@ -19,6 +20,10 @@ import {
 } from "./control.js";
 
 const cleanups: Array<() => Promise<void>> = [];
+const controlEndpoint = (root: string) =>
+  process.platform === "win32"
+    ? resolveLocalIpcEndpoint(root, "core", "win32")
+    : join(root, "core.sock");
 
 function sendV1(
   socketPath: string,
@@ -103,7 +108,7 @@ afterEach(async () => {
 describe("local control socket", () => {
   it("serves doctor requests over a 0600 unix socket", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-control-"));
-    const socketPath = join(directory, "core.sock");
+    const socketPath = controlEndpoint(directory);
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const server = new LocalControlServer(
       socketPath,
@@ -125,7 +130,7 @@ describe("local control socket", () => {
 
   it("serves versioned control envelopes without breaking legacy framing", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-control-v1-"));
-    const socketPath = join(directory, "core.sock");
+    const socketPath = controlEndpoint(directory);
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const server = new LocalControlServer(
       socketPath,
@@ -159,7 +164,7 @@ describe("local control socket", () => {
 
   it("negotiates hello before application requests", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-control-hello-"));
-    const socketPath = join(directory, "core.sock");
+    const socketPath = controlEndpoint(directory);
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const server = new LocalControlServer(
       socketPath,
@@ -189,7 +194,7 @@ describe("local control socket", () => {
 
   it("isolates an oversized connection without terminating Core", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-control-oversize-"));
-    const socketPath = join(directory, "core.sock");
+    const socketPath = controlEndpoint(directory);
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const server = new LocalControlServer(
       socketPath,
@@ -221,7 +226,7 @@ describe("local control socket", () => {
 
   it("rejects expired and unknown v1 requests with stable error codes", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-control-v1-errors-"));
-    const socketPath = join(directory, "core.sock");
+    const socketPath = controlEndpoint(directory);
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const server = new LocalControlServer(
       socketPath,

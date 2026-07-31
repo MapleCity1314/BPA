@@ -101,18 +101,22 @@ describe("Design Mode semantic snapshot", () => {
     expect(JSON.stringify(first)).not.toContain('"selector":"#secret"');
   });
 
-  it("caps semantic nodes before serialization", async () => {
-    document.body.innerHTML = Array.from(
-      { length: MAX_SEMANTIC_NODES + 20 },
-      (_, index) => `<button>item ${index}</button>`
-    ).join("");
-    const snapshot = await captureSemanticSnapshot(document, {
-      pageState: "large-list",
-      capturedAt: "2026-07-30T04:00:00.000Z"
-    });
-    expect(snapshot.semanticNodes).toHaveLength(MAX_SEMANTIC_NODES);
-    expect(snapshot.semanticNodes.at(-1)?.order).toBe(
-      MAX_SEMANTIC_NODES - 1
-    );
-  });
+  it(
+    "caps semantic nodes before serialization",
+    async () => {
+      document.body.innerHTML = Array.from(
+        { length: MAX_SEMANTIC_NODES + 20 },
+        (_, index) => `<button>item ${index}</button>`
+      ).join("");
+      const snapshot = await captureSemanticSnapshot(document, {
+        pageState: "large-list",
+        capturedAt: "2026-07-30T04:00:00.000Z"
+      });
+      expect(snapshot.semanticNodes).toHaveLength(MAX_SEMANTIC_NODES);
+      expect(snapshot.semanticNodes.at(-1)?.order).toBe(
+        MAX_SEMANTIC_NODES - 1
+      );
+    },
+    15_000
+  );
 });

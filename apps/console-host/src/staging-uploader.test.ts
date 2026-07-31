@@ -3,12 +3,16 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveLocalIpcEndpoint } from "@bpa/platform-runtime";
 import { UnixSocketStagingUploader } from "./staging-uploader.js";
 
 describe("UnixSocketStagingUploader", () => {
   it("moves bytes through the staging socket and reads a bounded receipt", async () => {
     const directory = mkdtempSync(join(tmpdir(), "bpa-uploader-"));
-    const socketPath = join(directory, "staging.sock");
+    const socketPath =
+      process.platform === "win32"
+        ? resolveLocalIpcEndpoint(directory, "staging", "win32")
+        : join(directory, "staging.sock");
     const observed: { metadata?: Record<string, unknown>; body?: Buffer } = {};
     const server = createServer((socket) => {
       let buffered = Buffer.alloc(0);
