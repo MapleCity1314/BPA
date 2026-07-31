@@ -1891,7 +1891,10 @@ export class LocalControlServer {
           return;
         }
         if (nativeConnectionId) {
-          this.service.browserGateway?.handle(message);
+          this.service.browserGateway?.handle(
+            message,
+            nativeConnectionId
+          );
           return;
         }
         const request = message as Partial<ControlRequest>;

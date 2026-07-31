@@ -44,6 +44,7 @@ type Message = BrowserProtocolMessage & {
 export interface BrowserGatewayStatus {
   connected: boolean;
   ready: boolean;
+  activeSessionCount?: number;
   sessionId?: string;
   browserInstanceId?: string;
   extensionId: string;
@@ -54,12 +55,35 @@ export interface BrowserGatewayStatus {
 interface ActiveSession {
   id: string;
   browserInstanceId: string;
+  extensionVersion: string;
+  connectedAt: number;
   incoming: ProtocolSessionGuard;
   incomingSeq: number;
   outgoingSeq: number;
   lastAckedCommandSeq: number;
   ready: boolean;
   capabilities: BrowserCapabilityRecord[];
+}
+
+interface BrowserConnection {
+  id: string;
+  attachedOrder: number;
+  send: (message: Message) => void;
+  session?: ActiveSession;
+  lastError?: string;
+  cancelRequests: Set<string>;
+}
+
+function compareExtensionVersions(left: string, right: string): number {
+  const leftParts = left.split(".").map((part) => Number(part));
+  const rightParts = right.split(".").map((part) => Number(part));
+  const width = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < width; index += 1) {
+    const difference =
+      (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return left.localeCompare(right);
 }
 
 function rejectDesignCapture(
@@ -156,11 +180,8 @@ export function validateDesignCaptureInvocation(
 export class LocalBrowserGateway implements RuntimeProvider {
   readonly id = "browser";
   readonly #extensionId: string;
-  #send: ((message: Message) => void) | undefined;
-  #session: ActiveSession | undefined;
-  #lastError: string | undefined;
-  #connectionId: string | undefined;
-  readonly #cancelRequests = new Set<string>();
+  readonly #connections = new Map<string, BrowserConnection>();
+  #attachedOrder = 0;
 
   constructor(
     readonly persistence: Persistence,
@@ -175,46 +196,46 @@ export class LocalBrowserGateway implements RuntimeProvider {
 
   attach(origin: string, send: (message: Message) => void): string {
     assertNativeHostOrigin(origin, this.#extensionId);
-    if (this.#session) {
-      this.persistence.updateBrowserSession({
-        id: this.#session.id,
-        disconnectedAt: new Date().toISOString()
-      });
-    }
     const connectionId = randomUUID();
-    this.#connectionId = connectionId;
-    this.#send = send;
-    this.#session = undefined;
-    this.#lastError = undefined;
-    this.#cancelRequests.clear();
+    this.#connections.set(connectionId, {
+      id: connectionId,
+      attachedOrder: ++this.#attachedOrder,
+      send,
+      cancelRequests: new Set()
+    });
     return connectionId;
   }
 
   detach(connectionId?: string): void {
-    if (connectionId && connectionId !== this.#connectionId) return;
-    if (this.#session) {
+    const connection = connectionId
+      ? this.#connections.get(connectionId)
+      : this.#primaryConnection(false);
+    if (!connection) return;
+    if (connection.session) {
       this.persistence.updateBrowserSession({
-        id: this.#session.id,
+        id: connection.session.id,
         disconnectedAt: new Date().toISOString()
       });
     }
-    this.#send = undefined;
-    this.#session = undefined;
-    this.#connectionId = undefined;
-    this.#cancelRequests.clear();
+    this.#connections.delete(connection.id);
   }
 
   status(): BrowserGatewayStatus {
+    const primary =
+      this.#primaryConnection() ?? this.#primaryConnection(false);
     return {
-      connected: Boolean(this.#send),
-      ready: this.#session?.ready ?? false,
-      ...(this.#session ? { sessionId: this.#session.id } : {}),
-      ...(this.#session
-        ? { browserInstanceId: this.#session.browserInstanceId }
+      connected: this.#connections.size > 0,
+      ready: Boolean(primary?.session?.ready),
+      activeSessionCount: [...this.#connections.values()].filter(
+        (connection) => connection.session?.ready
+      ).length,
+      ...(primary?.session ? { sessionId: primary.session.id } : {}),
+      ...(primary?.session
+        ? { browserInstanceId: primary.session.browserInstanceId }
         : {}),
       extensionId: this.#extensionId,
-      capabilityCount: this.#session?.capabilities.length ?? 0,
-      ...(this.#lastError ? { lastError: this.#lastError } : {})
+      capabilityCount: primary?.session?.capabilities.length ?? 0,
+      ...(primary?.lastError ? { lastError: primary.lastError } : {})
     };
   }
 
@@ -325,81 +346,80 @@ export class LocalBrowserGateway implements RuntimeProvider {
     this.#cancelRuntimeCommand(this.#runtimeCommandId(invocationId));
   }
 
-  handle(message: unknown): void {
+  handle(message: unknown, connectionId?: string): void {
+    const connection = this.#resolveConnection(connectionId);
     try {
       const candidate = message as Message;
-      if (!this.#session) {
-        this.#handleHello(candidate);
+      if (!connection.session) {
+        this.#handleHello(connection, candidate);
         return;
       }
-      const acceptance = this.#session.incoming.accept(candidate);
+      const acceptance = connection.session.incoming.accept(candidate);
       if (acceptance.status === "duplicate") {
         if (candidate.type === "command.result") {
-          this.#handleResult(candidate);
+          this.#handleResult(connection, candidate);
         }
         return;
       }
-      this.#session.incomingSeq = candidate.seq;
+      connection.session.incomingSeq = candidate.seq;
       this.persistence.updateBrowserSession({
-        id: this.#session.id,
+        id: connection.session.id,
         incomingSeq: candidate.seq
       });
       switch (candidate.type) {
         case "capability.report":
-          this.#handleCapabilities(candidate);
+          this.#handleCapabilities(connection, candidate);
           break;
         case "command.ack":
-          this.#handleCommandAck(candidate);
+          this.#handleCommandAck(connection, candidate);
           break;
         case "command.result":
-          this.#handleResult(candidate);
+          this.#handleResult(connection, candidate);
           break;
         case "heartbeat.pong":
           break;
         case "cancel.ack":
           break;
         case "cancel.effective":
-          this.#handleCancelEffective(candidate);
+          this.#handleCancelEffective(connection, candidate);
           break;
         case "evidence.begin":
         case "evidence.chunk":
         case "evidence.complete":
-          this.#handleEvidence(candidate);
+          this.#handleEvidence(connection, candidate);
           break;
         default:
           this.#sendError(
+            connection,
             "UNEXPECTED_MESSAGE",
             `Bridge message is not valid in the current state: ${candidate.type}`,
             candidate.message_id
           );
       }
     } catch (error) {
-      this.#lastError = error instanceof Error ? error.message : String(error);
-      this.#sendError("PROTOCOL_VIOLATION", this.#lastError, undefined, true);
+      connection.lastError =
+        error instanceof Error ? error.message : String(error);
+      this.#sendError(
+        connection,
+        "PROTOCOL_VIOLATION",
+        connection.lastError,
+        undefined,
+        true
+      );
     }
   }
 
   dispatchPending(): number {
-    const session = this.#session;
-    if (!session?.ready) return 0;
+    if (!this.#primaryConnection()) return 0;
     this.recoverCancellations();
     this.#promoteEngineMessages();
     let dispatched = 0;
-    for (const command of this.persistence.listPendingGatewayCommands(
-      session.lastAckedCommandSeq
-    )) {
+    for (const command of this.persistence.listPendingGatewayCommands()) {
       if (this.#runIsCancelled(command)) continue;
-      const requiredSessionIds = this.#requiredSessionIds(command);
-      if (
-        requiredSessionIds === undefined ||
-        requiredSessionIds.length > 1 ||
-        (requiredSessionIds.length === 1 &&
-          requiredSessionIds[0] !== session.id)
-      ) {
-        continue;
-      }
-      if (!this.#supports(command)) continue;
+      const connection = this.#connectionForCommand(command);
+      if (!connection || !this.#supports(connection, command)) continue;
       this.#sendMessage(
+        connection,
         "command.dispatch",
         command.payload as Record<string, unknown>,
         `trace-${command.nodeExecutionId}`
@@ -491,7 +511,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
     return requested;
   }
 
-  #handleHello(message: Message): void {
+  #handleHello(connection: BrowserConnection, message: Message): void {
     const guard = new ProtocolSessionGuard();
     guard.accept(message);
     const payload = message.payload;
@@ -530,9 +550,11 @@ export class LocalBrowserGateway implements RuntimeProvider {
     });
     const activeSessionId = opened.session.id;
     guard.establish(activeSessionId, 0);
-    this.#session = {
+    connection.session = {
       id: activeSessionId,
       browserInstanceId: opened.session.browserInstanceId,
+      extensionVersion: opened.session.extensionVersion,
+      connectedAt: Date.parse(opened.session.connectedAt),
       incoming: guard,
       incomingSeq: 0,
       outgoingSeq: 0,
@@ -541,6 +563,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
       capabilities: []
     };
     this.#sendMessage(
+      connection,
       "session.welcome",
       {
         selected_protocol: BROWSER_PROTOCOL,
@@ -558,6 +581,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
     );
     if (opened.resumedFrom) {
       this.#sendMessage(
+        connection,
         "session.resume",
         {
           accepted: true,
@@ -569,8 +593,11 @@ export class LocalBrowserGateway implements RuntimeProvider {
     }
   }
 
-  #handleCapabilities(message: Message): void {
-    const session = this.#session!;
+  #handleCapabilities(
+    connection: BrowserConnection,
+    message: Message
+  ): void {
+    const session = connection.session!;
     const reported = message.payload.capabilities as Array<{
       node_id: string;
       versions: string[];
@@ -592,11 +619,14 @@ export class LocalBrowserGateway implements RuntimeProvider {
     });
     session.capabilities = capabilities;
     session.ready = true;
-    this.#lastError = undefined;
+    delete connection.lastError;
     this.dispatchPending();
   }
 
-  #handleCommandAck(message: Message): void {
+  #handleCommandAck(
+    connection: BrowserConnection,
+    message: Message
+  ): void {
     const payload = message.payload;
     const command = this.persistence.getGatewayCommand(
       String(payload.command_id)
@@ -608,6 +638,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
     ) {
       throw new Error("Command ACK does not match an active command");
     }
+    this.#assertCommandSession(connection, command);
     if (payload.accepted === true) {
       this.persistence.markGatewayCommandState(
         command.id,
@@ -632,7 +663,14 @@ export class LocalBrowserGateway implements RuntimeProvider {
     this.#commitResult(message.message_id, synthetic);
   }
 
-  #handleResult(message: Message): void {
+  #handleResult(
+    connection: BrowserConnection,
+    message: Message
+  ): void {
+    const command = this.persistence.getGatewayCommand(
+      String(message.payload.command_id)
+    );
+    if (command) this.#assertCommandSession(connection, command);
     let outcome:
       | "accepted"
       | "duplicate"
@@ -648,25 +686,29 @@ export class LocalBrowserGateway implements RuntimeProvider {
           ? "evidence_not_ready"
           : "evidence_invalid";
     }
-    this.#cancelRequests.delete(String(message.payload.command_id));
+    connection.cancelRequests.delete(String(message.payload.command_id));
     const accepted = outcome === "accepted" || outcome === "duplicate";
-    if (accepted) this.#lastError = undefined;
+    if (accepted) delete connection.lastError;
     if (accepted) {
-      const command = this.persistence.getGatewayCommand(
-        String(message.payload.command_id)
-      );
-      if (command) {
-        this.#session!.lastAckedCommandSeq = Math.max(
-          this.#session!.lastAckedCommandSeq,
-          command.commandSeq
+      const acceptedCommand =
+        command ??
+        this.persistence.getGatewayCommand(
+          String(message.payload.command_id)
+        );
+      if (acceptedCommand) {
+        connection.session!.lastAckedCommandSeq = Math.max(
+          connection.session!.lastAckedCommandSeq,
+          acceptedCommand.commandSeq
         );
         this.persistence.updateBrowserSession({
-          id: this.#session!.id,
-          lastAckedCommandSeq: this.#session!.lastAckedCommandSeq
+          id: connection.session!.id,
+          lastAckedCommandSeq:
+            connection.session!.lastAckedCommandSeq
         });
       }
     }
     this.#sendMessage(
+      connection,
       "result.ack",
       {
         command_id: String(message.payload.command_id),
@@ -687,7 +729,10 @@ export class LocalBrowserGateway implements RuntimeProvider {
     );
   }
 
-  #handleCancelEffective(message: Message): void {
+  #handleCancelEffective(
+    connection: BrowserConnection,
+    message: Message
+  ): void {
     const command = this.persistence.getGatewayCommand(
       String(message.payload.command_id)
     );
@@ -699,6 +744,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
     ) {
       throw new Error("Cancel Effective does not match an active command");
     }
+    this.#assertCommandSession(connection, command);
     this.#commitResult(message.message_id, {
       command_seq: command.commandSeq,
       command_id: command.id,
@@ -707,7 +753,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
       fencing_token: command.fencingToken,
       status: message.payload.status
     });
-    this.#cancelRequests.delete(command.id);
+    connection.cancelRequests.delete(command.id);
   }
 
   #commitResult(
@@ -1004,9 +1050,11 @@ export class LocalBrowserGateway implements RuntimeProvider {
       });
       return true;
     }
-    if (this.#session?.ready) {
-      if (this.#cancelRequests.has(command.id)) return false;
+    const connection = this.#connectionForCommand(command);
+    if (connection?.session?.ready) {
+      if (connection.cancelRequests.has(command.id)) return false;
       this.#sendMessage(
+        connection,
         "cancel.request",
         {
           command_id: command.id,
@@ -1016,7 +1064,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
         },
         `trace-${command.nodeExecutionId}`
       );
-      this.#cancelRequests.add(command.id);
+      connection.cancelRequests.add(command.id);
       return true;
     }
     if (command.id.startsWith("ir2:")) {
@@ -1044,6 +1092,79 @@ export class LocalBrowserGateway implements RuntimeProvider {
   #runId(command: GatewayCommandRecord): string | undefined {
     const runId = (command.payload as Record<string, unknown>).run_id;
     return typeof runId === "string" && runId.length > 0 ? runId : undefined;
+  }
+
+  #resolveConnection(connectionId?: string): BrowserConnection {
+    if (connectionId) {
+      const connection = this.#connections.get(connectionId);
+      if (!connection) {
+        throw new Error(`Browser connection is unavailable: ${connectionId}`);
+      }
+      return connection;
+    }
+    if (this.#connections.size === 1) {
+      return this.#connections.values().next().value as BrowserConnection;
+    }
+    throw new Error(
+      "Browser connection identity is required when multiple sessions are attached"
+    );
+  }
+
+  #primaryConnection(
+    readyOnly = true
+  ): BrowserConnection | undefined {
+    return [...this.#connections.values()]
+      .filter(
+        (connection) =>
+          !readyOnly || connection.session?.ready === true
+      )
+      .sort((left, right) => {
+        const versionOrder = compareExtensionVersions(
+          right.session?.extensionVersion ?? "0.0.0",
+          left.session?.extensionVersion ?? "0.0.0"
+        );
+        if (versionOrder !== 0) return versionOrder;
+        const connectedOrder =
+          (right.session?.connectedAt ?? 0) -
+          (left.session?.connectedAt ?? 0);
+        return connectedOrder !== 0
+          ? connectedOrder
+          : right.attachedOrder - left.attachedOrder;
+      })[0];
+  }
+
+  #connectionForCommand(
+    command: GatewayCommandRecord
+  ): BrowserConnection | undefined {
+    const requiredSessionIds = this.#requiredSessionIds(command);
+    if (requiredSessionIds === undefined || requiredSessionIds.length > 1) {
+      return undefined;
+    }
+    if (requiredSessionIds.length === 0) {
+      return this.#primaryConnection();
+    }
+    return [...this.#connections.values()].find(
+      (connection) =>
+        connection.session?.ready === true &&
+        connection.session.id === requiredSessionIds[0]
+    );
+  }
+
+  #assertCommandSession(
+    connection: BrowserConnection,
+    command: GatewayCommandRecord
+  ): void {
+    const requiredSessionIds = this.#requiredSessionIds(command);
+    if (
+      requiredSessionIds === undefined ||
+      requiredSessionIds.length > 1 ||
+      (requiredSessionIds.length === 1 &&
+        requiredSessionIds[0] !== connection.session?.id)
+    ) {
+      throw new Error(
+        "Browser message does not match the command's frozen Session"
+      );
+    }
   }
 
   #requiredSessionIds(
@@ -1151,7 +1272,10 @@ export class LocalBrowserGateway implements RuntimeProvider {
     };
   }
 
-  #supports(command: GatewayCommandRecord): boolean {
+  #supports(
+    connection: BrowserConnection,
+    command: GatewayCommandRecord
+  ): boolean {
     const payload = command.payload as Record<string, unknown>;
     const node = payload.node as { id: string; version: string };
     const grant = payload.permission_grant as {
@@ -1159,7 +1283,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
       risk_level: RiskLevel;
     };
     return (
-      this.#session?.capabilities.some(
+      connection.session?.capabilities.some(
         (capability) =>
           capability.nodeId === node.id &&
           capability.nodeVersion === node.version &&
@@ -1172,12 +1296,13 @@ export class LocalBrowserGateway implements RuntimeProvider {
   }
 
   #sendMessage(
+    connection: BrowserConnection,
     type: string,
     payload: Record<string, unknown>,
     traceId: string
   ): void {
-    const session = this.#session;
-    if (!session || !this.#send) {
+    const session = connection.session;
+    if (!session) {
       throw new Error("Browser session is not attached");
     }
     session.outgoingSeq += 1;
@@ -1196,13 +1321,17 @@ export class LocalBrowserGateway implements RuntimeProvider {
       id: session.id,
       outgoingSeq: session.outgoingSeq
     });
-    this.#send(message);
+    connection.send(message);
   }
 
-  #handleEvidence(message: Message): void {
+  #handleEvidence(
+    connection: BrowserConnection,
+    message: Message
+  ): void {
     const evidenceId = String(message.payload.evidence_id);
     if (!this.evidence) {
       this.#sendEvidenceAcknowledgement(
+        connection,
         {
           evidenceId,
           accepted: false,
@@ -1214,20 +1343,22 @@ export class LocalBrowserGateway implements RuntimeProvider {
     }
     try {
       if (message.type === "evidence.begin") {
-        this.evidence.begin(this.#session!.id, message.payload);
+        this.evidence.begin(connection.session!.id, message.payload);
         return;
       }
       if (message.type === "evidence.chunk") {
-        this.evidence.chunk(this.#session!.id, message.payload);
+        this.evidence.chunk(connection.session!.id, message.payload);
         return;
       }
       this.#sendEvidenceAcknowledgement(
-        this.evidence.complete(this.#session!.id, message.payload),
+        connection,
+        this.evidence.complete(connection.session!.id, message.payload),
         message.trace_id
       );
     } catch (error) {
       if (!(error instanceof BrowserEvidenceError)) throw error;
       this.#sendEvidenceAcknowledgement(
+        connection,
         {
           evidenceId,
           accepted: false,
@@ -1242,10 +1373,12 @@ export class LocalBrowserGateway implements RuntimeProvider {
   }
 
   #sendEvidenceAcknowledgement(
+    connection: BrowserConnection,
     acknowledgement: BrowserEvidenceAcknowledgement,
     traceId: string
   ): void {
     this.#sendMessage(
+      connection,
       "evidence.ack",
       {
         evidence_id: acknowledgement.evidenceId,
@@ -1262,13 +1395,15 @@ export class LocalBrowserGateway implements RuntimeProvider {
   }
 
   #sendError(
+    connection: BrowserConnection,
     code: string,
     detail: string,
     relatedMessageId?: string,
     fatal = false
   ): void {
-    if (!this.#session || !this.#send) return;
+    if (!connection.session) return;
     this.#sendMessage(
+      connection,
       "session.error",
       {
         code,
