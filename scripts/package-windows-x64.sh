@@ -12,7 +12,7 @@ if [[ "$("$BUNDLED_NODE" -p 'process.versions.node.split(".")[0]')" != "24" ]]; 
   print -u2 "The Windows cross-build requires Node.js 24."
   exit 1
 fi
-for command in curl unzip zip shasum file; do
+for command in curl unzip zip shasum file grep; do
   if ! command -v "$command" >/dev/null 2>&1; then
     print -u2 "Required Windows packaging command is missing: $command"
     exit 1
@@ -58,7 +58,7 @@ curl --fail --location --silent --show-error \
   --output "$PACKAGE_ROOT/SHASUMS256.txt"
 (
   cd "$PACKAGE_ROOT"
-  rg "  ${NODE_ARCHIVE}$" SHASUMS256.txt | shasum -a 256 -c -
+  grep "  ${NODE_ARCHIVE}$" SHASUMS256.txt | shasum -a 256 -c -
   unzip -q "$NODE_ARCHIVE"
 )
 WINDOWS_NODE="$PACKAGE_ROOT/node-v${NODE_VERSION}-win-x64/node.exe"
