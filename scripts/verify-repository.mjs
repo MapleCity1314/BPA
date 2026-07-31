@@ -1,11 +1,14 @@
 import { access, readdir, readFile, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { promisify } from "node:util";
 import { parse } from "yaml";
 
 const root = resolve(import.meta.dirname, "..");
 const issues = [];
+const execFileAsync = promisify(execFile);
 
 async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
@@ -528,10 +531,32 @@ async function verifyScripts() {
   const shellScripts = (await readdir(scriptDirectory))
     .filter((name) => name.endsWith(".sh"))
     .sort();
+  let indexedExecutablePaths;
+  if (process.platform === "win32") {
+    const { stdout } = await execFileAsync(
+      "git",
+      [
+        "ls-files",
+        "--stage",
+        "--",
+        ...shellScripts.map((filename) => `scripts/${filename}`)
+      ],
+      { cwd: root }
+    );
+    indexedExecutablePaths = new Set(
+      stdout
+        .split(/\r?\n/gu)
+        .filter((line) => line.startsWith("100755 "))
+        .map((line) => line.slice(line.indexOf("\t") + 1))
+    );
+  }
   for (const filename of shellScripts) {
     const path = join(scriptDirectory, filename);
-    const fileStat = await stat(path);
-    if ((fileStat.mode & 0o111) === 0) {
+    const executable =
+      process.platform === "win32"
+        ? indexedExecutablePaths?.has(`scripts/${filename}`)
+        : ((await stat(path)).mode & 0o111) !== 0;
+    if (!executable) {
       issues.push(`Shell script is not executable: scripts/${filename}`);
     }
   }
