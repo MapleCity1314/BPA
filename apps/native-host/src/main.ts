@@ -3,7 +3,7 @@ import { createConnection } from "node:net";
 import {
   DEFAULT_BPA_EXTENSION_ID,
   assertNativeHostOrigin
-} from "@bpa/gateway-core/native-origin";
+} from "@bpa/native-host-contract";
 import {
   resolveDefaultBpaHome,
   resolveLocalIpcEndpoint

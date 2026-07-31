@@ -281,9 +281,9 @@ importers:
 
   apps/native-host:
     dependencies:
-      '@bpa/gateway-core':
+      '@bpa/native-host-contract':
         specifier: workspace:*
-        version: link:../../packages/gateway-core
+        version: link:../../packages/native-host-contract
       '@bpa/platform-runtime':
         specifier: workspace:*
         version: link:../../packages/platform-runtime
@@ -444,6 +444,9 @@ importers:
 
   packages/gateway-core:
     dependencies:
+      '@bpa/native-host-contract':
+        specifier: workspace:*
+        version: link:../native-host-contract
       '@bpa/schemas':
         specifier: workspace:*
         version: link:../schemas
@@ -453,6 +456,8 @@ importers:
       '@bpa/attention-core':
         specifier: workspace:*
         version: link:../attention-core
+
+  packages/native-host-contract: {}
 
   packages/node-runtime:
     dependencies:

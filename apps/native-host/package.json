@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@bpa/gateway-core": "workspace:*",
+    "@bpa/native-host-contract": "workspace:*",
     "@bpa/platform-runtime": "workspace:*"
   }
 }

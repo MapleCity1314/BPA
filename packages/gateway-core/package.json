@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./native-origin": "./src/native-origin.ts"
+    ".": "./src/index.ts"
   },
   "dependencies": {
+    "@bpa/native-host-contract": "workspace:*",
     "@bpa/schemas": "workspace:*"
   }
 }

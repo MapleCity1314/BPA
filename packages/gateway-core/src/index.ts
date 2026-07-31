@@ -189,5 +189,8 @@ export class ProtocolSessionGuard {
   }
 }
 
-export * from "./native-origin.js";
+export {
+  DEFAULT_BPA_EXTENSION_ID,
+  assertNativeHostOrigin
+} from "@bpa/native-host-contract";
 export * from "./signing-key.js";
