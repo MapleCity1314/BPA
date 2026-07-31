@@ -15,8 +15,6 @@ import {
 
 export const BROWSER_PROTOCOL = "bpa.browser/1" as const;
 export const BROWSER_PROTOCOL_VERSION = "1.0.0" as const;
-export const DEFAULT_BPA_EXTENSION_ID =
-  "hoobbnlkcdhbemedpfhhoicklplggmbc";
 export const BROWSER_PROTOCOL_MAX_MESSAGE_BYTES = 512 * 1024;
 export const EVIDENCE_CHUNK_BYTES = 256 * 1024;
 export const RESUME_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
@@ -191,14 +189,5 @@ export class ProtocolSessionGuard {
   }
 }
 
-export function assertNativeHostOrigin(
-  origin: string,
-  allowedExtensionId: string
-): void {
-  const expected = `chrome-extension://${allowedExtensionId}/`;
-  if (origin !== expected) {
-    throw new Error(`Native host origin rejected: ${origin}`);
-  }
-}
-
+export * from "./native-origin.js";
 export * from "./signing-key.js";

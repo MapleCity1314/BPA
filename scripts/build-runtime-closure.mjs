@@ -39,7 +39,8 @@ const targetNativeHostExecutable =
     ? resolve(process.env.BPA_TARGET_NATIVE_HOST_EXECUTABLE)
     : undefined;
 const maximumBytes = Number(
-  process.env.BPA_RUNTIME_MAX_BYTES ?? 160 * 1024 * 1024
+  process.env.BPA_RUNTIME_MAX_BYTES ??
+    (targetPlatform === "win32" ? 256 : 160) * 1024 * 1024
 );
 
 if (

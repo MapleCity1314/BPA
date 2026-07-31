@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./native-origin": "./src/native-origin.ts"
   },
   "dependencies": {
     "@bpa/schemas": "workspace:*"
