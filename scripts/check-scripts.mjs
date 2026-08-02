@@ -88,6 +88,7 @@ for (const name of [
   const source = await readFile(join(scriptsRoot, name), "utf8");
   if (
     !source.includes("runtime-common.ps1") ||
+    !source.includes("windows-runtime-common.ps1") ||
     !source.includes("Stop-BpaCoreSafely")
   ) {
     throw new Error(`${name} must use the shared safe Core lifecycle`);

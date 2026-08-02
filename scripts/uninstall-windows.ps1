@@ -7,9 +7,11 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$RuntimeHelpers = Join-Path `
-  (Split-Path -Parent $MyInvocation.MyCommand.Path) `
-  "runtime-common.ps1"
+$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RuntimeHelpers = Join-Path $ScriptRoot "runtime-common.ps1"
+if (-not (Test-Path -LiteralPath $RuntimeHelpers -PathType Leaf)) {
+  $RuntimeHelpers = Join-Path $ScriptRoot "windows-runtime-common.ps1"
+}
 if (-not (Test-Path -LiteralPath $RuntimeHelpers -PathType Leaf)) {
   throw "BPA Windows runtime helpers are missing."
 }

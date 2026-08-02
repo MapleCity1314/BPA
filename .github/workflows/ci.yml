@@ -291,6 +291,7 @@ jobs:
           $skillRoot = Split-Path -Parent (Split-Path -Parent $installer.FullName)
           $installRoot = Join-Path $env:RUNNER_TEMP "bpa-real-install"
           $recordsRoot = Join-Path $env:RUNNER_TEMP "bpa-real-records"
+          $primaryFailure = $false
           try {
             foreach ($attempt in 1..2) {
               $resultText = @(& powershell.exe `
@@ -323,8 +324,19 @@ jobs:
                 throw "Installed Core failed its doctor check"
               }
             }
+          } catch {
+            $primaryFailure = $true
+            throw
           } finally {
-            ./scripts/uninstall-windows.ps1 `
-              -InstallRoot $installRoot `
-              -PurgeData
+            try {
+              ./scripts/uninstall-windows.ps1 `
+                -InstallRoot $installRoot `
+                -PurgeData
+            } catch {
+              if ($primaryFailure) {
+                Write-Warning "Cleanup also failed: $($_.Exception.Message)"
+              } else {
+                throw
+              }
+            }
           }
