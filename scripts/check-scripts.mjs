@@ -76,7 +76,9 @@ for (const required of [
   "CommandLine",
   "ExpectedRuntimeIdentity",
   "RedirectStandardError",
-  "core.err.log"
+  "core.err.log",
+  "BPA Core exited during startup",
+  "[int]$Attempts = 3"
 ]) {
   if (!runtimeCommon.includes(required)) {
     throw new Error(`Windows process identity gate is missing ${required}`);

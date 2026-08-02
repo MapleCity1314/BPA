@@ -204,12 +204,30 @@ function Start-BpaCoreProcess {
   try {
     $env:BPA_HOME = $InstallRoot
     $env:BPA_RUNTIME_ID = $RuntimeIdentity
-    Start-Process `
+    $Process = Start-Process `
       -FilePath $Node `
       -ArgumentList "`"$EntryPoint`"" `
       -WindowStyle Hidden `
       -RedirectStandardOutput $StandardOutput `
-      -RedirectStandardError $StandardError
+      -RedirectStandardError $StandardError `
+      -PassThru
+    Start-Sleep -Milliseconds 250
+    $Process.Refresh()
+    if ($Process.HasExited) {
+      $ErrorTail = @(
+        Get-Content `
+          -LiteralPath $StandardError `
+          -Tail 20 `
+          -ErrorAction SilentlyContinue
+      ) -join " | "
+      if ([string]::IsNullOrWhiteSpace($ErrorTail)) {
+        $ErrorTail = "empty"
+      }
+      throw (
+        "BPA Core exited during startup with code $($Process.ExitCode). " +
+        "stderr=$ErrorTail"
+      )
+    }
   } finally {
     $env:BPA_HOME = $PreviousHome
     $env:BPA_RUNTIME_ID = $PreviousRuntimeIdentity
@@ -222,7 +240,7 @@ function Wait-BpaCoreHealthy {
     [string]$InstallRoot,
     [Parameter(Mandatory = $true)]
     [string]$RuntimeIdentity,
-    [int]$Attempts = 60
+    [int]$Attempts = 3
   )
   $RuntimeRoot = Join-Path $InstallRoot "runtime\$RuntimeIdentity"
   $PreviousHome = $env:BPA_HOME
