@@ -68,6 +68,7 @@ const requiredFiles = [
   "bin/bpa.js",
   "bin/bpa-console-host.js",
   "bin/bpa-core.js",
+  "bin/bpa-core-launcher.js",
   "bin/bpa-native-host.js",
   "bin/bpa-mcp.js",
   "bin/bpa-team-worker.js",

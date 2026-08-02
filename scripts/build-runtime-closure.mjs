@@ -106,6 +106,10 @@ const gitCommit = execFileSync("git", ["rev-parse", "HEAD"], {
 
 const entryPoints = {
   "bpa-core": join(repositoryRoot, "apps/local-core/src/main.ts"),
+  "bpa-core-launcher": join(
+    repositoryRoot,
+    "scripts/windows-core-launcher.mjs"
+  ),
   bpa: join(repositoryRoot, "apps/cli/src/main.ts"),
   "bpa-console-host": join(
     repositoryRoot,

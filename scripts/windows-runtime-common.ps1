@@ -183,7 +183,7 @@ function Start-BpaCoreProcess {
   $RuntimeRoot = Join-Path $InstallRoot "runtime\$RuntimeIdentity"
   $Node = Join-Path $RuntimeRoot "node\node.exe"
   $EntryPoint = Join-Path $RuntimeRoot "bin\bpa-core.js"
-  $Launcher = Join-Path $InstallRoot "bin\bpa-core.cmd"
+  $Launcher = Join-Path $RuntimeRoot "bin\bpa-core-launcher.js"
   if (
     -not (Test-Path -LiteralPath $Node -PathType Leaf) -or
     -not (Test-Path -LiteralPath $EntryPoint -PathType Leaf)
@@ -191,42 +191,22 @@ function Start-BpaCoreProcess {
     throw "BPA Core runtime is incomplete: $RuntimeIdentity"
   }
   if (-not (Test-Path -LiteralPath $Launcher -PathType Leaf)) {
-    throw "BPA Core launcher is missing: $Launcher"
+    throw "BPA detached Core launcher is missing: $Launcher"
   }
-  $LogRoot = Join-Path $InstallRoot "logs"
-  New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
-  $StandardOutput = Join-Path $LogRoot "core.out.log"
-  $StandardError = Join-Path $LogRoot "core.err.log"
-  # Start the fixed executable directly. The sole argument is a verified local
-  # file path; no JSON, JavaScript source or user input crosses PowerShell 5.1.
+  # The fixed launcher owns Windows handle isolation. It starts Core detached
+  # with explicit file logs, then exits so WorkBuddy receives EOF immediately.
   $PreviousHome = $env:BPA_HOME
   $PreviousRuntimeIdentity = $env:BPA_RUNTIME_ID
   try {
     $env:BPA_HOME = $InstallRoot
     $env:BPA_RUNTIME_ID = $RuntimeIdentity
-    $Process = Start-Process `
-      -FilePath $Node `
-      -ArgumentList "`"$EntryPoint`"" `
-      -WindowStyle Hidden `
-      -RedirectStandardOutput $StandardOutput `
-      -RedirectStandardError $StandardError `
-      -PassThru
+    & $Node $Launcher
+    if ($LASTEXITCODE -ne 0) {
+      throw "BPA detached Core launcher exited with code $LASTEXITCODE."
+    }
     Start-Sleep -Milliseconds 250
-    $Process.Refresh()
-    if ($Process.HasExited) {
-      $ErrorTail = @(
-        Get-Content `
-          -LiteralPath $StandardError `
-          -Tail 20 `
-          -ErrorAction SilentlyContinue
-      ) -join " | "
-      if ([string]::IsNullOrWhiteSpace($ErrorTail)) {
-        $ErrorTail = "empty"
-      }
-      throw (
-        "BPA Core exited during startup with code $($Process.ExitCode). " +
-        "stderr=$ErrorTail"
-      )
+    if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "run\core.lock"))) {
+      throw "BPA Core exited before creating its identity lock."
     }
   } finally {
     $env:BPA_HOME = $PreviousHome

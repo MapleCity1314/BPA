@@ -75,9 +75,9 @@ for (const required of [
   "ExecutablePath",
   "CommandLine",
   "ExpectedRuntimeIdentity",
-  "RedirectStandardError",
   "core.err.log",
-  "BPA Core exited during startup",
+  "bpa-core-launcher.js",
+  "BPA Core exited before creating its identity lock",
   "[int]$Attempts = 3"
 ]) {
   if (!runtimeCommon.includes(required)) {
