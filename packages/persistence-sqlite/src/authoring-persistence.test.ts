@@ -15,6 +15,7 @@ import { SqlitePersistence } from "./index.js";
 
 const createdAt = "2026-07-28T00:00:00.000Z";
 const updatedAt = "2026-07-28T00:01:00.000Z";
+const concurrentDatabaseTestTimeoutMs = 15_000;
 
 function draft(
   draftId = "draft-1",
@@ -148,34 +149,38 @@ describe("SQLite Workflow Draft persistence", () => {
     store.close();
   });
 
-  it("lets only one concurrent CAS writer advance the Draft", () => {
-    const directory = mkdtempSync(join(tmpdir(), "bpa-draft-cas-"));
-    const path = join(directory, "bpa.sqlite3");
-    try {
-      const first = new SqlitePersistence({ path });
-      first.createWorkflowDraft(draft());
-      const second = new SqlitePersistence({ path });
-      expect(first.applyWorkflowDraftRevision(applyInput()).status).toBe(
-        "accepted"
-      );
-      expect(
-        second.applyWorkflowDraftRevision(
-          applyInput({
-            operationId: "operation-loser",
-            content: { losing: true }
-          })
-        )
-      ).toEqual({ status: "stale", actualRevision: 1 });
-      expect(second.getWorkflowDraft("draft-1")?.revision).toBe(1);
-      expect(
-        second.getWorkflowDraftRevision("draft-1", 1)?.operationId
-      ).toBe("operation-1");
-      first.close();
-      second.close();
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
+  it(
+    "lets only one concurrent CAS writer advance the Draft",
+    () => {
+      const directory = mkdtempSync(join(tmpdir(), "bpa-draft-cas-"));
+      const path = join(directory, "bpa.sqlite3");
+      try {
+        const first = new SqlitePersistence({ path });
+        first.createWorkflowDraft(draft());
+        const second = new SqlitePersistence({ path });
+        expect(first.applyWorkflowDraftRevision(applyInput()).status).toBe(
+          "accepted"
+        );
+        expect(
+          second.applyWorkflowDraftRevision(
+            applyInput({
+              operationId: "operation-loser",
+              content: { losing: true }
+            })
+          )
+        ).toEqual({ status: "stale", actualRevision: 1 });
+        expect(second.getWorkflowDraft("draft-1")?.revision).toBe(1);
+        expect(
+          second.getWorkflowDraftRevision("draft-1", 1)?.operationId
+        ).toBe("operation-1");
+        first.close();
+        second.close();
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+    concurrentDatabaseTestTimeoutMs
+  );
 
   it("saves Candidates immutably and permits only exact replay", () => {
     const store = new SqlitePersistence({ path: ":memory:" });
