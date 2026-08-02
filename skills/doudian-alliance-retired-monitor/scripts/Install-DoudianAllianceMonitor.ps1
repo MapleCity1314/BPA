@@ -369,11 +369,20 @@ $EffectiveMaxShops = if ($MaxShops -gt 0) {
 } else {
   [int]$Configuration.maxShops
 }
+$InputFile = Join-Path `
+  $env:TEMP `
+  "bpa-alliance-input-$PID-$([Guid]::NewGuid().ToString('N')).json"
+$InputJson = @{ maxShops = $EffectiveMaxShops } | ConvertTo-Json -Compress
+[IO.File]::WriteAllText(
+  $InputFile,
+  $InputJson,
+  [Text.UTF8Encoding]::new($false)
+)
 $Arguments = @(
   "workflow-run",
   "doudian.alliance-retired-products-monitor",
   "--version", "2.0.0",
-  "--input", "{`"maxShops`":$EffectiveMaxShops}",
+  "--input-file", $InputFile,
   "--wait-seconds", "28800"
 )
 if ($Configuration.browserInstanceId) {
@@ -399,6 +408,10 @@ try {
   $Run = ($RunText -join "`n") | ConvertFrom-Json
 } catch {
   $RuntimeError = $_.Exception.Message
+} finally {
+  if (Test-Path -LiteralPath $InputFile) {
+    Remove-Item -LiteralPath $InputFile -Force
+  }
 }
 if ($Run -and $Run.status -ne "succeeded") {
   try {

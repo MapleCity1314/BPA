@@ -52,6 +52,38 @@ function waitSecondsOption(value: string): number {
   return parsed;
 }
 
+const JSON_INPUT_LIMIT = 64 * 1024;
+
+async function workflowInput(commandOptions: {
+  input?: string;
+  inputFile?: string;
+}): Promise<unknown> {
+  if (commandOptions.input !== undefined && commandOptions.inputFile) {
+    throw new InvalidArgumentError(
+      "--input and --input-file cannot be used together"
+    );
+  }
+  let source = commandOptions.input ?? "{}";
+  if (commandOptions.inputFile) {
+    source = await readFile(resolve(commandOptions.inputFile), "utf8");
+    if (Buffer.byteLength(source, "utf8") > JSON_INPUT_LIMIT) {
+      throw new InvalidArgumentError(
+        `--input-file must not exceed ${JSON_INPUT_LIMIT} bytes`
+      );
+    }
+    source = source.replace(/^\uFEFF/u, "");
+  }
+  try {
+    return JSON.parse(source);
+  } catch {
+    throw new InvalidArgumentError(
+      commandOptions.inputFile
+        ? "--input-file must contain valid JSON"
+        : "--input must be valid JSON"
+    );
+  }
+}
+
 export function createCliProgram(options: CliProgramOptions): Command {
   const { client, actor } = options;
   const output = options.writeOutput ?? defaultOutput;
@@ -285,7 +317,11 @@ export function createCliProgram(options: CliProgramOptions): Command {
     .description("resolve browser resources and run any published Workflow")
     .argument("<workflow-id>", "published Workflow ID")
     .requiredOption("--version <version>", "published Workflow version")
-    .option("--input <json>", "Workflow input JSON", "{}")
+    .option("--input <json>", "Workflow input JSON")
+    .option(
+      "--input-file <path>",
+      "Workflow input JSON file; avoids shell quoting"
+    )
     .option(
       "--browser-instance-id <instance>",
       "stable Chrome Browser Instance"
@@ -298,12 +334,7 @@ export function createCliProgram(options: CliProgramOptions): Command {
     )
     .action(async (workflowId, commandOptions) => {
       const workflowVersion = commandOptions.version as string;
-      let input: unknown;
-      try {
-        input = JSON.parse(commandOptions.input as string);
-      } catch {
-        throw new InvalidArgumentError("--input must be valid JSON");
-      }
+      const input = await workflowInput(commandOptions);
       const observationDeadline = Date.now() + 10_000;
       let resourceBindings: Record<string, unknown> | undefined;
       let lastObservationError: unknown;

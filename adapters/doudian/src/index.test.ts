@@ -1,3 +1,4 @@
+import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
 import {
   detectDoudianRiskSignals,
@@ -74,6 +75,9 @@ describe("doudian adapter", () => {
         return selector === "body *"
           ? [productElement, shopElement]
           : [];
+      },
+      querySelector() {
+        return null;
       }
     } as unknown as Document;
     expect(readDoudianShopContext(doc).shop).toEqual({
@@ -81,6 +85,29 @@ describe("doudian adapter", () => {
       name: "榆园儿食品专营店",
       identity_confirmed: false
     });
+  });
+
+  it("confirms a unique visible shop from an authenticated product shell", () => {
+    const doc = new JSDOM(`
+      <body>
+        <div class="top-navigation">
+          <span>精选联盟</span>
+          <div class="account-entry"><span>榆园儿食品专营店</span></div>
+        </div>
+        <input placeholder="请输入商品名称/商品ID/商家编码，多条可用逗号隔开" />
+      </body>
+    `).window.document;
+    const shop = doc.querySelector<HTMLElement>(".account-entry span")!;
+    shop.getBoundingClientRect = () =>
+      ({ top: 72, bottom: 96, width: 150, height: 24 }) as DOMRect;
+    expect(readDoudianShopContext(doc, "https://fxg.jinritemai.com/ffa/g/list"))
+      .toMatchObject({
+        shop: {
+          id: "name:59dcdd52",
+          name: "榆园儿食品专营店",
+          identity_confirmed: true
+        }
+      });
   });
 
   it("falls back to the first complete shop-name line in transformed layouts", () => {

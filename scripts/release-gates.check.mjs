@@ -136,6 +136,11 @@ test("keeps WorkBuddy Windows installation progress machine-readable", async () 
     workBuddyInstaller,
     /\$RuntimeInstallerOutput\s*=\s*@\([\s\S]*?\*>&1[\s\S]*?\)/u
   );
+  assert.match(workBuddyInstaller, /"--input-file", \$InputFile/u);
+  assert.doesNotMatch(
+    workBuddyInstaller,
+    /"--input", "\{`"maxShops/u
+  );
 });
 
 test("retries transient Windows package verification cleanup", async () => {

@@ -84,6 +84,14 @@ describe("Doudian alliance retired-products runtime", () => {
     expect(promoteClick).toHaveBeenCalledOnce();
   });
 
+  it("reads the current shop after Doudian changes header class names", () => {
+    const doc = documentOf(`
+      <div class="account-entry"><span>榆园儿食品专营店</span></div>
+      <a href="/ffa/w/login/account">账号管理</a>
+    `);
+    expect(readDoudianHeaderShopName(doc)).toBe("榆园儿食品专营店");
+  });
+
   it("closes stacked promotion dialogs from the top and opens clear-out", () => {
     const doc = documentOf(`
       <div role="dialog">如何迁移旧版数据？<button aria-label="Close"></button></div>

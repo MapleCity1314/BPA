@@ -1,11 +1,11 @@
+import { readDoudianVisibleShopIdentity } from "./shop-context.js";
+
 const DOUDIAN_ORIGIN = "https://fxg.jinritemai.com";
 const BUYIN_ORIGIN = "https://buyin.jinritemai.com";
 const DOUDIAN_PRODUCT_LIST_PATH = "/ffa/g/list";
 const BUYIN_PROMOTE_PATH = "/dashboard/product/promote-manage";
 const BUYIN_RETIRED_PATH = "/dashboard/regulation/clear-out";
 
-const SHOP_NAME_SUFFIX =
-  /(?:官方旗舰店|旗舰店|专营店|专卖店|企业店|个体店|食品店|商店|小店|店)$/u;
 const PRODUCT_ID_PATTERN = /(?:商品\s*ID|ID)[：:\s]*(\d{5,30})/iu;
 const NUMBER_PATTERN = /\d{5,30}/u;
 
@@ -107,32 +107,11 @@ export function assertBuyinRetiredPage(pageUrl: string): void {
 }
 
 export function readDoudianHeaderShopName(doc: Document): string {
-  const precise = Array.from(
-    doc.querySelectorAll<HTMLElement>(
-      "#fxg-pc-header [class*='headerShopName'] [class*='userName'], " +
-        "#fxg-pc-header [class*='headerShopName'] [class*='shopName']"
-    )
-  )
-    .map((element) => normalizeText(element.textContent))
-    .filter(Boolean);
-  const names =
-    precise.length > 0
-      ? precise
-      : Array.from(
-          doc.querySelectorAll<HTMLElement>(
-            "#fxg-pc-header [class*='headerShopName']"
-          )
-        )
-          .map((element) => normalizeText(element.textContent))
-          .filter(
-            (candidate) =>
-              candidate.length >= 2 &&
-              candidate.length <= 80 &&
-              SHOP_NAME_SUFFIX.test(candidate)
-          );
-  const unique = [...new Set(names)];
-  if (unique.length !== 1) throw new Error("SHOP_IDENTITY_UNCONFIRMED");
-  return unique[0]!;
+  const identity = readDoudianVisibleShopIdentity(doc);
+  if (!identity.identityConfirmed) {
+    throw new Error("SHOP_IDENTITY_UNCONFIRMED");
+  }
+  return identity.name;
 }
 
 export function openDoudianShopSwitcher(doc: Document): void {

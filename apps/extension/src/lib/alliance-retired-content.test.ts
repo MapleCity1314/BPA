@@ -35,6 +35,31 @@ describe("alliance retired-products content stages", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it("continues discovery when the authenticated header classes change", async () => {
+    const document = doc(`
+      <div class="top-navigation">
+        <span>精选联盟</span>
+        <div class="account-entry"><span>榆园儿食品专营店</span></div>
+      </div>
+      <a href="/ffa/w/login/account">账号管理</a>
+      <div role="dialog">切换组织/店铺
+        <button aria-label="Close"></button>
+        <div class="roleItem"><span class="introName">榆园儿食品专营店</span>店铺ID 10001 正常营业</div>
+      </div>
+    `);
+    await expect(
+      executeAllianceRetiredStage(
+        { stage: "discover-shops" },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      stage: "discover-shops",
+      currentShopName: "榆园儿食品专营店",
+      shops: [{ id: "10001", name: "榆园儿食品专营店" }]
+    });
+  });
+
   it("discovers shops across a virtualized switcher", async () => {
     const document = doc(`
       <div id="fxg-pc-header">

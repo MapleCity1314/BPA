@@ -1,4 +1,6 @@
-import { resolve } from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createCliProgram,
@@ -306,5 +308,36 @@ describe("generic Workflow run CLI", () => {
     expect(output).toEqual([
       expect.objectContaining({ id: "run-monitor", status: "succeeded" })
     ]);
+  });
+
+  it("reads Workflow input from a file without shell quote parsing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bpa-cli-input-"));
+    try {
+      const inputPath = join(root, "workflow input.json");
+      await writeFile(
+        inputPath,
+        '{"maxShops":100,"note":"双引号 \\"保留\\""}',
+        "utf8"
+      );
+      const { client, program } = fixture();
+      await program.parseAsync([
+        "node",
+        "bpa",
+        "workflow-run",
+        "doudian.alliance-retired-products-monitor",
+        "--version",
+        "2.0.0",
+        "--input-file",
+        inputPath
+      ]);
+      expect(client.calls).toContainEqual({
+        method: "run.create",
+        params: expect.objectContaining({
+          input: { maxShops: 100, note: '双引号 "保留"' }
+        })
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
