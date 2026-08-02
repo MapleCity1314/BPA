@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { chmod, unlink } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import type { DemandForecast, InventoryRiskEvaluation } from "@bpa/inventory-domain";
+import { isWindowsNamedPipe } from "@bpa/platform-runtime";
 import type { MysqlSalesDemandSync } from "./mysql-source.js";
 import type {
   InventoryRepository,
@@ -70,9 +71,11 @@ export class InventoryServiceProtocol {
 
   async start(): Promise<void> {
     if (this.#server) return;
-    await unlink(this.socketPath).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== "ENOENT") throw error;
-    });
+    if (!isWindowsNamedPipe(this.socketPath)) {
+      await unlink(this.socketPath).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
+    }
     const server = createServer({ allowHalfOpen: true }, (socket) => this.accept(socket));
     this.#server = server;
     await new Promise<void>((resolve, reject) => {
@@ -82,7 +85,9 @@ export class InventoryServiceProtocol {
         resolve();
       });
     });
-    await chmod(this.socketPath, 0o600);
+    if (!isWindowsNamedPipe(this.socketPath)) {
+      await chmod(this.socketPath, 0o600);
+    }
   }
 
   async close(): Promise<void> {
@@ -93,9 +98,11 @@ export class InventoryServiceProtocol {
         server.close((error) => (error ? reject(error) : resolve()))
       );
     }
-    await unlink(this.socketPath).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== "ENOENT") throw error;
-    });
+    if (!isWindowsNamedPipe(this.socketPath)) {
+      await unlink(this.socketPath).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
+    }
   }
 
   private accept(socket: Socket): void {

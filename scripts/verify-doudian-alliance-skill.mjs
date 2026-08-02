@@ -92,6 +92,40 @@ function safePackagePath(path) {
   );
 }
 
+async function verifyWorkBuddyBoundaries(root) {
+  const installPrompt = await readFile(
+    join(root, "references/workbuddy-install-prompt.md"),
+    "utf8"
+  );
+  const automationPrompt = await readFile(
+    join(root, "references/workbuddy-automation-prompt.md"),
+    "utf8"
+  );
+  for (const requiredInstruction of [
+    "不读取、对比或分析 Runtime 内部 JavaScript、PowerShell、Workflow 或扩展 bundle",
+    "不创建 `.mjs`、`.js`、`.ps1` 补丁",
+    "不得继续猜测或检查脚本逻辑",
+    "只有安装器自身返回 `ready` 才能宣告完成"
+  ]) {
+    if (!installPrompt.includes(requiredInstruction)) {
+      throw new Error(
+        `WorkBuddy install safety boundary is missing: ${requiredInstruction}`
+      );
+    }
+  }
+  for (const requiredInstruction of [
+    "不得自己编写或修改临时脚本、选择器、Session ID 或运行参数",
+    "不得检查 Runtime、扩展或 Workflow 的源码来临时修复运行失败",
+    "固定入口返回异常时只按结构化错误提醒运营，停止本轮任务"
+  ]) {
+    if (!automationPrompt.includes(requiredInstruction)) {
+      throw new Error(
+        `WorkBuddy automation safety boundary is missing: ${requiredInstruction}`
+      );
+    }
+  }
+}
+
 async function filesUnder(root, directory = root) {
   const result = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -122,6 +156,7 @@ async function verifySource() {
   for (const relativePath of required) {
     await requireFile(join(skillSource, relativePath), relativePath);
   }
+  await verifyWorkBuddyBoundaries(skillSource);
   const installer = await readFile(
     join(skillSource, "scripts/Install-DoudianAllianceMonitor.ps1"),
     "utf8"
@@ -212,6 +247,7 @@ async function verifyPackage(inputPath) {
     for (const relativePath of required) {
       await requireFile(join(packageRoot, relativePath), relativePath);
     }
+    await verifyWorkBuddyBoundaries(packageRoot);
     for (const [filename, canonicalPath] of Object.entries(canonicalAssets)) {
       const packagedPath = join(
         packageRoot,

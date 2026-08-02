@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 
 export type SupportedDesktopPlatform = "darwin" | "win32";
-export type LocalIpcChannel = "core" | "staging";
+export type LocalIpcChannel = string;
 
 export interface DesktopPathEnvironment {
   readonly platform?: NodeJS.Platform;
@@ -64,6 +64,9 @@ export function resolveLocalIpcEndpoint(
   channel: LocalIpcChannel,
   platform: NodeJS.Platform = process.platform
 ): string {
+  if (!/^[a-z][a-z0-9-]{0,62}$/u.test(channel)) {
+    throw new Error("BPA local IPC channel is invalid");
+  }
   const supported = supportedPlatform(platform);
   const paths = pathsFor(supported);
   if (supported === "darwin") {

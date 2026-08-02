@@ -7,6 +7,12 @@ import {
 } from "./index.js";
 
 describe("desktop runtime paths", () => {
+  it("rejects unsafe local IPC channel names", () => {
+    expect(() =>
+      resolveLocalIpcEndpoint("/tmp/bpa", "../core", "darwin")
+    ).toThrow(/channel is invalid/u);
+  });
+
   it("preserves the existing macOS layout", () => {
     expect(
       resolveDefaultBpaHome({

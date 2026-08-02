@@ -1,5 +1,6 @@
 import { createConnection, type Socket } from "node:net";
 import { isAbsolute } from "node:path";
+import { isWindowsNamedPipe } from "@bpa/platform-runtime";
 import { TeamHandlerError } from "@bpa/team-runtime";
 import type { JsonValue } from "@bpa/workflow-ir";
 
@@ -13,7 +14,11 @@ interface ServiceResponse {
 
 function configuredSocketPath(): string {
   const socketPath = process.env.BPA_INVENTORY_SOCKET;
-  if (!socketPath || !isAbsolute(socketPath) || socketPath.length > 500) {
+  if (
+    !socketPath ||
+    (!isAbsolute(socketPath) && !isWindowsNamedPipe(socketPath)) ||
+    socketPath.length > 500
+  ) {
     throw new TeamHandlerError(
       "INVENTORY_SERVICE_NOT_CONFIGURED",
       "The trusted inventory service socket is not configured"

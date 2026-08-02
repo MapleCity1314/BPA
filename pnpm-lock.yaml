@@ -230,6 +230,9 @@ importers:
       '@bpa/inventory-domain':
         specifier: workspace:*
         version: link:../../packages/inventory-domain
+      '@bpa/platform-runtime':
+        specifier: workspace:*
+        version: link:../../packages/platform-runtime
       mysql2:
         specifier: ^3.14.5
         version: 3.23.2(@types/node@24.13.3)
@@ -403,6 +406,9 @@ importers:
       '@bpa/packaging-domain':
         specifier: workspace:*
         version: link:../../packages/packaging-domain
+      '@bpa/platform-runtime':
+        specifier: workspace:*
+        version: link:../../packages/platform-runtime
       '@bpa/team-runtime':
         specifier: workspace:*
         version: link:../../packages/team-runtime

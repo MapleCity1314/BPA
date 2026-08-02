@@ -1,6 +1,7 @@
 import { chmod, mkdir, unlink, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { createAppPostgresPool } from "@bpa/app-postgres";
+import { isWindowsNamedPipe, resolveDefaultBpaHome } from "@bpa/platform-runtime";
 import { MysqlSalesDemandSync, mysqlOptionsFromEnvironment } from "./mysql-source.js";
 import { InventoryRepository } from "./repository.js";
 import { InventoryServiceProtocol } from "./service-protocol.js";
@@ -29,12 +30,18 @@ await repository.recordConfiguration({
 });
 const mysqlOptions = mysqlOptionsFromEnvironment();
 const salesSync = mysqlOptions ? new MysqlSalesDemandSync(mysqlOptions, repository) : undefined;
-await mkdir(dirname(socketPath), { recursive: true, mode: 0o700 });
+if (!isWindowsNamedPipe(socketPath)) {
+  await mkdir(dirname(socketPath), { recursive: true, mode: 0o700 });
+}
 const protocol = new InventoryServiceProtocol(socketPath,repository,salesSync,{ id:shopId,name:shopName });
 await protocol.start();
 const port = Number(process.env.BPA_INVENTORY_PORT ?? 17650);
 const web = await startInventoryWebServer({ repository,shopId,port });
-const launchUrlFile = process.env.BPA_INVENTORY_LAUNCH_URL_FILE?.trim() || `${socketPath}.review-url`;
+const launchUrlFile = process.env.BPA_INVENTORY_LAUNCH_URL_FILE?.trim() || (
+  isWindowsNamedPipe(socketPath)
+    ? join(resolveDefaultBpaHome(), "run", "inventory.review-url")
+    : `${socketPath}.review-url`
+);
 await mkdir(dirname(launchUrlFile),{ recursive:true,mode:0o700 });
 await writeFile(launchUrlFile,`${web.launchUrl}\n`,{ encoding:"utf8",mode:0o600 });
 await chmod(launchUrlFile,0o600);

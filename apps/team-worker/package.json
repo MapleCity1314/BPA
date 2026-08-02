@@ -9,6 +9,7 @@
     "@bpa/inventory-domain": "workspace:*",
     "@bpa/packaging-dataset": "workspace:*",
     "@bpa/packaging-domain": "workspace:*",
+    "@bpa/platform-runtime": "workspace:*",
     "@bpa/team-runtime": "workspace:*",
     "@bpa/workflow-ir": "workspace:*"
   }
