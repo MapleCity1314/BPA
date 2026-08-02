@@ -210,20 +210,20 @@ export class MysqlSalesDemandSync {
     const [rows] = await this.pool.query<SourceRow[]>(
       `SELECT
          id,batch_id,shop_name,shop_id,row_hash,loaded_at,period_end,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$.子订单编号')) AS child_order_id,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$.商品ID')) AS product_id,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$.商家编码')) AS merchant_code,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$.商品规格')) AS specification,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$.商品数量')) AS source_quantity,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$.订单提交时间')) AS submitted_at,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$.支付完成时间')) AS paid_at,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$.发货时间')) AS shipped_at,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$.订单状态')) AS order_status,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$.售后状态')) AS aftersales_status
+         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."子订单编号"')) AS child_order_id,
+         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."商品ID"')) AS product_id,
+         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."商家编码"')) AS merchant_code,
+         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."商品规格"')) AS specification,
+         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."商品数量"')) AS source_quantity,
+         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."订单提交时间"')) AS submitted_at,
+         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."支付完成时间"')) AS paid_at,
+         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."发货时间"')) AS shipped_at,
+         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."订单状态"')) AS order_status,
+         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."售后状态"')) AS aftersales_status
        FROM stg_doudian_manual_order_raw
        WHERE id > ? AND shop_name = ?
-         AND dataset_type = 'orders'
-         AND platform = 'douyin'
+         AND dataset_type IN ('order','orders')
+         AND platform IN ('抖音','douyin')
          AND (? IS NOT NULL AND batch_id >= ? OR ? IS NULL AND period_end >= DATE_SUB(CURRENT_DATE, INTERVAL 90 DAY))
        ORDER BY id
        LIMIT ${PAGE_SIZE}`,
