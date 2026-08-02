@@ -35,11 +35,14 @@ if (!runtimeInput || !outputInput || !outputInput.endsWith(".zip")) {
 }
 const runtimePath = resolve(runtimeInput);
 const outputPath = resolve(outputInput);
-try {
-  await stat(outputPath);
-  throw new Error(`Refusing to overwrite existing output: ${outputPath}`);
-} catch (error) {
-  if (error?.code !== "ENOENT") throw error;
+const outputChecksumPath = `${outputPath}.sha256`;
+for (const candidate of [outputPath, outputChecksumPath]) {
+  try {
+    await stat(candidate);
+    throw new Error(`Refusing to overwrite existing output: ${candidate}`);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
 }
 if (!/^bpa-local-.+-windows-x64\.zip$/u.test(basename(runtimePath))) {
   throw new Error("Runtime filename does not contain an immutable release identity");
@@ -151,6 +154,11 @@ try {
     ],
     { cwd: stage, maxBuffer: 20 * 1024 * 1024 }
   );
+  await writeFile(
+    outputChecksumPath,
+    `${await digest(outputPath)}  ${basename(outputPath)}\n`,
+    "ascii"
+  );
   await execFileAsync(
     process.execPath,
     [
@@ -159,7 +167,7 @@ try {
     ],
     { maxBuffer: 30 * 1024 * 1024 }
   );
-  process.stdout.write(`${outputPath}\n`);
+  process.stdout.write(`${outputPath}\n${outputChecksumPath}\n`);
 } finally {
   await rm(stage, { recursive: true, force: true });
 }

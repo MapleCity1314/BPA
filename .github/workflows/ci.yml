@@ -212,4 +212,6 @@ jobs:
         with:
           name: doudian-alliance-retired-monitor-skill-rc
           if-no-files-found: error
-          path: ${{ runner.temp }}/doudian-alliance-retired-monitor.skill.zip
+          path: |
+            ${{ runner.temp }}/doudian-alliance-retired-monitor.skill.zip
+            ${{ runner.temp }}/doudian-alliance-retired-monitor.skill.zip.sha256

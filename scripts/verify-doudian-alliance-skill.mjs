@@ -127,6 +127,19 @@ async function verifyPackage(inputPath) {
   let packageRoot = resolve(inputPath);
   let stage;
   if (packageRoot.endsWith(".zip")) {
+    const archivePath = packageRoot;
+    const archiveChecksumPath = `${archivePath}.sha256`;
+    await requireFile(archiveChecksumPath, "Skill archive checksum");
+    const checksumFields = (await readFile(archiveChecksumPath, "ascii"))
+      .trim()
+      .split(/\s+/u);
+    if (
+      checksumFields.length !== 2 ||
+      checksumFields[1] !== basename(archivePath) ||
+      checksumFields[0]?.toLowerCase() !== (await digest(archivePath))
+    ) {
+      throw new Error("Skill archive checksum or filename does not match");
+    }
     stage = await mkdtemp(join(tmpdir(), "bpa-skill-verify-"));
     await execFileAsync("unzip", ["-q", packageRoot, "-d", stage]);
     packageRoot = stage;
@@ -205,7 +218,7 @@ async function verifyPackage(inputPath) {
       }
     );
     process.stdout.write(
-      `Verified complete Doudian alliance Skill delivery: ${inputPath}\n`
+      `Verified complete Doudian alliance Skill delivery and checksum: ${inputPath}\n`
     );
   } finally {
     if (stage) await rm(stage, { recursive: true, force: true });
