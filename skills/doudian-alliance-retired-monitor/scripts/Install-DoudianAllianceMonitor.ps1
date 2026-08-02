@@ -16,6 +16,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
 function Write-JsonResult([hashtable]$Value) {
@@ -202,9 +203,21 @@ try {
     ).Trim()
   }
   if ($CurrentIdentity -ne $RequiredIdentity) {
-    & (Join-Path $PackageRoot "install.ps1") -InstallRoot $InstallRoot
+    $RuntimeInstallerOutput = @(
+      & (Join-Path $PackageRoot "install.ps1") `
+        -InstallRoot $InstallRoot `
+        *>&1
+    )
     if ($LASTEXITCODE -ne 0) {
-      throw "The BPA Runtime installer exited with code $LASTEXITCODE."
+      $RuntimeInstallerDetail = (
+        $RuntimeInstallerOutput |
+          Select-Object -Last 20 |
+          ForEach-Object { [string]$_ }
+      ) -join "`n"
+      throw (
+        "The BPA Runtime installer exited with code $LASTEXITCODE." +
+        " $RuntimeInstallerDetail"
+      )
     }
     $RuntimeInstalled = $true
   }

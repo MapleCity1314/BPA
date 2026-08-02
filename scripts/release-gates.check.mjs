@@ -114,6 +114,30 @@ test("allows CI to reuse only the successful Windows repository gate", async () 
   assert.match(ciSource, /-SkipRepositoryVerification/u);
 });
 
+test("keeps WorkBuddy Windows installation progress machine-readable", async () => {
+  const [runtimeInstaller, workBuddyInstaller] = await Promise.all([
+    readFile(new URL("install-windows-x64.ps1", import.meta.url), "utf8"),
+    readFile(
+      new URL(
+        "../skills/doudian-alliance-retired-monitor/scripts/" +
+          "Install-DoudianAllianceMonitor.ps1",
+        import.meta.url
+      ),
+      "utf8"
+    )
+  ]);
+  for (const installer of [runtimeInstaller, workBuddyInstaller]) {
+    assert.match(
+      installer,
+      /\$ProgressPreference\s*=\s*"SilentlyContinue"/u
+    );
+  }
+  assert.match(
+    workBuddyInstaller,
+    /\$RuntimeInstallerOutput\s*=\s*@\([\s\S]*?\*>&1[\s\S]*?\)/u
+  );
+});
+
 test("rejects legacy names and metadata drift", () => {
   const release = createReleaseMetadata({
     runtimeVersion: "0.4.0",
