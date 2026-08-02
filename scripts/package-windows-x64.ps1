@@ -66,8 +66,10 @@ try {
     throw "Native Host SEA bundle failed."
   }
   $SeaConfig = @{
-    main = $SeaBundle
-    output = (Join-Path $SeaRoot "sea-prep.blob")
+    # Node embeds the main value in the SEA blob. Keep both paths relative so
+    # the random isolated build directory cannot affect the executable bytes.
+    main = "bpa-native-host.cjs"
+    output = "sea-prep.blob"
     disableExperimentalSEAWarning = $true
     useSnapshot = $false
     useCodeCache = $false
@@ -76,9 +78,14 @@ try {
     -LiteralPath (Join-Path $SeaRoot "sea-config.json") `
     -Value $SeaConfig `
     -Encoding utf8NoBOM
-  node --experimental-sea-config (Join-Path $SeaRoot "sea-config.json")
-  if ($LASTEXITCODE -ne 0) {
-    throw "Native Host SEA preparation failed."
+  Push-Location $SeaRoot
+  try {
+    node --experimental-sea-config "sea-config.json"
+    if ($LASTEXITCODE -ne 0) {
+      throw "Native Host SEA preparation failed."
+    }
+  } finally {
+    Pop-Location
   }
   $NativeHostExe = Join-Path $SeaRoot "bpa-native-host.exe"
   Copy-Item -LiteralPath (Get-Command node).Source -Destination $NativeHostExe

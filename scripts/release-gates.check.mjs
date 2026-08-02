@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -61,6 +68,27 @@ test("uses the exact Node.js patch in the immutable RC identity", () => {
     architecture: "x64"
   });
   assert.notEqual(first.identity, second.identity);
+});
+
+test("uses build-directory-independent SEA configuration", async () => {
+  const [powerShellSource, shellSource] = await Promise.all(
+    ["package-windows-x64.ps1", "package-windows-x64.sh"].map((name) =>
+      readFile(new URL(name, import.meta.url), "utf8")
+    )
+  );
+  assert.match(powerShellSource, /main\s*=\s*"bpa-native-host\.cjs"/u);
+  assert.match(powerShellSource, /output\s*=\s*"sea-prep\.blob"/u);
+  assert.doesNotMatch(powerShellSource, /main\s*=\s*\$SeaBundle/u);
+  assert.match(powerShellSource, /Push-Location \$SeaRoot/u);
+  assert.match(
+    shellSource,
+    /"\$SEA_ROOT\/sea-config\.json"\s*\\\s*"bpa-native-host\.cjs"\s*\\\s*"sea-prep\.blob"/u
+  );
+  assert.match(shellSource, /cd "\$SEA_ROOT"/u);
+  assert.doesNotMatch(
+    shellSource,
+    /--experimental-sea-config "\$SEA_ROOT\/sea-config\.json"/u
+  );
 });
 
 test("rejects legacy names and metadata drift", () => {

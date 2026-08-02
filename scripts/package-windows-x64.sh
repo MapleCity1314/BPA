@@ -111,9 +111,12 @@ PATH="${BUNDLED_NODE:h}:$PATH" pnpm exec esbuild \
   );
 ' \
   "$SEA_ROOT/sea-config.json" \
-  "$SEA_ROOT/bpa-native-host.cjs" \
-  "$SEA_ROOT/sea-prep.blob"
-"$BUNDLED_NODE" --experimental-sea-config "$SEA_ROOT/sea-config.json"
+  "bpa-native-host.cjs" \
+  "sea-prep.blob"
+(
+  cd "$SEA_ROOT"
+  "$BUNDLED_NODE" --experimental-sea-config sea-config.json
+)
 cp "$WINDOWS_NODE" "$SEA_ROOT/bpa-native-host.exe"
 PATH="${BUNDLED_NODE:h}:$PATH" pnpm exec postject \
   "$SEA_ROOT/bpa-native-host.exe" \
