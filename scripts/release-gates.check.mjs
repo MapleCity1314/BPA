@@ -91,6 +91,25 @@ test("uses build-directory-independent SEA configuration", async () => {
   );
 });
 
+test("allows CI to reuse only the successful Windows repository gate", async () => {
+  const [powerShellSource, ciSource] = await Promise.all([
+    readFile(new URL("package-windows-x64.ps1", import.meta.url), "utf8"),
+    readFile(
+      new URL("../.github/workflows/ci.yml", import.meta.url),
+      "utf8"
+    )
+  ]);
+  assert.match(
+    powerShellSource,
+    /if \(-not \$SkipRepositoryVerification\) \{\s+pnpm verify/u
+  );
+  assert.match(
+    ciSource,
+    /release-package-windows:\s+needs: verify-windows/u
+  );
+  assert.match(ciSource, /-SkipRepositoryVerification/u);
+});
+
 test("rejects legacy names and metadata drift", () => {
   const release = createReleaseMetadata({
     runtimeVersion: "0.4.0",

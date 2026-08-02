@@ -2,6 +2,7 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -97,6 +98,7 @@ jobs:
             ${{ runner.temp }}/bpa-local-*-macos-arm64.tar.gz.sha256
 
   release-package-windows:
+    needs: verify-windows
     runs-on: windows-2025
     timeout-minutes: 60
     strategy:
@@ -126,8 +128,12 @@ jobs:
           New-Item -ItemType Directory -Path $firstDirectory, $secondDirectory -Force | Out-Null
           $firstArchive = Join-Path $firstDirectory "bpa-local-$identity-windows-x64.zip"
           $secondArchive = Join-Path $secondDirectory "bpa-local-$identity-windows-x64.zip"
-          ./scripts/package-windows-x64.ps1 -Output $firstArchive
-          ./scripts/package-windows-x64.ps1 -Output $secondArchive
+          ./scripts/package-windows-x64.ps1 `
+            -Output $firstArchive `
+            -SkipRepositoryVerification
+          ./scripts/package-windows-x64.ps1 `
+            -Output $secondArchive `
+            -SkipRepositoryVerification
           ./scripts/verify-package-windows-x64.ps1 -Archive $firstArchive
           ./scripts/verify-package-windows-x64.ps1 -Archive $secondArchive
           ./scripts/compare-windows-runtime-archives.ps1 `

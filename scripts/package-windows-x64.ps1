@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-  [string]$Output
+  [string]$Output,
+  [switch]$SkipRepositoryVerification
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,9 +36,11 @@ if (Test-Path -LiteralPath $Output) {
   throw "Release output already exists and will not be overwritten."
 }
 
-pnpm verify
-if ($LASTEXITCODE -ne 0) {
-  throw "Repository verification failed."
+if (-not $SkipRepositoryVerification) {
+  pnpm verify
+  if ($LASTEXITCODE -ne 0) {
+    throw "Repository verification failed."
+  }
 }
 node --test (Join-Path $ProjectRoot "scripts\release-gates.check.mjs")
 if ($LASTEXITCODE -ne 0) {
