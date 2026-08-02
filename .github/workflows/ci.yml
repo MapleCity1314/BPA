@@ -35,6 +35,22 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
 
+  performance-gate:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+          run_install: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm performance:check
+
   release-package:
     runs-on: macos-15
     timeout-minutes: 30
@@ -82,7 +98,11 @@ jobs:
 
   release-package-windows:
     runs-on: windows-2025
-    timeout-minutes: 35
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        builder: [1, 2]
     steps:
       - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
@@ -101,20 +121,66 @@ jobs:
           $version = node -p 'require("./package.json").version'
           $nodeVersion = node -p 'process.versions.node'
           $identity = "v$version-rc.$($commit.Substring(0, 12)).node$nodeVersion"
-          $archive = Join-Path $env:RUNNER_TEMP "bpa-local-$identity-windows-x64.zip"
-          ./scripts/package-windows-x64.ps1 -Output $archive
-          ./scripts/verify-package-windows-x64.ps1 -Archive $archive
+          $firstDirectory = Join-Path $env:RUNNER_TEMP "build-first"
+          $secondDirectory = Join-Path $env:RUNNER_TEMP "build-second"
+          New-Item -ItemType Directory -Path $firstDirectory, $secondDirectory -Force | Out-Null
+          $firstArchive = Join-Path $firstDirectory "bpa-local-$identity-windows-x64.zip"
+          $secondArchive = Join-Path $secondDirectory "bpa-local-$identity-windows-x64.zip"
+          ./scripts/package-windows-x64.ps1 -Output $firstArchive
+          ./scripts/package-windows-x64.ps1 -Output $secondArchive
+          ./scripts/verify-package-windows-x64.ps1 -Archive $firstArchive
+          ./scripts/verify-package-windows-x64.ps1 -Archive $secondArchive
+          ./scripts/compare-windows-runtime-archives.ps1 `
+            -FirstArchive $firstArchive `
+            -SecondArchive $secondArchive
       - name: Upload verified Windows RC archive
+        uses: actions/upload-artifact@v6
+        with:
+          name: bpa-windows-x64-rc-builder-${{ matrix.builder }}
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/build-first/bpa-local-*-windows-x64.zip
+            ${{ runner.temp }}/build-first/bpa-local-*-windows-x64.zip.sha256
+
+  verify-windows-reproducibility:
+    needs: release-package-windows
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: bpa-windows-x64-rc-builder-*
+          path: ${{ runner.temp }}/builders
+      - name: Compare independent Builder closures
+        shell: pwsh
+        run: |
+          $archives = @(Get-ChildItem `
+            -LiteralPath (Join-Path $env:RUNNER_TEMP "builders") `
+            -Filter "bpa-local-*-windows-x64.zip" `
+            -File `
+            -Recurse)
+          if ($archives.Count -ne 2) {
+            throw "Expected exactly two independent Builder archives"
+          }
+          ./scripts/compare-windows-runtime-archives.ps1 `
+            -FirstArchive $archives[0].FullName `
+            -SecondArchive $archives[1].FullName
+          $canonical = Join-Path $env:RUNNER_TEMP "canonical"
+          New-Item -ItemType Directory -Path $canonical -Force | Out-Null
+          Copy-Item -LiteralPath $archives[0].FullName -Destination $canonical
+          Copy-Item -LiteralPath "$($archives[0].FullName).sha256" -Destination $canonical
+      - name: Upload cross-Builder verified Runtime
         uses: actions/upload-artifact@v6
         with:
           name: bpa-windows-x64-rc
           if-no-files-found: error
           path: |
-            ${{ runner.temp }}/bpa-local-*-windows-x64.zip
-            ${{ runner.temp }}/bpa-local-*-windows-x64.zip.sha256
+            ${{ runner.temp }}/canonical/bpa-local-*-windows-x64.zip
+            ${{ runner.temp }}/canonical/bpa-local-*-windows-x64.zip.sha256
 
   release-workbuddy-skill:
-    needs: release-package-windows
+    needs: verify-windows-reproducibility
     runs-on: macos-15
     timeout-minutes: 20
     steps:

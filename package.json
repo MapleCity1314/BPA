@@ -21,6 +21,7 @@
     "repository:check": "node scripts/verify-repository.mjs",
     "architecture:check": "node scripts/verify-architecture-boundaries.mjs",
     "supply-chain:check": "node scripts/verify-supply-chain.mjs",
+    "performance:check": "tsx scripts/verify-persistence-scale.ts",
     "scripts:check": "node scripts/check-scripts.mjs",
     "docs:dev": "pnpm --filter @bpa/docs dev",
     "docs:build": "pnpm --filter @bpa/docs build",

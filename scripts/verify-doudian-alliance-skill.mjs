@@ -44,6 +44,15 @@ async function digest(path) {
   return createHash("sha256").update(await readFile(path)).digest("hex");
 }
 
+async function requireCanonicalLf(path, label) {
+  const bytes = await readFile(path);
+  if (bytes.includes(Buffer.from("\r\n"))) {
+    throw new Error(
+      `${label} uses CRLF; release identities require canonical LF bytes`
+    );
+  }
+}
+
 async function requireFile(path, label) {
   try {
     await access(path);
@@ -68,6 +77,7 @@ async function verifySource() {
     "utf8"
   );
   for (const [filename, path] of Object.entries(canonicalAssets)) {
+    await requireCanonicalLf(path, filename);
     const expectedDigest = await digest(path);
     if (
       !installer.includes(filename) ||
@@ -80,6 +90,10 @@ async function verifySource() {
   }
   const promptDigest = await digest(
     join(skillSource, "references/workbuddy-automation-prompt.md")
+  );
+  await requireCanonicalLf(
+    join(skillSource, "references/workbuddy-automation-prompt.md"),
+    "WorkBuddy automation prompt"
   );
   if (!installer.includes(promptDigest)) {
     throw new Error("Installer automation prompt pin is stale");
