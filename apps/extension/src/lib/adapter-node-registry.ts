@@ -73,6 +73,7 @@ function blockingSignal(code: string): RiskSignal | undefined {
       "RISK_CONTROL",
       "SESSION_EXPIRED",
       "SHOP_IDENTITY_MISMATCH",
+      "SHOP_CONTEXT_RESTORE_FAILED",
       "SHOP_SWITCH_NOT_CONFIRMED"
     ].includes(code)
   ) {
@@ -92,7 +93,8 @@ function blockingSignal(code: string): RiskSignal | undefined {
     category:
       code === "SESSION_EXPIRED" || code === "AUTH_REQUIRED"
         ? "session"
-        : code === "PAGE_CONTEXT_CHANGED"
+        : code === "PAGE_CONTEXT_CHANGED" ||
+            code === "SHOP_CONTEXT_RESTORE_FAILED"
           ? "page_context"
           : "challenge",
     severity: "blocking",
@@ -209,13 +211,11 @@ const scanAllianceShop: AdapterNodeHandler = async (input, context) => {
   try {
     await driver.cleanupShopTabs();
     await driver.switchShop(sourceShop);
-  } catch (restoreError) {
-    return errorResponse(
-      primaryError ??
-        (restoreError instanceof Error
-          ? new Error("SHOP_CONTEXT_RESTORE_FAILED")
-          : restoreError)
-    );
+  } catch {
+    // A failed restore invalidates the browser context for every remaining
+    // shop. It must take precedence over the original collection error so
+    // the Workflow stops with the correct blocking recovery instruction.
+    return errorResponse(new Error("SHOP_CONTEXT_RESTORE_FAILED"));
   }
   if (primaryError) return errorResponse(primaryError);
   if (!result) return errorResponse(new Error("RETIRED_PRODUCTS_MISSING"));

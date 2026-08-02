@@ -377,6 +377,7 @@ $BusinessDate = [TimeZoneInfo]::ConvertTimeFromUtc(
 ).ToString("yyyy-MM-dd")
 $Run = $null
 $RuntimeError = $null
+$RunError = $null
 try {
   $RunText = & ([string]$Configuration.bpaCommand) @Arguments 2>&1
   if ($LASTEXITCODE -ne 0) {
@@ -386,10 +387,53 @@ try {
 } catch {
   $RuntimeError = $_.Exception.Message
 }
+if ($Run -and $Run.status -ne "succeeded") {
+  try {
+    $EventsText = & ([string]$Configuration.bpaCommand) `
+      "events" `
+      ([string]$Run.id) `
+      2>&1
+    if ($LASTEXITCODE -eq 0) {
+      $Events = @(($EventsText -join "`n") | ConvertFrom-Json)
+      $FailureEvents = @(
+        $Events | Where-Object {
+          $_.payload -and $_.payload.errorCode
+        }
+      )
+      if ($FailureEvents.Count -gt 0) {
+        $Failure = $FailureEvents | Select-Object -Last 1
+        $RunError = @{
+          code = [string]$Failure.payload.errorCode
+          message = "Workflow stopped after $([string]$Failure.type)."
+          event = $Failure.payload
+        }
+      }
+    }
+  } catch {
+    # The terminal Run remains authoritative. Event diagnostics are best-effort
+    # and must never turn an incomplete Run into a successful result.
+  }
+  if (-not $RunError) {
+    $RunError = @{
+      code = if ($Run.status -eq "uncertain") {
+        "WORKFLOW_RUN_UNCERTAIN"
+      } else {
+        "WORKFLOW_RUN_INCOMPLETE"
+      }
+      message = "Workflow ended with status $([string]$Run.status)."
+    }
+  }
+}
 $Scan = if ($Run -and $Run.output) { $Run.output.scan } else { $null }
 $Complete = $Run.status -eq "succeeded" -and
   @("complete_empty", "complete_with_items") -contains $Scan.status
 $Found = $Complete -and $Scan.status -eq "complete_with_items"
+if (-not $RuntimeError -and -not $Complete -and -not $RunError) {
+  $RunError = @{
+    code = "WORKFLOW_OUTPUT_INCOMPLETE"
+    message = "Workflow succeeded without a complete scan contract."
+  }
+}
 $Status = if ($RuntimeError) {
   "runtime_error"
 } elseif ($Complete) {
@@ -404,7 +448,31 @@ $Message = if ($RuntimeError) {
 } elseif ($Complete) {
   "所有店铺完整扫描，未发现已清退商品。"
 } else {
-  "精选联盟巡检未形成完整结果，禁止按今日正常处理。"
+  switch -Regex ([string]$RunError.code) {
+    "AUTH_REQUIRED|SESSION_EXPIRED" {
+      "抖店登录状态已失效，请运营人工重新登录后重跑。"
+      break
+    }
+    "CAPTCHA_REQUIRED|CHALLENGE|RISK_CONTROL" {
+      "页面需要人工完成验证码或风控确认，巡检已停止。"
+      break
+    }
+    "CONTENT_SCRIPT_MISSING|FEATURE_MISMATCH" {
+      "浏览器扩展未正确注入或版本不匹配，请重载扩展并刷新抖店页面。"
+      break
+    }
+    "BRIDGE_DISCONNECTED" {
+      "BPA Browser Bridge 已断开，请恢复浏览器连接后重跑。"
+      break
+    }
+    "SHOP_CONTEXT_RESTORE_FAILED|SHOP_IDENTITY" {
+      "店铺身份或源店铺恢复无法确认，巡检已停止以避免串店。"
+      break
+    }
+    default {
+      "精选联盟巡检未形成完整结果（$([string]$RunError.code)），禁止按今日正常处理。"
+    }
+  }
 }
 $Attempt = [ordered]@{
   runId = if ($Run) { [string]$Run.id } else { $null }
@@ -417,6 +485,8 @@ $Attempt = [ordered]@{
   output = if ($Run) { $Run.output } else { $null }
   error = if ($RuntimeError) {
     @{ code = "WORKBUDDY_MONITOR_RUNTIME_ERROR"; message = $RuntimeError }
+  } elseif ($RunError) {
+    $RunError
   } else { $null }
 }
 New-Item -ItemType Directory -Path $Configuration.recordsDir -Force | Out-Null
