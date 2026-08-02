@@ -39,7 +39,10 @@ export async function invokeInventoryService(
   if (signal.aborted) {
     throw new TeamHandlerError("TEAM_HANDLER_CANCELLED", "Inventory service request was cancelled");
   }
-  const payload = Buffer.from(JSON.stringify({ id: requestId(), operation, input }), "utf8");
+  const payload = Buffer.from(
+    `${JSON.stringify({ id: requestId(), operation, input })}\n`,
+    "utf8"
+  );
   if (payload.byteLength > MAX_FRAME_BYTES) {
     throw new TeamHandlerError("TEAM_HANDLER_INPUT_INVALID", "Inventory service request exceeds 1 MiB");
   }
@@ -61,7 +64,7 @@ export async function invokeInventoryService(
     signal.addEventListener("abort", abort, { once: true });
 
     socket = createConnection(configuredSocketPath());
-    socket.once("connect", () => socket?.end(payload));
+    socket.once("connect", () => socket?.write(payload));
     socket.on("data", (chunk: Buffer) => {
       body = Buffer.concat([body, chunk]);
       if (body.byteLength > MAX_FRAME_BYTES) {

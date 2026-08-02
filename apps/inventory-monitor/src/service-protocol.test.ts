@@ -10,7 +10,7 @@ async function request(socketPath: string, value: unknown): Promise<Record<strin
   return new Promise((resolve,reject) => {
     let body = "";
     const socket = createConnection(socketPath);
-    socket.once("connect",() => socket.end(JSON.stringify(value)));
+    socket.once("connect",() => socket.write(`${JSON.stringify(value)}\n`));
     socket.setEncoding("utf8");
     socket.on("data",(chunk) => { body += chunk; });
     socket.once("error",reject);

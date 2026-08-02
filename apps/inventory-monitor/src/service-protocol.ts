@@ -56,7 +56,9 @@ function lease(value: unknown): LeaseFence {
 }
 
 function response(socket: Socket, value: unknown): void {
-  socket.end(`${JSON.stringify(value)}\n`);
+  if (!socket.destroyed && socket.writable) {
+    socket.end(`${JSON.stringify(value)}\n`);
+  }
 }
 
 export class InventoryServiceProtocol {
@@ -108,18 +110,13 @@ export class InventoryServiceProtocol {
   private accept(socket: Socket): void {
     let body = Buffer.alloc(0);
     let settled = false;
-    socket.on("data", (chunk: Buffer) => {
-      if (settled) return;
-      body = Buffer.concat([body, chunk]);
-      if (body.byteLength > MAX_REQUEST_BYTES) {
-        settled = true;
-        response(socket, { ok: false, error: { code: "PAYLOAD_TOO_LARGE", message: "Request exceeded 1 MiB" } });
-      }
+    socket.on("error", () => {
+      settled = true;
     });
-    socket.once("end", () => {
+    const dispatch = (frame: Uint8Array): void => {
       if (settled) return;
       settled = true;
-      void this.handle(body)
+      void this.handle(frame)
         .then((result) => response(socket, result))
         .catch((error) =>
           response(socket, {
@@ -130,6 +127,34 @@ export class InventoryServiceProtocol {
             }
           })
         );
+    };
+    socket.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      body = Buffer.concat([body, chunk]);
+      if (body.byteLength > MAX_REQUEST_BYTES) {
+        settled = true;
+        response(socket, { ok: false, error: { code: "PAYLOAD_TOO_LARGE", message: "Request exceeded 1 MiB" } });
+        return;
+      }
+      const boundary = body.indexOf(0x0a);
+      if (boundary >= 0) {
+        const trailing = body.subarray(boundary + 1).toString("utf8").trim();
+        if (trailing) {
+          settled = true;
+          response(socket, {
+            ok: false,
+            error: {
+              code: "MULTIPLE_REQUESTS_NOT_ALLOWED",
+              message: "Only one request frame is allowed per connection"
+            }
+          });
+          return;
+        }
+        dispatch(body.subarray(0, boundary));
+      }
+    });
+    socket.once("end", () => {
+      dispatch(body);
     });
   }
 
