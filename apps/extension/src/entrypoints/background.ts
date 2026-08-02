@@ -44,6 +44,7 @@ import {
 } from "../lib/page-observer-registry";
 import { resolveNavigationTarget } from "../lib/navigation-target";
 import { executeRegisteredAdapterNode } from "../lib/adapter-node-registry";
+import { ContentScriptRecovery } from "../lib/content-script-recovery";
 
 const NATIVE_HOST = "com.bpa.browser";
 const PROTOCOL = BROWSER_PROTOCOL;
@@ -81,6 +82,7 @@ export default defineBackground(() => {
     }
   >();
   const probeGenerations = new Map<number, number>();
+  const contentScriptRecovery = new ContentScriptRecovery();
   const assistancePanel = new AssistancePanelRepository({
     get: (key) => browser.storage.local.get(key),
     set: (value) => browser.storage.local.set(value)
@@ -338,9 +340,19 @@ export default defineBackground(() => {
       return;
     }
     try {
-      const response = (await browser.tabs.sendMessage(tabId, {
-        type: "bpa.content.probe",
-        pageEpoch
+      const response = (await contentScriptRecovery.probe({
+        tabId,
+        probe: () =>
+          browser.tabs.sendMessage(tabId, {
+            type: "bpa.content.probe",
+            pageEpoch
+          }),
+        inject: async () => {
+          await browser.scripting.executeScript({
+            target: { tabId },
+            files: ["/content-scripts/content.js"]
+          });
+        }
       })) as {
         pageEpoch?: string;
         observerCapabilityId?: string;
@@ -1420,6 +1432,7 @@ export default defineBackground(() => {
     void probeTab(tabId);
   });
   browser.tabs.onRemoved.addListener((tabId) => {
+    contentScriptRecovery.forget(tabId);
     void invalidateTrackedTab(tabId, "TAB_CLOSED");
   });
   setInterval(() => void probeAllSourceTabs(), 10_000);
