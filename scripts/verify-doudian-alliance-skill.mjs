@@ -53,6 +53,18 @@ async function requireCanonicalLf(path, label) {
   }
 }
 
+async function requireUtf8Bom(path, label) {
+  const bytes = await readFile(path);
+  if (
+    bytes.length < 3 ||
+    bytes[0] !== 0xef ||
+    bytes[1] !== 0xbb ||
+    bytes[2] !== 0xbf
+  ) {
+    throw new Error(`${label} must use UTF-8 BOM for Windows PowerShell 5.1`);
+  }
+}
+
 async function requireFile(path, label) {
   try {
     await access(path);
@@ -75,6 +87,10 @@ async function verifySource() {
   const installer = await readFile(
     join(skillSource, "scripts/Install-DoudianAllianceMonitor.ps1"),
     "utf8"
+  );
+  await requireUtf8Bom(
+    join(skillSource, "scripts/Install-DoudianAllianceMonitor.ps1"),
+    "Doudian alliance installer"
   );
   for (const [filename, path] of Object.entries(canonicalAssets)) {
     await requireCanonicalLf(path, filename);
