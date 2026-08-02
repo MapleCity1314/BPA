@@ -18,12 +18,14 @@ import {
   validateResourceBinding
 } from "./index.js";
 
-const clock = {
-  value: 1_000,
-  now() {
-    return this.value++;
-  }
-};
+function createClock() {
+  return {
+    value: 1_000,
+    now() {
+      return this.value++;
+    }
+  };
+}
 
 const requirement: BrowserResourceRequirementSnapshot = {
   kind: "browser",
@@ -53,6 +55,7 @@ const binding: ResourceBindingRef = {
 
 describe("Resource Binding state", () => {
   it("moves through requested, validated, frozen and available with injected time", () => {
+    const clock = createClock();
     const requested = requestResourceBinding(
       {
         bindingId: "binding-1",
@@ -103,6 +106,7 @@ describe("Resource Binding state", () => {
   });
 
   it("rejects skipped and terminal transitions", () => {
+    const clock = createClock();
     const requested = requestResourceBinding(
       {
         bindingId: "binding-1",

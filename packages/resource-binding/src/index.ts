@@ -78,7 +78,16 @@ function transition(
   changes: Partial<ResourceBindingRecord> = {},
   clearReason = false
 ): ResourceBindingTransition {
-  const at = clock.now();
+  return transitionAt(record, to, clock.now(), changes, clearReason);
+}
+
+function transitionAt(
+  record: ResourceBindingRecord,
+  to: ResourceBindingState,
+  at: number,
+  changes: Partial<ResourceBindingRecord> = {},
+  clearReason = false
+): ResourceBindingTransition {
   const { reason: _previousReason, ...withoutReason } = record;
   const next: ResourceBindingRecord = {
     ...(clearReason ? withoutReason : record),
@@ -180,14 +189,15 @@ export function freezeResourceBinding(
   if (record.state !== "validated" || !record.candidate) {
     throw new InvalidResourceBindingTransitionError(record.state, "frozen");
   }
-  return transition(
+  const frozenAt = clock.now();
+  return transitionAt(
     record,
     "frozen",
-    clock,
+    frozenAt,
     {
       frozen: {
         ...copyBinding(record.candidate),
-        frozenAt: clock.now()
+        frozenAt
       }
     },
     true
