@@ -1,0 +1,63 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: sales-demand.forecast
+  version: 1.0.0
+  title: 预测 SKU 分位数需求
+  description: 在有界 90 天小时需求序列上回测选择季节朴素、加权均值或 Croston-SBA，并输出未来 2、6、24 小时 P50/P90。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [asOf, observations]
+  properties:
+    asOf: { type: string, format: date-time }
+    observations:
+      type: array
+      maxItems: 2160
+      items:
+        type: object
+        additionalProperties: false
+        required: [at, quantity]
+        properties:
+          at: { type: string, format: date-time }
+          quantity: { type: number, minimum: 0 }
+    fallbackHourlyRate: { type: number, minimum: 0 }
+    fallbackReason: { type: string, maxLength: 500 }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [algorithmVersion, asOf, selectedModel, dailyP50, dailyP90, horizons, confidence, recentAcceleration, trainingHours, diagnostics]
+  properties:
+    algorithmVersion: { const: inventory-demand-ensemble-conformal/1.0.0 }
+    asOf: { type: string, format: date-time }
+    selectedModel: { enum: [seasonal_naive, weighted_mean, croston_sba, hierarchical_fallback] }
+    dailyP50: { type: number, minimum: 0 }
+    dailyP90: { type: number, minimum: 0 }
+    horizons:
+      type: array
+      minItems: 3
+      maxItems: 3
+      items:
+        type: object
+        additionalProperties: false
+        required: [hours, p50, p90]
+        properties:
+          hours: { enum: [2, 6, 24] }
+          p50: { type: number, minimum: 0 }
+          p90: { type: number, minimum: 0 }
+    confidence: { enum: [high, medium, low] }
+    recentAcceleration: { type: number, minimum: 0.75, maximum: 3 }
+    trainingHours: { type: integer, minimum: 0, maximum: 2160 }
+    diagnostics:
+      type: array
+      maxItems: 100
+      items: { type: string, maxLength: 1000 }
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 10s
+  idempotency: pure
+  cancellable: true
+errors: [TEAM_HANDLER_INPUT_INVALID, TEAM_HANDLER_RESULT_LIMIT_EXCEEDED, TEAM_HANDLER_CANCELLED, TEAM_HANDLER_TIMEOUT]

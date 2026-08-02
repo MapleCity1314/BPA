@@ -6,6 +6,7 @@
   "dependencies": {
     "@bpa/dataset-core": "workspace:*",
     "@bpa/ecommerce-evidence-domain": "workspace:*",
+    "@bpa/inventory-domain": "workspace:*",
     "@bpa/packaging-dataset": "workspace:*",
     "@bpa/packaging-domain": "workspace:*",
     "@bpa/team-runtime": "workspace:*",

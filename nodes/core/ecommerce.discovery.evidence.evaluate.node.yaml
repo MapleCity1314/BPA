@@ -1,0 +1,29 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: ecommerce.discovery.evidence.evaluate
+  version: 1.0.0
+  title: 形成三平台探查证据声明
+  description: 将搜索页可见字段限定为一级来源事实，明确不证明统一销量、GMV、官方类目或视觉因果。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [observedAt, discovery, comparablePool]
+  properties:
+    observedAt: { type: string, format: date-time }
+    discovery: { type: object }
+    comparablePool: { type: object }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [schemaVersion, observedAt, maximumEstablishedLevel, claims, notEstablished]
+  properties:
+    schemaVersion: { const: evidence-claims/v0.3 }
+    observedAt: { type: string, format: date-time }
+    maximumEstablishedLevel: { const: E1 }
+    claims: { type: array, maxItems: 150, items: { type: object } }
+    notEstablished: { type: array, items: { type: string } }
+risk: { level: R0, permissions: [] }
+execution: { timeoutDefault: 10s, idempotency: pure, cancellable: true }
+errors: [TEAM_HANDLER_INPUT_INVALID, TEAM_HANDLER_RESULT_LIMIT_EXCEEDED, TEAM_HANDLER_CANCELLED, TEAM_HANDLER_TIMEOUT]

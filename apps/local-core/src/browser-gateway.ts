@@ -68,6 +68,7 @@ interface ActiveSession {
   id: string;
   browserInstanceId: string;
   extensionVersion: string;
+  bridgeBuildId: string;
   connectedAt: number;
   incoming: ProtocolSessionGuard;
   incomingSeq: number;
@@ -202,7 +203,8 @@ export class LocalBrowserGateway implements RuntimeProvider {
     readonly signingKey: CoreSigningKey,
     extensionId =
       process.env.BPA_EXTENSION_ID ?? DEFAULT_BPA_EXTENSION_ID,
-    readonly evidence?: BrowserEvidenceReceiver
+    readonly evidence?: BrowserEvidenceReceiver,
+    readonly expectedBridgeBuildId = process.env.BPA_RUNTIME_ID?.trim()
   ) {
     this.#extensionId = extensionId;
     this.persistence.pruneBrowserPageObservations({
@@ -424,6 +426,12 @@ export class LocalBrowserGateway implements RuntimeProvider {
             !features.includes("active_page_probe_v1"))
         ) {
           throw new Error("BROWSER_BRIDGE_FEATURE_MISMATCH");
+        }
+        if (
+          this.expectedBridgeBuildId &&
+          candidate.payload?.bridge_build_id !== this.expectedBridgeBuildId
+        ) {
+          throw new Error("BROWSER_BRIDGE_BUILD_MISMATCH");
         }
         this.#handleHello(connection, candidate);
         return;
@@ -725,11 +733,28 @@ export class LocalBrowserGateway implements RuntimeProvider {
       now: now.toISOString()
     });
     const activeSessionId = opened.session.id;
+    if (opened.resumedFrom) {
+      // A resumed extension process has lost its in-memory page revision
+      // namespace. Remove the disconnected observations before accepting the
+      // new process' revision 1 reports; every existing binding remains stale
+      // and must be resolved again from fresh page facts.
+      this.persistence.resetBrowserPageObservations(activeSessionId);
+      for (const [otherId, other] of this.#connections) {
+        if (
+          otherId !== connection.id &&
+          other.session?.id === activeSessionId
+        ) {
+          other.lastError = "BROWSER_SESSION_SUPERSEDED";
+          this.#connections.delete(otherId);
+        }
+      }
+    }
     guard.establish(activeSessionId, 0);
     connection.session = {
       id: activeSessionId,
       browserInstanceId: opened.session.browserInstanceId,
       extensionVersion: opened.session.extensionVersion,
+      bridgeBuildId: String(payload.bridge_build_id ?? "unknown"),
       connectedAt: Date.parse(opened.session.connectedAt),
       incoming: guard,
       incomingSeq: 0,

@@ -1,7 +1,12 @@
 import {
   detectDoudianRiskSignals,
-  readDoudianShopContext
+  readDoudianShopContext,
+  readDoudianVisibleShopIdentity
 } from "@bpa/adapter-doudian";
+import {
+  detectMarketplaceRiskSignals,
+  isMarketplaceSearchPageReady
+} from "@bpa/adapter-marketplace";
 import { firstBlockingRiskSignal } from "@bpa/node-runtime";
 
 export type PageAuthenticationState =
@@ -56,10 +61,72 @@ async function authenticationContextRef(
   return `auth-context-${hex}`;
 }
 
+function marketplaceObserver(
+  capabilityId: string,
+  origin: string
+): PageObserver {
+  return {
+    capabilityId,
+    supports: (url) => url.origin === origin,
+    async probe(document, url) {
+      if (isAuthenticationPath(url.pathname)) {
+        return {
+          observerCapabilityId: capabilityId,
+          authentication: { state: "anonymous" },
+          observationState: "auth_required",
+          reasonCode: "SESSION_EXPIRED"
+        };
+      }
+      const blocking = firstBlockingRiskSignal(
+        detectMarketplaceRiskSignals(document, url.href)
+      );
+      if (blocking) {
+        return {
+          observerCapabilityId: capabilityId,
+          authentication: {
+            state: blocking.code === "SESSION_EXPIRED" ? "anonymous" : "unknown"
+          },
+          observationState:
+            blocking.code === "SESSION_EXPIRED" ? "auth_required" : "challenge",
+          reasonCode: blocking.code
+        };
+      }
+      if (!isMarketplaceSearchPageReady(document, url.href)) {
+        return {
+          observerCapabilityId: capabilityId,
+          authentication: { state: "unknown" },
+          observationState: document.body ? "probing" : "loading",
+          reasonCode: "MARKETPLACE_STRUCTURE_UNCONFIRMED"
+        };
+      }
+      return {
+        observerCapabilityId: capabilityId,
+        authentication: { state: "unknown" },
+        observationState: "ready"
+      };
+    }
+  };
+}
+
+function hasInteractivePageShell(document: Document): boolean {
+  return [...document.querySelectorAll("main, nav, [role='main'], #root, #app")]
+    .some((element) => {
+      const text = element.textContent?.replace(/\s+/gu, " ").trim() ?? "";
+      return element.childElementCount > 0 && text.length > 1;
+    });
+}
+
 const observers: readonly PageObserver[] = [
+  marketplaceObserver("douyin.marketplace-search.page", "https://www.douyin.com"),
+  marketplaceObserver("taobao.marketplace-search.page", "https://s.taobao.com"),
+  marketplaceObserver("jd.marketplace-search.page", "https://search.jd.com"),
   {
     capabilityId: "doudian.page",
-    supports: (url) => url.origin === "https://fxg.jinritemai.com",
+    supports: (url) =>
+      url.origin === "https://fxg.jinritemai.com" &&
+      ["/ffa/g/list", "/ffa/g/create", "/ffa/morder/order"].some(
+        (prefix) => url.pathname.startsWith(prefix)
+      ),
     async probe(document, url) {
       if (isAuthenticationPath(url.pathname)) {
         return {
@@ -89,8 +156,17 @@ const observers: readonly PageObserver[] = [
         };
       }
       try {
-        const context = readDoudianShopContext(document, url.href);
-        if (!context.shop.identity_confirmed) {
+        const identity = url.pathname === "/ffa/g/list"
+          ? readDoudianShopContext(document, url.href).shop
+          : (() => {
+              const observed = readDoudianVisibleShopIdentity(document);
+              return {
+                id: observed.id,
+                name: observed.name,
+                identity_confirmed: observed.identityConfirmed
+              };
+            })();
+        if (!identity.identity_confirmed) {
           return {
             observerCapabilityId: this.capabilityId,
             authentication: { state: "unknown" },
@@ -104,7 +180,7 @@ const observers: readonly PageObserver[] = [
             state: "authenticated",
             contextRef: await authenticationContextRef(
               this.capabilityId,
-              `${context.shop.id}\u0000${context.shop.name}`
+              `${identity.id}\u0000${identity.name}`
             )
           },
           observationState: "ready"
@@ -122,17 +198,28 @@ const observers: readonly PageObserver[] = [
   },
   {
     capabilityId: "buyin.page",
-    supports: (url) => url.origin === "https://buyin.jinritemai.com",
-    async probe(_document, url) {
+    supports: (url) =>
+      url.origin === "https://buyin.jinritemai.com" &&
+      url.pathname.startsWith("/dashboard"),
+    async probe(document, url) {
+      const requiresAuthentication = isAuthenticationPath(url.pathname);
+      if (!requiresAuthentication && !hasInteractivePageShell(document)) {
+        return {
+          observerCapabilityId: this.capabilityId,
+          authentication: { state: "unknown" },
+          observationState: document.body ? "probing" : "loading",
+          reasonCode: "BUYIN_STRUCTURE_UNCONFIRMED"
+        };
+      }
       return {
         observerCapabilityId: this.capabilityId,
         authentication: {
-          state: isAuthenticationPath(url.pathname) ? "anonymous" : "unknown"
+          state: requiresAuthentication ? "anonymous" : "unknown"
         },
-        observationState: isAuthenticationPath(url.pathname)
+        observationState: requiresAuthentication
           ? "auth_required"
           : "ready",
-        ...(isAuthenticationPath(url.pathname)
+        ...(requiresAuthentication
           ? { reasonCode: "SESSION_EXPIRED" }
           : {})
       };
@@ -141,7 +228,23 @@ const observers: readonly PageObserver[] = [
   {
     capabilityId: "chanmama.page",
     supports: (url) => url.origin === "https://www.chanmama.com",
-    async probe() {
+    async probe(document, url) {
+      if (isAuthenticationPath(url.pathname)) {
+        return {
+          observerCapabilityId: this.capabilityId,
+          authentication: { state: "anonymous" },
+          observationState: "auth_required",
+          reasonCode: "SESSION_EXPIRED"
+        };
+      }
+      if (!hasInteractivePageShell(document)) {
+        return {
+          observerCapabilityId: this.capabilityId,
+          authentication: { state: "unknown" },
+          observationState: document.body ? "probing" : "loading",
+          reasonCode: "CHANMAMA_STRUCTURE_UNCONFIRMED"
+        };
+      }
       return {
         observerCapabilityId: this.capabilityId,
         authentication: { state: "unknown" },

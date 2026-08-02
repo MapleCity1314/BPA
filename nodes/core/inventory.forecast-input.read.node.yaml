@@ -1,0 +1,37 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: inventory.forecast-input.read
+  version: 1.0.0
+  title: 读取固定版本预测输入
+  description: 从库存服务读取指定商品截至 asOf 的 SKU 订单小时序列、渠道库存序列及其固定数据集版本。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [shopId, productId, asOf]
+  properties:
+    shopId: { type: string, minLength: 1, maxLength: 200 }
+    productId: { type: string, minLength: 1, maxLength: 200 }
+    asOf: { type: string, format: date-time }
+outputSchema:
+  type: array
+  maxItems: 500
+  items:
+    type: object
+    additionalProperties: false
+    required: [platformSkuId, merchantCode, observations, channelPoints, sourceDataset]
+    properties:
+      platformSkuId: { type: string }
+      merchantCode: { type: string }
+      observations: { type: array, maxItems: 2160, items: { type: object } }
+      channelPoints: { type: array, maxItems: 20000, items: { type: object } }
+      sourceDataset: { type: object }
+risk:
+  level: R0
+  permissions: [inventory.service.forecast.read]
+execution:
+  timeoutDefault: 30s
+  idempotency: repeatable_read
+  cancellable: true
+errors: [INVENTORY_SERVICE_NOT_CONFIGURED, INVENTORY_SERVICE_UNAVAILABLE, INVENTORY_SERVICE_FAILED]

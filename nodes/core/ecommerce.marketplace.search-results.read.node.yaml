@@ -1,0 +1,93 @@
+apiVersion: bpa/v1alpha2
+kind: Node
+metadata:
+  id: ecommerce.marketplace.search-results.read
+  version: 1.0.0
+  title: 读取三平台商品搜索页可见结果
+  description: 在用户已打开的抖音、淘宝或京东搜索页中，只读提取有界商品链接、标题、主图地址、价格和销量原文；不翻页、不绕过登录或验证。
+runtime: browser
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [platform, query, maxItems]
+  properties:
+    platform:
+      enum: [DOUYIN, TAOBAO, JD]
+    query:
+      type: string
+      minLength: 1
+      maxLength: 200
+    maxItems:
+      type: integer
+      minimum: 1
+      maximum: 50
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [schemaVersion, platform, query, observedAt, pageUrl, queryConfirmed, status, items, warnings]
+  properties:
+    schemaVersion: { const: marketplace-probe/v0.1 }
+    platform: { enum: [DOUYIN, TAOBAO, JD] }
+    query: { type: string }
+    observedAt: { type: string, format: date-time }
+    pageUrl: { type: string, format: uri }
+    queryConfirmed: { const: true }
+    status: { enum: [READY, PARTIAL, EMPTY_CONFIRMED] }
+    items:
+      type: array
+      maxItems: 50
+      items:
+        type: object
+        additionalProperties: false
+        required: [productId, title, productUrl, position]
+        properties:
+          productId: { type: string }
+          title: { type: string }
+          productUrl: { type: string, format: uri }
+          mainImageUrl: { type: string, format: uri }
+          priceText: { type: string }
+          salesText: { type: string }
+          shopName: { type: string }
+          position: { type: integer, minimum: 1 }
+    warnings:
+      type: array
+      maxItems: 50
+      items: { type: string }
+risk:
+  level: R1
+  permissions: [browser.dom.read, browser.tabs.read]
+  domains:
+    - https://www.douyin.com
+    - https://s.taobao.com
+    - https://search.jd.com
+resources:
+  browser:
+    kind: browser
+    capabilities: [browser.dom.read, browser.tabs.read]
+    allowedOrigins:
+      - https://www.douyin.com
+      - https://s.taobao.com
+      - https://search.jd.com
+    authentication: optional
+    purpose: 在用户已打开且关键词一致的搜索页读取可见商品卡片
+execution:
+  timeoutDefault: 30s
+  idempotency: repeatable_read
+  retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED, CONTENT_SCRIPT_UNAVAILABLE]
+  cancellable: true
+errors:
+  - PAGE_MISMATCH
+  - SEARCH_QUERY_MISMATCH
+  - PAGE_CONTEXT_CHANGED
+  - SESSION_EXPIRED
+  - CAPTCHA_REQUIRED
+  - RATE_LIMITED
+  - RISK_CONTROL
+  - BROWSER_DISCONNECTED
+  - CONTENT_SCRIPT_UNAVAILABLE
+  - MARKETPLACE_STRUCTURE_UNCONFIRMED
+evidence:
+  required: [result, error]
+adapter:
+  id: marketplace-search
+  versions: [1.0.0]

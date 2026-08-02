@@ -41,7 +41,8 @@ if [[ -e "$OUTPUT" || -e "$OUTPUT.sha256" ]]; then
   exit 1
 fi
 
-PATH="${BUNDLED_NODE:h}:$PATH" pnpm verify
+BPA_RELEASE_IDENTITY="$RELEASE_IDENTITY" \
+  PATH="${BUNDLED_NODE:h}:$PATH" pnpm verify
 "$BUNDLED_NODE" --test "$PROJECT_ROOT/scripts/release-gates.check.mjs"
 
 PACKAGE_ROOT="$(mktemp -d /tmp/bpa-windows-package.XXXXXX)"
@@ -130,6 +131,7 @@ BPA_TARGET_NODE_VERSION="$NODE_VERSION" \
 BPA_TARGET_NODE_EXECUTABLE="$WINDOWS_NODE" \
 BPA_TARGET_SQLITE_BINARY="$WINDOWS_SQLITE" \
 BPA_TARGET_NATIVE_HOST_EXECUTABLE="$SEA_ROOT/bpa-native-host.exe" \
+  BPA_RELEASE_IDENTITY="$RELEASE_IDENTITY" \
   "$BUNDLED_NODE" \
   "$PROJECT_ROOT/scripts/build-runtime-closure.mjs" \
   "$PACKAGE_ROOT/bpa/runtime"

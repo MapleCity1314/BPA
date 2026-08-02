@@ -18,9 +18,39 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
+$DeploymentStage = $null
 
 function Write-JsonResult([hashtable]$Value) {
+  if (
+    $null -ne $script:DeploymentStage -and
+    (Test-Path -LiteralPath $script:DeploymentStage)
+  ) {
+    Remove-Item -LiteralPath $script:DeploymentStage -Recurse -Force
+    $script:DeploymentStage = $null
+  }
   $Value | ConvertTo-Json -Depth 8
+}
+
+trap {
+  $InstallMessage = $_.Exception.Message
+  $InstallErrorCode = "INSTALLER_FAILED"
+  if (
+    $InstallMessage -match
+      "(?:^|\b)((?:BPA|BROWSER|SQLITE|WORKFLOW|RUNTIME|SKILL)_[A-Z0-9_]+)(?:\b|:)"
+  ) {
+    $InstallErrorCode = $Matches[1]
+  }
+  Write-JsonResult @{
+    schemaVersion = 1
+    status = "install_failed"
+    errorCode = $InstallErrorCode
+    message = $InstallMessage
+    requiredHumanActions = @(
+      "停止安装，不要修改或绕过 Runtime、数据库、校验和、版本指针或扩展文件。",
+      "保留本 JSON 和安装日志，使用原始 Skill 包重新验收或交给 BPA 开发修复。"
+    )
+  }
+  exit 2
 }
 
 function Invoke-Bpa(
@@ -118,7 +148,7 @@ $RequiredAssets = @(
   @{
     type = "node"
     file = "doudian.alliance.shops.discover.node.yaml"
-    sha256 = "6683915f4b31f57b01dfb866d06a30fed714ac37924502bdb6e34db2f38a1f92"
+    sha256 = "0a3d73ade57e0af917d95b4f34753fcbcfc885a0929ec68eb218010f0dde7afb"
   },
   @{
     type = "node"
@@ -202,25 +232,23 @@ try {
       Get-Content -LiteralPath $CurrentPointer -Raw
     ).Trim()
   }
-  if ($CurrentIdentity -ne $RequiredIdentity) {
-    $RuntimeInstallerOutput = @(
-      & (Join-Path $PackageRoot "install.ps1") `
-        -InstallRoot $InstallRoot `
-        *>&1
+  $RuntimeInstallerOutput = @(
+    & (Join-Path $PackageRoot "install.ps1") `
+      -InstallRoot $InstallRoot `
+      *>&1
+  )
+  if ($LASTEXITCODE -ne 0) {
+    $RuntimeInstallerDetail = (
+      $RuntimeInstallerOutput |
+        Select-Object -Last 20 |
+        ForEach-Object { [string]$_ }
+    ) -join "`n"
+    throw (
+      "The BPA Runtime installer exited with code $LASTEXITCODE." +
+      " $RuntimeInstallerDetail"
     )
-    if ($LASTEXITCODE -ne 0) {
-      $RuntimeInstallerDetail = (
-        $RuntimeInstallerOutput |
-          Select-Object -Last 20 |
-          ForEach-Object { [string]$_ }
-      ) -join "`n"
-      throw (
-        "The BPA Runtime installer exited with code $LASTEXITCODE." +
-        " $RuntimeInstallerDetail"
-      )
-    }
-    $RuntimeInstalled = $true
   }
+  $RuntimeInstalled = $CurrentIdentity -ne $RequiredIdentity
 } finally {
   if (Test-Path -LiteralPath $Stage) {
     Remove-Item -LiteralPath $Stage -Recurse -Force
@@ -234,21 +262,13 @@ if (-not (Test-Path -LiteralPath $BpaCommand -PathType Leaf)) {
 $DoctorText = Invoke-Bpa $BpaCommand @("doctor") "BPA health check"
 $Doctor = $DoctorText | ConvertFrom-Json
 
-foreach ($Asset in $RequiredAssets) {
-  $AssetPath = Join-Path $WorkflowAssetsRoot $Asset.file
-  Invoke-Bpa `
-    $BpaCommand `
-    @("validate", $Asset.type, $AssetPath) `
-    "Validate $($Asset.type)" | Out-Null
-  Invoke-Bpa `
-    $BpaCommand `
-    @("publish", $Asset.type, $AssetPath, "--yes") `
-    "Publish $($Asset.type)" | Out-Null
-}
-
 New-Item -ItemType Directory -Path $RecordsRoot -Force | Out-Null
 $WorkBuddyRoot = Join-Path $InstallRoot "workbuddy"
 New-Item -ItemType Directory -Path $WorkBuddyRoot -Force | Out-Null
+$DeploymentStage = Join-Path `
+  $WorkBuddyRoot `
+  ".deployment-$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Path $DeploymentStage -Force | Out-Null
 $AutomationPromptSource = Join-Path `
   $SkillRoot `
   "references\workbuddy-automation-prompt.md"
@@ -257,12 +277,15 @@ $AutomationPromptDigest = (
 ).Hash.ToLowerInvariant()
 if (
   $AutomationPromptDigest -ne
-    "5b73424c0e2ccebf828a18c3b0232c7f7ac76f71a969bc55816f8e64280e33d9"
+    "135bc08aa42dd43056584ddb52866b346b6e6604432f0c3a7258b14dc2e38ff3"
 ) {
   throw "The WorkBuddy automation prompt failed SHA-256 verification."
 }
-$AutomationPromptTarget = Join-Path `
+$AutomationPromptFinal = Join-Path `
   $WorkBuddyRoot `
+  "workbuddy-automation-prompt.md"
+$AutomationPromptTarget = Join-Path `
+  $DeploymentStage `
   "workbuddy-automation-prompt.md"
 Copy-Item `
   -LiteralPath $AutomationPromptSource `
@@ -335,10 +358,28 @@ $ReadyPages = @(
     $_.authenticationContextRef
   }
 )
+$ReadyAuthenticationContexts = @(
+  $ReadyPages |
+    ForEach-Object { [string]$_.authenticationContextRef } |
+    Sort-Object -Unique
+)
 
-$ConfigurationPath = Join-Path `
+$ConfigurationFinal = Join-Path `
   $WorkBuddyRoot `
   "doudian-alliance-retired-monitor.json"
+$ConfigurationPath = Join-Path `
+  $DeploymentStage `
+  "doudian-alliance-retired-monitor.json"
+$ExistingBrowserInstanceId = $null
+if (Test-Path -LiteralPath $ConfigurationFinal -PathType Leaf) {
+  try {
+    $ExistingConfiguration = Get-Content -LiteralPath $ConfigurationFinal -Raw |
+      ConvertFrom-Json
+    $ExistingBrowserInstanceId = $ExistingConfiguration.browserInstanceId
+  } catch {
+    $ExistingBrowserInstanceId = $null
+  }
+}
 $Configuration = [ordered]@{
   schemaVersion = 1
   installedAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -349,20 +390,31 @@ $Configuration = [ordered]@{
   maxShops = 100
   schedule = "daily 13:00"
   timezone = "Asia/Shanghai"
-  browserInstanceId = $SelectedInstanceId
+  browserInstanceId = if ($SelectedInstanceId) {
+    $SelectedInstanceId
+  } else {
+    $ExistingBrowserInstanceId
+  }
 }
+$ConfigurationTemporary = "$ConfigurationPath.next"
 [IO.File]::WriteAllText(
-  $ConfigurationPath,
+  $ConfigurationTemporary,
   "$($Configuration | ConvertTo-Json -Depth 5)`r`n",
   [Text.UTF8Encoding]::new($false)
 )
+Move-Item -LiteralPath $ConfigurationTemporary -Destination $ConfigurationPath -Force
 
-$RunnerPath = Join-Path $WorkBuddyRoot "Run-DoudianAllianceMonitor.ps1"
+$RunnerFinal = Join-Path $WorkBuddyRoot "Run-DoudianAllianceMonitor.ps1"
+$RunnerPath = Join-Path $DeploymentStage "Run-DoudianAllianceMonitor.ps1"
 $Runner = @'
 [CmdletBinding()]
-param([int]$MaxShops = 0)
+param(
+  [int]$MaxShops = 0,
+  [string]$ConfigurationPath = (
+    Join-Path $env:LOCALAPPDATA "BPA\workbuddy\doudian-alliance-retired-monitor.json"
+  )
+)
 $ErrorActionPreference = "Stop"
-$ConfigurationPath = Join-Path $env:LOCALAPPDATA "BPA\workbuddy\doudian-alliance-retired-monitor.json"
 $Configuration = Get-Content -LiteralPath $ConfigurationPath -Raw | ConvertFrom-Json
 $EffectiveMaxShops = if ($MaxShops -gt 0) {
   $MaxShops
@@ -554,6 +606,7 @@ foreach ($Destination in @($DailyPath, $LatestPath)) {
   attempt = $Attempt
 } | ConvertTo-Json -Depth 100
 if ($Status -eq "runtime_error") { exit 2 }
+if ($Status -eq "incomplete") { exit 3 }
 exit 0
 '@
 [IO.File]::WriteAllText(
@@ -565,15 +618,18 @@ exit 0
 if ($CapableSessions.Count -eq 0) {
   if (
     $Doctor.browser.connected -eq $true -and
-    [string]$Doctor.browser.lastError -eq
-      "BROWSER_BRIDGE_FEATURE_MISMATCH"
+    @(
+      "BROWSER_BRIDGE_FEATURE_MISMATCH",
+      "BROWSER_BRIDGE_BUILD_MISMATCH"
+    ) -contains [string]$Doctor.browser.lastError
   ) {
     Write-JsonResult @{
       schemaVersion = 1
       status = "needs_extension_reload"
-      errorCode = "BROWSER_BRIDGE_FEATURE_MISMATCH"
+      runtimeIdentity = $RequiredIdentity
+      errorCode = [string]$Doctor.browser.lastError
       runtimeInstalled = $RuntimeInstalled
-      assetsPublished = $true
+      assetsPublished = $false
       extensionPath = (Join-Path $InstallRoot "extension")
       requiredHumanActions = @(
         "在 Chrome 扩展页删除或重新加载旧版 BPA Browser Bridge。",
@@ -590,9 +646,10 @@ if ($CapableSessions.Count -eq 0) {
   Write-JsonResult @{
     schemaVersion = 1
     status = "needs_native_host"
+    runtimeIdentity = $RequiredIdentity
     errorCode = "BROWSER_BRIDGE_DISCONNECTED"
     runtimeInstalled = $RuntimeInstalled
-    assetsPublished = $true
+    assetsPublished = $false
     extensionPath = (Join-Path $InstallRoot "extension")
     doudianLoginUrl = "https://fxg.jinritemai.com/ffa/g/list"
     browserSetupOpened = $BrowserOpened
@@ -614,9 +671,10 @@ if ($InstanceIds.Count -gt 1 -and -not $SelectedInstanceId) {
   Write-JsonResult @{
     schemaVersion = 1
     status = "needs_browser_selection"
+    runtimeIdentity = $RequiredIdentity
     errorCode = "BROWSER_SESSION_AMBIGUOUS"
     runtimeInstalled = $RuntimeInstalled
-    assetsPublished = $true
+    assetsPublished = $false
     eligibleBrowserInstances = @(
       $InstanceIds | ForEach-Object {
         @{
@@ -632,10 +690,35 @@ if ($InstanceIds.Count -gt 1 -and -not $SelectedInstanceId) {
   exit 0
 }
 
+if ($ReadyAuthenticationContexts.Count -gt 1) {
+  Write-JsonResult @{
+    schemaVersion = 1
+    status = "needs_doudian_page_selection"
+    runtimeIdentity = $RequiredIdentity
+    errorCode = "BROWSER_PAGE_AMBIGUOUS"
+    conflictingTabs = @(
+      $ReadyPages | ForEach-Object {
+        @{
+          tabId = $_.tabId
+          pathname = $_.pathname
+          observedAt = $_.observedAt
+        }
+      }
+    )
+    requiredHumanActions = @(
+      "存在多个店铺身份不同的抖店商品管理标签页；BPA 已拒绝猜测执行目标。",
+      "只保留本次巡检要使用的商品管理标签页，或把其他商品管理标签页切换到同一店铺后刷新。",
+      "无需关闭其他非抖店网页。"
+    )
+  }
+  exit 0
+}
+
 if (-not $SelectedInstanceId -or $SelectedSessionIds.Count -eq 0) {
   Write-JsonResult @{
     schemaVersion = 1
     status = "needs_native_host"
+    runtimeIdentity = $RequiredIdentity
     errorCode = "BROWSER_BRIDGE_DISCONNECTED"
     requiredHumanActions = @(
       "确认 Chrome 已加载 BPA Browser Bridge。",
@@ -647,10 +730,11 @@ if (-not $SelectedInstanceId -or $SelectedSessionIds.Count -eq 0) {
 
 if ($SourcePages.Count -eq 0) {
   $LatestRelatedPage = $RelatedDoudianPages | Select-Object -First 1
-  if ($LatestRelatedPage.observationState -eq "challenge") {
+  if ($null -ne $LatestRelatedPage -and $LatestRelatedPage.observationState -eq "challenge") {
     Write-JsonResult @{
       schemaVersion = 1
       status = "needs_human_verification"
+      runtimeIdentity = $RequiredIdentity
       errorCode = "BROWSER_CHALLENGE_REQUIRED"
       requiredHumanActions = @(
         "在抖店页面人工完成验证码或风控验证。",
@@ -659,10 +743,11 @@ if ($SourcePages.Count -eq 0) {
     }
     exit 0
   }
-  if ($LatestRelatedPage.observationState -eq "auth_required") {
+  if ($null -ne $LatestRelatedPage -and $LatestRelatedPage.observationState -eq "auth_required") {
     Write-JsonResult @{
       schemaVersion = 1
       status = "needs_doudian_login"
+      runtimeIdentity = $RequiredIdentity
       errorCode = "BROWSER_AUTH_REQUIRED"
       doudianLoginUrl = "https://fxg.jinritemai.com/ffa/g/list"
       requiredHumanActions = @(
@@ -675,6 +760,7 @@ if ($SourcePages.Count -eq 0) {
   Write-JsonResult @{
     schemaVersion = 1
     status = "needs_doudian_page"
+    runtimeIdentity = $RequiredIdentity
     errorCode = "BROWSER_PAGE_NOT_FOUND"
     doudianLoginUrl = "https://fxg.jinritemai.com/ffa/g/list"
     requiredHumanActions = @(
@@ -694,6 +780,7 @@ if (@("departed", "stale") -contains $LatestPage.observationState) {
   Write-JsonResult @{
     schemaVersion = 1
     status = "needs_doudian_page"
+    runtimeIdentity = $RequiredIdentity
     errorCode = "BROWSER_PAGE_NOT_FOUND"
     doudianLoginUrl = "https://fxg.jinritemai.com/ffa/g/list"
     requiredHumanActions = @(
@@ -708,6 +795,7 @@ if (@("loading", "probing") -contains $LatestPage.observationState) {
   Write-JsonResult @{
     schemaVersion = 1
     status = "waiting_for_page"
+    runtimeIdentity = $RequiredIdentity
     errorCode = "BROWSER_OBSERVATION_PENDING"
     requiredHumanActions = @(
       "等待抖店页面加载完成后重新执行验收。"
@@ -720,6 +808,7 @@ if ($LatestPage.observationState -eq "challenge") {
   Write-JsonResult @{
     schemaVersion = 1
     status = "needs_human_verification"
+    runtimeIdentity = $RequiredIdentity
     errorCode = "BROWSER_CHALLENGE_REQUIRED"
     requiredHumanActions = @(
       "在抖店页面人工完成验证码或风控验证。",
@@ -736,6 +825,7 @@ if (
   Write-JsonResult @{
     schemaVersion = 1
     status = "needs_doudian_login"
+    runtimeIdentity = $RequiredIdentity
     errorCode = "BROWSER_AUTH_REQUIRED"
     requiredHumanActions = @(
       "在抖店商品管理页完成登录。",
@@ -752,6 +842,7 @@ if (
   Write-JsonResult @{
     schemaVersion = 1
     status = "needs_extension_reload"
+    runtimeIdentity = $RequiredIdentity
     errorCode = "BROWSER_CONTENT_SCRIPT_MISSING"
     requiredHumanActions = @(
       "在 Chrome 扩展页重新加载 BPA Browser Bridge。",
@@ -765,6 +856,7 @@ if ($ReadyPages.Count -eq 0) {
   Write-JsonResult @{
     schemaVersion = 1
     status = "waiting_for_page"
+    runtimeIdentity = $RequiredIdentity
     errorCode = "BROWSER_OBSERVATION_PENDING"
     requiredHumanActions = @(
       "等待抖店页面加载完成后重新执行验收。"
@@ -773,10 +865,23 @@ if ($ReadyPages.Count -eq 0) {
   exit 0
 }
 
+foreach ($Asset in $RequiredAssets) {
+  $AssetPath = Join-Path $WorkflowAssetsRoot $Asset.file
+  Invoke-Bpa `
+    $BpaCommand `
+    @("validate", $Asset.type, $AssetPath) `
+    "Validate $($Asset.type)" | Out-Null
+  Invoke-Bpa `
+    $BpaCommand `
+    @("publish", $Asset.type, $AssetPath, "--yes") `
+    "Publish $($Asset.type)" | Out-Null
+}
+
 $SmokeText = & powershell.exe `
   -NoProfile `
   -ExecutionPolicy Bypass `
-  -File $RunnerPath
+  -File $RunnerPath `
+  -ConfigurationPath $ConfigurationPath
 $Smoke = $SmokeText | ConvertFrom-Json
 if (-not $Smoke.record.dailyPath) {
   throw "The read-only browser smoke test did not persist a daily record."
@@ -794,6 +899,7 @@ if (-not $SmokeSucceeded) {
   Write-JsonResult @{
     schemaVersion = 1
     status = "smoke_test_failed"
+    runtimeIdentity = $RequiredIdentity
     errorCode = $SmokeErrorCode
     dailyPath = $Smoke.record.dailyPath
     smokeTestStatus = $Smoke.workbuddy.status
@@ -803,6 +909,44 @@ if (-not $SmokeSucceeded) {
     )
   }
   exit 0
+}
+
+$DeploymentFiles = @(
+  @{ Staged = $AutomationPromptTarget; Final = $AutomationPromptFinal },
+  @{ Staged = $ConfigurationPath; Final = $ConfigurationFinal },
+  @{ Staged = $RunnerPath; Final = $RunnerFinal }
+)
+$DeploymentBackups = @()
+try {
+  foreach ($DeploymentFile in $DeploymentFiles) {
+    $Backup = Join-Path `
+      $DeploymentStage `
+      "backup-$([Guid]::NewGuid().ToString('N'))"
+    $HadOriginal = Test-Path -LiteralPath $DeploymentFile.Final -PathType Leaf
+    if ($HadOriginal) {
+      Copy-Item -LiteralPath $DeploymentFile.Final -Destination $Backup
+    }
+    $DeploymentBackups += @{
+      Final = $DeploymentFile.Final
+      Backup = $Backup
+      HadOriginal = $HadOriginal
+    }
+    $Next = "$($DeploymentFile.Final).next-$PID"
+    Copy-Item -LiteralPath $DeploymentFile.Staged -Destination $Next -Force
+    Move-Item -LiteralPath $Next -Destination $DeploymentFile.Final -Force
+  }
+} catch {
+  foreach ($DeploymentBackup in $DeploymentBackups) {
+    if ($DeploymentBackup.HadOriginal) {
+      Copy-Item `
+        -LiteralPath $DeploymentBackup.Backup `
+        -Destination $DeploymentBackup.Final `
+        -Force
+    } elseif (Test-Path -LiteralPath $DeploymentBackup.Final) {
+      Remove-Item -LiteralPath $DeploymentBackup.Final -Force
+    }
+  }
+  throw
 }
 
 Write-JsonResult @{
@@ -822,15 +966,15 @@ Write-JsonResult @{
     status = $Smoke.workbuddy.status
     dailyPath = $Smoke.record.dailyPath
   }
-  configurationPath = $ConfigurationPath
-  runnerPath = $RunnerPath
+  configurationPath = $ConfigurationFinal
+  runnerPath = $RunnerFinal
   recordsDir = $RecordsRoot
   automation = @{
     name = "抖店精选联盟清退商品日巡检"
     schedule = "每天 13:00"
     timezone = "Asia/Shanghai"
     skill = "抖店联盟清退巡检"
-    promptPath = $AutomationPromptTarget
+    promptPath = $AutomationPromptFinal
     pushToWorkBuddy = $true
   }
 }

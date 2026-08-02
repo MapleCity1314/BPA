@@ -180,4 +180,33 @@ describe("alliance retired-products browser navigation", () => {
     expect(state.tabs.has(2)).toBe(true);
     expect(state.removed).toEqual([]);
   });
+
+  it("returns a precise timeout when an injected stage never answers", async () => {
+    installBrowser(
+      [{
+        id: 1,
+        windowId: 10,
+        active: true,
+        status: "complete",
+        url: "https://fxg.jinritemai.com/ffa/g/list"
+      }],
+      () => undefined
+    );
+    const originalSendMessage = browser.tabs.sendMessage;
+    browser.tabs.sendMessage = (async (
+      tabId: number,
+      message: { type: string }
+    ) =>
+      message.type === "bpa.risk.preflight"
+        ? originalSendMessage(tabId, message)
+        : new Promise(() => undefined)) as typeof browser.tabs.sendMessage;
+    const driver = createAllianceRetiredBrowserDriver({
+      sourceTabId: 1,
+      deadline: new Date(Date.now() + 10_000).toISOString(),
+      stageResponseTimeoutMs: 10
+    });
+    await expect(driver.discoverShops()).rejects.toMatchObject({
+      code: "ALLIANCE_CONTENT_RESPONSE_TIMEOUT"
+    });
+  });
 });

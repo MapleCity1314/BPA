@@ -1,0 +1,33 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: ecommerce.discovery.merge
+  version: 1.0.0
+  title: 合并三平台商品探查结果
+  description: 合并抖音、淘宝和京东的可见搜索结果并保留平台、页面、时间和原始字段，不把搜索结果直接认定为竞品。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [intent, probes]
+  properties:
+    intent: { type: object }
+    probes:
+      type: array
+      minItems: 3
+      maxItems: 3
+      items: { type: object }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [schemaVersion, intentId, seedQuery, coverage, products, limitations]
+  properties:
+    schemaVersion: { const: discovery-product-set/v0.1 }
+    intentId: { type: string }
+    seedQuery: { type: string }
+    coverage: { type: array, maxItems: 3, items: { type: object } }
+    products: { type: array, maxItems: 150, items: { type: object } }
+    limitations: { type: array, items: { type: string } }
+risk: { level: R0, permissions: [] }
+execution: { timeoutDefault: 10s, idempotency: pure, cancellable: true }
+errors: [TEAM_HANDLER_INPUT_INVALID, TEAM_HANDLER_RESULT_LIMIT_EXCEEDED, TEAM_HANDLER_CANCELLED, TEAM_HANDLER_TIMEOUT]

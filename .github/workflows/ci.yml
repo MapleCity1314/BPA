@@ -279,3 +279,52 @@ jobs:
           ) {
             throw "WorkBuddy package-only validation returned an invalid result"
           }
+      - name: Install and repair the Runtime through the real WorkBuddy entrypoint
+        shell: pwsh
+        run: |
+          $expanded = Join-Path $env:RUNNER_TEMP "expanded-workbuddy-skill"
+          $installer = @(Get-ChildItem `
+            -LiteralPath $expanded `
+            -Filter "Install-DoudianAllianceMonitor.ps1" `
+            -File `
+            -Recurse)[0]
+          $skillRoot = Split-Path -Parent (Split-Path -Parent $installer.FullName)
+          $installRoot = Join-Path $env:RUNNER_TEMP "bpa-real-install"
+          $recordsRoot = Join-Path $env:RUNNER_TEMP "bpa-real-records"
+          try {
+            foreach ($attempt in 1..2) {
+              $resultText = @(& powershell.exe `
+                -NoProfile `
+                -ExecutionPolicy Bypass `
+                -File $installer.FullName `
+                -SkillRoot $skillRoot `
+                -InstallRoot $installRoot `
+                -RecordsRoot $recordsRoot `
+                2>&1)
+              if ($LASTEXITCODE -ne 0) {
+                throw "WorkBuddy real install attempt $attempt failed: $($resultText -join "`n")"
+              }
+              $result = ($resultText -join "`n") | ConvertFrom-Json
+              if (
+                $result.status -ne "needs_native_host" -or
+                $result.errorCode -ne "BROWSER_BRIDGE_DISCONNECTED" -or
+                $result.assetsPublished -ne $false
+              ) {
+                throw "Unexpected real install result on attempt $attempt"
+              }
+              $current = (Get-Content `
+                -LiteralPath (Join-Path $installRoot "runtime\current.txt") `
+                -Raw).Trim()
+              if (-not $current -or $current -ne $result.runtimeIdentity) {
+                throw "Installed Runtime pointer differs from the package identity"
+              }
+              & (Join-Path $installRoot "bin\bpa.cmd") doctor | Out-Null
+              if ($LASTEXITCODE -ne 0) {
+                throw "Installed Core failed its doctor check"
+              }
+            }
+          } finally {
+            ./scripts/uninstall-windows.ps1 `
+              -InstallRoot $installRoot `
+              -PurgeData
+          }

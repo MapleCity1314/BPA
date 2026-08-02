@@ -1,0 +1,32 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: ecom.sales-demand.sync
+  version: 1.0.0
+  title: 同步历史销售需求事实
+  description: 通过受限 Unix Socket 调用库存服务，从固定 MySQL 导出表增量同步非 PII 订单需求事实并发布不可变数据集。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [shopId, shopName, lease]
+  properties:
+    shopId: { type: string, minLength: 1, maxLength: 200 }
+    shopName: { type: string, minLength: 2, maxLength: 200 }
+    lease: { type: object }
+outputSchema:
+  type: object
+  additionalProperties: true
+  required: [status, syncRunId, processed]
+  properties:
+    status: { enum: [succeeded, no_changes] }
+    syncRunId: { type: string }
+    processed: { type: integer, minimum: 0 }
+risk:
+  level: R1
+  permissions: [inventory.service.sales-demand.write]
+execution:
+  timeoutDefault: 10m
+  idempotency: verified_write
+  cancellable: true
+errors: [INVENTORY_SERVICE_NOT_CONFIGURED, INVENTORY_SERVICE_UNAVAILABLE, MYSQL_SOURCE_NOT_CONFIGURED, MYSQL_SHOP_IDENTITY_MISMATCH, MYSQL_SYNC_ROW_LIMIT_EXCEEDED, LEASE_FENCE_INVALID, SCHEDULER_LEASE_LOST]

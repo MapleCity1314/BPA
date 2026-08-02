@@ -12,6 +12,7 @@
       "browser_instance_id": "browser-example-01",
       "extension_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "extension_version": "0.4.0",
+      "bridge_build_id": "v0.4.0-example.node24.18.0",
       "supported_protocols": ["bpa.browser/2"],
       "features": [
         "page_observation_v2",

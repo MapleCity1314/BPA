@@ -35,6 +35,8 @@ const release = validateReleaseMetadata(manifest.release);
 if (
   manifest.schemaVersion !== 2 ||
   manifest.browserProtocol !== "bpa.browser/2" ||
+  manifest.browserBridge?.buildId !== release.identity ||
+  manifest.browserBridge?.extensionVersion !== release.runtimeVersion ||
   manifest.source?.gitCommit !== release.gitCommit ||
   manifest.source?.dirty !== false ||
   manifest.runtimeVersion !== release.runtimeVersion ||
@@ -71,10 +73,13 @@ const requiredFiles = [
   "bin/bpa-team-worker.js",
   "bin/bpa-runtime-verify.js",
   "bin/bpa-release-scan.js",
+  "bin/bpa-sqlite-tool.js",
   "package.json",
   "sbom.spdx.json",
   "schema/browser-protocol-v2.schema.json",
   "assets/adapters/doudian-alliance.adapter.yaml",
+  "assets/adapters/doudian-inventory.adapter.yaml",
+  "assets/adapters/marketplace-search.adapter.yaml",
   "assets/nodes/doudian.alliance.shops.discover.node.yaml",
   "assets/nodes/doudian.alliance.shop.retired-products.scan.node.yaml",
   "assets/nodes/doudian.alliance.retired-products.aggregate.node.yaml",
@@ -167,8 +172,11 @@ if (
 const extensionManifest = JSON.parse(
   await readFile(join(root, "extension/manifest.json"), "utf8")
 );
-if (extensionManifest.version !== release.runtimeVersion) {
-  throw new Error("Extension version differs from the Runtime release");
+if (
+  extensionManifest.version !== release.runtimeVersion ||
+  extensionManifest.version_name !== release.identity
+) {
+  throw new Error("Extension build identity differs from the Runtime release");
 }
 const browserProtocolSchema = JSON.parse(
   await readFile(

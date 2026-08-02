@@ -298,10 +298,17 @@ export function createCliProgram(options: CliProgramOptions): Command {
     .description("list bounded per-tab Browser page observations")
     .option("--limit <limit>", "maximum observations", integerOption, 200)
     .option("--browser-instance-id <instance>", "stable Browser Instance")
+    .option(
+      "--include-disconnected",
+      "include retained observations from disconnected Sessions",
+      false
+    )
     .action(async (commandOptions) => {
       output(
         await client.request("browser.page-observation.list", {
           limit: commandOptions.limit as number,
+          includeDisconnected:
+            commandOptions.includeDisconnected === true,
           ...(commandOptions.browserInstanceId
             ? {
                 browserInstanceId:

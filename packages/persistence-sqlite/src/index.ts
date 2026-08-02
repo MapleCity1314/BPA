@@ -3588,6 +3588,15 @@ export class SqlitePersistence implements Persistence {
       .run(input.observedAt, input.reasonCode, input.sessionId).changes;
   }
 
+  resetBrowserPageObservations(sessionId: string): number {
+    if (!sessionId.trim()) {
+      throw new Error("Browser Session identity is required");
+    }
+    return this.#db
+      .prepare("DELETE FROM browser_page_observations WHERE session_id = ?")
+      .run(sessionId).changes;
+  }
+
   pruneBrowserPageObservations(input: {
     observedBefore: string;
   }): number {

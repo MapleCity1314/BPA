@@ -127,7 +127,8 @@ export class LocalCoreService {
     readonly browserGateway?: LocalBrowserGateway,
     runtimeProviders?: RuntimeProviderRegistry,
     readonly stagingTransfers?: StagingTransferService,
-    candidateArchiveDataDirectory?: string
+    candidateArchiveDataDirectory?: string,
+    readonly runtimeMaintenancePath?: string
   ) {
     this.engine = new LocalWorkflowEngine(persistence);
     this.datasets = new PackagingDatasetService(persistence);
@@ -162,7 +163,11 @@ export class LocalCoreService {
           cwd: existsSync(packagedWorker)
             ? resolve(import.meta.dirname, "..")
             : resolve(import.meta.dirname, "../../.."),
-          env: {}
+          env: {
+            ...(process.env.BPA_INVENTORY_SOCKET
+              ? { BPA_INVENTORY_SOCKET: process.env.BPA_INVENTORY_SOCKET }
+              : {})
+          }
         },
         expectedCodeDigest: TEAM_WORKER_CODE_DIGEST,
         expectedHandlerRefs: TEAM_WORKER_HANDLER_REFS
@@ -725,15 +730,22 @@ export class LocalCoreService {
             }))
         }));
       case "browser.page-observation.list":
-        return this.persistence.listBrowserPageObservations({
-          limit: Math.min(500, Math.max(1, Number(params.limit) || 200)),
-          ...(params.sessionId === undefined
-            ? {}
-            : { sessionId: String(params.sessionId) }),
-          ...(params.browserInstanceId === undefined
-            ? {}
-            : { browserInstanceId: String(params.browserInstanceId) })
-        });
+        {
+          const pages = this.persistence.listBrowserPageObservations({
+            limit: Math.min(500, Math.max(1, Number(params.limit) || 200)),
+            ...(params.sessionId === undefined
+              ? {}
+              : { sessionId: String(params.sessionId) }),
+            ...(params.browserInstanceId === undefined
+              ? {}
+              : { browserInstanceId: String(params.browserInstanceId) })
+          });
+          if (params.includeDisconnected === true) return pages;
+          return pages.filter((page) => {
+            const session = this.persistence.getBrowserSession(page.sessionId);
+            return session !== undefined && !session.disconnectedAt;
+          });
+        }
       case "browser.page-observation.probe":
         if (!this.browserGateway) {
           throw new Error("BROWSER_BRIDGE_DISCONNECTED");
@@ -791,6 +803,7 @@ export class LocalCoreService {
           String(params.actor || userInfo().username)
         );
       case "run.create":
+        this.#assertRuntimeAvailable();
         return this.#createRun(
           String(params.workflowId),
           String(params.workflowVersion),
@@ -805,6 +818,7 @@ export class LocalCoreService {
           params.input ?? {}
         );
       case "run.node.create":
+        this.#assertRuntimeAvailable();
         return this.#createSingleNodeRun({
           nodeId: String(params.nodeId),
           nodeVersion: String(params.nodeVersion),
@@ -823,6 +837,7 @@ export class LocalCoreService {
       case "run.events":
         return this.persistence.listEvents(String(params.runId));
       case "run.human.complete":
+        this.#assertRuntimeAvailable();
         return this.#completeHumanStep(
           String(params.nodeExecutionId),
           params.approved === true,
@@ -830,6 +845,7 @@ export class LocalCoreService {
         );
       case "run.cancel":
         {
+          this.#assertRuntimeAvailable();
           const runId = String(params.runId);
           const actor = String(params.actor || userInfo().username);
           if (
@@ -1326,6 +1342,15 @@ export class LocalCoreService {
     const run = this.engine.start(compiled, safeInput);
     this.browserGateway?.dispatchPending();
     return run;
+  }
+
+  #assertRuntimeAvailable(): void {
+    if (
+      this.runtimeMaintenancePath &&
+      existsSync(this.runtimeMaintenancePath)
+    ) {
+      throw new Error("BPA_RUNTIME_MAINTENANCE");
+    }
   }
 
   #resolveWorkflowResources(

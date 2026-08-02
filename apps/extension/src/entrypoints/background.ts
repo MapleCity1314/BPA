@@ -17,11 +17,15 @@ import {
 } from "../lib/evidence-transfer";
 import {
   listPendingEvidenceUploads,
+  listPendingCommandStarts,
   listPendingResults,
   normalizePendingResultForReplay,
+  recoverInterruptedCommands,
+  removePendingCommandStart,
   removePendingEvidence,
   removePendingResult,
   savePendingEvidenceUpload,
+  savePendingCommandStart,
   savePendingResult
 } from "../lib/pending-results";
 import {
@@ -44,7 +48,11 @@ import {
 } from "../lib/page-observer-registry";
 import { resolveNavigationTarget } from "../lib/navigation-target";
 import { executeRegisteredAdapterNode } from "../lib/adapter-node-registry";
-import { ContentScriptRecovery } from "../lib/content-script-recovery";
+import {
+  ContentScriptRecovery,
+  contentScriptFailureReason
+} from "../lib/content-script-recovery";
+import { matchesFrozenPageBinding } from "../lib/frozen-page-binding";
 
 const NATIVE_HOST = "com.bpa.browser";
 const PROTOCOL = BROWSER_PROTOCOL;
@@ -87,6 +95,7 @@ export default defineBackground(() => {
     get: (key) => browser.storage.local.get(key),
     set: (value) => browser.storage.local.set(value)
   });
+  const startupRecovery = recoverInterruptedCommands();
 
   const waitForTabReady = async (
     tabId: number,
@@ -399,18 +408,22 @@ export default defineBackground(() => {
         observerCapabilityId,
         ...(response.reasonCode ? { reasonCode: response.reasonCode } : {})
       });
-    } catch {
+    } catch (error) {
       if (!isCurrentProbe(pageEpoch)) return;
+      const reasonCode = contentScriptFailureReason(error);
       await reportPage({
         tabId,
         windowId: tab.windowId,
         url,
         contentScriptReady: false,
         authentication: { state: "unknown" },
-        observationState: "content_script_missing",
+        observationState:
+          reasonCode === "BROWSER_CONTENT_SCRIPT_MISSING"
+            ? "content_script_missing"
+            : "stale",
         pageEpoch,
         observerCapabilityId,
-        reasonCode: "BROWSER_CONTENT_SCRIPT_MISSING"
+        reasonCode
       });
     }
   };
@@ -554,21 +567,42 @@ export default defineBackground(() => {
     );
     const trackedPage =
       tab?.id == null ? undefined : observedTabs.get(tab.id);
-    const boundPageValid =
-      boundTabId === undefined ||
-      (payload.tab_ref.browser_instance_id ===
-        storedBrowser.browserInstanceId &&
-        tab?.id === boundTabId &&
-        (payload.tab_ref.window_id === undefined ||
-          tab?.windowId === payload.tab_ref.window_id) &&
-        (() => {
-          try {
-            return new URL(currentUrl).origin === payload.tab_ref.origin;
-          } catch {
-            return false;
-          }
-        })() &&
-        trackedPage?.pageEpoch === payload.page_epoch);
+    const frozenPage = boundTabId === undefined
+      ? undefined
+      : {
+          browserInstanceId: String(
+            payload.tab_ref.browser_instance_id
+          ),
+          tabId: boundTabId,
+          ...(payload.tab_ref.window_id === undefined
+            ? {}
+            : { windowId: Number(payload.tab_ref.window_id) }),
+          origin: String(payload.tab_ref.origin),
+          pageEpoch: String(payload.page_epoch),
+          observationRevision: Number(payload.observation_revision),
+          ...(payload.authentication_context_ref === undefined
+            ? {}
+            : {
+                authenticationContextRef: String(
+                  payload.authentication_context_ref
+                )
+              })
+        };
+    const boundPageValid = Boolean(
+      frozenPage &&
+        matchesFrozenPageBinding(frozenPage, {
+          browserInstanceId: storedBrowser.browserInstanceId,
+          tabId: tab?.id,
+          windowId: tab?.windowId,
+          url: currentUrl,
+          pageEpoch: trackedPage?.pageEpoch,
+          revision: trackedPage?.revision,
+          contentScriptReady: trackedPage?.contentScriptReady,
+          observationState: trackedPage?.observationState,
+          authenticationContextRef:
+            trackedPage?.authenticationContextRef
+        })
+    );
     if (!authorization.valid || tab?.id == null || !boundPageValid) {
       send(
         envelope(
@@ -620,6 +654,41 @@ export default defineBackground(() => {
     }
     const executingTabId = tab.id;
     const commandId = String(payload.command_id);
+    const previouslyCompleted = (await listPendingResults()).find(
+      (entry) => entry.commandId === commandId
+    );
+    if (previouslyCompleted) {
+      await sendStoredResult(previouslyCompleted);
+      return;
+    }
+    if (activeCommands.has(commandId)) {
+      send(
+        envelope(
+          "command.ack",
+          {
+            command_seq: payload.command_seq,
+            command_id: payload.command_id,
+            node_execution_id: payload.node_execution_id,
+            accepted: true,
+            fencing_token: payload.fencing_token
+          },
+          String(message.trace_id)
+        )
+      );
+      return;
+    }
+    if (
+      (await listPendingCommandStarts()).some(
+        (entry) => entry.commandId === commandId
+      )
+    ) {
+      await recoverInterruptedCommands();
+      const interrupted = (await listPendingResults()).find(
+        (entry) => entry.commandId === commandId
+      );
+      if (interrupted) await sendStoredResult(interrupted);
+      return;
+    }
     const occupyingCommand = activeTabCommands.get(executingTabId);
     if (occupyingCommand && occupyingCommand !== commandId) {
       send(
@@ -650,6 +719,16 @@ export default defineBackground(() => {
       validPageEpoch(nodeInput.pageEpoch, tab.id)
         ? nodeInput.pageEpoch
         : createPageEpoch(tab.id);
+    await savePendingCommandStart({
+      commandId,
+      commandSeq: Number(payload.command_seq),
+      nodeExecutionId: String(payload.node_execution_id),
+      idempotencyKey: String(payload.idempotency_key),
+      fencingToken: Number(payload.fencing_token),
+      traceId: String(message.trace_id),
+      pageEpoch,
+      startedAt: new Date().toISOString()
+    });
     send(
       envelope(
         "command.ack",
@@ -747,6 +826,7 @@ export default defineBackground(() => {
         );
       }
       if (cancelledCommands.delete(commandId)) {
+        await removePendingCommandStart(commandId);
         releaseCommand();
         sendCancelled();
         return;
@@ -754,10 +834,48 @@ export default defineBackground(() => {
       if (Date.now() >= Date.parse(payload.deadline)) {
         throw new Error("DEADLINE_EXCEEDED");
       }
+      await probeTab(tab.id);
       let currentTab = await browser.tabs.get(tab.id).catch(() => undefined);
+      const refreshedPage = observedTabs.get(tab.id);
+      const bindingStillValid = Boolean(
+        frozenPage &&
+          matchesFrozenPageBinding(frozenPage, {
+            browserInstanceId: storedBrowser.browserInstanceId,
+            tabId: currentTab?.id,
+            windowId: currentTab?.windowId,
+            url: currentTab?.url,
+            pageEpoch: refreshedPage?.pageEpoch,
+            revision: refreshedPage?.revision,
+            contentScriptReady: refreshedPage?.contentScriptReady,
+            observationState: refreshedPage?.observationState,
+            authenticationContextRef:
+              refreshedPage?.authenticationContextRef
+          })
+      );
       let navigationReady = true;
       let navigationBlocked = false;
-      if (
+      if (!bindingStillValid) {
+        navigationBlocked = true;
+        adapterResponse = {
+          ok: false,
+          error: {
+            code: "BROWSER_OBSERVATION_STALE",
+            message:
+              "The frozen page or authentication context changed before execution.",
+            retryable: false
+          },
+          riskSignals: [
+            {
+              code: "PAGE_CONTEXT_CHANGED",
+              category: "page_context",
+              severity: "blocking",
+              source: "bridge",
+              detected_at: new Date().toISOString(),
+              detail: "执行前页面观察或认证上下文已变化，命令已停止。"
+            }
+          ]
+        };
+      } else if (
         currentTab?.id === tab.id &&
         currentTab.url === currentUrl &&
         navigationTarget.valid &&
@@ -1051,6 +1169,7 @@ export default defineBackground(() => {
         traceId: String(message.trace_id),
         payload: resultPayload
       });
+      await removePendingCommandStart(commandId);
       await sendEvidenceUpload(evidenceUpload);
     } finally {
       releaseCommand();
@@ -1312,6 +1431,7 @@ export default defineBackground(() => {
   const connect = async (): Promise<void> => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     try {
+      await startupRecovery;
       port = browser.runtime.connectNative(NATIVE_HOST);
       const stored = await browser.storage.local.get([
         "browserInstanceId",
@@ -1345,6 +1465,9 @@ export default defineBackground(() => {
             browser_instance_id: browserInstanceId,
             extension_id: browser.runtime.id,
             extension_version: browser.runtime.getManifest().version,
+            bridge_build_id:
+              browser.runtime.getManifest().version_name ??
+              browser.runtime.getManifest().version,
             supported_protocols: [PROTOCOL],
             features: [...BROWSER_FEATURES],
             last_acked_command_seq: Number(

@@ -11,7 +11,10 @@ import {
 } from "./alliance-retired.js";
 
 function documentOf(body: string): Document {
-  return new JSDOM(`<body>${body}</body>`).window.document;
+  const dom = new JSDOM(`<body>${body}</body>`);
+  dom.window.Element.prototype.getBoundingClientRect = () =>
+    ({ top: 20, bottom: 44, width: 160, height: 24 }) as DOMRect;
+  return dom.window.document;
 }
 
 describe("Doudian alliance retired-products runtime", () => {

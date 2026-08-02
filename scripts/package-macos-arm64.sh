@@ -35,12 +35,13 @@ if [[ -e "$OUTPUT" || -e "$OUTPUT.sha256" ]]; then
   exit 1
 fi
 
-PATH="${BUNDLED_NODE:h}:$PATH" pnpm verify
+BPA_RELEASE_IDENTITY="$RELEASE_IDENTITY" \
+  PATH="${BUNDLED_NODE:h}:$PATH" pnpm verify
 "$BUNDLED_NODE" --test "$PROJECT_ROOT/scripts/release-gates.check.mjs"
 PACKAGE_ROOT="$(mktemp -d)"
 trap 'rm -rf "$PACKAGE_ROOT"' EXIT
 mkdir -p "$PACKAGE_ROOT/bpa" "${OUTPUT:h}"
-"$BUNDLED_NODE" \
+BPA_RELEASE_IDENTITY="$RELEASE_IDENTITY" "$BUNDLED_NODE" \
   "$PROJECT_ROOT/scripts/build-runtime-closure.mjs" \
   "$PACKAGE_ROOT/bpa/runtime"
 cp "$PROJECT_ROOT/scripts/install-macos-arm64.sh" "$PACKAGE_ROOT/bpa/install.sh"

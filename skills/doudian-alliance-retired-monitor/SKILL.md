@@ -1,6 +1,6 @@
 ---
 name: doudian-alliance-retired-monitor
-description: 在运营 Windows 电脑的 WorkBuddy 中一键安装、恢复、运行或审查抖店精选联盟逐店清退商品日巡检。用于安装随 Skill 交付的 BPA Runtime 和固定资产，从抖店商品管理页进入精选联盟，逐个切换当前账号下的正常营业店铺，处理联盟首页广告弹窗，读取已清退商品，每天落盘状态，并在发现清退商品或巡检失败时提醒运营；也用于处理首次 Chrome 扩展授权、抖店登录、浏览器 Session 选择或页面结构变化造成的阻断。不要用于修改商品、佣金、推广策略、店铺设置或绕过平台验证。
+description: 在运营 Windows 电脑的 WorkBuddy 中一键安装、恢复或运行抖店精选联盟逐店清退商品日巡检。用于安装随 Skill 交付的 BPA Runtime 和固定资产，从抖店商品管理页进入精选联盟，逐个切换当前账号下的正常营业店铺，处理联盟首页广告弹窗，读取已清退商品，每天落盘状态，并在发现清退商品或巡检失败时提醒运营；也用于处理首次 Chrome 扩展授权、抖店登录、浏览器 Session 选择或页面结构变化造成的阻断。不要用于修改、检查或现场修补 Runtime、扩展、工作流、商品、佣金、推广策略或店铺设置，也不要绕过平台验证。
 ---
 
 # 抖店精选联盟清退商品巡检
@@ -15,6 +15,10 @@ description: 在运营 Windows 电脑的 WorkBuddy 中一键安装、恢复、�
 固定流程执行随 Skill 交付的
 `scripts/Install-DoudianAllianceMonitor.ps1`。必须使用安装中 Skill 的真实资源路径作为
 `-SkillRoot`，不要把脚本复制或改写到工作空间。
+
+安装或验收失败时不得分析并修改 Runtime/扩展/Workflow 内部脚本，不得绕过校验、迁移、
+构建身份或 smoke test，不得手工修改版本指针。只允许按安装器结构化
+`requiredHumanActions` 完成人工浏览器步骤；`install_failed` 必须停止并交回 BPA 开发修复。
 
 安装器会校验 Runtime SHA-256、安装或复用正确版本、启动 BPA Core、验证并发布固定资产、
 创建日记录目录和固定运行入口，然后对 Native Host、Browser Instance、Content Script、
@@ -61,9 +65,9 @@ description: 在运营 Windows 电脑的 WorkBuddy 中一键安装、恢复、�
 
 - 每次运行都必须确认命令返回了 `record.dailyPath`；文件按上海业务日期保存为
   `YYYY-MM-DD.json`，同日重跑追加到 `attempts`，并同步更新 `latest.json`。
-- `status=complete` 且 `retiredProductCount=0`：报告本轮所有已发现且正常营业店铺均未发现
+- `status=complete_empty` 且 `retiredProductCount=0`：报告本轮所有已发现且正常营业店铺均未发现
   清退商品；日状态记为 `no_clearout`，`shouldNotify=false`，不主动打扰运营。
-- `status=complete` 且 `retiredProductCount>0`：立即报告。按店铺列出商品 ID、商品标题、
+- `status=complete_with_items` 且 `retiredProductCount>0`：立即报告。按店铺列出商品 ID、商品标题、
   处理时间、处理状态和处理原因；日状态记为 `clearout_found`，`shouldNotify=true`。
 - `status=partial`：日状态记为 `incomplete` 并提醒运营，列出失败店铺和错误码；禁止描述为
   全部正常。

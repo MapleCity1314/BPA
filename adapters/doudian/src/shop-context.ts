@@ -33,15 +33,19 @@ function normalizeShopName(value: string | null | undefined): string {
 }
 
 function visibleNearHeader(element: Element): boolean {
-  if (typeof element.getBoundingClientRect !== "function") return true;
-  const rect = element.getBoundingClientRect();
+  const view = element.ownerDocument.defaultView;
+  const style = view?.getComputedStyle(element);
   if (
-    rect.top === 0 &&
-    rect.width === 0 &&
-    rect.height === 0
+    style?.display === "none" ||
+    style?.visibility === "hidden" ||
+    style?.opacity === "0" ||
+    element.hasAttribute("hidden") ||
+    element.getAttribute("aria-hidden") === "true"
   ) {
-    return true;
+    return false;
   }
+  if (typeof element.getBoundingClientRect !== "function") return false;
+  const rect = element.getBoundingClientRect();
   return (
     rect.width > 0 &&
     rect.height > 0 &&
@@ -59,7 +63,10 @@ function preciseShopElements(doc: Document): Element[] {
         "[class*='headerShopName'] [class*='shopName']," +
         "[data-testid*='shop-name'],[data-e2e*='shop-name']"
     )
-  ).filter((element) => normalizeShopName(element.textContent));
+  ).filter(
+    (element) =>
+      normalizeShopName(element.textContent) && visibleNearHeader(element)
+  );
 }
 
 function fallbackShopElements(doc: Document): Element[] {

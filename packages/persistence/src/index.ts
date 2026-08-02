@@ -696,6 +696,7 @@ export interface BrowserObservationStore {
     observedAt: string;
     reasonCode: string;
   }): number;
+  resetBrowserPageObservations(sessionId: string): number;
   pruneBrowserPageObservations(input: {
     observedBefore: string;
   }): number;

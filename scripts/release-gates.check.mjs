@@ -115,7 +115,7 @@ test("allows CI to reuse only the successful Windows repository gate", async () 
 });
 
 test("keeps WorkBuddy Windows installation progress machine-readable", async () => {
-  const [runtimeInstaller, workBuddyInstaller] = await Promise.all([
+  const [runtimeInstaller, workBuddyInstaller, runtimeRollback] = await Promise.all([
     readFile(new URL("install-windows-x64.ps1", import.meta.url), "utf8"),
     readFile(
       new URL(
@@ -124,7 +124,8 @@ test("keeps WorkBuddy Windows installation progress machine-readable", async () 
         import.meta.url
       ),
       "utf8"
-    )
+    ),
+    readFile(new URL("rollback-windows.ps1", import.meta.url), "utf8")
   ]);
   for (const installer of [runtimeInstaller, workBuddyInstaller]) {
     assert.match(
@@ -140,6 +141,25 @@ test("keeps WorkBuddy Windows installation progress machine-readable", async () 
   assert.doesNotMatch(
     workBuddyInstaller,
     /"--input", "\{`"maxShops/u
+  );
+  for (const installer of [
+    runtimeInstaller,
+    workBuddyInstaller,
+    runtimeRollback
+  ]) {
+    assert.doesNotMatch(
+      installer,
+      /(?:\bnode(?:\.exe)?["']?|node\\node\.exe["')\s]*)[\s\S]{0,80}(?:\s-e\b|--eval\b|--input-type=module)/iu
+    );
+  }
+  assert.match(workBuddyInstaller, /\.deployment-/u);
+  assert.match(
+    workBuddyInstaller,
+    /-ConfigurationPath \$ConfigurationPath/u
+  );
+  assert.match(
+    workBuddyInstaller,
+    /if \(-not \$SmokeSucceeded\)[\s\S]*?exit 0[\s\S]*?\$DeploymentFiles/u
   );
 });
 

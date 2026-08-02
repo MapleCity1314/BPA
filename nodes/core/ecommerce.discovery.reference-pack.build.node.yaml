@@ -1,0 +1,33 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: ecommerce.discovery.reference-pack.build
+  version: 1.0.0
+  title: 生成三平台远程主图候选包
+  description: 只收录可比商品的远程主图地址并标记待下载；未生成内容摘要、未去重、未人工精选前不进入图片生成任务。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [packId, sourceRunId, discovery, comparablePool, evidence]
+  properties:
+    packId: { type: string, minLength: 1, maxLength: 200 }
+    sourceRunId: { type: string, minLength: 1, maxLength: 200 }
+    discovery: { type: object }
+    comparablePool: { type: object }
+    evidence: { type: object }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [schemaVersion, packId, sourceRunId, status, summary, selectedAssets, nextRequiredAction]
+  properties:
+    schemaVersion: { const: reference-asset-pack/v0.3 }
+    packId: { type: string }
+    sourceRunId: { type: string }
+    status: { enum: [PROVISIONAL_REMOTE_ASSETS, NO_REMOTE_ASSET] }
+    summary: { type: object }
+    selectedAssets: { type: array, maxItems: 150, items: { type: object } }
+    nextRequiredAction: { type: string }
+risk: { level: R0, permissions: [] }
+execution: { timeoutDefault: 10s, idempotency: pure, cancellable: true }
+errors: [TEAM_HANDLER_INPUT_INVALID, TEAM_HANDLER_RESULT_LIMIT_EXCEEDED, TEAM_HANDLER_CANCELLED, TEAM_HANDLER_TIMEOUT]

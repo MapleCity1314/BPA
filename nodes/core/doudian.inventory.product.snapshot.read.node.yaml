@@ -1,0 +1,123 @@
+apiVersion: bpa/v1alpha2
+kind: Node
+metadata:
+  id: doudian.inventory.product.snapshot.read
+  version: 1.0.0
+  title: 读取抖店商品 SKU 与渠道库存快照
+  description: 在商品管理页只读打开指定商品的库存抽屉，读取 SKU 当前、占用、未占用及渠道商品库存，并在总量不一致时失败关闭。
+runtime: browser
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [shop, product]
+  properties:
+    shop:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: { type: string, minLength: 1, maxLength: 200 }
+        name: { type: string, minLength: 2, maxLength: 100 }
+    product:
+      type: object
+      additionalProperties: false
+      required: [id, title]
+      properties:
+        id: { type: string, pattern: "^[0-9]{5,30}$" }
+        title: { type: string, minLength: 1, maxLength: 1000 }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [status, snapshotVersion, observedAt, shop, product, skus, diagnostics, formMutations]
+  properties:
+    status: { const: complete }
+    snapshotVersion: { const: 1.0.0 }
+    observedAt: { type: string, format: date-time }
+    shop:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+    product:
+      type: object
+      additionalProperties: false
+      required: [id, title, totalStock]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        totalStock: { type: integer, minimum: 0 }
+    skus:
+      type: array
+      maxItems: 500
+      items:
+        type: object
+        additionalProperties: false
+        required: [platformSkuId, merchantCode, currentStock, occupiedStock, unoccupiedStock, channels]
+        properties:
+          platformSkuId: { type: string, pattern: "^[0-9]{5,30}$" }
+          merchantCode: { type: string, minLength: 1, maxLength: 200 }
+          currentStock: { type: integer, minimum: 0 }
+          occupiedStock: { type: integer, minimum: 0 }
+          unoccupiedStock: { type: integer, minimum: 0 }
+          channels:
+            type: array
+            maxItems: 500
+            items:
+              type: object
+              additionalProperties: false
+              required: [channelGoodsId, stock]
+              properties:
+                channelGoodsId: { type: string, pattern: "^[0-9]{5,30}$" }
+                stock: { type: integer, minimum: 0 }
+    diagnostics:
+      type: array
+      maxItems: 100
+      items: { type: string, maxLength: 1000 }
+    formMutations: { const: 0 }
+risk:
+  level: R1
+  permissions:
+    - browser.dom.read
+    - browser.dom.write
+    - browser.tabs.read
+  domains:
+    - https://fxg.jinritemai.com
+resources:
+  browser:
+    kind: browser
+    capabilities: [browser.dom.read, browser.dom.write, browser.tabs.read]
+    allowedOrigins: [https://fxg.jinritemai.com]
+    authentication: authenticated
+    purpose: 在冻结的商品管理标签页只读采集单个商品库存快照
+execution:
+  timeoutDefault: 2m
+  idempotency: repeatable_read
+  retryableErrors:
+    - PAGE_LOADING
+    - BROWSER_DISCONNECTED
+    - INVENTORY_DRAWER_NOT_READY
+  cancellable: true
+errors:
+  - PAGE_MISMATCH
+  - SHOP_IDENTITY_MISMATCH
+  - PRODUCT_ROW_NOT_FOUND
+  - PRODUCT_ROW_AMBIGUOUS
+  - INVENTORY_DRAWER_NOT_READY
+  - INVENTORY_SKU_COLUMNS_MISSING
+  - INVENTORY_SKU_ROWS_EMPTY
+  - INVENTORY_SKU_LIST_INCOMPLETE
+  - CHANNEL_STOCK_UNAVAILABLE
+  - CHANNEL_STOCK_TOTAL_MISMATCH
+  - SKU_STOCK_TOTAL_MISMATCH
+  - PRODUCT_STOCK_TOTAL_MISMATCH
+  - CAPTCHA_REQUIRED
+  - RATE_LIMITED
+  - RISK_CONTROL
+  - SESSION_EXPIRED
+evidence:
+  required: [result, error]
+adapter:
+  id: doudian-inventory
+  versions: [1.0.0]

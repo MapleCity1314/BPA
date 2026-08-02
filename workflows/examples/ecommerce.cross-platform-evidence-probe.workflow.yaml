@@ -1,0 +1,147 @@
+apiVersion: bpa/v1alpha3
+kind: Workflow
+metadata:
+  id: ecommerce.cross-platform-evidence-probe
+  version: 1.0.0
+  title: 抖音淘宝京东商品证据链探查
+  description: 对同一商品意图分别读取抖音、淘宝和京东的已打开搜索页，再建立类目空间、可比商品池、一级证据声明和远程主图候选包。
+spec:
+  riskLevel: R1
+  inputSchema:
+    type: object
+    additionalProperties: false
+    required: [intent, poolId, packId, sourceRunId, observedAt, comparisonRules, exclusionRules, maxItems]
+    properties:
+      intent:
+        type: object
+        additionalProperties: false
+        required: [intentId, platform, seedQuery, researchGoal, workingBoundary]
+        properties:
+          intentId: { type: string }
+          platform: { type: string }
+          seedQuery: { type: string }
+          researchGoal: { type: string }
+          workingBoundary: { type: object }
+      poolId: { type: string, minLength: 1 }
+      packId: { type: string, minLength: 1 }
+      sourceRunId: { type: string, minLength: 1 }
+      observedAt: { type: string, format: date-time }
+      comparisonRules:
+        type: object
+        additionalProperties: false
+        required: [coreTerms, packagingTerms, excludeTerms]
+        properties:
+          coreTerms: { type: array, minItems: 1, maxItems: 30, items: { type: string } }
+          packagingTerms: { type: array, minItems: 1, maxItems: 30, items: { type: string } }
+          excludeTerms: { type: array, maxItems: 50, items: { type: string } }
+      exclusionRules: { type: array, maxItems: 50, items: { type: string } }
+      maxItems: { type: integer, minimum: 1, maximum: 50 }
+  outputSchema:
+    type: object
+    additionalProperties: false
+    required: [productIntent, discovery, categorySpace, comparablePool, evidenceClaims, referencePack]
+    properties:
+      productIntent: { type: object }
+      discovery: { type: object }
+      categorySpace: { type: object }
+      comparablePool: { type: object }
+      evidenceClaims: { type: object }
+      referencePack: { type: object }
+  limits: { maxDepth: 2, maxStepExecutions: 50 }
+  resourceSlots:
+    douyin_page:
+      kind: browser
+      capabilities: [browser.dom.read, browser.tabs.read]
+      allowedOrigins: [https://www.douyin.com]
+      authentication: optional
+      purpose: 绑定关键词一致的抖音商品搜索页
+    taobao_page:
+      kind: browser
+      capabilities: [browser.dom.read, browser.tabs.read]
+      allowedOrigins: [https://s.taobao.com]
+      authentication: optional
+      purpose: 绑定关键词一致的淘宝商品搜索页
+    jd_page:
+      kind: browser
+      capabilities: [browser.dom.read, browser.tabs.read]
+      allowedOrigins: [https://search.jd.com]
+      authentication: optional
+      purpose: 绑定关键词一致的京东商品搜索页
+  root:
+    kind: sequence
+    steps:
+      - key: normalize_intent
+        kind: call
+        use: ecommerce.intent.normalize@1.0.0
+        with: ${input.intent}
+        timeout: 5s
+      - key: probe_douyin
+        kind: call
+        use: ecommerce.marketplace.search-results.read@1.0.0
+        resourceMappings: { browser: douyin_page }
+        with: { platform: DOUYIN, query: "${input.intent.seedQuery}", maxItems: "${input.maxItems}" }
+        timeout: 30s
+      - key: probe_taobao
+        kind: call
+        use: ecommerce.marketplace.search-results.read@1.0.0
+        resourceMappings: { browser: taobao_page }
+        with: { platform: TAOBAO, query: "${input.intent.seedQuery}", maxItems: "${input.maxItems}" }
+        timeout: 30s
+      - key: probe_jd
+        kind: call
+        use: ecommerce.marketplace.search-results.read@1.0.0
+        resourceMappings: { browser: jd_page }
+        with: { platform: JD, query: "${input.intent.seedQuery}", maxItems: "${input.maxItems}" }
+        timeout: 30s
+      - key: merge_discovery
+        kind: call
+        use: ecommerce.discovery.merge@1.0.0
+        with:
+          intent: ${steps.normalize_intent.output}
+          probes: ["${steps.probe_douyin.output}", "${steps.probe_taobao.output}", "${steps.probe_jd.output}"]
+        timeout: 10s
+      - key: build_category_space
+        kind: call
+        use: ecommerce.discovery.category-space.build@1.0.0
+        with:
+          intent: ${steps.normalize_intent.output}
+          discovery: ${steps.merge_discovery.output}
+          exclusionRules: ${input.exclusionRules}
+        timeout: 10s
+      - key: build_comparable_pool
+        kind: call
+        use: ecommerce.discovery.comparable-pool.build@1.0.0
+        with:
+          poolId: ${input.poolId}
+          categorySpace: ${steps.build_category_space.output}
+          discovery: ${steps.merge_discovery.output}
+          rules: ${input.comparisonRules}
+        timeout: 10s
+      - key: evaluate_evidence
+        kind: call
+        use: ecommerce.discovery.evidence.evaluate@1.0.0
+        with:
+          observedAt: ${input.observedAt}
+          discovery: ${steps.merge_discovery.output}
+          comparablePool: ${steps.build_comparable_pool.output}
+        timeout: 10s
+      - key: build_reference_pack
+        kind: call
+        use: ecommerce.discovery.reference-pack.build@1.0.0
+        with:
+          packId: ${input.packId}
+          sourceRunId: ${input.sourceRunId}
+          discovery: ${steps.merge_discovery.output}
+          comparablePool: ${steps.build_comparable_pool.output}
+          evidence: ${steps.evaluate_evidence.output}
+        timeout: 10s
+      - key: completed
+        kind: terminal
+        status: succeeded
+        output:
+          productIntent: ${steps.normalize_intent.output}
+          discovery: ${steps.merge_discovery.output}
+          categorySpace: ${steps.build_category_space.output}
+          comparablePool: ${steps.build_comparable_pool.output}
+          evidenceClaims: ${steps.evaluate_evidence.output}
+          referencePack: ${steps.build_reference_pack.output}

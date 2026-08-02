@@ -127,6 +127,10 @@ const entryPoints = {
   "bpa-release-scan": join(
     repositoryRoot,
     "scripts/scan-release-contents.mjs"
+  ),
+  "bpa-sqlite-tool": join(
+    repositoryRoot,
+    "scripts/windows-sqlite-tool.mjs"
   )
 };
 
@@ -175,6 +179,28 @@ async function copyRuntimeDependency(name, files, from = repositoryRoot) {
     version: String(metadata.version),
     license: String(metadata.license ?? "UNKNOWN")
   };
+}
+
+async function copyAdapterManifests() {
+  const targetNames = new Set();
+  for (const directory of await readdir(join(repositoryRoot, "adapters"), {
+    withFileTypes: true
+  })) {
+    if (!directory.isDirectory()) continue;
+    const sourceRoot = join(repositoryRoot, "adapters", directory.name);
+    for (const entry of await readdir(sourceRoot, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".adapter.yaml")) continue;
+      if (targetNames.has(entry.name)) {
+        throw new Error(`Duplicate packaged Adapter filename: ${entry.name}`);
+      }
+      targetNames.add(entry.name);
+      await copyFile(
+        join(sourceRoot, entry.name),
+        join(outputRoot, "assets/adapters", entry.name)
+      );
+    }
+  }
+  if (targetNames.size === 0) throw new Error("No Adapter manifests found");
 }
 
 async function collectFiles(directory, base = directory) {
@@ -238,14 +264,7 @@ await copyDirectory(
   join(repositoryRoot, "workflows/examples"),
   join(outputRoot, "assets/workflows")
 );
-await copyFile(
-  join(repositoryRoot, "adapters/doudian/doudian.adapter.yaml"),
-  join(outputRoot, "assets/adapters/doudian.adapter.yaml")
-);
-await copyFile(
-  join(repositoryRoot, "adapters/doudian/doudian-alliance.adapter.yaml"),
-  join(outputRoot, "assets/adapters/doudian-alliance.adapter.yaml")
-);
+await copyAdapterManifests();
 await copyDirectory(
   join(repositoryRoot, "assistance-profiles/core"),
   join(outputRoot, "assets/assistance-profiles")
@@ -305,6 +324,19 @@ const release = createReleaseMetadata({
   platform: targetPlatform,
   architecture: targetArchitecture
 });
+const extensionManifest = JSON.parse(
+  await readFile(join(outputRoot, "extension/manifest.json"), "utf8")
+);
+if (
+  extensionManifest.version !== release.runtimeVersion ||
+  extensionManifest.version_name !== release.identity
+) {
+  throw new Error(
+    `Browser Bridge identity mismatch: expected ${release.identity}, got ${String(
+      extensionManifest.version_name ?? extensionManifest.version
+    )}`
+  );
+}
 const migrationSource = await readFile(
   join(repositoryRoot, "packages/persistence-sqlite/src/migrations.ts"),
   "utf8"
@@ -420,6 +452,10 @@ await writeFile(
       schemaVersion: 2,
       runtimeVersion: rootPackage.version,
       browserProtocol: "bpa.browser/2",
+      browserBridge: {
+        buildId: release.identity,
+        extensionVersion: release.runtimeVersion
+      },
       databaseSchemaVersion,
       source: {
         gitCommit: release.gitCommit,

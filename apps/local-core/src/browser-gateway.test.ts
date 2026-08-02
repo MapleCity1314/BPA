@@ -24,6 +24,52 @@ function fixture(path: string): unknown {
 }
 
 describe("local browser gateway", () => {
+  it("rejects a Bridge build that does not match the installed Runtime", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const gateway = new LocalBrowserGateway(
+      persistence,
+      new LocalWorkflowEngine(persistence),
+      {
+        keyId: "core-build-key",
+        privateKey,
+        publicKey,
+        publicKeySpkiBase64: exportPublicKeySpkiBase64(publicKey)
+      },
+      undefined,
+      undefined,
+      "v0.6.0-rc.expected.node24.18.0"
+    );
+    gateway.attach(
+      `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      () => undefined
+    );
+    gateway.handle({
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
+      message_id: "hello-wrong-build",
+      session_id: "new",
+      seq: 0,
+      sent_at: new Date().toISOString(),
+      type: "session.hello",
+      trace_id: "trace-wrong-build",
+      payload: {
+        browser_instance_id: "browser-wrong-build",
+        extension_id: DEFAULT_BPA_EXTENSION_ID,
+        extension_version: "0.6.0",
+        bridge_build_id: "v0.6.0-rc.old.node24.18.0",
+        supported_protocols: ["bpa.browser/2"],
+        features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
+        last_acked_command_seq: 0
+      }
+    });
+    expect(gateway.status()).toMatchObject({
+      ready: false,
+      lastError: "BROWSER_BRIDGE_BUILD_MISMATCH"
+    });
+    persistence.close();
+  });
+
   it("rejects an old Bridge without exact page observation features", () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");
@@ -55,6 +101,7 @@ describe("local browser gateway", () => {
         browser_instance_id: "browser-old",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
         extension_version: "0.5.0",
+        bridge_build_id: "v0.5.0-test.node24.18.0",
         supported_protocols: ["bpa.browser/2"],
         last_acked_command_seq: 0
       }
@@ -100,6 +147,7 @@ describe("local browser gateway", () => {
           browser_instance_id: "browser-observation",
           extension_id: DEFAULT_BPA_EXTENSION_ID,
           extension_version: "0.6.0",
+          bridge_build_id: "v0.6.0-test.node24.18.0",
           supported_protocols: ["bpa.browser/2"],
           features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
           last_acked_command_seq: 0
@@ -265,6 +313,7 @@ describe("local browser gateway", () => {
         browser_instance_id: "browser-test",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
         extension_version: "0.3.0",
+        bridge_build_id: "v0.3.0-test.node24.18.0",
         supported_protocols: ["bpa.browser/2"],
         features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         last_acked_command_seq: 0
@@ -652,6 +701,7 @@ describe("local browser gateway", () => {
         browser_instance_id: "browser-resume",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
         extension_version: "0.4.0",
+        bridge_build_id: "v0.4.0-test.node24.18.0",
         supported_protocols: ["bpa.browser/2"],
         features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         last_acked_command_seq: 0
@@ -663,6 +713,21 @@ describe("local browser gateway", () => {
     const firstSessionId = String(firstWelcome.session_id);
     const resumeToken = String(firstWelcome.payload.resume_token);
     expect(resumeToken).toMatch(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+    persistence.upsertBrowserPageObservation({
+      sessionId: firstSessionId,
+      browserInstanceId: "browser-resume",
+      tabId: 42,
+      origin: "https://fxg.jinritemai.com",
+      pathname: "/ffa/g/list",
+      contentScriptReady: true,
+      authentication: "authenticated",
+      authenticationContextRef: "auth-context-before-reload",
+      observationState: "ready",
+      pageEpoch: "tab-42:before-reload",
+      observerCapabilityId: "doudian.page",
+      revision: 1,
+      observedAt: new Date().toISOString()
+    });
     gateway.detach(firstConnection);
 
     const marker = outgoing.length;
@@ -683,6 +748,7 @@ describe("local browser gateway", () => {
         browser_instance_id: "browser-resume",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
         extension_version: "0.4.0",
+        bridge_build_id: "v0.4.0-test.node24.18.0",
         supported_protocols: ["bpa.browser/2"],
         features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         last_acked_command_seq: 0,
@@ -702,6 +768,9 @@ describe("local browser gateway", () => {
       })
     );
     expect(gateway.status().sessionId).toBe(firstSessionId);
+    expect(
+      persistence.getBrowserPageObservation(firstSessionId, 42)
+    ).toBeUndefined();
     expect(persistence.listBrowserSessions({ limit: 10 }).records).toHaveLength(
       1
     );

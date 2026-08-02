@@ -67,13 +67,20 @@ describe("published default asset sources", () => {
         node
       ])
     );
+    const adapterFiles = readdirSync(new URL("adapters/", root), {
+      withFileTypes: true
+    }).flatMap((directory) =>
+      directory.isDirectory()
+        ? readdirSync(new URL(`adapters/${directory.name}/`, root))
+            .filter((name) => name.endsWith(".adapter.yaml"))
+            .map((name) => ({ directory: directory.name, name }))
+        : []
+    );
     const adapters = new Map(
-      readdirSync(new URL("adapters/doudian/", root))
-        .filter((name) => name.endsWith(".adapter.yaml"))
-        .map((filename) => {
+      adapterFiles.map(({ directory, name }) => {
           const adapter = loadYaml<{
             metadata: { id: string; version: string };
-          }>(`adapters/doudian/${filename}`);
+          }>(`adapters/${directory}/${name}`);
           return [
             `${adapter.metadata.id}@${adapter.metadata.version}`,
             {

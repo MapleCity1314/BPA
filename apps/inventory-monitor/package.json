@@ -1,0 +1,24 @@
+{
+  "name": "@bpa/inventory-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node dist/main.js",
+    "scheduler": "node dist/scheduler-main.js",
+    "migrate": "node dist/migrate-main.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run src"
+  },
+  "dependencies": {
+    "@bpa/app-postgres": "workspace:*",
+    "@bpa/control-client": "workspace:*",
+    "@bpa/inventory-domain": "workspace:*",
+    "mysql2": "^3.14.5",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/pg": "^8.15.5"
+  }
+}

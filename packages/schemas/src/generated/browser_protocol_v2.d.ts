@@ -46,6 +46,7 @@ export interface SessionHello {
     browser_instance_id: Id;
     extension_id: Id;
     extension_version: Id;
+    bridge_build_id: Id;
     /**
      * @minItems 1
      */

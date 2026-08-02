@@ -34,6 +34,14 @@ describe("Local Core platform assets", () => {
       [
         "doudian.editor.priority-items.inspect",
         "nodes/core/doudian.editor.priority-items.inspect@1.1.0.node.yaml"
+      ],
+      [
+        "doudian.inventory.product.snapshot.read",
+        "nodes/core/doudian.inventory.product.snapshot.read.node.yaml"
+      ],
+      [
+        "doudian.orders.recent.read",
+        "nodes/core/doudian.orders.recent.read.node.yaml"
       ]
     ] as const) {
       expect(
@@ -119,6 +127,22 @@ describe("Local Core platform assets", () => {
     expect(publishedAdapter).toMatchObject({
       ok: true,
       result: { digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) }
+    });
+    const inventoryAdapter = asset(
+      "adapters/doudian/doudian-inventory.adapter.yaml"
+    );
+    expect(
+      service.handle({
+        id: "validate:inventory-adapter",
+        method: "asset.validate",
+        params: { assetType: "adapter", content: inventoryAdapter }
+      })
+    ).toMatchObject({
+      ok: true,
+      result: {
+        valid: true,
+        identity: "doudian-inventory@1.0.0"
+      }
     });
     const contract = asset(
       "docs/protocols/examples/element-contract-v1alpha1.example.json"

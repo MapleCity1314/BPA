@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -106,6 +106,40 @@ afterEach(async () => {
 });
 
 describe("local control socket", () => {
+  it("rejects new Runs while a Runtime upgrade holds maintenance", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "bpa-maintenance-"));
+    const maintenancePath = join(directory, "runtime-maintenance.lock");
+    await writeFile(maintenancePath, "installer\n");
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const service = new LocalCoreService(
+      persistence,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      maintenancePath
+    );
+    cleanups.push(async () => {
+      persistence.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    expect(
+      service.handle({
+        id: "maintenance-run",
+        method: "run.create",
+        params: {
+          workflowId: "would-otherwise-be-looked-up",
+          workflowVersion: "1.0.0",
+          input: {}
+        }
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { message: "BPA_RUNTIME_MAINTENANCE" }
+    });
+  });
+
   it("serves doctor requests over a 0600 unix socket", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-control-"));
     const socketPath = controlEndpoint(directory);

@@ -3,7 +3,19 @@ import { describe, expect, it, vi } from "vitest";
 import { executeAllianceRetiredStage } from "./alliance-retired-content.js";
 
 function doc(body: string): Document {
-  return new JSDOM(`<body>${body}</body>`).window.document;
+  const dom = new JSDOM(`<body>${body}</body>`);
+  dom.window.Element.prototype.getBoundingClientRect = () => ({
+    x: 0,
+    y: 20,
+    top: 20,
+    right: 160,
+    bottom: 44,
+    left: 0,
+    width: 160,
+    height: 24,
+    toJSON: () => ({})
+  });
+  return dom.window.document;
 }
 
 describe("alliance retired-products content stages", () => {

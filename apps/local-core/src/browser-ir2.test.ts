@@ -197,6 +197,7 @@ describe("IR2 browser provider", () => {
         browser_instance_id: "browser-ir2",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
         extension_version: "0.3.0",
+        bridge_build_id: "v0.3.0-test.node24.18.0",
         supported_protocols: ["bpa.browser/2"],
         features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         last_acked_command_seq: 0
@@ -277,6 +278,7 @@ describe("IR2 browser provider", () => {
         browser_instance_id: "browser-ir2-decoy",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
         extension_version: "0.4.0",
+        bridge_build_id: "v0.4.0-test.node24.18.0",
         supported_protocols: ["bpa.browser/2"],
         features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         last_acked_command_seq: 0
@@ -473,6 +475,7 @@ describe("IR2 browser provider", () => {
         browser_instance_id: "browser-cancel",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
         extension_version: "0.3.0",
+        bridge_build_id: "v0.3.0-test.node24.18.0",
         supported_protocols: ["bpa.browser/2"],
         features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         last_acked_command_seq: 0
@@ -563,6 +566,7 @@ describe("IR2 browser provider", () => {
         browser_instance_id: "browser-cancel",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
         extension_version: "0.3.0",
+        bridge_build_id: "v0.3.0-test.node24.18.0",
         supported_protocols: ["bpa.browser/2"],
         features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         last_acked_command_seq: 0

@@ -134,6 +134,31 @@ describe("RuntimeResourceBindingService", () => {
     persistence.close();
   });
 
+  it("refuses to guess between ready tabs with different authentication contexts", () => {
+    const persistence = database();
+    persistence.upsertBrowserPageObservation({
+      sessionId: "session",
+      browserInstanceId: "browser",
+      tabId: 43,
+      windowId: 7,
+      origin: "https://example.com",
+      pathname: "/source",
+      contentScriptReady: true,
+      authentication: "authenticated",
+      authenticationContextRef: "auth-context-other",
+      observationState: "ready",
+      pageEpoch: "tab-43:1:test",
+      observerCapabilityId: "test.page",
+      revision: 1,
+      observedAt: new Date().toISOString()
+    });
+    const service = new RuntimeResourceBindingService(persistence);
+    expect(() => service.resolveForPlan(planWithBrowserCall())).toThrow(
+      "BROWSER_PAGE_AMBIGUOUS:source"
+    );
+    persistence.close();
+  });
+
   it("freezes an explicit single-Origin selection and resolves live state", () => {
     const persistence = database();
     const service = new RuntimeResourceBindingService(persistence);

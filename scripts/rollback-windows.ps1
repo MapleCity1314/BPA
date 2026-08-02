@@ -32,9 +32,12 @@ if ($Current -eq $Previous) {
   throw "Current and previous BPA runtimes must be different."
 }
 $TargetRoot = Join-Path $RuntimeRoot $Previous
+$CurrentRoot = Join-Path $RuntimeRoot $Current
 $TargetManifestPath = Join-Path $TargetRoot "runtime-manifest.json"
 $TargetExtension = Join-Path $TargetRoot "extension"
 foreach ($Required in @(
+  (Join-Path $CurrentRoot "node\node.exe"),
+  (Join-Path $CurrentRoot "bin\bpa-sqlite-tool.js"),
   (Join-Path $TargetRoot "node\node.exe"),
   (Join-Path $TargetRoot "bin\bpa-core.js"),
   (Join-Path $TargetRoot "bin\bpa.js"),
@@ -60,24 +63,11 @@ if ([string]$TargetManifest.release.identity -ne $Previous) {
 $TargetSchema = [int]$TargetManifest.databaseSchemaVersion
 $LiveSchema = 0
 if (Test-Path -LiteralPath $DataDb -PathType Leaf) {
-  Push-Location $TargetRoot
+  Push-Location $CurrentRoot
   try {
-    $LiveSchemaText = & (Join-Path $TargetRoot "node\node.exe") `
-      --input-type=module `
-      -e @'
-import Database from "better-sqlite3";
-const database = new Database(process.argv[1], { readonly: true });
-const table = database.prepare(
-  "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
-).get();
-const row = table
-  ? database.prepare(
-      "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations"
-    ).get()
-  : { version: 0 };
-database.close();
-process.stdout.write(String(row.version));
-'@ `
+    $LiveSchemaText = & (Join-Path $CurrentRoot "node\node.exe") `
+      (Join-Path $CurrentRoot "bin\bpa-sqlite-tool.js") `
+      "schema-version" `
       $DataDb
     if ($LASTEXITCODE -ne 0) {
       throw "Live BPA database Schema could not be inspected safely."

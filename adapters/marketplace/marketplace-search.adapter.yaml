@@ -1,0 +1,21 @@
+apiVersion: bpa.adapter/v1alpha1
+kind: Adapter
+metadata:
+  id: marketplace-search
+  version: 1.0.0
+  title: 三平台商品搜索页只读适配器
+  description: 从用户已打开的抖音、淘宝和京东搜索页提取可见商品卡片；不翻页、不登录、不绕过验证。
+platform: cross-platform-marketplace
+origins:
+  - https://www.douyin.com
+  - https://s.taobao.com
+  - https://search.jd.com
+extension:
+  minimumVersion: 0.6.0
+capabilities:
+  - nodeId: ecommerce.marketplace.search-results.read
+    nodeVersions: [1.0.0]
+    handlerId: ecommerce.marketplace.search-results.read
+    handlerVersion: 1.0.0
+    implementationDigest: sha256:8499afe19b38558e319df8345628e4d4fa86d18fd27a2d1e37889e79d473617a
+    permissions: [browser.dom.read, browser.tabs.read]

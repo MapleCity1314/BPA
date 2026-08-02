@@ -76,9 +76,6 @@ if (
   throw "Runtime identity is invalid."
 }
 $VersionRoot = Join-Path $RuntimeRoot $Version
-if (Test-Path -LiteralPath $VersionRoot) {
-  throw "Runtime $Version is already installed and will not be overwritten."
-}
 
 $Directories = @(
   $InstallRoot,
@@ -94,6 +91,24 @@ foreach ($Directory in $Directories) {
   New-Item -ItemType Directory -Path $Directory -Force | Out-Null
 }
 
+$InstallLockPath = Join-Path $RunRoot "runtime-install.lock"
+$RuntimeMaintenancePath = Join-Path $RunRoot "runtime-maintenance.lock"
+try {
+  $InstallLockStream = [IO.File]::Open(
+    $InstallLockPath,
+    [IO.FileMode]::OpenOrCreate,
+    [IO.FileAccess]::ReadWrite,
+    [IO.FileShare]::None
+  )
+} catch {
+  throw "BPA_INSTALL_ALREADY_RUNNING"
+}
+[IO.File]::WriteAllText(
+  $RuntimeMaintenancePath,
+  "$PID`r`n",
+  [Text.UTF8Encoding]::new($false)
+)
+
 $InstallId = [Guid]::NewGuid().ToString("N")
 $StagingRoot = Join-Path $InstallRoot ".install.$InstallId"
 $MigrationRoot = Join-Path $InstallRoot ".migration-test.$InstallId"
@@ -101,8 +116,38 @@ $ExtensionStage = Join-Path $InstallRoot ".extension.install.$InstallId"
 $ExtensionBackup = Join-Path $InstallRoot ".extension.rollback.$Version.$InstallId"
 $DatabaseBackup = $null
 $OldCurrent = $null
+$OldPrevious = $null
 $RuntimeSwitched = $false
+$RuntimeFilesSwitched = $false
 $ExtensionSwitched = $false
+$RuntimeVersionBackup = Join-Path $InstallRoot ".runtime.rollback.$InstallId"
+$NativeHostBackup = Join-Path $InstallRoot ".native-host.rollback.$InstallId.json"
+$HadNativeHostManifest = Test-Path -LiteralPath $NativeHostManifest -PathType Leaf
+$OldNativeHostRegistry = $null
+$HadNativeHostRegistry = Test-Path -LiteralPath $NativeHostRegistry
+if ($HadNativeHostRegistry) {
+  $OldNativeHostRegistry = (Get-Item -LiteralPath $NativeHostRegistry).GetValue("")
+}
+$OldBpaHome = [Environment]::GetEnvironmentVariable("BPA_HOME", "User")
+$HadRunValue = $false
+$OldRunValue = $null
+if (Test-Path -LiteralPath $RunRegistry) {
+  $RunProperty = Get-ItemProperty `
+    -LiteralPath $RunRegistry `
+    -Name "BPA Core" `
+    -ErrorAction SilentlyContinue
+  if ($RunProperty) {
+    $HadRunValue = $true
+    $OldRunValue = [string]$RunProperty."BPA Core"
+  }
+}
+$PreviousPointer = Join-Path $RuntimeRoot "previous.txt"
+if (Test-Path -LiteralPath $PreviousPointer -PathType Leaf) {
+  $OldPrevious = Get-Content -LiteralPath $PreviousPointer -Raw
+}
+if ($HadNativeHostManifest) {
+  Copy-Item -LiteralPath $NativeHostManifest -Destination $NativeHostBackup
+}
 
 function Set-CurrentRuntime([string]$Identity) {
   Set-BpaRuntimePointer -PointerPath $CurrentPointer -Identity $Identity
@@ -143,21 +188,27 @@ function Test-SqliteDatabase([string]$DatabasePath, [string]$RuntimePath) {
   if (-not (Test-Path -LiteralPath $DatabasePath -PathType Leaf)) {
     return
   }
-  Push-Location $RuntimePath
-  try {
-    & (Join-Path $RuntimePath "node\node.exe") --input-type=module -e @'
-import Database from "better-sqlite3";
-const database = new Database(process.argv[1]);
-database.pragma("wal_checkpoint(TRUNCATE)");
-const rows = database.pragma("integrity_check");
-database.close();
-if (rows.length !== 1 || rows[0].integrity_check !== "ok") process.exit(1);
-'@ $DatabasePath
-    if ($LASTEXITCODE -ne 0) {
-      throw "SQLite integrity check failed."
-    }
-  } finally {
-    Pop-Location
+  & (Join-Path $RuntimePath "node\node.exe") `
+    (Join-Path $RuntimePath "bin\bpa-sqlite-tool.js") `
+    "check" `
+    $DatabasePath
+  if ($LASTEXITCODE -ne 0) {
+    throw "SQLite integrity check failed."
+  }
+}
+
+function Backup-SqliteDatabase(
+  [string]$DatabasePath,
+  [string]$BackupPath,
+  [string]$RuntimePath
+) {
+  & (Join-Path $RuntimePath "node\node.exe") `
+    (Join-Path $RuntimePath "bin\bpa-sqlite-tool.js") `
+    "backup" `
+    $DatabasePath `
+    $BackupPath
+  if ($LASTEXITCODE -ne 0) {
+    throw "SQLite consistent backup failed."
   }
 }
 
@@ -186,29 +237,38 @@ set "BPA_RUNTIME_ID=%BPA_RUNTIME_ID%"
 }
 
 try {
-  Stop-BpaCore
+  if (Test-Path -LiteralPath $CurrentPointer -PathType Leaf) {
+    $OldCurrent = (Get-Content -LiteralPath $CurrentPointer -Raw).Trim()
+  }
   Copy-Item -LiteralPath $PackagedRuntime -Destination $StagingRoot -Recurse
   Copy-Item `
     -LiteralPath (Join-Path $StagingRoot "extension") `
     -Destination $ExtensionStage `
     -Recurse
 
-  Push-Location $StagingRoot
-  try {
-    & (Join-Path $StagingRoot "node\node.exe") -e `
-      'import("better-sqlite3").then(({default: Database}) => new Database(":memory:").close())'
-    if ($LASTEXITCODE -ne 0) {
-      throw "The packaged SQLite native module could not be loaded."
-    }
-  } finally {
-    Pop-Location
+  & (Join-Path $StagingRoot "node\node.exe") `
+    (Join-Path $StagingRoot "bin\bpa-sqlite-tool.js") `
+    "check-memory"
+  if ($LASTEXITCODE -ne 0) {
+    throw "The packaged SQLite native module could not be loaded."
   }
+  if (Test-Path -LiteralPath $DataDb -PathType Leaf) {
+    & (Join-Path $StagingRoot "node\node.exe") `
+      (Join-Path $StagingRoot "bin\bpa-sqlite-tool.js") `
+      "quiescent" `
+      $DataDb
+    if ($LASTEXITCODE -ne 0) {
+      throw "BPA_RUNTIME_BUSY"
+    }
+  }
+
+  Stop-BpaCore
 
   if (Test-Path -LiteralPath $DataDb -PathType Leaf) {
     Test-SqliteDatabase $DataDb $StagingRoot
     $Timestamp = Get-Date -Format "yyyyMMddHHmmss"
-    $DatabaseBackup = Join-Path $BackupRoot "bpa-before-$Version-$Timestamp.sqlite"
-    Copy-Item -LiteralPath $DataDb -Destination $DatabaseBackup
+    $DatabaseBackup = Join-Path $BackupRoot "bpa-before-$Version-$Timestamp-$InstallId.sqlite"
+    Backup-SqliteDatabase $DataDb $DatabaseBackup $StagingRoot
     New-Item -ItemType Directory -Path (Join-Path $MigrationRoot "data") -Force |
       Out-Null
     Copy-Item `
@@ -237,11 +297,14 @@ try {
     $env:BPA_HOME = $PreviousHome
   }
 
+  if (Test-Path -LiteralPath $VersionRoot) {
+    Move-Item -LiteralPath $VersionRoot -Destination $RuntimeVersionBackup
+  }
   Move-Item -LiteralPath $StagingRoot -Destination $VersionRoot
-  if (Test-Path -LiteralPath $CurrentPointer -PathType Leaf) {
-    $OldCurrent = (Get-Content -LiteralPath $CurrentPointer -Raw).Trim()
+  $RuntimeFilesSwitched = $true
+  if ($OldCurrent) {
     [IO.File]::WriteAllText(
-      (Join-Path $RuntimeRoot "previous.txt"),
+      $PreviousPointer,
       "$OldCurrent`r`n",
       [Text.UTF8Encoding]::new($false)
     )
@@ -255,6 +318,14 @@ try {
   Move-Item -LiteralPath $ExtensionStage -Destination $ExtensionRoot
   $ExtensionSwitched = $true
   Write-Launchers
+  Copy-Item `
+    -LiteralPath (Join-Path $PackageRoot "rollback.ps1") `
+    -Destination (Join-Path $BinRoot "bpa-rollback.ps1") `
+    -Force
+  Copy-Item `
+    -LiteralPath $RuntimeHelpers `
+    -Destination (Join-Path $BinRoot "runtime-common.ps1") `
+    -Force
 
   $NativeHost = @{
     name = "com.bpa.browser"
@@ -283,6 +354,9 @@ try {
     -PropertyType String `
     -Force | Out-Null
 
+  if (Test-Path -LiteralPath $RuntimeMaintenancePath) {
+    Remove-Item -LiteralPath $RuntimeMaintenancePath -Force
+  }
   Start-BpaCore
   $Healthy = $false
   for ($Attempt = 0; $Attempt -lt 60; $Attempt += 1) {
@@ -303,11 +377,33 @@ try {
   }
 
   if (Test-Path -LiteralPath $ExtensionBackup) {
-    Remove-Item -LiteralPath $ExtensionBackup -Recurse -Force
+    Remove-Item `
+      -LiteralPath $ExtensionBackup `
+      -Recurse `
+      -Force `
+      -ErrorAction SilentlyContinue
   }
   if (Test-Path -LiteralPath $MigrationRoot) {
-    Remove-Item -LiteralPath $MigrationRoot -Recurse -Force
+    Remove-Item `
+      -LiteralPath $MigrationRoot `
+      -Recurse `
+      -Force `
+      -ErrorAction SilentlyContinue
   }
+  if (Test-Path -LiteralPath $RuntimeVersionBackup) {
+    Remove-Item `
+      -LiteralPath $RuntimeVersionBackup `
+      -Recurse `
+      -Force `
+      -ErrorAction SilentlyContinue
+  }
+  if (Test-Path -LiteralPath $NativeHostBackup) {
+    Remove-Item `
+      -LiteralPath $NativeHostBackup `
+      -Force `
+      -ErrorAction SilentlyContinue
+  }
+  $InstallLockStream.Dispose()
 
   Write-Host "BPA $Version installed from a verified Windows x64 closure."
   Write-Host "CLI: $(Join-Path $BinRoot 'bpa.cmd')"
@@ -316,28 +412,130 @@ try {
     Write-Host "Pre-upgrade database backup: $DatabaseBackup"
   }
 } catch {
-  Stop-BpaCore
-  if ($ExtensionSwitched) {
-    if (Test-Path -LiteralPath $ExtensionRoot) {
-      Remove-Item -LiteralPath $ExtensionRoot -Recurse -Force
+  $InstallError = $_
+  $RollbackErrors = [System.Collections.Generic.List[string]]::new()
+  try {
+    Stop-BpaCore
+  } catch {
+    $RollbackErrors.Add("stop-core: $($_.Exception.Message)")
+  }
+  try {
+    if ($ExtensionSwitched) {
+      if (Test-Path -LiteralPath $ExtensionRoot) {
+        Remove-Item -LiteralPath $ExtensionRoot -Recurse -Force
+      }
+      if (Test-Path -LiteralPath $ExtensionBackup) {
+        Move-Item -LiteralPath $ExtensionBackup -Destination $ExtensionRoot
+      }
     }
-    if (Test-Path -LiteralPath $ExtensionBackup) {
-      Move-Item -LiteralPath $ExtensionBackup -Destination $ExtensionRoot
+  } catch {
+    $RollbackErrors.Add("extension: $($_.Exception.Message)")
+  }
+  try {
+    if ($RuntimeSwitched) {
+      if ($OldCurrent) {
+        Set-CurrentRuntime $OldCurrent
+      } elseif (Test-Path -LiteralPath $CurrentPointer) {
+        Remove-Item -LiteralPath $CurrentPointer -Force
+      }
     }
-  }
-  if ($RuntimeSwitched -and $OldCurrent) {
-    Set-CurrentRuntime $OldCurrent
-  }
-  if ($DatabaseBackup -and (Test-Path -LiteralPath $DatabaseBackup)) {
-    Copy-Item -LiteralPath $DatabaseBackup -Destination $DataDb -Force
-  }
-  foreach ($Temporary in @($StagingRoot, $MigrationRoot, $ExtensionStage)) {
-    if (Test-Path -LiteralPath $Temporary) {
-      Remove-Item -LiteralPath $Temporary -Recurse -Force
+    if ($RuntimeFilesSwitched -and (Test-Path -LiteralPath $VersionRoot)) {
+      Remove-Item -LiteralPath $VersionRoot -Recurse -Force
     }
+    if (Test-Path -LiteralPath $RuntimeVersionBackup) {
+      Move-Item -LiteralPath $RuntimeVersionBackup -Destination $VersionRoot
+    }
+    if ($OldPrevious -ne $null) {
+      [IO.File]::WriteAllText(
+        $PreviousPointer,
+        $OldPrevious,
+        [Text.UTF8Encoding]::new($false)
+      )
+    } elseif (Test-Path -LiteralPath $PreviousPointer) {
+      Remove-Item -LiteralPath $PreviousPointer -Force
+    }
+  } catch {
+    $RollbackErrors.Add("runtime: $($_.Exception.Message)")
   }
-  if ($OldCurrent) {
-    Start-BpaCore
+  try {
+    if ($DatabaseBackup -and (Test-Path -LiteralPath $DatabaseBackup)) {
+      foreach ($DatabaseFile in @($DataDb, "$DataDb-wal", "$DataDb-shm")) {
+        if (Test-Path -LiteralPath $DatabaseFile) {
+          Remove-Item -LiteralPath $DatabaseFile -Force
+        }
+      }
+      Copy-Item -LiteralPath $DatabaseBackup -Destination $DataDb -Force
+    }
+  } catch {
+    $RollbackErrors.Add("database: $($_.Exception.Message)")
   }
-  throw
+  try {
+    if ($HadNativeHostManifest -and (Test-Path -LiteralPath $NativeHostBackup)) {
+      Copy-Item -LiteralPath $NativeHostBackup -Destination $NativeHostManifest -Force
+    } elseif (Test-Path -LiteralPath $NativeHostManifest) {
+      Remove-Item -LiteralPath $NativeHostManifest -Force
+    }
+    if ($HadNativeHostRegistry) {
+      New-Item -Path $NativeHostRegistry -Force | Out-Null
+      Set-Item -Path $NativeHostRegistry -Value $OldNativeHostRegistry
+    } elseif (Test-Path -LiteralPath $NativeHostRegistry) {
+      Remove-Item -LiteralPath $NativeHostRegistry -Recurse -Force
+    }
+  } catch {
+    $RollbackErrors.Add("native-host: $($_.Exception.Message)")
+  }
+  try {
+    [Environment]::SetEnvironmentVariable("BPA_HOME", $OldBpaHome, "User")
+    if ($HadRunValue) {
+      New-ItemProperty `
+        -Path $RunRegistry `
+        -Name "BPA Core" `
+        -Value $OldRunValue `
+        -PropertyType String `
+        -Force | Out-Null
+    } else {
+      Remove-ItemProperty `
+        -Path $RunRegistry `
+        -Name "BPA Core" `
+        -ErrorAction SilentlyContinue
+    }
+  } catch {
+    $RollbackErrors.Add("environment: $($_.Exception.Message)")
+  }
+  try {
+    foreach ($Temporary in @($StagingRoot, $MigrationRoot, $ExtensionStage)) {
+      if (Test-Path -LiteralPath $Temporary) {
+        Remove-Item -LiteralPath $Temporary -Recurse -Force
+      }
+    }
+  } catch {
+    $RollbackErrors.Add("cleanup: $($_.Exception.Message)")
+  }
+  try {
+    if ($OldCurrent) {
+      if (Test-Path -LiteralPath $RuntimeMaintenancePath) {
+        Remove-Item -LiteralPath $RuntimeMaintenancePath -Force
+      }
+      Start-BpaCore
+    }
+  } catch {
+    $RollbackErrors.Add("restart-old-core: $($_.Exception.Message)")
+  } finally {
+    if (Test-Path -LiteralPath $RuntimeMaintenancePath) {
+      Remove-Item `
+        -LiteralPath $RuntimeMaintenancePath `
+        -Force `
+        -ErrorAction SilentlyContinue
+    }
+    $InstallLockStream.Dispose()
+  }
+  if ($RollbackErrors.Count -gt 0) {
+    throw (
+      "BPA_INSTALL_FAILED_ROLLBACK_INCOMPLETE: " +
+      $InstallError.Exception.Message +
+      "; rollback=" +
+      ($RollbackErrors -join " | ")
+    )
+  }
+  throw $InstallError
 }

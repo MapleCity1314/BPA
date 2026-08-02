@@ -183,29 +183,20 @@ function Start-BpaCoreProcess {
   $RuntimeRoot = Join-Path $InstallRoot "runtime\$RuntimeIdentity"
   $Node = Join-Path $RuntimeRoot "node\node.exe"
   $EntryPoint = Join-Path $RuntimeRoot "bin\bpa-core.js"
+  $Launcher = Join-Path $InstallRoot "bin\bpa-core.cmd"
   if (
     -not (Test-Path -LiteralPath $Node -PathType Leaf) -or
     -not (Test-Path -LiteralPath $EntryPoint -PathType Leaf)
   ) {
     throw "BPA Core runtime is incomplete: $RuntimeIdentity"
   }
-  $LogRoot = Join-Path $InstallRoot "logs"
-  New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
-  $PreviousHome = $env:BPA_HOME
-  $PreviousRuntimeIdentity = $env:BPA_RUNTIME_ID
-  try {
-    $env:BPA_HOME = $InstallRoot
-    $env:BPA_RUNTIME_ID = $RuntimeIdentity
-    Start-Process `
-      -FilePath $Node `
-      -ArgumentList @("`"$EntryPoint`"") `
-      -WindowStyle Hidden `
-      -RedirectStandardOutput (Join-Path $LogRoot "core.stdout.log") `
-      -RedirectStandardError (Join-Path $LogRoot "core.stderr.log")
-  } finally {
-    $env:BPA_HOME = $PreviousHome
-    $env:BPA_RUNTIME_ID = $PreviousRuntimeIdentity
+  if (-not (Test-Path -LiteralPath $Launcher -PathType Leaf)) {
+    throw "BPA Core launcher is missing: $Launcher"
   }
+  # PowerShell 5.1 corrupts quoted Node arguments in several Start-Process
+  # combinations. The verified ASCII launcher owns all quoting and environment
+  # setup, so no JavaScript or JSON crosses the PowerShell argument parser.
+  Start-Process -FilePath $Launcher -WindowStyle Hidden
 }
 
 function Wait-BpaCoreHealthy {

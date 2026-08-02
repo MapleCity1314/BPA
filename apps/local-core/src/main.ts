@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { loadOrCreateCoreSigningKey } from "@bpa/gateway-core";
 import { LocalWorkflowEngine } from "./compatibility/local-workflow-engine.js";
@@ -50,7 +51,8 @@ const service = new LocalCoreService(
   browserGateway,
   undefined,
   stagingTransfers,
-  paths.data
+  paths.data,
+  join(paths.run, "runtime-maintenance.lock")
 );
 browserGateway.recoverTerminalResults();
 browserGateway.recoverCancellations();

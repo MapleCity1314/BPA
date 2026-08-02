@@ -67,6 +67,7 @@ export function createAllianceRetiredBrowserDriver(input: {
   readonly sourceTabId: number;
   readonly deadline: string;
   readonly isCancelled?: () => boolean;
+  readonly stageResponseTimeoutMs?: number;
 }): AllianceRetiredBrowserDriver {
   const managedTabIds = new Set<number>();
   let promoteTabId: number | undefined;
@@ -110,10 +111,38 @@ export function createAllianceRetiredBrowserDriver(input: {
     expectedStage: T["stage"]
   ): Promise<T> => {
     await preflight(tabId);
-    const response = (await browser.tabs.sendMessage(tabId, {
-      type: "bpa.doudian.alliance.stage",
-      request
-    })) as StageResponse;
+    const remaining = Date.parse(input.deadline) - Date.now();
+    const timeoutMs = Math.max(
+      1,
+      Math.min(input.stageResponseTimeoutMs ?? 75_000, remaining)
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let response: StageResponse;
+    try {
+      response = (await Promise.race([
+        browser.tabs.sendMessage(tabId, {
+          type: "bpa.doudian.alliance.stage",
+          request
+        }),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("ALLIANCE_CONTENT_RESPONSE_TIMEOUT")),
+            timeoutMs
+          );
+        })
+      ])) as StageResponse;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new AllianceRetiredDriverError(
+        /Extension context invalidated|Receiving end does not exist|message port closed/iu.test(
+          message
+        )
+          ? "BROWSER_CONTENT_SCRIPT_MISSING"
+          : message
+      );
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     if (!response?.ok || response.result?.stage !== expectedStage) {
       throw new AllianceRetiredDriverError(
         response?.error?.code ?? "ALLIANCE_STAGE_FAILED"

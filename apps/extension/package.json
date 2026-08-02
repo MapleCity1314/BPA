@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@bpa/adapter-doudian": "workspace:*",
+    "@bpa/adapter-marketplace": "workspace:*",
     "@bpa/browser-bridge": "workspace:*",
     "@bpa/node-runtime": "workspace:*",
     "@bpa/schemas": "workspace:*",

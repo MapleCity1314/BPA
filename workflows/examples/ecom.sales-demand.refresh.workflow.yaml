@@ -1,0 +1,59 @@
+apiVersion: bpa/v1alpha3
+kind: Workflow
+metadata:
+  id: ecom.sales-demand.refresh
+  version: 1.0.0
+  title: 刷新销售需求版本化事实
+  description: 从固定 MySQL 抖店导出事实表增量同步支付后商品数量；去重、状态口径和数据集发布均由库存服务原子执行。
+spec:
+  riskLevel: R1
+  inputSchema:
+    type: object
+    additionalProperties: false
+    required: [shopId, shopName, lease]
+    properties:
+      shopId: { type: string, minLength: 1, maxLength: 200 }
+      shopName: { type: string, minLength: 2, maxLength: 200 }
+      lease: { type: object }
+  outputSchema:
+    type: object
+  limits: { maxDepth: 2, maxStepExecutions: 20 }
+  resourceSlots:
+    doudian_orders_browser:
+      kind: browser
+      capabilities: [browser.dom.read,browser.tabs.read]
+      allowedOrigins: [https://fxg.jinritemai.com]
+      authentication: authenticated
+      purpose: 冻结已登录订单页，只读补充最近订单热数据
+  root:
+    kind: sequence
+    steps:
+      - key: sync_sales_demand
+        kind: call
+        use: ecom.sales-demand.sync@1.0.0
+        with:
+          shopId: ${input.shopId}
+          shopName: ${input.shopName}
+          lease: ${input.lease}
+        timeout: 10m
+      - key: read_recent_orders
+        kind: call
+        use: doudian.orders.recent.read@1.0.0
+        resourceMappings: { browser: doudian_orders_browser }
+        with:
+          shopId: ${input.shopId}
+          shopName: ${input.shopName}
+        timeout: 2m
+      - key: persist_recent_orders
+        kind: call
+        use: ecom.sales-demand.recent.persist@1.0.0
+        with:
+          snapshot: ${steps.read_recent_orders.output}
+          lease: ${input.lease}
+        timeout: 30s
+      - key: completed
+        kind: terminal
+        status: succeeded
+        output:
+          historical: ${steps.sync_sales_demand.output}
+          recent: ${steps.persist_recent_orders.output}

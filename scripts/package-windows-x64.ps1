@@ -24,6 +24,10 @@ $NodeVersion = node -p 'process.versions.node'
 $GitCommit = git rev-parse HEAD
 $ReleaseIdentity =
   "v$RuntimeVersion-rc.$($GitCommit.Substring(0, 12)).node$NodeVersion"
+$PreviousReleaseIdentity = $env:BPA_RELEASE_IDENTITY
+$env:BPA_RELEASE_IDENTITY = $ReleaseIdentity
+$PackageRoot = $null
+try {
 $ExpectedName = "bpa-local-$ReleaseIdentity-windows-x64.zip"
 if (-not $Output) {
   $Output = Join-Path $ProjectRoot "artifacts\$ExpectedName"
@@ -55,10 +59,10 @@ if ($LASTEXITCODE -ne 0) {
   throw "Release gate tests failed."
 }
 
-$PackageRoot = Join-Path $env:RUNNER_TEMP "bpa-windows-$([Guid]::NewGuid().ToString('N'))"
-if (-not $env:RUNNER_TEMP) {
-  $PackageRoot = Join-Path $env:TEMP "bpa-windows-$([Guid]::NewGuid().ToString('N'))"
-}
+$PackageBase = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
+$PackageRoot = Join-Path `
+  $PackageBase `
+  "bpa-windows-$([Guid]::NewGuid().ToString('N'))"
 $BpaRoot = Join-Path $PackageRoot "bpa"
 $RuntimeRoot = Join-Path $BpaRoot "runtime"
 $SeaRoot = Join-Path $PackageRoot "sea"
@@ -142,8 +146,9 @@ try {
     if ($LASTEXITCODE -ne 0) {
       throw "Packaged runtime verification failed."
     }
-    & (Join-Path $RuntimeRoot "node\node.exe") -e `
-      'import("better-sqlite3").then(({default: Database}) => new Database(":memory:").close())'
+    & (Join-Path $RuntimeRoot "node\node.exe") `
+      (Join-Path $RuntimeRoot "bin\bpa-sqlite-tool.js") `
+      "check-memory"
     if ($LASTEXITCODE -ne 0) {
       throw "Packaged SQLite binary verification failed."
     }
@@ -179,7 +184,10 @@ try {
   }
   Write-Output $Output
 } finally {
-  if (Test-Path -LiteralPath $PackageRoot) {
+  if ($PackageRoot -and (Test-Path -LiteralPath $PackageRoot)) {
     Remove-Item -LiteralPath $PackageRoot -Recurse -Force
   }
+}
+} finally {
+  $env:BPA_RELEASE_IDENTITY = $PreviousReleaseIdentity
 }

@@ -1,13 +1,19 @@
 import {
   collectDoudianProductScope,
+  collectDoudianProductInventorySnapshot,
   detectDoudianRiskSignals,
   inspectDoudianPriorityItems,
   legacyDoudianScopeCollectionResult,
   readDoudianShopContext,
+  readDoudianRecentOrders,
   restoreDoudianProductScope,
   validateDoudianScopeRestoreTarget,
   verifyDoudianEditorOpen
 } from "@bpa/adapter-doudian";
+import {
+  collectMarketplaceSearchResults,
+  detectMarketplaceRiskSignals
+} from "@bpa/adapter-marketplace";
 import {
   AdaptiveReadinessGate,
   firstBlockingRiskSignal
@@ -128,6 +134,22 @@ async function readShopContextWhenReady(
 }
 
 const handlers: ContentActionHandlers = {
+  async "ecommerce.marketplace.search-results.read"(input) {
+    const startedAt = Date.now();
+    const riskSignals = detectMarketplaceRiskSignals(document, location.href);
+    if (firstBlockingRiskSignal(riskSignals)) {
+      throw new ContentActionRiskError(riskSignals);
+    }
+    const output = collectMarketplaceSearchResults(document, input);
+    return {
+      output: { ...output },
+      riskSignals,
+      timingObservation: {
+        readiness_wait_ms: Date.now() - startedAt,
+        stable_for_ms: 0
+      }
+    };
+  },
   async "browser.design.snapshot.capture"(input) {
     const snapshot = await captureSemanticSnapshot(document, {
       pageState: String(input.pageState)
@@ -228,6 +250,52 @@ const handlers: ContentActionHandlers = {
     };
   },
 
+  async "doudian.inventory.product.snapshot.read"(input, request) {
+    const startedAt = Date.now();
+    const ready = await readShopContextWhenReady(
+      request.timingPolicy,
+      request.deadline
+    );
+    const requestedShop = input.shop as { id?: unknown; name?: unknown };
+    if (
+      requestedShop?.id !== ready.context.shop.id ||
+      requestedShop?.name !== ready.context.shop.name
+    ) {
+      throw new Error("SHOP_IDENTITY_MISMATCH");
+    }
+    const output = await collectDoudianProductInventorySnapshot(
+      document,
+      input,
+      {
+        deadline: request.deadline!,
+        ...(request.timingPolicy?.readiness?.pollIntervalMs === undefined
+          ? {}
+          : { waitMs: request.timingPolicy.readiness.pollIntervalMs })
+      }
+    );
+    const riskSignals = detectDoudianRiskSignals(document, location.href);
+    if (firstBlockingRiskSignal(riskSignals)) {
+      throw new ContentActionRiskError(riskSignals);
+    }
+    return {
+      output: { ...output },
+      riskSignals,
+      timingObservation: {
+        readiness_wait_ms: Date.now() - startedAt,
+        stable_for_ms: request.timingPolicy?.readiness?.stableForMs ?? 250
+      }
+    };
+  },
+
+  async "doudian.orders.recent.read"(input) {
+    const output = readDoudianRecentOrders(document,{
+      shopId:String(input.shopId),shopName:String(input.shopName)
+    });
+    const riskSignals = detectDoudianRiskSignals(document,location.href);
+    if (firstBlockingRiskSignal(riskSignals)) throw new ContentActionRiskError(riskSignals);
+    return { output,riskSignals };
+  },
+
   async "doudian.product.editor.open"(input, request) {
     const startedAt = Date.now();
     const riskSignals = detectDoudianRiskSignals(document, location.href);
@@ -292,8 +360,12 @@ export default defineContentScript({
   matches: [
     "https://fxg.jinritemai.com/ffa/g/list*",
     "https://fxg.jinritemai.com/ffa/g/create*",
+    "https://fxg.jinritemai.com/ffa/morder/order/*",
     "https://buyin.jinritemai.com/dashboard*",
-    "https://www.chanmama.com/*"
+    "https://www.chanmama.com/*",
+    "https://www.douyin.com/search*",
+    "https://s.taobao.com/search*",
+    "https://search.jd.com/Search*"
   ],
   main() {
     const announceReady = (): void => {
@@ -369,7 +441,13 @@ export default defineContentScript({
         }
         if (request.type === "bpa.risk.preflight") {
           sendResponse({
-            riskSignals: detectDoudianRiskSignals(document, location.href)
+            riskSignals: [
+              "https://www.douyin.com",
+              "https://s.taobao.com",
+              "https://search.jd.com"
+            ].includes(location.origin)
+              ? detectMarketplaceRiskSignals(document, location.href)
+              : detectDoudianRiskSignals(document, location.href)
           });
           return true;
         }

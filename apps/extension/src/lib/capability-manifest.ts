@@ -2,9 +2,14 @@ import type { BridgeCapability } from "@bpa/browser-bridge";
 
 export const BROWSER_PROTOCOL = "bpa.browser/2";
 export const DOUDIAN_ADAPTER_VERSION = "1.2.0";
+export const DOUDIAN_INVENTORY_ADAPTER_VERSION = "1.0.0";
 export const DOUDIAN_ORIGIN = "https://fxg.jinritemai.com";
 export const DOUDIAN_BUYIN_ORIGIN = "https://buyin.jinritemai.com";
 export const CHANMAMA_ORIGIN = "https://www.chanmama.com";
+export const DOUYIN_SEARCH_ORIGIN = "https://www.douyin.com";
+export const TAOBAO_SEARCH_ORIGIN = "https://s.taobao.com";
+export const JD_SEARCH_ORIGIN = "https://search.jd.com";
+export const MARKETPLACE_ADAPTER_VERSION = "1.0.0";
 export const BROWSER_FEATURES = [
   "page_observation_v2",
   "exact_tab_binding_v2",
@@ -16,16 +21,19 @@ export type ExtensionNodeId =
   | "doudian.shop.context.read"
   | "doudian.product.scope.collect"
   | "doudian.product.scope.restore"
+  | "doudian.inventory.product.snapshot.read"
+  | "doudian.orders.recent.read"
   | "doudian.product.editor.open"
   | "doudian.editor.priority-items.inspect"
   | "doudian.alliance.shops.discover"
   | "doudian.alliance.shop.retired-products.scan"
-  | "doudian.alliance.retired-products.aggregate";
+  | "doudian.alliance.retired-products.aggregate"
+  | "ecommerce.marketplace.search-results.read";
 
 export interface ExtensionCapability {
   readonly nodeId: ExtensionNodeId;
   readonly versions: readonly string[];
-  readonly riskLevel: "R0" | "R2";
+  readonly riskLevel: "R0" | "R1" | "R2";
   readonly permissions: readonly string[];
   readonly routes: readonly {
     readonly origin: string;
@@ -33,7 +41,7 @@ export interface ExtensionCapability {
     readonly observerCapabilityId: string;
   }[];
   readonly adapter?: {
-    readonly id: "doudian" | "doudian-alliance";
+    readonly id: "doudian" | "doudian-inventory" | "doudian-alliance" | "marketplace-search";
     readonly version: string;
   };
   readonly executionTarget?: "background";
@@ -46,6 +54,30 @@ const READ_ONLY_PERMISSIONS = [
 ] as const;
 
 export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
+  {
+    nodeId: "ecommerce.marketplace.search-results.read",
+    versions: ["1.0.0"],
+    riskLevel: "R1",
+    permissions: READ_ONLY_PERMISSIONS,
+    routes: [
+      {
+        origin: DOUYIN_SEARCH_ORIGIN,
+        pathnamePrefixes: ["/search"],
+        observerCapabilityId: "douyin.marketplace-search.page"
+      },
+      {
+        origin: TAOBAO_SEARCH_ORIGIN,
+        pathnamePrefixes: ["/search"],
+        observerCapabilityId: "taobao.marketplace-search.page"
+      },
+      {
+        origin: JD_SEARCH_ORIGIN,
+        pathnamePrefixes: ["/Search"],
+        observerCapabilityId: "jd.marketplace-search.page"
+      }
+    ],
+    adapter: { id: "marketplace-search", version: MARKETPLACE_ADAPTER_VERSION }
+  },
   {
     nodeId: "browser.design.snapshot.capture",
     versions: ["1.0.0"],
@@ -115,6 +147,39 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
       }
     ],
     adapter: { id: "doudian", version: DOUDIAN_ADAPTER_VERSION }
+  },
+  {
+    nodeId: "doudian.inventory.product.snapshot.read",
+    versions: ["1.0.0"],
+    riskLevel: "R1",
+    permissions: [
+      "browser.dom.read",
+      "browser.dom.write",
+      "browser.tabs.read"
+    ],
+    routes: [
+      {
+        origin: DOUDIAN_ORIGIN,
+        pathnamePrefixes: ["/ffa/g/list"],
+        observerCapabilityId: "doudian.page"
+      }
+    ],
+    adapter: {
+      id: "doudian-inventory",
+      version: DOUDIAN_INVENTORY_ADAPTER_VERSION
+    }
+  },
+  {
+    nodeId: "doudian.orders.recent.read",
+    versions: ["1.0.0"],
+    riskLevel: "R0",
+    permissions: READ_ONLY_PERMISSIONS,
+    routes: [{
+      origin: DOUDIAN_ORIGIN,
+      pathnamePrefixes: ["/ffa/morder/order"],
+      observerCapabilityId: "doudian.page"
+    }],
+    adapter: { id:"doudian-inventory",version:DOUDIAN_INVENTORY_ADAPTER_VERSION }
   },
   {
     nodeId: "doudian.product.editor.open",
@@ -215,14 +280,14 @@ export interface ExtensionCapabilityReport {
   capabilities: Array<{
     node_id: ExtensionNodeId;
     versions: string[];
-    risk_level: "R0" | "R2";
+    risk_level: "R0" | "R1" | "R2";
     permissions: string[];
     routes: Array<{
       origin: string;
       pathname_prefixes: string[];
       observer_capability_id: string;
     }>;
-    adapter_id?: "doudian" | "doudian-alliance";
+    adapter_id?: "doudian" | "doudian-inventory" | "doudian-alliance" | "marketplace-search";
     adapter_version?: string;
   }>;
   manifest_digest: `sha256:${string}`;

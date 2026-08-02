@@ -154,8 +154,19 @@ export class RuntimeResourceBindingService {
         )
         .sort(
           (left, right) =>
-            Date.parse(right.observedAt) - Date.parse(left.observedAt)
+            Date.parse(right.observedAt) - Date.parse(left.observedAt) ||
+            left.tabId - right.tabId
         );
+      const authenticatedContexts = new Set(
+        ready
+          .filter((page) =>
+            ["authenticated", "membership"].includes(page.authentication)
+          )
+          .map((page) => page.authenticationContextRef)
+      );
+      if (authenticatedContexts.size > 1) {
+        throw new Error(`BROWSER_PAGE_AMBIGUOUS:${slotName}`);
+      }
       const page = ready[0];
       if (!page) {
         const latest = [...candidates].sort(

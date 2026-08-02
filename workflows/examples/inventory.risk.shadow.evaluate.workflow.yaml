@@ -1,0 +1,75 @@
+apiVersion: bpa/v1alpha3
+kind: Workflow
+metadata:
+  id: inventory.risk.shadow.evaluate
+  version: 1.0.0
+  title: 评估并持久化影子库存风险
+  description: 针对一个已持久化商品快照读取固定订单版本，运行预测、渠道估算和风险规则，只写影子事件与模拟通知数据。
+spec:
+  riskLevel: R1
+  inputSchema:
+    type: object
+    additionalProperties: false
+    required: [snapshotId, envelope, evaluatedAt, lease]
+    properties:
+      snapshotId: { type: string, minLength: 1, maxLength: 500 }
+      envelope: { type: object }
+      evaluatedAt: { type: string, format: date-time }
+      lease: { type: object }
+  outputSchema:
+    type: object
+  limits: { maxDepth: 3, maxStepExecutions: 5000 }
+  root:
+    kind: sequence
+    steps:
+      - key: read_forecast_inputs
+        kind: call
+        use: inventory.forecast-input.read@1.0.0
+        with:
+          shopId: ${input.envelope.scope.shopId}
+          productId: ${input.envelope.facts.productId}
+          asOf: ${input.envelope.asOf}
+        timeout: 30s
+      - key: compute_shadow_result
+        kind: call
+        use: inventory.shadow.product.compute@1.0.0
+        with:
+          evaluatedAt: ${input.evaluatedAt}
+          envelope: ${input.envelope}
+          inputs: ${steps.read_forecast_inputs.output}
+          lease: ${input.lease}
+        timeout: 30s
+      - key: persist_forecasts
+        kind: foreach
+        items: ${steps.compute_shadow_result.output.persistableForecasts}
+        itemName: forecast_item
+        indexName: forecast_index
+        itemKey: ${item.platformSkuId}
+        maxItems: 500
+        maxDuration: 30m
+        onItemError: stop
+        body:
+          kind: sequence
+          steps:
+            - key: persist_forecast
+              kind: call
+              use: inventory.forecast.persist@1.0.0
+              with: ${item}
+              timeout: 30s
+      - key: persist_risk
+        kind: call
+        use: inventory.risk.persist@1.0.0
+        with:
+          snapshotId: ${input.snapshotId}
+          shopId: ${input.envelope.scope.shopId}
+          productId: ${input.envelope.facts.productId}
+          evaluation: ${steps.compute_shadow_result.output.evaluation}
+          lease: ${input.lease}
+        timeout: 30s
+      - key: completed
+        kind: terminal
+        status: succeeded
+        output:
+          computation: ${steps.compute_shadow_result.output}
+          forecastWrites: ${steps.persist_forecasts.output}
+          riskWrite: ${steps.persist_risk.output}

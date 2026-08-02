@@ -228,6 +228,7 @@
             "browser_instance_id",
             "extension_id",
             "extension_version",
+            "bridge_build_id",
             "supported_protocols",
             "features",
             "last_acked_command_seq"
@@ -236,6 +237,7 @@
             "browser_instance_id": { "$ref": "#/$defs/id" },
             "extension_id": { "$ref": "#/$defs/id" },
             "extension_version": { "$ref": "#/$defs/id" },
+            "bridge_build_id": { "$ref": "#/$defs/id" },
             "supported_protocols": {
               "type": "array",
               "minItems": 1,

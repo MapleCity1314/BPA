@@ -13,10 +13,21 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -OpenBrowserSetup
 ```
 
+执行边界（优先级最高）：
+
+- 不读取、对比或分析 Runtime 内部 JavaScript、PowerShell、Workflow 或扩展 bundle 来尝试现场修复。
+- 不创建 `.mjs`、`.js`、`.ps1` 补丁，不修改解压目录或安装目录中的任何文件。
+- 不跳过 SHA-256、Runtime closure、SQLite integrity、迁移、Native Host、扩展构建身份或 smoke test。
+- 不手工写 `current.txt`/`previous.txt`，不手工替换扩展，不清理 WAL/SHM，不用 `.NET`、`cmd /c start` 或其他方式绕过安装器。
+- 安装器返回 `install_failed` 或非零退出码时立即停止，只报告结构化错误；不得继续猜测或检查脚本逻辑。
+- 只有安装器自身返回 `ready` 才能宣告完成。
+
 3. 读取脚本最后返回的 JSON：
    - `needs_native_host`：按 `requiredHumanActions` 加载或重载扩展、启动连接，然后重新执行。
    - `needs_browser_selection`：展示候选 Browser Instance ID，让运营确认；使用
      `-BrowserInstanceId <id>` 重新执行。
+   - `needs_doudian_page_selection`：存在不同店铺身份的多个商品管理标签页；只让运营处理
+     `conflictingTabs`，不得关闭全部浏览器标签页或自行猜测目标。
    - `needs_doudian_page`：打开安装器返回的抖店商品管理地址并等待加载。
    - `needs_extension_reload`：重载扩展后刷新商品管理页。
    - `needs_doudian_login`：只提示运营在页面中人工登录，不索取任何凭据。
@@ -24,6 +35,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
    - `waiting_for_page`：等待数秒后重新执行同一安装器。
    - `smoke_test_failed`：打开 `dailyPath` 查看失败记录，按 `errorCode` 和
      `requiredHumanActions` 恢复后重新执行；不得当作安装成功。
+   - `install_failed`：原样报告 `errorCode` 和 `message`，停止操作并交给 BPA 开发修复；禁止现场打补丁或绕过校验。
    - `ready`：确认 `smokeTest.dailyPath` 存在，不重复执行 smoke test。
 4. 首次只读验收必须已经写入 `smokeTest.dailyPath`。随后给出 WorkBuddy 自动化配置：
    - 名称：`抖店精选联盟清退商品日巡检`

@@ -4,7 +4,7 @@ import {
   teamCodeDigest
 } from "@bpa/team-runtime";
 
-export const TEAM_WORKER_VERSION = "0.4.0";
+export const TEAM_WORKER_VERSION = "0.6.0";
 
 function implementationDigest(ref: string, implementation: string): string {
   return `sha256:${createHash("sha256")
@@ -13,6 +13,76 @@ function implementationDigest(ref: string, implementation: string): string {
 }
 
 export const TEAM_WORKER_HANDLER_MANIFEST = [
+  {
+    ref: "ecom.sales-demand.sync@1.0.0",
+    implementationDigest: implementationDigest(
+      "ecom.sales-demand.sync@1.0.0",
+      "inventory-service-uds:mysql-demand-sync:verified-write:v1"
+    )
+  },
+  {
+    ref: "ecom.sales-demand.recent.persist@1.0.0",
+    implementationDigest: implementationDigest(
+      "ecom.sales-demand.recent.persist@1.0.0",
+      "inventory-service-uds:recent-order-whitelist:verified-write:v1"
+    )
+  },
+  {
+    ref: "inventory.snapshot.persist@1.0.0",
+    implementationDigest: implementationDigest(
+      "inventory.snapshot.persist@1.0.0",
+      "inventory-service-uds:snapshot-persist:verified-write:v1"
+    )
+  },
+  {
+    ref: "inventory.forecast-input.read@1.0.0",
+    implementationDigest: implementationDigest(
+      "inventory.forecast-input.read@1.0.0",
+      "inventory-service-uds:forecast-input:repeatable-read:v1"
+    )
+  },
+  {
+    ref: "inventory.forecast.persist@1.0.0",
+    implementationDigest: implementationDigest(
+      "inventory.forecast.persist@1.0.0",
+      "inventory-service-uds:forecast-persist:verified-write:v1"
+    )
+  },
+  {
+    ref: "inventory.risk.persist@1.0.0",
+    implementationDigest: implementationDigest(
+      "inventory.risk.persist@1.0.0",
+      "inventory-service-uds:risk-incident-hysteresis:verified-write:v1"
+    )
+  },
+  {
+    ref: "sales-demand.forecast@1.0.0",
+    implementationDigest: implementationDigest(
+      "sales-demand.forecast@1.0.0",
+      "inventory-demand-ensemble-conformal:hierarchical-fallback:bounded-pure:v2"
+    )
+  },
+  {
+    ref: "inventory.channel-consumption.estimate@1.0.0",
+    implementationDigest: implementationDigest(
+      "inventory.channel-consumption.estimate@1.0.0",
+      "channel-negative-delta-share:cold-start-3d:v1"
+    )
+  },
+  {
+    ref: "inventory.risk.evaluate@1.0.0",
+    implementationDigest: implementationDigest(
+      "inventory.risk.evaluate@1.0.0",
+      "inventory-balanced-shadow:p90-2h-6h-reserve-24h:freshness-gates:v2"
+    )
+  },
+  {
+    ref: "inventory.shadow.product.compute@1.0.0",
+    implementationDigest: implementationDigest(
+      "inventory.shadow.product.compute@1.0.0",
+      "inventory-product-forecast-channel-risk:hierarchical-fallback:bounded-pure:v2"
+    )
+  },
   {
     ref: "ecommerce.intent.normalize@1.0.0",
     implementationDigest: implementationDigest(
@@ -46,6 +116,41 @@ export const TEAM_WORKER_HANDLER_MANIFEST = [
     implementationDigest: implementationDigest(
       "ecommerce.reference-pack.build@1.0.0",
       "ecommerce-reference-pack-v1:asset-ref-only"
+    )
+  },
+  {
+    ref: "ecommerce.discovery.merge@1.0.0",
+    implementationDigest: implementationDigest(
+      "ecommerce.discovery.merge@1.0.0",
+      "marketplace-three-probe-merge:bounded-visible-facts:v1"
+    )
+  },
+  {
+    ref: "ecommerce.discovery.category-space.build@1.0.0",
+    implementationDigest: implementationDigest(
+      "ecommerce.discovery.category-space.build@1.0.0",
+      "consumer-need-first:platform-discovery-branches:v1"
+    )
+  },
+  {
+    ref: "ecommerce.discovery.comparable-pool.build@1.0.0",
+    implementationDigest: implementationDigest(
+      "ecommerce.discovery.comparable-pool.build@1.0.0",
+      "explicit-core-packaging-exclusion-terms:v1"
+    )
+  },
+  {
+    ref: "ecommerce.discovery.evidence.evaluate@1.0.0",
+    implementationDigest: implementationDigest(
+      "ecommerce.discovery.evidence.evaluate@1.0.0",
+      "visible-search-facts-only:maximum-e1:v1"
+    )
+  },
+  {
+    ref: "ecommerce.discovery.reference-pack.build@1.0.0",
+    implementationDigest: implementationDigest(
+      "ecommerce.discovery.reference-pack.build@1.0.0",
+      "remote-main-image-candidates:pending-download:v1"
     )
   },
   {
