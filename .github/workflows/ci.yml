@@ -215,3 +215,61 @@ jobs:
           path: |
             ${{ runner.temp }}/doudian-alliance-retired-monitor.skill.zip
             ${{ runner.temp }}/doudian-alliance-retired-monitor.skill.zip.sha256
+
+  validate-workbuddy-skill-windows:
+    needs: release-workbuddy-skill
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v6
+        with:
+          name: doudian-alliance-retired-monitor-skill-rc
+          path: ${{ runner.temp }}/workbuddy-skill
+      - name: Parse installer and validate the packaged closure on Windows
+        shell: pwsh
+        run: |
+          $artifactRoot = Join-Path $env:RUNNER_TEMP "workbuddy-skill"
+          $archives = @(Get-ChildItem `
+            -LiteralPath $artifactRoot `
+            -Filter "doudian-alliance-retired-monitor.skill.zip" `
+            -File)
+          if ($archives.Count -ne 1) {
+            throw "Expected exactly one WorkBuddy Skill archive"
+          }
+          $archive = $archives[0].FullName
+          $sidecar = "$archive.sha256"
+          if (-not (Test-Path -LiteralPath $sidecar -PathType Leaf)) {
+            throw "WorkBuddy Skill checksum sidecar is missing"
+          }
+          $checksumFields = `
+            (Get-Content -LiteralPath $sidecar -Raw).Trim() -split "\s+"
+          $expected = $checksumFields[0]
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+          if ($expected.ToLowerInvariant() -ne $actual.ToLowerInvariant()) {
+            throw "WorkBuddy Skill checksum does not match"
+          }
+          $expanded = Join-Path $env:RUNNER_TEMP "expanded-workbuddy-skill"
+          Expand-Archive -LiteralPath $archive -DestinationPath $expanded
+          $installers = @(Get-ChildItem `
+            -LiteralPath $expanded `
+            -Filter "Install-DoudianAllianceMonitor.ps1" `
+            -File `
+            -Recurse)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one WorkBuddy installer"
+          }
+          $scriptRoot = Split-Path -Parent $installers[0].FullName
+          $skillRoot = Split-Path -Parent $scriptRoot
+          $resultText = @(& $installers[0].FullName `
+            -SkillRoot $skillRoot `
+            -ValidatePackageOnly)
+          $result = ($resultText -join "`n") | ConvertFrom-Json
+          if (
+            $result.status -ne "package_verified" -or
+            -not $result.runtimeIdentity -or
+            -not $result.runtimeSha256 -or
+            @($result.assets).Count -ne 5
+          ) {
+            throw "WorkBuddy package-only validation returned an invalid result"
+          }

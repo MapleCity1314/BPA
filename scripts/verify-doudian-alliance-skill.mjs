@@ -1,5 +1,6 @@
 import {
   access,
+  lstat,
   mkdtemp,
   readFile,
   readdir,
@@ -8,7 +9,7 @@ import {
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -71,6 +72,43 @@ async function requireFile(path, label) {
   } catch {
     throw new Error(`${label} is missing: ${path}`);
   }
+}
+
+function safePackagePath(path) {
+  const parts = typeof path === "string" ? path.split("/") : [];
+  return (
+    typeof path === "string" &&
+    path.length > 0 &&
+    !path.startsWith("/") &&
+    !path.includes("\\") &&
+    parts.every(
+      (part) =>
+        /^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(part) &&
+        part !== "." &&
+        part !== ".." &&
+        !part.endsWith(".") &&
+        !/^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/iu.test(part)
+    )
+  );
+}
+
+async function filesUnder(root, directory = root) {
+  const result = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    const metadata = await lstat(path);
+    if (metadata.isSymbolicLink()) {
+      throw new Error(`Skill package must not contain symlinks: ${path}`);
+    }
+    if (entry.isDirectory()) {
+      result.push(...(await filesUnder(root, path)));
+    } else if (entry.isFile()) {
+      result.push(relative(root, path).replaceAll("\\", "/"));
+    } else {
+      throw new Error(`Unsupported Skill package entry: ${path}`);
+    }
+  }
+  return result.sort();
 }
 
 async function verifySource() {
@@ -140,6 +178,24 @@ async function verifyPackage(inputPath) {
     ) {
       throw new Error("Skill archive checksum or filename does not match");
     }
+    const archiveListing = (
+      await execFileAsync("unzip", ["-Z1", archivePath], {
+        maxBuffer: 2 * 1024 * 1024
+      })
+    ).stdout
+      .split(/\r?\n/u)
+      .filter(Boolean);
+    const archivePaths = archiveListing
+      .map((path) => (path.endsWith("/") ? path.slice(0, -1) : path))
+      .filter(Boolean);
+    const archiveFiles = archiveListing.filter((path) => !path.endsWith("/"));
+    if (
+      archiveFiles.length === 0 ||
+      archivePaths.some((path) => !safePackagePath(path)) ||
+      new Set(archiveFiles).size !== archiveFiles.length
+    ) {
+      throw new Error("Skill archive contains unsafe or duplicate paths");
+    }
     stage = await mkdtemp(join(tmpdir(), "bpa-skill-verify-"));
     await execFileAsync("unzip", ["-q", packageRoot, "-d", stage]);
     packageRoot = stage;
@@ -199,12 +255,40 @@ async function verifyPackage(inputPath) {
     ) {
       throw new Error("Skill package manifest identity is invalid");
     }
-    for (const entry of manifest.files ?? []) {
+    if (!Array.isArray(manifest.files) || manifest.files.length === 0) {
+      throw new Error("Skill package manifest file closure is missing");
+    }
+    const manifestPaths = new Set();
+    for (const entry of manifest.files) {
+      if (
+        !entry ||
+        typeof entry !== "object" ||
+        !safePackagePath(entry.path) ||
+        !/^[a-f0-9]{64}$/u.test(String(entry.sha256)) ||
+        manifestPaths.has(entry.path) ||
+        entry.path === "package-manifest.json"
+      ) {
+        throw new Error(
+          "Skill package manifest contains an invalid file entry"
+        );
+      }
+      manifestPaths.add(entry.path);
       const filePath = join(packageRoot, String(entry.path));
       await requireFile(filePath, String(entry.path));
       if ((await digest(filePath)) !== entry.sha256) {
         throw new Error(`Skill package file digest mismatch: ${entry.path}`);
       }
+    }
+    const actualFiles = (await filesUnder(packageRoot)).filter(
+      (path) => path !== "package-manifest.json"
+    );
+    if (
+      actualFiles.length !== manifestPaths.size ||
+      actualFiles.some((path) => !manifestPaths.has(path))
+    ) {
+      throw new Error(
+        "Skill package contains files outside the manifest closure"
+      );
     }
     await execFileAsync(
       join(repositoryRoot, "scripts/verify-package-windows-x64.sh"),
