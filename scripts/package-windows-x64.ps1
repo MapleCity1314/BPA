@@ -41,6 +41,14 @@ if (-not $SkipRepositoryVerification) {
   if ($LASTEXITCODE -ne 0) {
     throw "Repository verification failed."
   }
+} else {
+  # CI proves the repository gate in the prerequisite Windows job, but build
+  # outputs are job-local and must be recreated independently by every
+  # reproducibility Builder.
+  pnpm build
+  if ($LASTEXITCODE -ne 0) {
+    throw "Repository build failed."
+  }
 }
 node --test (Join-Path $ProjectRoot "scripts\release-gates.check.mjs")
 if ($LASTEXITCODE -ne 0) {

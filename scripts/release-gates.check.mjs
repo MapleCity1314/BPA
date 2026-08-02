@@ -104,6 +104,10 @@ test("allows CI to reuse only the successful Windows repository gate", async () 
     /if \(-not \$SkipRepositoryVerification\) \{\s+pnpm verify/u
   );
   assert.match(
+    powerShellSource,
+    /\} else \{[\s\S]*?pnpm build[\s\S]*?Repository build failed\./u
+  );
+  assert.match(
     ciSource,
     /release-package-windows:\s+needs: verify-windows/u
   );
