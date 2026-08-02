@@ -74,7 +74,10 @@ for (const required of [
   "Test-BpaPathEqual",
   "ExecutablePath",
   "CommandLine",
-  "ExpectedRuntimeIdentity"
+  "ExpectedRuntimeIdentity",
+  "$env:ComSpec",
+  "RedirectStandardError",
+  "core.err.log"
 ]) {
   if (!runtimeCommon.includes(required)) {
     throw new Error(`Windows process identity gate is missing ${required}`);

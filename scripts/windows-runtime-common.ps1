@@ -193,10 +193,19 @@ function Start-BpaCoreProcess {
   if (-not (Test-Path -LiteralPath $Launcher -PathType Leaf)) {
     throw "BPA Core launcher is missing: $Launcher"
   }
-  # PowerShell 5.1 corrupts quoted Node arguments in several Start-Process
-  # combinations. The verified ASCII launcher owns all quoting and environment
-  # setup, so no JavaScript or JSON crosses the PowerShell argument parser.
-  Start-Process -FilePath $Launcher -WindowStyle Hidden
+  $LogRoot = Join-Path $InstallRoot "logs"
+  New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
+  $StandardOutput = Join-Path $LogRoot "core.out.log"
+  $StandardError = Join-Path $LogRoot "core.err.log"
+  # A .cmd file is not a Win32 executable. Launch it through cmd.exe with one
+  # verified quoted path; no JavaScript or JSON crosses the command parser.
+  $CommandLine = "/d /s /c `"`"$Launcher`"`""
+  Start-Process `
+    -FilePath $env:ComSpec `
+    -ArgumentList $CommandLine `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput $StandardOutput `
+    -RedirectStandardError $StandardError
 }
 
 function Wait-BpaCoreHealthy {
@@ -213,14 +222,38 @@ function Wait-BpaCoreHealthy {
     $env:BPA_HOME = $InstallRoot
     for ($Attempt = 0; $Attempt -lt $Attempts; $Attempt += 1) {
       Start-Sleep -Milliseconds 250
-      & (Join-Path $RuntimeRoot "node\node.exe") `
-        (Join-Path $RuntimeRoot "bin\bpa.js") doctor *> $null
-      if ($LASTEXITCODE -eq 0) {
-        return
+      try {
+        & (Join-Path $RuntimeRoot "node\node.exe") `
+          (Join-Path $RuntimeRoot "bin\bpa.js") doctor *> $null
+        if ($LASTEXITCODE -eq 0) {
+          return
+        }
+      } catch {
+        continue
       }
     }
   } finally {
     $env:BPA_HOME = $PreviousHome
   }
-  throw "BPA Core health check did not complete for $RuntimeIdentity."
+  $LockPath = Join-Path $InstallRoot "run\core.lock"
+  $LockState = if (Test-Path -LiteralPath $LockPath -PathType Leaf) {
+    "present"
+  } else {
+    "missing"
+  }
+  $ErrorLog = Join-Path $InstallRoot "logs\core.err.log"
+  $ErrorTail = if (Test-Path -LiteralPath $ErrorLog -PathType Leaf) {
+    @(
+      Get-Content -LiteralPath $ErrorLog -Tail 20 -ErrorAction SilentlyContinue
+    ) -join " | "
+  } else {
+    "missing"
+  }
+  if ([string]::IsNullOrWhiteSpace($ErrorTail)) {
+    $ErrorTail = "empty"
+  }
+  throw (
+    "BPA Core health check did not complete for $RuntimeIdentity. " +
+    "Lock=$LockState; stderr=$ErrorTail"
+  )
 }

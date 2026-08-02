@@ -360,20 +360,9 @@ try {
     Remove-Item -LiteralPath $RuntimeMaintenancePath -Force
   }
   Start-BpaCore
-  $Healthy = $false
-  for ($Attempt = 0; $Attempt -lt 60; $Attempt += 1) {
-    Start-Sleep -Milliseconds 250
-    try {
-      Invoke-CurrentRuntime "bpa.js" @("doctor") | Out-Null
-      $Healthy = $true
-      break
-    } catch {
-      continue
-    }
-  }
-  if (-not $Healthy) {
-    throw "BPA Core health check did not complete."
-  }
+  Wait-BpaCoreHealthy `
+    -InstallRoot $InstallRoot `
+    -RuntimeIdentity $Version
   if (-not (Test-Path -LiteralPath (Join-Path $ExtensionRoot "manifest.json"))) {
     throw "BPA Extension installation is incomplete."
   }
