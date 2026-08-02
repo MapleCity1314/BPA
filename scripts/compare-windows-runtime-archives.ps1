@@ -46,11 +46,36 @@ try {
   Expand-Archive -LiteralPath $SecondArchive -DestinationPath $SecondRoot
   $FirstManifest = Get-FileManifest -Root $FirstRoot
   $SecondManifest = Get-FileManifest -Root $SecondRoot
-  $Difference = Compare-Object `
-    ($FirstManifest | ConvertTo-Json -Depth 4 -Compress) `
-    ($SecondManifest | ConvertTo-Json -Depth 4 -Compress)
-  if ($Difference) {
-    throw "Windows Runtime closures are not byte-for-byte reproducible"
+  $FirstByPath = @{}
+  $SecondByPath = @{}
+  foreach ($Entry in $FirstManifest) { $FirstByPath[$Entry.path] = $Entry }
+  foreach ($Entry in $SecondManifest) { $SecondByPath[$Entry.path] = $Entry }
+  $Paths = @($FirstByPath.Keys + $SecondByPath.Keys | Sort-Object -Unique)
+  $Differences = @(
+    foreach ($Path in $Paths) {
+      $FirstEntry = $FirstByPath[$Path]
+      $SecondEntry = $SecondByPath[$Path]
+      if (
+        -not $FirstEntry -or
+        -not $SecondEntry -or
+        $FirstEntry.size -ne $SecondEntry.size -or
+        $FirstEntry.sha256 -ne $SecondEntry.sha256
+      ) {
+        [PSCustomObject]@{
+          path = $Path
+          firstSize = $(if ($FirstEntry) { $FirstEntry.size } else { $null })
+          firstSha256 = $(if ($FirstEntry) { $FirstEntry.sha256 } else { $null })
+          secondSize = $(if ($SecondEntry) { $SecondEntry.size } else { $null })
+          secondSha256 = $(if ($SecondEntry) { $SecondEntry.sha256 } else { $null })
+        }
+      }
+    }
+  )
+  if ($Differences.Count -gt 0) {
+    Write-Error ($Differences | Select-Object -First 20 | ConvertTo-Json -Depth 4)
+    throw (
+      "Windows Runtime closures differ in {0} file(s)" -f $Differences.Count
+    )
   }
   $NativeHost = $FirstManifest |
     Where-Object { $_.path -eq "bin/bpa-native-host.exe" }
