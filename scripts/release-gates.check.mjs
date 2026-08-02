@@ -138,6 +138,17 @@ test("keeps WorkBuddy Windows installation progress machine-readable", async () 
   );
 });
 
+test("retries transient Windows package verification cleanup", async () => {
+  const verifier = await readFile(
+    new URL("verify-package-windows-x64.ps1", import.meta.url),
+    "utf8"
+  );
+  assert.match(verifier, /function Remove-VerificationStage/u);
+  assert.match(verifier, /\$Attempt -le 20/u);
+  assert.match(verifier, /Start-Sleep -Milliseconds 250/u);
+  assert.match(verifier, /Remove-VerificationStage -Path \$Stage/u);
+});
+
 test("rejects legacy names and metadata drift", () => {
   const release = createReleaseMetadata({
     runtimeVersion: "0.4.0",

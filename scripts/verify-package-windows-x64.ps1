@@ -7,6 +7,23 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+function Remove-VerificationStage([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) {
+    return
+  }
+  for ($Attempt = 1; $Attempt -le 20; $Attempt += 1) {
+    try {
+      Remove-Item -LiteralPath $Path -Recurse -Force
+      return
+    } catch {
+      if ($Attempt -eq 20) {
+        throw
+      }
+      Start-Sleep -Milliseconds 250
+    }
+  }
+}
+
 if (-not (Test-Path -LiteralPath $Archive -PathType Leaf)) {
   throw "Windows package archive is missing."
 }
@@ -43,7 +60,5 @@ try {
   }
   Write-Host "Verified BPA Windows x64 production archive: $Archive"
 } finally {
-  if (Test-Path -LiteralPath $Stage) {
-    Remove-Item -LiteralPath $Stage -Recurse -Force
-  }
+  Remove-VerificationStage -Path $Stage
 }
