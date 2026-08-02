@@ -31,6 +31,13 @@
       "owner": "BPA release engineering",
       "expiresOn": "2026-08-31",
       "reason": "Dynamically loaded build-time image dependency; preserve notices and replace or complete distribution review before expiry."
+    },
+    {
+      "license": "Apache-2.0 AND LGPL-3.0-or-later",
+      "packages": ["@img/sharp-win32-x64"],
+      "owner": "BPA release engineering",
+      "expiresOn": "2026-08-31",
+      "reason": "Windows Sharp native image dependency; preserve notices and complete the same distribution review as the Darwin libvips package before expiry."
     }
   ],
   "vulnerabilityExceptions": [
