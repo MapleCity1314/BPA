@@ -77,6 +77,7 @@ for (const required of [
   "ExpectedRuntimeIdentity",
   "core.err.log",
   "bpa-core-launcher.js",
+  "& $Node $Launcher *> $null",
   "BPA Core exited before creating its identity lock",
   "[int]$Attempts = 3"
 ]) {

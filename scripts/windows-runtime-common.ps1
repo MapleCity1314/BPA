@@ -200,7 +200,7 @@ function Start-BpaCoreProcess {
   try {
     $env:BPA_HOME = $InstallRoot
     $env:BPA_RUNTIME_ID = $RuntimeIdentity
-    & $Node $Launcher
+    & $Node $Launcher *> $null
     if ($LASTEXITCODE -ne 0) {
       throw "BPA detached Core launcher exited with code $LASTEXITCODE."
     }
