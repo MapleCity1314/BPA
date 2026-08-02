@@ -115,7 +115,12 @@ test("allows CI to reuse only the successful Windows repository gate", async () 
 });
 
 test("keeps WorkBuddy Windows installation progress machine-readable", async () => {
-  const [runtimeInstaller, workBuddyInstaller, runtimeRollback] = await Promise.all([
+  const [
+    runtimeInstaller,
+    workBuddyInstaller,
+    runtimeRollback,
+    localCoreMain
+  ] = await Promise.all([
     readFile(new URL("install-windows-x64.ps1", import.meta.url), "utf8"),
     readFile(
       new URL(
@@ -125,7 +130,11 @@ test("keeps WorkBuddy Windows installation progress machine-readable", async () 
       ),
       "utf8"
     ),
-    readFile(new URL("rollback-windows.ps1", import.meta.url), "utf8")
+    readFile(new URL("rollback-windows.ps1", import.meta.url), "utf8"),
+    readFile(
+      new URL("../apps/local-core/src/main.ts", import.meta.url),
+      "utf8"
+    )
   ]);
   for (const installer of [runtimeInstaller, workBuddyInstaller]) {
     assert.match(
@@ -160,6 +169,14 @@ test("keeps WorkBuddy Windows installation progress machine-readable", async () 
   assert.match(
     workBuddyInstaller,
     /if \(-not \$SmokeSucceeded\)[\s\S]*?exit 0[\s\S]*?\$DeploymentFiles/u
+  );
+  assert.match(
+    localCoreMain,
+    /process\.stdout\.write\("BPA migrations completed successfully/u
+  );
+  assert.doesNotMatch(
+    localCoreMain,
+    /process\.stderr\.write\("BPA migrations completed successfully/u
   );
 });
 

@@ -23,7 +23,7 @@ const persistence = new SqlitePersistence({ path: paths.database });
 if (process.argv.includes("--migrate-only")) {
   persistence.close();
   instanceLock.release();
-  process.stderr.write("BPA migrations completed successfully.\n");
+  process.stdout.write("BPA migrations completed successfully.\n");
   process.exit(0);
 }
 const signingKey = loadOrCreateCoreSigningKey(paths.signingKey);
