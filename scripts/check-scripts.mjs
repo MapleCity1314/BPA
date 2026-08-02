@@ -98,6 +98,20 @@ for (const name of [
     throw new Error(`${name} must use the shared safe Core lifecycle`);
   }
 }
+const windowsInstall = await readFile(
+  join(scriptsRoot, "install-windows-x64.ps1"),
+  "utf8"
+);
+for (const required of [
+  "InstalledClosureHealthy",
+  "bpa-runtime-verify.js",
+  "repaired from a verified installed closure",
+  "Install-HostIntegration"
+]) {
+  if (!windowsInstall.includes(required)) {
+    throw new Error(`Windows same-version repair gate is missing ${required}`);
+  }
+}
 const rollback = await readFile(
   join(scriptsRoot, "rollback-windows.ps1"),
   "utf8"

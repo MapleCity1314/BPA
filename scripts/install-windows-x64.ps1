@@ -238,9 +238,94 @@ set "BPA_RUNTIME_ID=%BPA_RUNTIME_ID%"
   }
 }
 
+function Install-HostIntegration {
+  Write-Launchers
+  Copy-Item `
+    -LiteralPath (Join-Path $PackageRoot "rollback.ps1") `
+    -Destination (Join-Path $BinRoot "bpa-rollback.ps1") `
+    -Force
+  Copy-Item `
+    -LiteralPath $RuntimeHelpers `
+    -Destination (Join-Path $BinRoot "runtime-common.ps1") `
+    -Force
+
+  $NativeHost = @{
+    name = "com.bpa.browser"
+    description = "BPA local browser bridge"
+    path = (Join-Path $VersionRoot "bin\bpa-native-host.exe")
+    type = "stdio"
+    allowed_origins = @("chrome-extension://$ExtensionId/")
+  } | ConvertTo-Json -Depth 4
+  [IO.File]::WriteAllText(
+    $NativeHostManifest,
+    "$NativeHost`r`n",
+    [Text.UTF8Encoding]::new($false)
+  )
+  New-Item -Path $NativeHostRegistry -Force | Out-Null
+  Set-Item -Path $NativeHostRegistry -Value $NativeHostManifest
+  [Environment]::SetEnvironmentVariable("BPA_HOME", $InstallRoot, "User")
+
+  $StartupCommand =
+    "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden " +
+    "-Command `"& '$BinRoot\bpa-core.cmd'`""
+  New-Item -Path $RunRegistry -Force | Out-Null
+  New-ItemProperty `
+    -Path $RunRegistry `
+    -Name "BPA Core" `
+    -Value $StartupCommand `
+    -PropertyType String `
+    -Force | Out-Null
+}
+
 try {
   if (Test-Path -LiteralPath $CurrentPointer -PathType Leaf) {
     $OldCurrent = (Get-Content -LiteralPath $CurrentPointer -Raw).Trim()
+  }
+  $InstalledClosureHealthy = $false
+  if ($OldCurrent -eq $Version -and (Test-Path -LiteralPath $VersionRoot)) {
+    & (Join-Path $VersionRoot "node\node.exe") `
+      (Join-Path $VersionRoot "bin\bpa-runtime-verify.js") `
+      $VersionRoot
+    $InstalledClosureHealthy = $LASTEXITCODE -eq 0
+  }
+  if ($InstalledClosureHealthy) {
+    Copy-Item `
+      -LiteralPath (Join-Path $PackagedRuntime "extension") `
+      -Destination $ExtensionStage `
+      -Recurse
+    if (Test-Path -LiteralPath $ExtensionRoot) {
+      Move-Item -LiteralPath $ExtensionRoot -Destination $ExtensionBackup
+    }
+    Move-Item -LiteralPath $ExtensionStage -Destination $ExtensionRoot
+    $ExtensionSwitched = $true
+    Install-HostIntegration
+    if (Test-Path -LiteralPath $RuntimeMaintenancePath) {
+      Remove-Item -LiteralPath $RuntimeMaintenancePath -Force
+    }
+    try {
+      Wait-BpaCoreHealthy `
+        -InstallRoot $InstallRoot `
+        -RuntimeIdentity $Version `
+        -Attempts 1
+    } catch {
+      Stop-BpaCore
+      Start-BpaCore
+      Wait-BpaCoreHealthy `
+        -InstallRoot $InstallRoot `
+        -RuntimeIdentity $Version
+    }
+    if (Test-Path -LiteralPath $ExtensionBackup) {
+      Remove-Item `
+        -LiteralPath $ExtensionBackup `
+        -Recurse `
+        -Force `
+        -ErrorAction SilentlyContinue
+    }
+    $InstallLockStream.Dispose()
+    Write-Host "BPA $Version repaired from a verified installed closure."
+    Write-Host "CLI: $(Join-Path $BinRoot 'bpa.cmd')"
+    Write-Host "Extension: $ExtensionRoot"
+    return
   }
   Copy-Item -LiteralPath $PackagedRuntime -Destination $StagingRoot -Recurse
   Copy-Item `
@@ -319,42 +404,7 @@ try {
   }
   Move-Item -LiteralPath $ExtensionStage -Destination $ExtensionRoot
   $ExtensionSwitched = $true
-  Write-Launchers
-  Copy-Item `
-    -LiteralPath (Join-Path $PackageRoot "rollback.ps1") `
-    -Destination (Join-Path $BinRoot "bpa-rollback.ps1") `
-    -Force
-  Copy-Item `
-    -LiteralPath $RuntimeHelpers `
-    -Destination (Join-Path $BinRoot "runtime-common.ps1") `
-    -Force
-
-  $NativeHost = @{
-    name = "com.bpa.browser"
-    description = "BPA local browser bridge"
-    path = (Join-Path $VersionRoot "bin\bpa-native-host.exe")
-    type = "stdio"
-    allowed_origins = @("chrome-extension://$ExtensionId/")
-  } | ConvertTo-Json -Depth 4
-  [IO.File]::WriteAllText(
-    $NativeHostManifest,
-    "$NativeHost`r`n",
-    [Text.UTF8Encoding]::new($false)
-  )
-  New-Item -Path $NativeHostRegistry -Force | Out-Null
-  Set-Item -Path $NativeHostRegistry -Value $NativeHostManifest
-  [Environment]::SetEnvironmentVariable("BPA_HOME", $InstallRoot, "User")
-
-  $StartupCommand =
-    "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden " +
-    "-Command `"& '$BinRoot\bpa-core.cmd'`""
-  New-Item -Path $RunRegistry -Force | Out-Null
-  New-ItemProperty `
-    -Path $RunRegistry `
-    -Name "BPA Core" `
-    -Value $StartupCommand `
-    -PropertyType String `
-    -Force | Out-Null
+  Install-HostIntegration
 
   if (Test-Path -LiteralPath $RuntimeMaintenancePath) {
     Remove-Item -LiteralPath $RuntimeMaintenancePath -Force
