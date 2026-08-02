@@ -197,15 +197,23 @@ function Start-BpaCoreProcess {
   New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
   $StandardOutput = Join-Path $LogRoot "core.out.log"
   $StandardError = Join-Path $LogRoot "core.err.log"
-  # A .cmd file is not a Win32 executable. Launch it through cmd.exe with one
-  # verified quoted path; no JavaScript or JSON crosses the command parser.
-  $CommandLine = "/d /s /c `"`"$Launcher`"`""
-  Start-Process `
-    -FilePath $env:ComSpec `
-    -ArgumentList $CommandLine `
-    -WindowStyle Hidden `
-    -RedirectStandardOutput $StandardOutput `
-    -RedirectStandardError $StandardError
+  # Start the fixed executable directly. The sole argument is a verified local
+  # file path; no JSON, JavaScript source or user input crosses PowerShell 5.1.
+  $PreviousHome = $env:BPA_HOME
+  $PreviousRuntimeIdentity = $env:BPA_RUNTIME_ID
+  try {
+    $env:BPA_HOME = $InstallRoot
+    $env:BPA_RUNTIME_ID = $RuntimeIdentity
+    Start-Process `
+      -FilePath $Node `
+      -ArgumentList "`"$EntryPoint`"" `
+      -WindowStyle Hidden `
+      -RedirectStandardOutput $StandardOutput `
+      -RedirectStandardError $StandardError
+  } finally {
+    $env:BPA_HOME = $PreviousHome
+    $env:BPA_RUNTIME_ID = $PreviousRuntimeIdentity
+  }
 }
 
 function Wait-BpaCoreHealthy {

@@ -75,7 +75,6 @@ for (const required of [
   "ExecutablePath",
   "CommandLine",
   "ExpectedRuntimeIdentity",
-  "$env:ComSpec",
   "RedirectStandardError",
   "core.err.log"
 ]) {
