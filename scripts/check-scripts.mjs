@@ -85,6 +85,25 @@ for (const required of [
     throw new Error(`Windows process identity gate is missing ${required}`);
   }
 }
+const windowsCoreLauncher = await readFile(
+  join(scriptsRoot, "windows-core-launcher.mjs"),
+  "utf8"
+);
+for (const required of [
+  "attempt < 50",
+  "lock.pid === child.pid",
+  "lock.runtimeIdentity === runtimeIdentity",
+  "normalizePath(lock.executablePath) === expectedExecutable",
+  "normalizePath(lock.entryPointPath) === expectedEntryPoint",
+  "child.kill()",
+  "attempt < 20 && child.exitCode === null"
+]) {
+  if (!windowsCoreLauncher.includes(required)) {
+    throw new Error(
+      `Windows Core launcher readiness gate is missing ${required}`
+    );
+  }
+}
 for (const name of [
   "install-windows-x64.ps1",
   "rollback-windows.ps1",
