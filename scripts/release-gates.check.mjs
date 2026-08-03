@@ -153,6 +153,7 @@ test("keeps WorkBuddy Windows installation progress machine-readable", async () 
   );
   assert.match(workBuddyInstaller, /workbuddy-install\.log/u);
   assert.match(workBuddyInstaller, /function Get-OptionalProperty/u);
+  assert.match(workBuddyInstaller, /function ConvertFrom-JsonItems/u);
   assert.match(
     workBuddyInstaller,
     /Get-OptionalProperty \$_ "disconnectedAt"/u

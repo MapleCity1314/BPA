@@ -51,6 +51,14 @@ function Get-OptionalProperty(
   return $Property.Value
 }
 
+function ConvertFrom-JsonItems([string]$Json) {
+  $Parsed = $Json | ConvertFrom-Json
+  if ($null -eq $Parsed) {
+    return @()
+  }
+  return @($Parsed)
+}
+
 function Write-JsonResult([hashtable]$Value) {
   if (
     $null -ne $script:DeploymentStage -and
@@ -351,7 +359,7 @@ $SessionsText = Invoke-Bpa `
   $BpaCommand `
   @("browser-sessions", "--limit", "100") `
   "Read browser sessions"
-$Sessions = @($SessionsText | ConvertFrom-Json)
+$Sessions = @(ConvertFrom-JsonItems $SessionsText)
 Write-InstallTrace "browser-sessions-read" ([string]$Sessions.Count)
 $CapableSessions = @(
   $Sessions | Where-Object {
@@ -369,7 +377,7 @@ $PagesText = Invoke-Bpa `
   $BpaCommand `
   @("browser-pages", "--limit", "200") `
   "Read browser page observations"
-$Pages = @($PagesText | ConvertFrom-Json)
+$Pages = @(ConvertFrom-JsonItems $PagesText)
 Write-InstallTrace "browser-pages-read" ([string]$Pages.Count)
 $SelectedInstanceId = $BrowserInstanceId
 if ($BrowserSessionId) {
