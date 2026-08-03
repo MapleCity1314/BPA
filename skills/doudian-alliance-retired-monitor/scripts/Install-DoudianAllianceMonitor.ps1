@@ -11,6 +11,7 @@ param(
   ),
   [string]$BrowserSessionId,
   [string]$BrowserInstanceId,
+  [string]$ResultPath,
   [switch]$OpenBrowserSetup,
   [switch]$ValidatePackageOnly
 )
@@ -19,6 +20,21 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 $DeploymentStage = $null
+$InstallTracePath = Join-Path $InstallRoot "logs\workbuddy-install.log"
+
+function Write-InstallTrace([string]$Stage, [string]$Detail = "") {
+  $TraceDirectory = Split-Path -Parent $script:InstallTracePath
+  New-Item -ItemType Directory -Path $TraceDirectory -Force | Out-Null
+  $Line = "{0}`t{1}`t{2}`r`n" -f `
+    (Get-Date).ToUniversalTime().ToString("o"), `
+    $Stage, `
+    $Detail.Replace("`r", " ").Replace("`n", " ")
+  [IO.File]::AppendAllText(
+    $script:InstallTracePath,
+    $Line,
+    [Text.UTF8Encoding]::new($false)
+  )
+}
 
 function Write-JsonResult([hashtable]$Value) {
   if (
@@ -28,7 +44,25 @@ function Write-JsonResult([hashtable]$Value) {
     Remove-Item -LiteralPath $script:DeploymentStage -Recurse -Force
     $script:DeploymentStage = $null
   }
-  $Value | ConvertTo-Json -Depth 8
+  $Json = "$($Value | ConvertTo-Json -Depth 8)`r`n"
+  Write-InstallTrace "result" ([string]$Value.status)
+  if (-not [string]::IsNullOrWhiteSpace($ResultPath)) {
+    $ResolvedResultPath = [IO.Path]::GetFullPath($ResultPath)
+    $ResultDirectory = Split-Path -Parent $ResolvedResultPath
+    New-Item -ItemType Directory -Path $ResultDirectory -Force | Out-Null
+    $TemporaryResult = "$ResolvedResultPath.tmp-$PID"
+    [IO.File]::WriteAllText(
+      $TemporaryResult,
+      $Json,
+      [Text.UTF8Encoding]::new($false)
+    )
+    Move-Item `
+      -LiteralPath $TemporaryResult `
+      -Destination $ResolvedResultPath `
+      -Force
+    return
+  }
+  Write-Output $Json.TrimEnd()
 }
 
 trap {
@@ -116,6 +150,7 @@ if (-not [Environment]::Is64BitOperatingSystem) {
 if (-not (Test-Path -LiteralPath $SkillRoot -PathType Container)) {
   throw "Skill root does not exist: $SkillRoot"
 }
+Write-InstallTrace "started" "validatePackageOnly=$ValidatePackageOnly"
 
 $AssetsRoot = Join-Path $SkillRoot "assets"
 $RuntimeRoot = Join-Path $AssetsRoot "windows-x64"
@@ -143,6 +178,7 @@ $ActualDigest = (
 if ($ExpectedDigest -ne $ActualDigest) {
   throw "The Runtime SHA-256 does not match."
 }
+Write-InstallTrace "runtime-archive-verified"
 
 $RequiredAssets = @(
   @{
@@ -232,9 +268,11 @@ try {
       Get-Content -LiteralPath $CurrentPointer -Raw
     ).Trim()
   }
+  Write-InstallTrace "runtime-install-started" $RequiredIdentity
   $RuntimeInstallerOutput = @(
     & (Join-Path $PackageRoot "install.ps1") `
       -InstallRoot $InstallRoot `
+      -TracePath (Join-Path $InstallRoot "logs\runtime-install.log") `
       *>&1
   )
   if ($LASTEXITCODE -ne 0) {
@@ -248,6 +286,7 @@ try {
       " $RuntimeInstallerDetail"
     )
   }
+  Write-InstallTrace "runtime-install-completed" $RequiredIdentity
   $RuntimeInstalled = $CurrentIdentity -ne $RequiredIdentity
 } finally {
   if (Test-Path -LiteralPath $Stage) {
@@ -261,6 +300,7 @@ if (-not (Test-Path -LiteralPath $BpaCommand -PathType Leaf)) {
 }
 $DoctorText = Invoke-Bpa $BpaCommand @("doctor") "BPA health check"
 $Doctor = $DoctorText | ConvertFrom-Json
+Write-InstallTrace "doctor-completed"
 
 New-Item -ItemType Directory -Path $RecordsRoot -Force | Out-Null
 $WorkBuddyRoot = Join-Path $InstallRoot "workbuddy"
@@ -297,6 +337,7 @@ $SessionsText = Invoke-Bpa `
   @("browser-sessions", "--limit", "100") `
   "Read browser sessions"
 $Sessions = @($SessionsText | ConvertFrom-Json)
+Write-InstallTrace "browser-sessions-read" ([string]$Sessions.Count)
 $CapableSessions = @(
   $Sessions | Where-Object {
     -not $_.disconnectedAt -and $_.capabilityDigest -and
@@ -311,6 +352,7 @@ $PagesText = Invoke-Bpa `
   @("browser-pages", "--limit", "200") `
   "Read browser page observations"
 $Pages = @($PagesText | ConvertFrom-Json)
+Write-InstallTrace "browser-pages-read" ([string]$Pages.Count)
 $SelectedInstanceId = $BrowserInstanceId
 if ($BrowserSessionId) {
   $LegacySession = @(

@@ -1,11 +1,32 @@
 [CmdletBinding()]
 param(
-  [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA "BPA")
+  [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA "BPA"),
+  [string]$TracePath
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
+
+if ([string]::IsNullOrWhiteSpace($TracePath)) {
+  $TracePath = Join-Path $InstallRoot "logs\runtime-install.log"
+}
+
+function Write-RuntimeInstallTrace([string]$Stage, [string]$Detail = "") {
+  $TraceDirectory = Split-Path -Parent $script:TracePath
+  New-Item -ItemType Directory -Path $TraceDirectory -Force | Out-Null
+  $Line = "{0}`t{1}`t{2}`r`n" -f `
+    (Get-Date).ToUniversalTime().ToString("o"), `
+    $Stage, `
+    $Detail.Replace("`r", " ").Replace("`n", " ")
+  [IO.File]::AppendAllText(
+    $script:TracePath,
+    $Line,
+    [Text.UTF8Encoding]::new($false)
+  )
+}
+
+Write-RuntimeInstallTrace "started"
 
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RuntimeHelpers = Join-Path $ScriptRoot "runtime-common.ps1"
@@ -61,6 +82,7 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
   throw "Release content scan failed."
 }
+Write-RuntimeInstallTrace "packaged-closure-verified"
 
 $Manifest = Get-Content -LiteralPath $ManifestPath -Raw |
   ConvertFrom-Json
@@ -289,6 +311,7 @@ try {
     $InstalledClosureHealthy = $LASTEXITCODE -eq 0
   }
   if ($InstalledClosureHealthy) {
+    Write-RuntimeInstallTrace "same-version-repair-started" $Version
     Copy-Item `
       -LiteralPath (Join-Path $PackagedRuntime "extension") `
       -Destination $ExtensionStage `
@@ -314,6 +337,7 @@ try {
         -InstallRoot $InstallRoot `
         -RuntimeIdentity $Version
     }
+    Write-RuntimeInstallTrace "same-version-repair-completed" $Version
     if (Test-Path -LiteralPath $ExtensionBackup) {
       Remove-Item `
         -LiteralPath $ExtensionBackup `
@@ -327,6 +351,7 @@ try {
     Write-Host "Extension: $ExtensionRoot"
     return
   }
+  Write-RuntimeInstallTrace "fresh-install-copy-started" $Version
   Copy-Item -LiteralPath $PackagedRuntime -Destination $StagingRoot -Recurse
   Copy-Item `
     -LiteralPath (Join-Path $StagingRoot "extension") `
@@ -416,6 +441,7 @@ try {
   if (-not (Test-Path -LiteralPath (Join-Path $ExtensionRoot "manifest.json"))) {
     throw "BPA Extension installation is incomplete."
   }
+  Write-RuntimeInstallTrace "fresh-install-completed" $Version
 
   if (Test-Path -LiteralPath $ExtensionBackup) {
     Remove-Item `
@@ -454,6 +480,7 @@ try {
   }
 } catch {
   $InstallError = $_
+  Write-RuntimeInstallTrace "failed" $InstallError.Exception.Message
   $RollbackErrors = [System.Collections.Generic.List[string]]::new()
   try {
     Stop-BpaCore

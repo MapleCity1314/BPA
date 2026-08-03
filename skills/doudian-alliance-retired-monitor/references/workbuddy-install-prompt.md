@@ -4,13 +4,22 @@
 
 1. 取得当前已安装 Skill 的真实根目录。确认该目录同时包含
    `SKILL.md`、`scripts/Install-DoudianAllianceMonitor.ps1` 和 `assets/windows-x64/`。
-2. 以 PowerShell 执行，不得复制、改写或重新生成脚本：
+2. 以 PowerShell 执行，不得复制、改写或重新生成脚本。使用结果文件接收 JSON，避免
+   PowerShell 5.1 转义或后台进程输出句柄影响 WorkBuddy：
 
 ```powershell
+$resultPath = Join-Path $env:TEMP `
+  "bpa-workbuddy-install-result-$([Guid]::NewGuid().ToString('N')).json"
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File "<Skill根目录>\scripts\Install-DoudianAllianceMonitor.ps1" `
   -SkillRoot "<Skill根目录>" `
+  -ResultPath $resultPath `
   -OpenBrowserSetup
+if ($LASTEXITCODE -ne 0 -and -not (Test-Path -LiteralPath $resultPath)) {
+  throw "BPA 安装器未返回结构化结果。"
+}
+$result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+$result | ConvertTo-Json -Depth 8
 ```
 
 执行边界（优先级最高）：

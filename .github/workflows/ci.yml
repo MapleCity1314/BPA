@@ -225,7 +225,7 @@ jobs:
   validate-workbuddy-skill-windows:
     needs: release-workbuddy-skill
     runs-on: windows-2025
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v6
@@ -279,7 +279,7 @@ jobs:
           ) {
             throw "WorkBuddy package-only validation returned an invalid result"
           }
-      - name: Install and repair the Runtime through the real WorkBuddy entrypoint
+      - name: Install the Runtime through the real WorkBuddy entrypoint
         shell: pwsh
         run: |
           $expanded = Join-Path $env:RUNNER_TEMP "expanded-workbuddy-skill"
@@ -291,52 +291,85 @@ jobs:
           $skillRoot = Split-Path -Parent (Split-Path -Parent $installer.FullName)
           $installRoot = Join-Path $env:RUNNER_TEMP "bpa-real-install"
           $recordsRoot = Join-Path $env:RUNNER_TEMP "bpa-real-records"
-          $primaryFailure = $false
-          try {
-            foreach ($attempt in 1..2) {
-              $resultText = @(& powershell.exe `
-                -NoProfile `
-                -ExecutionPolicy Bypass `
-                -File $installer.FullName `
-                -SkillRoot $skillRoot `
-                -InstallRoot $installRoot `
-                -RecordsRoot $recordsRoot `
-                2>&1)
-              if ($LASTEXITCODE -ne 0) {
-                throw "WorkBuddy real install attempt $attempt failed: $($resultText -join "`n")"
-              }
-              $result = ($resultText -join "`n") | ConvertFrom-Json
-              if (
-                $result.status -ne "needs_native_host" -or
-                $result.errorCode -ne "BROWSER_BRIDGE_DISCONNECTED" -or
-                $result.assetsPublished -ne $false
-              ) {
-                throw "Unexpected real install result on attempt $attempt"
-              }
-              $current = (Get-Content `
-                -LiteralPath (Join-Path $installRoot "runtime\current.txt") `
-                -Raw).Trim()
-              if (-not $current -or $current -ne $result.runtimeIdentity) {
-                throw "Installed Runtime pointer differs from the package identity"
-              }
-              & (Join-Path $installRoot "bin\bpa.cmd") doctor | Out-Null
-              if ($LASTEXITCODE -ne 0) {
-                throw "Installed Core failed its doctor check"
-              }
-            }
-          } catch {
-            $primaryFailure = $true
-            throw
-          } finally {
-            try {
-              ./scripts/uninstall-windows.ps1 `
-                -InstallRoot $installRoot `
-                -PurgeData
-            } catch {
-              if ($primaryFailure) {
-                Write-Warning "Cleanup also failed: $($_.Exception.Message)"
-              } else {
-                throw
-              }
-            }
+          $resultPath = Join-Path $env:RUNNER_TEMP "fresh-install-result.json"
+          & powershell.exe `
+            -NoProfile `
+            -ExecutionPolicy Bypass `
+            -File $installer.FullName `
+            -SkillRoot $skillRoot `
+            -InstallRoot $installRoot `
+            -RecordsRoot $recordsRoot `
+            -ResultPath $resultPath
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $resultPath)) {
+            throw "WorkBuddy real install did not return a result file"
           }
+          $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+          if (
+            $result.status -ne "needs_native_host" -or
+            $result.errorCode -ne "BROWSER_BRIDGE_DISCONNECTED" -or
+            $result.assetsPublished -ne $false
+          ) {
+            throw "Unexpected real install result: $($result | ConvertTo-Json -Compress)"
+          }
+          $current = (Get-Content `
+            -LiteralPath (Join-Path $installRoot "runtime\current.txt") `
+            -Raw).Trim()
+          if (-not $current -or $current -ne $result.runtimeIdentity) {
+            throw "Installed Runtime pointer differs from the package identity"
+          }
+          & (Join-Path $installRoot "bin\bpa.cmd") doctor | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installed Core failed its doctor check"
+          }
+      - name: Repair the same Runtime through the real WorkBuddy entrypoint
+        shell: pwsh
+        run: |
+          $expanded = Join-Path $env:RUNNER_TEMP "expanded-workbuddy-skill"
+          $installer = @(Get-ChildItem `
+            -LiteralPath $expanded `
+            -Filter "Install-DoudianAllianceMonitor.ps1" `
+            -File `
+            -Recurse)[0]
+          $skillRoot = Split-Path -Parent (Split-Path -Parent $installer.FullName)
+          $installRoot = Join-Path $env:RUNNER_TEMP "bpa-real-install"
+          $recordsRoot = Join-Path $env:RUNNER_TEMP "bpa-real-records"
+          $resultPath = Join-Path $env:RUNNER_TEMP "same-version-repair-result.json"
+          & powershell.exe `
+            -NoProfile `
+            -ExecutionPolicy Bypass `
+            -File $installer.FullName `
+            -SkillRoot $skillRoot `
+            -InstallRoot $installRoot `
+            -RecordsRoot $recordsRoot `
+            -ResultPath $resultPath
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $resultPath)) {
+            throw "WorkBuddy same-version repair did not return a result file"
+          }
+          $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+          if (
+            $result.status -ne "needs_native_host" -or
+            $result.errorCode -ne "BROWSER_BRIDGE_DISCONNECTED" -or
+            $result.assetsPublished -ne $false
+          ) {
+            throw "Unexpected same-version repair result: $($result | ConvertTo-Json -Compress)"
+          }
+          & (Join-Path $installRoot "bin\bpa.cmd") doctor | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Repaired Core failed its doctor check"
+          }
+      - name: Upload Windows installer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: workbuddy-windows-install-diagnostics
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/bpa-real-install/logs/*.log
+            ${{ runner.temp }}/*-result.json
+      - name: Remove the real Windows test installation
+        if: always()
+        shell: pwsh
+        run: |
+          ./scripts/uninstall-windows.ps1 `
+            -InstallRoot (Join-Path $env:RUNNER_TEMP "bpa-real-install") `
+            -PurgeData

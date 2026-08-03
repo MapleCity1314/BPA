@@ -146,6 +146,13 @@ test("keeps WorkBuddy Windows installation progress machine-readable", async () 
     workBuddyInstaller,
     /\$RuntimeInstallerOutput\s*=\s*@\([\s\S]*?\*>&1[\s\S]*?\)/u
   );
+  assert.match(workBuddyInstaller, /\[string\]\$ResultPath/u);
+  assert.match(
+    workBuddyInstaller,
+    /\$TemporaryResult[\s\S]*?Move-Item[\s\S]*?\$ResolvedResultPath/u
+  );
+  assert.match(workBuddyInstaller, /workbuddy-install\.log/u);
+  assert.match(runtimeInstaller, /runtime-install\.log/u);
   assert.match(workBuddyInstaller, /"--input-file", \$InputFile/u);
   assert.doesNotMatch(
     workBuddyInstaller,
