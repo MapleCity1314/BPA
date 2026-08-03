@@ -52,6 +52,10 @@ import {
   ContentScriptRecovery,
   contentScriptFailureReason
 } from "../lib/content-script-recovery";
+import {
+  shouldForgetTrackedObservation,
+  shouldReusePageEpoch
+} from "../lib/page-observation-lifecycle";
 import { matchesFrozenPageBinding } from "../lib/frozen-page-binding";
 
 const NATIVE_HOST = "com.bpa.browser";
@@ -186,7 +190,9 @@ export default defineBackground(() => {
     forceNew = false
   ): string => {
     const current = observedTabs.get(tabId);
-    if (!forceNew && current?.url === url) return current.pageEpoch;
+    if (current && shouldReusePageEpoch(current, url, forceNew)) {
+      return current.pageEpoch;
+    }
     const pageEpoch = createPageEpoch(tabId);
     const observerCapabilityId = observerCapabilityForUrl(url);
     if (!observerCapabilityId) throw new Error("PAGE_OBSERVER_NOT_FOUND");
@@ -214,9 +220,6 @@ export default defineBackground(() => {
     observerCapabilityId: string;
     reasonCode?: string;
   }): Promise<void> => {
-    if (!port || !session.sessionId) return;
-    const stored = await browser.storage.local.get("browserInstanceId");
-    if (typeof stored.browserInstanceId !== "string") return;
     const signature = JSON.stringify({
       url: input.url.href,
       contentScriptReady: input.contentScriptReady,
@@ -245,6 +248,9 @@ export default defineBackground(() => {
         : { authenticationContextRef: input.authentication.contextRef }),
       ...(input.windowId === undefined ? {} : { windowId: input.windowId })
     });
+    if (!port || !session.sessionId) return;
+    const stored = await browser.storage.local.get("browserInstanceId");
+    if (typeof stored.browserInstanceId !== "string") return;
     send(
       envelope(
         "page.observation",
@@ -299,7 +305,13 @@ export default defineBackground(() => {
         reasonCode
       });
     }
-    observedTabs.delete(tabId);
+    // Keep the last revision while a tab temporarily leaves a supported URL.
+    // Login redirects can later return the same tab to the same source URL;
+    // forgetting it here would restart the revision counter and make Core
+    // reject the recovered observation as a conflicting stale update.
+    if (shouldForgetTrackedObservation(reasonCode)) {
+      observedTabs.delete(tabId);
+    }
   };
 
   const probeTab = async (
