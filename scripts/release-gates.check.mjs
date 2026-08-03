@@ -152,6 +152,11 @@ test("keeps WorkBuddy Windows installation progress machine-readable", async () 
     /\$TemporaryResult[\s\S]*?Move-Item[\s\S]*?\$ResolvedResultPath/u
   );
   assert.match(workBuddyInstaller, /workbuddy-install\.log/u);
+  assert.match(workBuddyInstaller, /function Get-OptionalProperty/u);
+  assert.match(
+    workBuddyInstaller,
+    /Get-OptionalProperty \$_ "disconnectedAt"/u
+  );
   assert.match(runtimeInstaller, /runtime-install\.log/u);
   assert.match(workBuddyInstaller, /"--input-file", \$InputFile/u);
   assert.doesNotMatch(

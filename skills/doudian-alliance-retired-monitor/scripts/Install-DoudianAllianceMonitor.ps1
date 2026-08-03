@@ -36,6 +36,21 @@ function Write-InstallTrace([string]$Stage, [string]$Detail = "") {
   )
 }
 
+function Get-OptionalProperty(
+  [object]$InputObject,
+  [string]$Name,
+  [object]$DefaultValue = $null
+) {
+  if ($null -eq $InputObject) {
+    return $DefaultValue
+  }
+  $Property = $InputObject.PSObject.Properties[$Name]
+  if ($null -eq $Property) {
+    return $DefaultValue
+  }
+  return $Property.Value
+}
+
 function Write-JsonResult([hashtable]$Value) {
   if (
     $null -ne $script:DeploymentStage -and
@@ -340,8 +355,11 @@ $Sessions = @($SessionsText | ConvertFrom-Json)
 Write-InstallTrace "browser-sessions-read" ([string]$Sessions.Count)
 $CapableSessions = @(
   $Sessions | Where-Object {
-    -not $_.disconnectedAt -and $_.capabilityDigest -and
-    @($_.capabilities | Where-Object {
+    $DisconnectedAt = Get-OptionalProperty $_ "disconnectedAt"
+    $CapabilityDigest = Get-OptionalProperty $_ "capabilityDigest"
+    $Capabilities = @(Get-OptionalProperty $_ "capabilities" @())
+    -not $DisconnectedAt -and $CapabilityDigest -and
+    @($Capabilities | Where-Object {
       $_.nodeId -eq "doudian.alliance.shops.discover" -and
       $_.nodeVersion -eq "1.0.0"
     }).Count -gt 0
@@ -397,12 +415,14 @@ $ReadyPages = @(
     $_.contentScriptReady -eq $true -and
     @("authenticated", "membership") -contains $_.authentication -and
     $_.observationState -eq "ready" -and
-    $_.authenticationContextRef
+    (Get-OptionalProperty $_ "authenticationContextRef")
   }
 )
 $ReadyAuthenticationContexts = @(
   $ReadyPages |
-    ForEach-Object { [string]$_.authenticationContextRef } |
+    ForEach-Object {
+      [string](Get-OptionalProperty $_ "authenticationContextRef")
+    } |
     Sort-Object -Unique
 )
 
@@ -417,7 +437,9 @@ if (Test-Path -LiteralPath $ConfigurationFinal -PathType Leaf) {
   try {
     $ExistingConfiguration = Get-Content -LiteralPath $ConfigurationFinal -Raw |
       ConvertFrom-Json
-    $ExistingBrowserInstanceId = $ExistingConfiguration.browserInstanceId
+    $ExistingBrowserInstanceId = Get-OptionalProperty `
+      $ExistingConfiguration `
+      "browserInstanceId"
   } catch {
     $ExistingBrowserInstanceId = $null
   }
@@ -658,18 +680,19 @@ exit 0
 )
 
 if ($CapableSessions.Count -eq 0) {
+  $DoctorLastError = [string](Get-OptionalProperty $Doctor.browser "lastError")
   if (
     $Doctor.browser.connected -eq $true -and
     @(
       "BROWSER_BRIDGE_FEATURE_MISMATCH",
       "BROWSER_BRIDGE_BUILD_MISMATCH"
-    ) -contains [string]$Doctor.browser.lastError
+    ) -contains $DoctorLastError
   ) {
     Write-JsonResult @{
       schemaVersion = 1
       status = "needs_extension_reload"
       runtimeIdentity = $RequiredIdentity
-      errorCode = [string]$Doctor.browser.lastError
+      errorCode = $DoctorLastError
       runtimeInstalled = $RuntimeInstalled
       assetsPublished = $false
       extensionPath = (Join-Path $InstallRoot "extension")
