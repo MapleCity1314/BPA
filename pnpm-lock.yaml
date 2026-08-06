@@ -653,6 +653,12 @@ importers:
         specifier: workspace:*
         version: link:../schemas
 
+  packages/sqlite-observability:
+    dependencies:
+      better-sqlite3:
+        specifier: 12.10.0
+        version: 12.10.0
+
   packages/team-runtime:
     dependencies:
       '@bpa/node-runtime':

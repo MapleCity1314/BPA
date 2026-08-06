@@ -68,7 +68,15 @@
 
 分析器明确把 SQLite 标记为 `file_sizes_only`，并将 page cache 的配置与实际占用标记
 为 `not_measured`。即使当前 JSONL 采样跑满 24 小时，也只能闭合 Node 与 Chrome 桶，
-不能把数据库文件大小冒充 page cache 证据。阶段 0 继续保持未完成。
+不能把数据库文件大小冒充 page cache 证据。
+
+为关闭这个观测盲区，新增了隔离的 `@bpa/sqlite-observability` 原生扩展证明：它通过
+SQLite 官方的 `sqlite3_db_status64`，在 better-sqlite3 持有的同一连接内返回 page
+cache、schema 与 statement 内存；测试同时验证连接局部注册、SQL
+`load_extension()` 仍被禁止、`shrink_memory` 后全表扫描会重新填充缓存，以及 macOS
+bundle 不携带本机 install name 且重复构建字节一致。当前边界仍只是 macOS arm64
+隔离代码证据，尚未打入 Runtime 闭包、接入 Core 主连接或生产采样，所以阶段 0 继续
+保持未完成，也不得把隔离测试数值写成生产 page cache 曲线。
 
 库存生产侧新增只读 readiness 判定器，统一核对 host/PostgreSQL 时钟、launchd PID、
 原子状态文件、全表 running schedule/collection、有效 PostgreSQL 与 Browser Control
@@ -147,7 +155,8 @@ TriggerSpec 快照，并把 Workflow 的 `rejected` / `uncertain` 压缩成较�
 
 1. ~~将当前工作区按规范、协议/Trigger、库存生产、Rust Kernel 分组并分别验证提交。~~
 2. ~~为当前 JSONL 增加确定性分析器，且把 SQLite 文件大小与 page cache 证据分开。~~
-3. 等待并分析 Node、Chrome 24 小时采样结果；另补 SQLite page cache 的真实遥测。
+3. 等待并分析 Node、Chrome 24 小时采样结果；将已通过隔离验证的 SQLite 同连接遥测
+   打入固定路径、manifest-hashed 的 Runtime 闭包并接入生产前隔离 Core。
 4. 复用已有 macOS 预编译 Core 闭包，在隔离 `BPA_HOME` 验证后制定生产切换门禁；
    当前采样期间不替代生产 `tsx`。
 5. 启动 Core 7 天稳定性窗口并记录重启、RSS 趋势与运行事件。
