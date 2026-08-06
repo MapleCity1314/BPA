@@ -8,14 +8,15 @@
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- 当前分支：`codex/workflow-terminal-fidelity`，PR #3。
-- Git 基线：PR #2 已在全部发布门禁通过后合并到 `main`，merge commit 为
-  `5e091af7fbb0`，阶段 0 的大分支收敛门禁已关闭。后续终态与稳定性加固在独立 PR #3
-  继续，不再堆叠到已合并分支。
-- 验证基线：固定 Node `24.18.0` 下 PR #3 当前候选 `pnpm verify` 通过，126 个测试文件、
-  775 项测试全绿，文档 Catalog 80 条有效，Astro 0 诊断。生产闭包仍是已经完整验收并
-  部署的 `51ba97b2e526`；PR #3 尚未部署，仍须以当前 GitHub checks 的最终状态为准，
-  不能继承旧提交的绿色结论。
+- 当前分支：`codex/phase0-observation`，只记录阶段 0 观测证据，不部署新 Runtime。
+- Git 基线：PR #2 与 PR #3 均已在全部发布门禁通过后合并到 `main`，merge commit 分别为
+  `5e091af7fbb0` 与 `58bfc108238f`。阶段 0 的结构收敛、Workflow `rejected` 终态保真、
+  资源观测加固和 Windows 文件锁重试均已进入主线。
+- 验证基线：固定 Node `24.18.0` 下 PR #3 候选 `pnpm verify` 通过，126 个测试文件、
+  775 项测试全绿，文档 Catalog 80 条有效，Astro 0 诊断。GitHub 的 macOS/Linux、Windows、
+  性能、双架构发布、Windows 可复现性、WorkBuddy 发布及 Windows 安装验证全部通过。
+  生产闭包仍是已经完整验收并部署的 `51ba97b2e526`；PR #3 已合并但未部署，不得以代码
+  合并替代生产证据，也不得为部署重置当前 24 小时采样窗口。
 - 生产原则：库存公司业务不中断；任何运行中进程、状态、schedule 或有效 lease 存在
   时，只观察，不重启、不叠加触发。
 - Rust 判定：暂不切换生产 Core，保留实现、测试和候选架构；完成阶段 0 数据采集后
@@ -27,7 +28,7 @@
 
 | 阶段 | 状态 | 当前最重要缺口 | 退出证据 |
 | --- | --- | --- | --- |
-| 0 稳住上阵 | **进行中** | Core 热轮询修复后的首个自然 13 店周期已成功；新 24 小时资源曲线与 Core 7 天稳定性尚未验收，PR #3 仍在收敛 | 24 小时三类资源曲线、Core 7 天稳定、PR #3 门禁 |
+| 0 稳住上阵 | **进行中** | Core 热轮询修复后的首个自然 13 店周期已成功；PR #3 已合并，新 24 小时资源曲线与 Core 7 天稳定性尚未验收 | 24 小时三类资源曲线、Core 7 天稳定 |
 | 1 无人值守 | 未开始 | 登录失效恢复、失败推送、统一控制台、固定 Trigger 覆盖 | 无 SSH 认证恢复、100% 失败推送、AI 触发占比持续降至零 |
 | 2 造流程易用 | 未开始 | Web 校正界面、截图/元素候选回传、非技术用户验收 | 非技术同事独立完成真实流程发布 |
 | 3 通用能力 | 未开始 | HTTP Request、File Write、JSON Transform、导出、自愈 | 不写 Adapter 覆盖主要通用需求 |
@@ -139,8 +140,8 @@ Bridge connected/ready，1 个活动 Session、2 个 `authenticated + ready` 页
 阻断页。以上关闭了上一轮 lease renew unconfirmed 的生产回归，但不替代长期稳定门禁。
 
 旧资源样本跨越 Core PID 切换，已经终止并保留；新 24 小时窗口从 Core PID 47140
-重新计时，同时采集同连接 `sqlite3_db_status64`。截至 23:04，61 个样本覆盖约 1 小时，
-最大间隔 61 秒，无缺失服务 PID；61/61 Core metrics 可用，Runtime identity 固定为
+重新计时，同时采集同连接 `sqlite3_db_status64`。截至 23:23，79 个样本覆盖约 1.30 小时，
+最大间隔 61 秒，无超过 120 秒的断点或缺失服务 PID；79/79 Core metrics 可用，Runtime identity 固定为
 生产闭包，同连接 cache 使用值保持稳定。该窗口仍不足 24 小时，不能据此得出长期稳定
 或内存泄漏结论。
 
@@ -184,10 +185,11 @@ Bridge connected/ready，1 个活动 Session、2 个 `authenticated + ready` 页
 - 交接成功是历史证据，每次生产操作前仍需重新只读核验。
 
 2026-08-06 的只读 Trigger 审计进一步确认：完整 13 店周期仍由 launchd 和
-`production-cycle.ts` 编排，不是一个已发布 Workflow；Trigger Run 没有钉死不可变的
-TriggerSpec 快照，并把 Workflow 的 `rejected` / `uncertain` 压缩成较弱终态。先修复
-版本血缘、终态保真、人工 actor 审计和策略执行，再迁移库存编排；不得用一个仅调用
-旧脚本的壳 Node 伪装成产品 Workflow。
+`production-cycle.ts` 编排，不是一个已发布 Workflow。PR #3 已让 Workflow 的
+`rejected` 成为不可恢复的真实终态，但 Trigger Run 仍没有钉死不可变的 TriggerSpec 快照，
+并仍会压缩 Workflow 的 `rejected` / `uncertain`。阶段 0 门禁完成后，先修复 Trigger
+版本血缘、触发层终态保真、人工 actor 审计和策略执行，再迁移库存编排；不得用一个
+仅调用旧脚本的壳 Node 伪装成产品 Workflow。
 
 2026-08-06 20:59 的生产只读复核发现最新周期失败于
 `BROWSER_CONTROL_LEASE_RENEW_UNCONFIRMED`：当时有效 Browser Control Lease、运行中
