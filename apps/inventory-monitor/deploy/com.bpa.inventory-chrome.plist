@@ -17,8 +17,8 @@
     <string>--disable-background-timer-throttling</string>
     <string>--disable-backgrounding-occluded-windows</string>
     <string>--disable-renderer-backgrounding</string>
-    <string>--disable-extensions-except=/Users/yyerybz/Codex/BPA/apps/extension/.output/chrome-mv3</string>
-    <string>--load-extension=/Users/yyerybz/Codex/BPA/apps/extension/.output/chrome-mv3</string>
+    <string>--disable-extensions-except=/Users/yyerybz/Library/Application Support/BPA/extension</string>
+    <string>--load-extension=/Users/yyerybz/Library/Application Support/BPA/extension</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

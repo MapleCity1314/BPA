@@ -14,10 +14,10 @@
   复制一个会随提交立刻过期的哈希。该分支尚未合并或明确放弃，因此阶段 0 的 Git
   收敛门禁仍未完成。
 - 验证基线：固定 Node `24.18.0` 下当前候选 `pnpm verify` 通过。本轮完整门禁为 125 个
-  测试文件、765 项测试全绿，文档 Catalog 80 条有效，Astro 0 诊断。前一 GitHub
-  提交的 macOS、性能和发布闭包已通过；Windows 因把 POSIX `0600` 断言直接用于
-  Windows 文件 mode 而失败，修正后新一轮 `verify-windows` 已通过。后续提交仍须重新
-  接受相同门禁，不能继承旧提交的绿色结论。
+  测试文件、765 项测试全绿，文档 Catalog 80 条有效，Astro 0 诊断。提交
+  `51ba97b2e526` 的 macOS、Windows、性能、可复现性、WorkBuddy Skill 和发布闭包
+  GitHub 门禁均已通过，部署任务按条件跳过。后续提交仍须重新接受相同门禁，不能继承
+  旧提交的绿色结论。
 - 生产原则：库存公司业务不中断；任何运行中进程、状态、schedule 或有效 lease 存在
   时，只观察，不重启、不叠加触发。
 - Rust 判定：暂不切换生产 Core，保留实现、测试和候选架构；完成阶段 0 数据采集后
@@ -29,7 +29,7 @@
 
 | 阶段 | 状态 | 当前最重要缺口 | 退出证据 |
 | --- | --- | --- | --- |
-| 0 稳住上阵 | **进行中** | 库存生产暴露 Core 热轮询全表扫描；PR 尚未收敛，24 小时资源曲线、SQLite page cache 实测和 Core 7 天稳定性仍缺失 | 库存周期恢复、Git 分支二选一、`pnpm check`、三类资源曲线、Core 7 天稳定 |
+| 0 稳住上阵 | **进行中** | Core 热轮询修复已切入生产，但新 24 小时资源曲线、下一自然库存周期和 Core 7 天稳定性尚未验收；PR 仍未收敛 | 库存周期恢复、Git 分支二选一、`pnpm check`、三类资源曲线、Core 7 天稳定 |
 | 1 无人值守 | 未开始 | 登录失效恢复、失败推送、统一控制台、固定 Trigger 覆盖 | 无 SSH 认证恢复、100% 失败推送、AI 触发占比持续降至零 |
 | 2 造流程易用 | 未开始 | Web 校正界面、截图/元素候选回传、非技术用户验收 | 非技术同事独立完成真实流程发布 |
 | 3 通用能力 | 未开始 | HTTP Request、File Write、JSON Transform、导出、自愈 | 不写 Adapter 覆盖主要通用需求 |
@@ -84,25 +84,54 @@ mode `0600` 的原子白名单快照；采集器只复制通过 schema 校验的
 内部 package 与 dylib 一起放入 manifest 哈希和 SBOM；Windows x64 在 DLL 门禁完成前
 明确为 `unsupported_platform`，不能伪装为已测量。隔离 Core 已真实启动并写出
 `cacheUsedBytes=823936` 的同连接快照，但这仍是临时空库代码证据，不是生产数值。
-本轮正式 RC 闭包已完成 150 个文件的摘要验证，并通过打包态迁移、
+本轮正式 RC 闭包已完成 155 个文件的摘要验证，并通过打包态迁移、
 socket、CLI、Team Worker 与 Extension E2E；这证明交付物包含该能力，但不等于已部署。
 
-当前生产 sampler 是旧窗口，不能追溯补入 page cache；必须在受保护的预编译 Core
-切换完成后开启新采样窗口。macOS launcher 已改为闭包构建期生成并纳入 manifest，
+旧生产 sampler 不能追溯补入 page cache，且已经跨越 Core PID 切换，因此只作为切换前
+诊断证据保留。生产闭包切换后已开启包含同连接 page cache 的新采样窗口。macOS
+launcher 已改为闭包构建期生成并纳入 manifest，
 固定写入 release identity；installer 在停止旧 Core 前核对 lock PID、可执行文件、
 entrypoint 与 live command，启动新 Core 后再次核对精确 release，并为首次切换备份和
 恢复原 launchd plist 与 Native Host manifest。installer 还会原子持有 install 与
 maintenance 目录锁；受哈希的 Core launcher 只加载固定 `$BPA_HOME/core.env`，并要求
-当前用户所有且权限为 `0600`，加载后再次覆盖可信 release identity。生产切换仍被
-maintenance 后的生产 readiness 复核、库存 scheduler 暂停/恢复和 source-to-closure
-故障注入 E2E 阻断。阶段 0 保持未完成，不得把隔离测试或旧窗口写成生产 page cache
-曲线。
+当前用户所有且权限为 `0600`，加载后再次覆盖可信 release identity。生产切换已通过
+maintenance 后的 readiness 复核、库存 scheduler 暂停/恢复和 source-to-closure
+故障注入 E2E。阶段 0 仍保持未完成，不得把首个生产样本或隔离测试写成完整 page
+cache 曲线。
 
 库存生产侧新增只读 readiness 判定器，统一核对 host/PostgreSQL 时钟、launchd PID、
 原子状态文件、全表 running schedule/collection、有效 PostgreSQL 与 Browser Control
 Lease、Core 健康及绑定页面认证状态。任何证据缺失或冲突都返回 `observe_only`；该工具
-不获取租约、不写数据库，也不调用任何内部刷新实现。当前生产部署副本尚未切入此提交，
-因此这里只构成代码与测试证据，不构成生产现场证据。
+不获取租约、不写数据库，也不调用任何内部刷新实现。
+
+## 3.2 阶段 0 首次生产闭包切换
+
+2026-08-06 21:27 的最终切换检查发现真实库存周期正在运行，因此保持只读等待，没有
+停止、重启或叠加触发。该周期于 21:49 自然终止为 `failed`，保留了已持久化事实；随后
+复核为 recovery PID、有效 PostgreSQL/Browser Control lease、running schedule 和
+running collection 全部为 0，状态文件与最新 collection 均为终态。
+
+在该维护窗口内暂停库存 recovery launchd 后，首次生产 source-to-closure 安装完成：
+
+- Runtime identity 为 `v0.6.0-rc.51ba97b2e526.node24.18.0`，Core PID 为 47140；
+- SQLite 已迁移至 schema 13，三个热路径部分索引存在，待确认 outbox 为 0；
+- `engine_outbox` 待确认查询计划命中 `engine_outbox_pending_created`，不再全表扫描；
+- 安装前数据库备份位于受保护的 BPA backup 目录，install 与 maintenance 锁均已释放；
+- 10 轮 `doctor`、Browser Session 和页面观察请求的进程级往返约 34–48 ms。
+
+首次安装后的浏览器握手暴露了一个交付边界错误：库存 Chrome launchd 仍从源码目录
+`apps/extension/.output` 加载扩展，因此已安装 Core 拒绝该 build。修正为稳定安装目录
+`~/Library/Application Support/BPA/extension` 后，launchd 从干净状态加载成功；Core
+报告 Browser Bridge `connected=true`、`ready=true`，配置的 Browser Instance 有 1 个
+当前会话、2 个 `authenticated + ready` 页面和 0 个阻断页。仓库门禁现会拒绝任何重新
+指向源码构建的库存 Chrome plist。
+
+22:04 已恢复 30 分钟 recovery launchd，但没有 kickstart 或人工刷新；加载后状态为
+`not running`、`runs=0`，等待下一个自然计划时点。旧资源样本跨越 Core PID 切换，已
+终止并保留；新 24 小时窗口从 Core PID 47140 重新计时，同时采集同连接
+`sqlite3_db_status64`。首个样本的 Core metrics 为 `available`，Runtime identity 与
+生产闭包一致。以上证明生产切换与恢复控制已完成，不证明 24 小时或 7 天稳定门禁已经
+完成。
 
 ## 4. Codex 过渡状态
 
@@ -164,8 +193,8 @@ schedule 和 collection 均为 0，但该周期只完成 1/13 店。该店已经
 
 当前修复候选增加 Schema v13 的三个热路径部分索引，并把跨控制协议的“无租约”明确
 编码为 `null`。查询计划测试、控制协议 E2E、租约 fail-closed 测试和固定 Node 24
-typecheck 已通过；生产尚未部署该候选。修复部署前继续只读观察，不手工补触发、不重启
-Core，也不把新的失败周期覆盖为成功。
+typecheck 已通过；生产已部署精确 RC，现场 schema、索引和查询计划复核通过。下一自然
+库存周期完成前仍不宣称业务恢复成功，也不手工补触发或把失败周期覆盖为成功。
 
 候选 RC 已完成首次 source-to-closure 故障注入：在隔离 Home 和 v12 临时数据库中，
 强制让新 launch agent bootstrap 以状态 42 失败。installer 随后恢复了旧 launchd
@@ -206,10 +235,10 @@ plist、Native Host manifest、Extension 与 v12 数据库，删除了新 Runtim
 
 1. ~~将当前工作区按规范、协议/Trigger、库存生产、Rust Kernel 分组并分别验证提交。~~
 2. ~~为当前 JSONL 增加确定性分析器，且把 SQLite 文件大小与 page cache 证据分开。~~
-3. 完成 Core 热轮询索引与控制租约空结果协议修复的正式门禁，并在没有运行中
-   schedule、collection 或有效 lease 的维护窗口内完成首次 source-to-closure 切换。
-4. 等待并分析 Node、Chrome 24 小时采样结果；SQLite 同连接遥测已接入生产前隔离
-   Core，待安全切换后重启包含 page cache 的新采样窗口。
+3. ~~完成 Core 热轮询索引与控制租约空结果协议修复的正式门禁，并在没有运行中
+   schedule、collection 或有效 lease 的维护窗口内完成首次 source-to-closure 切换。~~
+4. 等待并分析新 Core、Chrome 和 SQLite 同连接 page cache 的 24 小时采样结果，同时
+   观察下一自然库存周期，不手工补触发。
 5. 启动 Core 7 天稳定性窗口并记录重启、RSS 趋势与运行事件。
 6. 修复 Trigger 版本钉死与终态保真，再进入阶段 1 的登录恢复、告警和统一控制台。
 7. 依次完成清退商品、库存监控、爆款图片证据流的正式产品回归。

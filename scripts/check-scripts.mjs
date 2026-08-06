@@ -147,11 +147,19 @@ for (const required of [
   }
 }
 
-const [macosInstall, closureBuilder, closureVerifier] = await Promise.all([
-  readFile(join(scriptsRoot, "install-macos-arm64.sh"), "utf8"),
-  readFile(join(scriptsRoot, "build-runtime-closure.mjs"), "utf8"),
-  readFile(join(scriptsRoot, "verify-runtime-closure.mjs"), "utf8")
-]);
+const [macosInstall, closureBuilder, closureVerifier, inventoryChromeAgent] =
+  await Promise.all([
+    readFile(join(scriptsRoot, "install-macos-arm64.sh"), "utf8"),
+    readFile(join(scriptsRoot, "build-runtime-closure.mjs"), "utf8"),
+    readFile(join(scriptsRoot, "verify-runtime-closure.mjs"), "utf8"),
+    readFile(
+      join(
+        root,
+        "apps/inventory-monitor/deploy/com.bpa.inventory-chrome.plist"
+      ),
+      "utf8"
+    )
+  ]);
 if (macosInstall.includes('cat > "$STAGING_ROOT/bin/bpa-core"')) {
   throw new Error("macOS installer must not generate unverified runtime wrappers");
 }
@@ -195,6 +203,18 @@ for (const required of [
   if (!closureVerifier.includes(required)) {
     throw new Error(`macOS wrapper verification is missing ${required}`);
   }
+}
+const installedExtensionPath =
+  "/Users/yyerybz/Library/Application Support/BPA/extension";
+for (const flag of ["--disable-extensions-except=", "--load-extension="]) {
+  if (!inventoryChromeAgent.includes(`${flag}${installedExtensionPath}`)) {
+    throw new Error(
+      `Inventory Chrome must load the installed Browser Bridge with ${flag}`
+    );
+  }
+}
+if (inventoryChromeAgent.includes("apps/extension/.output")) {
+  throw new Error("Inventory Chrome must not load a Browser Bridge from source");
 }
 
 process.stdout.write(
