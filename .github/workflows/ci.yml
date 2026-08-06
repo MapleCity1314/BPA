@@ -17,7 +17,9 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-      - run: pnpm install --frozen-lockfile
+          cache: pnpm
+      - run: pnpm fetch --frozen-lockfile
+      - run: pnpm install --offline --frozen-lockfile
       - run: pnpm verify
 
   verify-windows:
@@ -31,7 +33,9 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-      - run: pnpm install --frozen-lockfile
+          cache: pnpm
+      - run: pnpm fetch --frozen-lockfile
+      - run: pnpm install --offline --frozen-lockfile
       - run: pnpm verify
 
   performance-gate:
@@ -46,7 +50,9 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-      - run: pnpm install --frozen-lockfile
+          cache: pnpm
+      - run: pnpm fetch --frozen-lockfile
+      - run: pnpm install --offline --frozen-lockfile
       - run: pnpm performance:check
 
   release-package:
@@ -61,6 +67,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
+          cache: pnpm
       - name: Verify release build host
         run: |
           test "$(uname -s)" = Darwin
@@ -72,7 +79,8 @@ jobs:
               process.versions.node.split(".")[0] !== "24"
             ) process.exit(1);
           '
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm fetch --frozen-lockfile
+      - run: pnpm install --offline --frozen-lockfile
       - name: Build and verify immutable RC archive
         run: |
           commit="$(git rev-parse HEAD)"
@@ -110,7 +118,9 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-      - run: pnpm install --frozen-lockfile
+          cache: pnpm
+      - run: pnpm fetch --frozen-lockfile
+      - run: pnpm install --offline --frozen-lockfile
       - name: Build and verify immutable Windows RC archive
         shell: pwsh
         run: |
@@ -193,7 +203,9 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-      - run: pnpm install --frozen-lockfile
+          cache: pnpm
+      - run: pnpm fetch --frozen-lockfile
+      - run: pnpm install --offline --frozen-lockfile
       - uses: actions/download-artifact@v6
         with:
           name: bpa-windows-x64-rc
