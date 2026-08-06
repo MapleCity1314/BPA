@@ -45,6 +45,22 @@ if (process.platform !== "win32") {
       process.exit(parsed.status ?? 1);
     }
   }
+  const behavior = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      join(scriptsRoot, "windows-runtime-copy-retry.test.ps1")
+    ],
+    { cwd: root, encoding: "utf8" }
+  );
+  if (behavior.status !== 0) {
+    process.stderr.write(behavior.stderr || behavior.stdout);
+    process.exit(behavior.status ?? 1);
+  }
 }
 
 for (const path of powerShellScripts) {

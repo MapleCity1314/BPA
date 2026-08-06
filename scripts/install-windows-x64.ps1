@@ -26,18 +26,6 @@ function Write-RuntimeInstallTrace([string]$Stage, [string]$Detail = "") {
   )
 }
 
-function Test-TransientFileSharingViolation([Exception]$Exception) {
-  $Current = $Exception
-  while ($null -ne $Current) {
-    $NativeCode = $Current.HResult -band 0xFFFF
-    if ($NativeCode -eq 32 -or $NativeCode -eq 33) {
-      return $true
-    }
-    $Current = $Current.InnerException
-  }
-  return $false
-}
-
 Write-RuntimeInstallTrace "started"
 
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -183,55 +171,6 @@ if (Test-Path -LiteralPath $PreviousPointer -PathType Leaf) {
 }
 if ($HadNativeHostManifest) {
   Copy-Item -LiteralPath $NativeHostManifest -Destination $NativeHostBackup
-}
-
-function Remove-FreshInstallStaging([int]$MaximumAttempts = 5) {
-  for ($Attempt = 1; $Attempt -le $MaximumAttempts; $Attempt += 1) {
-    if (-not (Test-Path -LiteralPath $StagingRoot)) {
-      return
-    }
-    try {
-      Remove-Item `
-        -LiteralPath $StagingRoot `
-        -Recurse `
-        -Force `
-        -ErrorAction Stop
-      return
-    } catch {
-      if (
-        -not (Test-TransientFileSharingViolation $_.Exception) -or
-        $Attempt -eq $MaximumAttempts
-      ) {
-        throw
-      }
-      Start-Sleep -Milliseconds (250 * $Attempt)
-    }
-  }
-}
-
-function Copy-PackagedRuntimeForFreshInstall([int]$MaximumAttempts = 4) {
-  for ($Attempt = 1; $Attempt -le $MaximumAttempts; $Attempt += 1) {
-    Remove-FreshInstallStaging
-    try {
-      Copy-Item `
-        -LiteralPath $PackagedRuntime `
-        -Destination $StagingRoot `
-        -Recurse `
-        -ErrorAction Stop
-      return
-    } catch {
-      $CopyFailure = $_
-      $Retryable = Test-TransientFileSharingViolation $_.Exception
-      Remove-FreshInstallStaging
-      if (-not $Retryable -or $Attempt -eq $MaximumAttempts) {
-        throw $CopyFailure
-      }
-      Write-RuntimeInstallTrace `
-        "fresh-install-copy-retry" `
-        "$Attempt/$MaximumAttempts"
-      Start-Sleep -Milliseconds (250 * $Attempt)
-    }
-  }
 }
 
 function Set-CurrentRuntime([string]$Identity) {
@@ -413,7 +352,16 @@ try {
     return
   }
   Write-RuntimeInstallTrace "fresh-install-copy-started" $Version
-  Copy-PackagedRuntimeForFreshInstall
+  Copy-BpaPackagedRuntimeForFreshInstall `
+    -InstallRoot $InstallRoot `
+    -PackagedRuntime $PackagedRuntime `
+    -StagingRoot $StagingRoot `
+    -OnRetry {
+      param([int]$Attempt, [int]$AttemptLimit)
+      Write-RuntimeInstallTrace `
+        "fresh-install-copy-retry" `
+        "$Attempt/$AttemptLimit"
+    }
   Copy-Item `
     -LiteralPath (Join-Path $StagingRoot "extension") `
     -Destination $ExtensionStage `
