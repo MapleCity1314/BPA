@@ -695,6 +695,7 @@ details code {
 }
 
 .status-action,
+.status-rejected,
 .status-failed,
 .status-uncertain {
   color: #8b3325;

@@ -219,7 +219,7 @@ describe("published default asset sources", () => {
     if (scanShop?.kind !== "call") throw new Error("fixture changed");
     expect(scanShops.body.steps[scanShop.routes.rejected]).toMatchObject({
       kind: "terminal",
-      status: "failed"
+      status: "rejected"
     });
 
     const doudianWorkflow = loadYaml<WorkflowDefinitionV1Alpha3>(

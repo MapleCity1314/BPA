@@ -19,7 +19,7 @@ Workflow 等级不得低于任一引用 Node。风险不确定时取更高等级
 | `success` | 下一业务节点或 `control.succeed` |
 | `failure` | 有业务兜底则进入兜底，否则 `control.fail` |
 | `timeout` | 仅对声明的可重试错误有限重试，耗尽后失败 |
-| `rejected` | 记录权限、风控或人工拒绝原因并失败 |
+| `rejected` | 不重试、不进入失败或人工恢复路由；保留拒绝原因并以不可恢复的 `rejected` 终态结束，处理原因后新建 Run |
 | `cancelled` | 停止后续动作并以取消结束 |
 | `uncertain` | 不重试、不宣告成功，要求人工核验真实业务状态 |
 

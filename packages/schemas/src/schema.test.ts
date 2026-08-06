@@ -21,6 +21,7 @@ import {
   validateSourceRecord,
   validateTimingPolicy,
   validateTriggerSpec,
+  validateWorkflow,
   validateWorkflowV1Alpha2,
   validateWorkflowV1Alpha3
 } from "./index.js";
@@ -187,6 +188,22 @@ const protocolExample = (name: string): unknown =>
   );
 
 describe("strong iteration contract schemas", () => {
+  it("rejects custom rejected recovery in Workflow v1alpha1", () => {
+    const workflow = parse(
+      readFileSync(
+        new URL(
+          "../../../workflows/examples/core.data-flow-smoke.workflow.yaml",
+          import.meta.url
+        ),
+        "utf8"
+      )
+    ) as Record<string, any>;
+    expect(validateWorkflow(workflow)).toBe(true);
+
+    workflow.spec.nodes.merge_marker.on = { rejected: "finish" };
+    expect(validateWorkflow(workflow)).toBe(false);
+  });
+
   it("validates immutable Adapter and Assistance Profile assets", () => {
     const adapter = {
       apiVersion: "bpa.adapter/v1alpha1",
@@ -495,6 +512,10 @@ describe("0.5 source, asset, and resource contract candidates", () => {
       )
     ) as Record<string, any>;
     expect(validateWorkflowV1Alpha3(workflow)).toBe(true);
+
+    const rejectedTerminal = structuredClone(workflow);
+    rejectedTerminal.spec.root.steps.at(-1).status = "rejected";
+    expect(validateWorkflowV1Alpha3(rejectedTerminal)).toBe(true);
 
     const insecureOrigin = structuredClone(workflow);
     insecureOrigin.spec.resourceSlots.metrics_source.allowedOrigins = [

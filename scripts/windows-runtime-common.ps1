@@ -108,6 +108,161 @@ function Test-BpaPathEqual {
   )
 }
 
+function Test-BpaTransientFileSharingViolation(
+  [System.Exception]$Exception
+) {
+  $Current = $Exception
+  while ($null -ne $Current) {
+    $NativeCode = $Current.HResult -band 0xFFFF
+    if ($NativeCode -eq 32 -or $NativeCode -eq 33) {
+      return $true
+    }
+    $Current = $Current.InnerException
+  }
+  return $false
+}
+
+function Assert-BpaFreshInstallStagingPath {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$InstallRoot,
+    [Parameter(Mandatory = $true)]
+    [string]$StagingRoot
+  )
+  $StagingParent = Split-Path -Parent ([IO.Path]::GetFullPath($StagingRoot))
+  $StagingName = Split-Path -Leaf $StagingRoot
+  if (
+    -not (Test-BpaPathEqual -Left $StagingParent -Right $InstallRoot) -or
+    $StagingName -notmatch "^\.install\.[a-f0-9]{32}$"
+  ) {
+    throw "Fresh Runtime staging path is not an exact BPA install GUID."
+  }
+}
+
+function Remove-BpaFreshInstallStaging {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$InstallRoot,
+    [Parameter(Mandatory = $true)]
+    [string]$StagingRoot,
+    [int]$MaximumAttempts = 5,
+    [scriptblock]$RemoveOperation = {
+      param([string]$Path)
+      Remove-Item `
+        -LiteralPath $Path `
+        -Recurse `
+        -Force `
+        -ErrorAction Stop
+    },
+    [scriptblock]$SleepOperation = {
+      param([int]$Milliseconds)
+      Start-Sleep -Milliseconds $Milliseconds
+    }
+  )
+  Assert-BpaFreshInstallStagingPath `
+    -InstallRoot $InstallRoot `
+    -StagingRoot $StagingRoot
+  for ($Attempt = 1; $Attempt -le $MaximumAttempts; $Attempt += 1) {
+    if (-not (Test-Path -LiteralPath $StagingRoot)) {
+      return
+    }
+    try {
+      & $RemoveOperation $StagingRoot
+      if (Test-Path -LiteralPath $StagingRoot) {
+        throw "Fresh Runtime staging cleanup did not remove its exact target."
+      }
+      return
+    } catch {
+      if (
+        -not (Test-BpaTransientFileSharingViolation $_.Exception) -or
+        $Attempt -eq $MaximumAttempts
+      ) {
+        throw
+      }
+      & $SleepOperation (250 * $Attempt)
+    }
+  }
+}
+
+function Copy-BpaPackagedRuntimeForFreshInstall {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$InstallRoot,
+    [Parameter(Mandatory = $true)]
+    [string]$PackagedRuntime,
+    [Parameter(Mandatory = $true)]
+    [string]$StagingRoot,
+    [int]$MaximumAttempts = 4,
+    [int]$CleanupMaximumAttempts = 5,
+    [scriptblock]$CopyOperation = {
+      param([string]$Source, [string]$Destination)
+      Copy-Item `
+        -LiteralPath $Source `
+        -Destination $Destination `
+        -Recurse `
+        -ErrorAction Stop
+    },
+    [scriptblock]$RemoveOperation = {
+      param([string]$Path)
+      Remove-Item `
+        -LiteralPath $Path `
+        -Recurse `
+        -Force `
+        -ErrorAction Stop
+    },
+    [scriptblock]$SleepOperation = {
+      param([int]$Milliseconds)
+      Start-Sleep -Milliseconds $Milliseconds
+    },
+    [scriptblock]$OnRetry = {
+      param([int]$Attempt, [int]$AttemptLimit)
+    }
+  )
+  Assert-BpaFreshInstallStagingPath `
+    -InstallRoot $InstallRoot `
+    -StagingRoot $StagingRoot
+  for ($Attempt = 1; $Attempt -le $MaximumAttempts; $Attempt += 1) {
+    Remove-BpaFreshInstallStaging `
+      -InstallRoot $InstallRoot `
+      -StagingRoot $StagingRoot `
+      -MaximumAttempts $CleanupMaximumAttempts `
+      -RemoveOperation $RemoveOperation `
+      -SleepOperation $SleepOperation
+    try {
+      & $CopyOperation $PackagedRuntime $StagingRoot
+      return
+    } catch {
+      $CopyFailure = $_
+      $Retryable = Test-BpaTransientFileSharingViolation $_.Exception
+      $CleanupFailure = $null
+      try {
+        Remove-BpaFreshInstallStaging `
+          -InstallRoot $InstallRoot `
+          -StagingRoot $StagingRoot `
+          -MaximumAttempts $CleanupMaximumAttempts `
+          -RemoveOperation $RemoveOperation `
+          -SleepOperation $SleepOperation
+      } catch {
+        $CleanupFailure = $_
+      }
+      if ($null -ne $CleanupFailure) {
+        throw [System.AggregateException]::new(
+          "Fresh Runtime copy and staging cleanup both failed.",
+          [System.Exception[]]@(
+            $CopyFailure.Exception,
+            $CleanupFailure.Exception
+          )
+        )
+      }
+      if (-not $Retryable -or $Attempt -eq $MaximumAttempts) {
+        throw $CopyFailure
+      }
+      & $OnRetry $Attempt $MaximumAttempts
+      & $SleepOperation (250 * $Attempt)
+    }
+  }
+}
+
 function Stop-BpaCoreSafely {
   param(
     [Parameter(Mandatory = $true)]

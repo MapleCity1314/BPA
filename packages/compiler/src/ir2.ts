@@ -943,6 +943,11 @@ class IrBuilder {
       path
     );
     const failedDefault = this.terminal(steps, "failed", context.scope);
+    const rejectedDefault = this.terminal(
+      steps,
+      "rejected",
+      context.scope
+    );
     const cancelledDefault = this.terminal(
       steps,
       "cancelled",
@@ -953,6 +958,16 @@ class IrBuilder {
       "uncertain",
       context.scope
     );
+    if (
+      source.handlers?.rejected &&
+      (source.handlers.rejected.steps.length !== 1 ||
+        source.handlers.rejected.steps[0]?.kind !== "terminal" ||
+        source.handlers.rejected.steps[0].status !== "rejected")
+    ) {
+      throw new WorkflowCompileError([
+        `${path}/handlers/rejected must be exactly one rejected terminal`
+      ]);
+    }
     if (
       source.handlers?.uncertain &&
       (source.handlers.uncertain.steps.length !== 1 ||
@@ -977,12 +992,14 @@ class IrBuilder {
         steps,
         context
       ),
-      rejected: this.compileHandler(
-        source.handlers?.rejected,
-        failedDefault,
-        steps,
-        context
-      ),
+      rejected: source.handlers?.rejected
+        ? this.compileSequence(
+            source.handlers.rejected,
+            rejectedDefault,
+            steps,
+            context
+          )
+        : rejectedDefault,
       cancelled: this.compileHandler(
         source.handlers?.cancelled,
         cancelledDefault,
@@ -1292,7 +1309,12 @@ export function compileWorkflowV1Alpha1ToIr2(
   const risks: ExecutionPlan["riskSnapshot"][number][] = [];
   let generated = 0;
   const generatedTerminal = (
-    status: "succeeded" | "failed" | "cancelled" | "uncertain"
+    status:
+      | "succeeded"
+      | "rejected"
+      | "failed"
+      | "cancelled"
+      | "uncertain"
   ): string => {
     let key: string;
     do {
@@ -1308,6 +1330,7 @@ export function compileWorkflowV1Alpha1ToIr2(
   };
   const fallback = {
     succeeded: generatedTerminal("succeeded"),
+    rejected: generatedTerminal("rejected"),
     failed: generatedTerminal("failed"),
     cancelled: generatedTerminal("cancelled"),
     uncertain: generatedTerminal("uncertain")
@@ -1384,10 +1407,9 @@ export function compileWorkflowV1Alpha1ToIr2(
       failed: compiled.on.failure ?? fallback.failed,
       timed_out:
         compiled.on.timeout ?? compiled.on.failure ?? fallback.failed,
-      rejected:
-        compiled.on.rejected ?? compiled.on.failure ?? fallback.failed,
+      rejected: fallback.rejected,
       cancelled: compiled.on.cancelled ?? fallback.cancelled,
-      // Legacy uncertain recovery is deliberately not carried forward.
+      // Legacy rejected and uncertain recovery are deliberately not carried forward.
       uncertain: fallback.uncertain
     };
     steps[key] = {

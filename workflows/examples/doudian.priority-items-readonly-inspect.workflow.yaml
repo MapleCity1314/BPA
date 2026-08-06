@@ -50,7 +50,7 @@ spec:
         type: object
   limits:
     maxDepth: 3
-    maxStepExecutions: 5000
+    maxStepExecutions: 6000
   resourceSlots:
     doudian_browser:
       kind: browser

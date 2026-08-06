@@ -62,7 +62,7 @@ spec:
             steps:
               - key: discovery_blocked
                 kind: terminal
-                status: uncertain
+                status: rejected
                 error:
                   code: DOUDIAN_ALLIANCE_DISCOVERY_BLOCKED
                   message: 登录、验证码、风控或页面身份阻断了店铺发现。
@@ -115,7 +115,7 @@ spec:
                   steps:
                     - key: shop_blocked
                       kind: terminal
-                      status: failed
+                      status: rejected
                       error:
                         code: DOUDIAN_ALLIANCE_SHOP_BLOCKED
                         message: 阻断信号使剩余店铺不可安全继续；foreach 必须立即停止。

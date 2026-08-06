@@ -352,7 +352,16 @@ try {
     return
   }
   Write-RuntimeInstallTrace "fresh-install-copy-started" $Version
-  Copy-Item -LiteralPath $PackagedRuntime -Destination $StagingRoot -Recurse
+  Copy-BpaPackagedRuntimeForFreshInstall `
+    -InstallRoot $InstallRoot `
+    -PackagedRuntime $PackagedRuntime `
+    -StagingRoot $StagingRoot `
+    -OnRetry {
+      param([int]$Attempt, [int]$AttemptLimit)
+      Write-RuntimeInstallTrace `
+        "fresh-install-copy-retry" `
+        "$Attempt/$AttemptLimit"
+    }
   Copy-Item `
     -LiteralPath (Join-Path $StagingRoot "extension") `
     -Destination $ExtensionStage `

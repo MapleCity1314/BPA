@@ -112,6 +112,7 @@ export type RunStatus =
   | "paused"
   | "compensating"
   | "succeeded"
+  | "rejected"
   | "failed"
   | "cancelled"
   | "uncertain";

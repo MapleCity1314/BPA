@@ -8,16 +8,14 @@
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- 当前分支：`codex/protocol-v2-decoupled-runtime`。
-- Git 基线：本地分支与 `origin/codex/protocol-v2-decoupled-runtime` 同步，PR #2
-  保持打开；当前精确提交以 `git rev-parse HEAD` 和 GitHub PR 为准，不在状态文档内
-  复制一个会随提交立刻过期的哈希。该分支尚未合并或明确放弃，因此阶段 0 的 Git
-  收敛门禁仍未完成。
-- 验证基线：固定 Node `24.18.0` 下当前候选 `pnpm verify` 通过。本轮完整门禁为 125 个
-  测试文件、765 项测试全绿，文档 Catalog 80 条有效，Astro 0 诊断。提交
-  `51ba97b2e526` 的 macOS、Windows、性能、可复现性、WorkBuddy Skill 和发布闭包
-  GitHub 门禁均已通过，部署任务按条件跳过。后续提交仍须重新接受相同门禁，不能继承
-  旧提交的绿色结论。
+- 当前分支：`codex/workflow-terminal-fidelity`，PR #3。
+- Git 基线：PR #2 已在全部发布门禁通过后合并到 `main`，merge commit 为
+  `5e091af7fbb0`，阶段 0 的大分支收敛门禁已关闭。后续终态与稳定性加固在独立 PR #3
+  继续，不再堆叠到已合并分支。
+- 验证基线：固定 Node `24.18.0` 下 PR #3 当前候选 `pnpm verify` 通过，126 个测试文件、
+  775 项测试全绿，文档 Catalog 80 条有效，Astro 0 诊断。生产闭包仍是已经完整验收并
+  部署的 `51ba97b2e526`；PR #3 尚未部署，仍须以当前 GitHub checks 的最终状态为准，
+  不能继承旧提交的绿色结论。
 - 生产原则：库存公司业务不中断；任何运行中进程、状态、schedule 或有效 lease 存在
   时，只观察，不重启、不叠加触发。
 - Rust 判定：暂不切换生产 Core，保留实现、测试和候选架构；完成阶段 0 数据采集后
@@ -29,7 +27,7 @@
 
 | 阶段 | 状态 | 当前最重要缺口 | 退出证据 |
 | --- | --- | --- | --- |
-| 0 稳住上阵 | **进行中** | Core 热轮询修复已切入生产，但新 24 小时资源曲线、下一自然库存周期和 Core 7 天稳定性尚未验收；PR 仍未收敛 | 库存周期恢复、Git 分支二选一、`pnpm check`、三类资源曲线、Core 7 天稳定 |
+| 0 稳住上阵 | **进行中** | Core 热轮询修复后的首个自然 13 店周期已成功；新 24 小时资源曲线与 Core 7 天稳定性尚未验收，PR #3 仍在收敛 | 24 小时三类资源曲线、Core 7 天稳定、PR #3 门禁 |
 | 1 无人值守 | 未开始 | 登录失效恢复、失败推送、统一控制台、固定 Trigger 覆盖 | 无 SSH 认证恢复、100% 失败推送、AI 触发占比持续降至零 |
 | 2 造流程易用 | 未开始 | Web 校正界面、截图/元素候选回传、非技术用户验收 | 非技术同事独立完成真实流程发布 |
 | 3 通用能力 | 未开始 | HTTP Request、File Write、JSON Transform、导出、自愈 | 不写 Adapter 覆盖主要通用需求 |
@@ -126,12 +124,25 @@ running collection 全部为 0，状态文件与最新 collection 均为终态�
 当前会话、2 个 `authenticated + ready` 页面和 0 个阻断页。仓库门禁现会拒绝任何重新
 指向源码构建的库存 Chrome plist。
 
-22:04 已恢复 30 分钟 recovery launchd，但没有 kickstart 或人工刷新；加载后状态为
-`not running`、`runs=0`，等待下一个自然计划时点。旧资源样本跨越 Core PID 切换，已
-终止并保留；新 24 小时窗口从 Core PID 47140 重新计时，同时采集同连接
-`sqlite3_db_status64`。首个样本的 Core metrics 为 `available`，Runtime identity 与
-生产闭包一致。以上证明生产切换与恢复控制已完成，不证明 24 小时或 7 天稳定门禁已经
-完成。
+22:04 已恢复 30 分钟 recovery launchd，但没有 kickstart 或人工刷新。随后首个自然
+周期于 22:32:30 启动，23:03:06 成功终止，launchd 退出码为 0。权威
+`ops.collection_run` 为 `succeeded`，配置和完成均为 13/13；52 个 collection step
+全部终态：13 个 canary succeeded、9 个 orders succeeded、4 个 orders fresh_reused、
+13 个 inventory succeeded、13 个 risk succeeded。库存 attempted/persisted 为
+319/319、failed 为 0，blocked/partial shop 均为 0，diagnostics 为空。状态文件为
+`succeeded`，但自身没有 `completedShopCount` 字段，因此 13/13 结论只来自数据库权威
+行，不从状态文件反推。
+
+终态后 recovery PID、running schedule、running collection、有效 PostgreSQL lease 和
+Browser Control lease 均为 0。Core 仍是 PID 47140，Chrome launch PID 48106；Browser
+Bridge connected/ready，1 个活动 Session、2 个 `authenticated + ready` 页面、0 个
+阻断页。以上关闭了上一轮 lease renew unconfirmed 的生产回归，但不替代长期稳定门禁。
+
+旧资源样本跨越 Core PID 切换，已经终止并保留；新 24 小时窗口从 Core PID 47140
+重新计时，同时采集同连接 `sqlite3_db_status64`。截至 23:04，61 个样本覆盖约 1 小时，
+最大间隔 61 秒，无缺失服务 PID；61/61 Core metrics 可用，Runtime identity 固定为
+生产闭包，同连接 cache 使用值保持稳定。该窗口仍不足 24 小时，不能据此得出长期稳定
+或内存泄漏结论。
 
 ## 4. Codex 过渡状态
 
@@ -193,8 +204,9 @@ schedule 和 collection 均为 0，但该周期只完成 1/13 店。该店已经
 
 当前修复候选增加 Schema v13 的三个热路径部分索引，并把跨控制协议的“无租约”明确
 编码为 `null`。查询计划测试、控制协议 E2E、租约 fail-closed 测试和固定 Node 24
-typecheck 已通过；生产已部署精确 RC，现场 schema、索引和查询计划复核通过。下一自然
-库存周期完成前仍不宣称业务恢复成功，也不手工补触发或把失败周期覆盖为成功。
+typecheck 已通过；生产已部署精确 RC，现场 schema、索引和查询计划复核通过。修复后的
+首个自然 13 店周期已经完整成功，租约续期与终态清理均闭合；业务恢复已由生产证据确认，
+但 24 小时和 7 天稳定性门禁仍未完成。
 
 候选 RC 已完成首次 source-to-closure 故障注入：在隔离 Home 和 v12 临时数据库中，
 强制让新 launch agent bootstrap 以状态 42 失败。installer 随后恢复了旧 launchd
@@ -237,8 +249,8 @@ plist、Native Host manifest、Extension 与 v12 数据库，删除了新 Runtim
 2. ~~为当前 JSONL 增加确定性分析器，且把 SQLite 文件大小与 page cache 证据分开。~~
 3. ~~完成 Core 热轮询索引与控制租约空结果协议修复的正式门禁，并在没有运行中
    schedule、collection 或有效 lease 的维护窗口内完成首次 source-to-closure 切换。~~
-4. 等待并分析新 Core、Chrome 和 SQLite 同连接 page cache 的 24 小时采样结果，同时
-   观察下一自然库存周期，不手工补触发。
+4. 等待并分析新 Core、Chrome 和 SQLite 同连接 page cache 的 24 小时采样结果；首个
+   自然 13 店周期已成功，不再需要人工补触发。
 5. 启动 Core 7 天稳定性窗口并记录重启、RSS 趋势与运行事件。
 6. 修复 Trigger 版本钉死与终态保真，再进入阶段 1 的登录恢复、告警和统一控制台。
 7. 依次完成清退商品、库存监控、爆款图片证据流的正式产品回归。

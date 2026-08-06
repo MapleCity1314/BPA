@@ -200,6 +200,54 @@ function chromeSummary(samples) {
   };
 }
 
+function coreIdentitySummary(samples, expectedIntervalSeconds) {
+  const pids = [];
+  const runtimeIdentities = [];
+  const runtimeIdentityExpected = samples.some(
+    ({ sample }) => sample.coreMetrics !== undefined && sample.coreMetrics !== null
+  );
+  let missingPidSamples = 0;
+  let missingRuntimeIdentitySamples = 0;
+  for (const { sample, timestamp } of samples) {
+    const corePid = sample.services["com.bpa.core"]?.pid;
+    if (!Number.isSafeInteger(corePid) || corePid <= 0) {
+      missingPidSamples += 1;
+    } else {
+      pids.push(corePid);
+    }
+    const metrics = sample.coreMetrics;
+    const metricsTimestamp = Date.parse(metrics?.sampledAt);
+    const ageSeconds = (timestamp - metricsTimestamp) / 1_000;
+    const identityIsFresh =
+      metrics?.status === "available" &&
+      Number.isFinite(metricsTimestamp) &&
+      ageSeconds >= -5 &&
+      ageSeconds <= expectedIntervalSeconds * 2 &&
+      metrics.pid === corePid &&
+      typeof metrics.runtimeIdentity === "string" &&
+      metrics.runtimeIdentity.length > 0;
+    if (!identityIsFresh) {
+      missingRuntimeIdentitySamples += 1;
+    } else {
+      runtimeIdentities.push(metrics.runtimeIdentity);
+    }
+  }
+  const uniquePids = [...new Set(pids)];
+  const uniqueRuntimeIdentities = [...new Set(runtimeIdentities)];
+  return {
+    missingPidSamples,
+    uniquePids,
+    pidStable: missingPidSamples === 0 && uniquePids.length === 1,
+    missingRuntimeIdentitySamples,
+    runtimeIdentities: uniqueRuntimeIdentities,
+    runtimeIdentityExpected,
+    runtimeIdentityStable:
+      runtimeIdentityExpected &&
+      missingRuntimeIdentitySamples === 0 &&
+      uniqueRuntimeIdentities.length === 1
+  };
+}
+
 function sqliteSummary(samples, expectedIntervalSeconds) {
   const firstTimestamp = samples[0].timestamp;
   const durationHours =
@@ -302,10 +350,17 @@ function analyze(samples, options) {
   };
   const windowComplete = durationHours >= options.minimumDurationHours;
   const continuityComplete = continuity.gapsOverDoubleInterval === 0;
+  const coreIdentity = coreIdentitySummary(
+    samples,
+    options.expectedIntervalSeconds
+  );
+  const coreIdentityStable =
+    coreIdentity.pidStable && coreIdentity.runtimeIdentityStable;
   const sqlite = sqliteSummary(samples, options.expectedIntervalSeconds);
   const sqlitePageCacheMeasurable =
     windowComplete &&
     continuityComplete &&
+    coreIdentityStable &&
     sqlite.pageCache.status === "measured";
   return {
     schema: OUTPUT_SCHEMA,
@@ -322,18 +377,35 @@ function analyze(samples, options) {
     conclusionGate: {
       windowComplete,
       continuityComplete,
-      nodeAndChromeMeasurable: windowComplete && continuityComplete,
+      corePidStable: coreIdentity.pidStable,
+      coreRuntimeIdentityStable: coreIdentity.runtimeIdentityStable,
+      nodeAndChromeMeasurable:
+        windowComplete && continuityComplete && coreIdentity.pidStable,
       sqlitePageCacheMeasurable,
       phaseZeroResourceMeasurementComplete:
-        windowComplete && continuityComplete && sqlitePageCacheMeasurable,
+        windowComplete &&
+        continuityComplete &&
+        coreIdentityStable &&
+        sqlitePageCacheMeasurable,
       blockers: [
         ...(!windowComplete ? ["minimum_duration_not_reached"] : []),
         ...(!continuityComplete ? ["sampling_gaps_exceed_limit"] : []),
+        ...(coreIdentity.missingPidSamples > 0 ? ["core_pid_missing"] : []),
+        ...(coreIdentity.uniquePids.length > 1 ? ["core_pid_changed"] : []),
+        ...(coreIdentity.runtimeIdentityExpected &&
+        coreIdentity.missingRuntimeIdentitySamples > 0
+          ? ["core_runtime_identity_missing"]
+          : []),
+        ...(coreIdentity.runtimeIdentityExpected &&
+        coreIdentity.runtimeIdentities.length > 1
+          ? ["core_runtime_identity_changed"]
+          : []),
         ...(sqlite.pageCache.status !== "measured"
           ? ["sqlite_page_cache_not_measured"]
           : [])
       ]
     },
+    coreIdentity,
     services: Object.fromEntries(
       serviceLabels.map((label) => [
         label,

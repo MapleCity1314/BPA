@@ -24,6 +24,7 @@ Candidate；正式发布必须由用户通过 CLI 确认。
 ## 固定边界
 
 - 不把失败、超时、拒绝或取消路由到 `control.succeed`。
+- `rejected` 是不可恢复终态：不得重试、收集、转入失败路由或请求协助；处理拒绝原因后只能新建 Run。
 - 不给 `uncertain` 配置自动重试或自动成功出口；保留终态并要求人工核验。
 - 不降低任何已发布 Node 的风险、权限、节奏或超时安全线。
 - 只生成有上限、可恢复的顺序 foreach。不得生成 parallel、任意图回边、无界循环、通用 paginate、poll、补偿或子流程语法。
@@ -42,6 +43,6 @@ Candidate；正式发布必须由用户通过 CLI 确认。
 - AI 歧义分析：`packaging_match_review@1.0.0`；长期绑定确认：`binding_confirm@1.0.0`。
 - 店铺/范围确认、登录风控接管、Adapter 异常分类分别使用 `scope_review@1.0.0`、`auth_takeover@1.0.0`、`adapter_anomaly_review@1.0.0`。
 - 其他 AI 分析或人工确认/操作：`wait.assistance`，引用精确 Assistance Profile 版本。
-- 明确结局：`terminal`，区分 `succeeded`、`failed`、`cancelled`、`uncertain`。
+- 明确结局：`terminal`，区分 `succeeded`、`rejected`、`failed`、`cancelled`、`uncertain`。
 
 在交付前按 [review-checklist.md](references/review-checklist.md) 完成检查。

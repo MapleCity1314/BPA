@@ -1,7 +1,9 @@
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync
@@ -73,13 +75,80 @@ describe("Core runtime resource metrics", () => {
     try {
       const path = join(root, "core-runtime-metrics.json");
       writeFileSync(path, "previous\n", { mode: 0o600 });
-      mkdirSync(`${path}.42.tmp`);
+      const collision = `${path}.42.collision.tmp`;
+      mkdirSync(collision);
       expect(() =>
-        writeRuntimeResourceMetrics(path, metrics, { processId: 42 })
+        writeRuntimeResourceMetrics(path, metrics, {
+          processId: 42,
+          temporaryIdFactory: () => "collision"
+        })
       ).toThrow();
       expect(readFileSync(path, "utf8")).toBe("previous\n");
+      expect(statSync(collision).isDirectory()).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("removes an exclusive temporary file after a serialization failure", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-metrics-cleanup-"));
+    try {
+      const path = join(root, "core-runtime-metrics.json");
+      writeFileSync(path, "previous\n", { mode: 0o600 });
+      expect(() =>
+        writeRuntimeResourceMetrics(
+          path,
+          { ...metrics, cacheUsedBytes: 1n as unknown as number },
+          {
+            processId: 42,
+            temporaryIdFactory: () => "serialization-failure"
+          }
+        )
+      ).toThrow(/BigInt/u);
+      expect(readFileSync(path, "utf8")).toBe("previous\n");
+      expect(readdirSync(root)).toEqual(["core-runtime-metrics.json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "preserves a primary write failure when temporary cleanup also fails",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "bpa-runtime-metrics-errors-"));
+      const path = join(root, "core-runtime-metrics.json");
+      const temporary = `${path}.42.aggregate-error.tmp`;
+      const primary = new Error("primary serialization failure");
+      try {
+        writeFileSync(path, "previous\n", { mode: 0o600 });
+        const failingValue = {
+          toJSON() {
+            chmodSync(root, 0o500);
+            throw primary;
+          }
+        };
+        let thrown: unknown;
+        try {
+          writeRuntimeResourceMetrics(
+            path,
+            { ...metrics, cacheUsedBytes: failingValue as unknown as number },
+            {
+              processId: 42,
+              temporaryIdFactory: () => "aggregate-error"
+            }
+          );
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(AggregateError);
+        expect((thrown as AggregateError).errors[0]).toBe(primary);
+        expect((thrown as Error & { cause?: unknown }).cause).toBe(primary);
+        expect(readFileSync(path, "utf8")).toBe("previous\n");
+        expect(statSync(temporary).isFile()).toBe(true);
+      } finally {
+        chmodSync(root, 0o700);
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  );
 });

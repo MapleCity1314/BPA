@@ -96,6 +96,7 @@ export interface RunView {
     | "running"
     | "waiting"
     | "succeeded"
+    | "rejected"
     | "failed"
     | "uncertain"
     | "cancelled";

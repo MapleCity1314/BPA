@@ -1,11 +1,14 @@
 import {
   chmodSync,
   closeSync,
+  constants,
   fsyncSync,
   openSync,
   renameSync,
+  unlinkSync,
   writeFileSync
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import type { SqliteResourceMetrics } from "@bpa/persistence-sqlite";
 
 export const RUNTIME_RESOURCE_METRICS_SCHEMA =
@@ -28,6 +31,7 @@ export function writeRuntimeResourceMetrics(
     now?: () => Date;
     processId?: number;
     runtimeIdentity?: string | null;
+    temporaryIdFactory?: () => string;
   } = {}
 ): RuntimeResourceMetricsSnapshot {
   const snapshot: RuntimeResourceMetricsSnapshot = {
@@ -40,15 +44,73 @@ export function writeRuntimeResourceMetrics(
       ...metrics
     }
   };
-  const temporaryPath = `${path}.${snapshot.pid}.tmp`;
-  const file = openSync(temporaryPath, "w", 0o600);
+  const temporaryId = (options.temporaryIdFactory ?? randomUUID)();
+  if (!/^[A-Za-z0-9-]+$/u.test(temporaryId)) {
+    throw new Error("Runtime resource metrics temporary ID is invalid");
+  }
+  const temporaryPath = `${path}.${snapshot.pid}.${temporaryId}.tmp`;
+  const flags =
+    constants.O_WRONLY |
+    constants.O_CREAT |
+    constants.O_EXCL |
+    (constants.O_NOFOLLOW ?? 0);
+  let file: number | undefined;
+  let temporaryCreated = false;
+  let renamed = false;
+  let primaryError: unknown;
   try {
+    file = openSync(temporaryPath, flags, 0o600);
+    temporaryCreated = true;
     writeFileSync(file, `${JSON.stringify(snapshot)}\n`, "utf8");
     fsyncSync(file);
-  } finally {
-    closeSync(file);
+    const descriptor = file;
+    file = undefined;
+    closeSync(descriptor);
+    chmodSync(temporaryPath, 0o600);
+    renameSync(temporaryPath, path);
+    renamed = true;
+  } catch (error) {
+    primaryError = error;
   }
-  chmodSync(temporaryPath, 0o600);
-  renameSync(temporaryPath, path);
+  const cleanupErrors: unknown[] = [];
+  if (file !== undefined) {
+    try {
+      const descriptor = file;
+      file = undefined;
+      closeSync(descriptor);
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  if (temporaryCreated && !renamed) {
+    try {
+      unlinkSync(temporaryPath);
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !("code" in error) ||
+        error.code !== "ENOENT"
+      ) {
+        cleanupErrors.push(error);
+      }
+    }
+  }
+  if (primaryError !== undefined) {
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [primaryError, ...cleanupErrors],
+        "Runtime resource metrics write and cleanup failed",
+        { cause: primaryError }
+      );
+    }
+    throw primaryError;
+  }
+  if (cleanupErrors.length === 1) throw cleanupErrors[0];
+  if (cleanupErrors.length > 1) {
+    throw new AggregateError(
+      cleanupErrors,
+      "Runtime resource metrics cleanup failed"
+    );
+  }
   return snapshot;
 }

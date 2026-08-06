@@ -344,7 +344,7 @@
         "key": { "$ref": "#/$defs/stepKey" },
         "kind": { "const": "terminal" },
         "status": {
-          "enum": ["succeeded", "failed", "cancelled", "uncertain"]
+          "enum": ["succeeded", "rejected", "failed", "cancelled", "uncertain"]
         },
         "output": { "$ref": "#/$defs/safeValue" },
         "error": {

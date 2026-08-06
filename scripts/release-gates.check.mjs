@@ -204,6 +204,63 @@ test("retries transient Windows package verification cleanup", async () => {
   assert.match(verifier, /Remove-VerificationStage -Path \$Stage/u);
 });
 
+test("bounds fresh Windows Runtime copy retries to sharing violations", async () => {
+  const [installer, runtimeCommon, behaviorTest] = await Promise.all([
+    readFile(new URL("install-windows-x64.ps1", import.meta.url), "utf8"),
+    readFile(new URL("windows-runtime-common.ps1", import.meta.url), "utf8"),
+    readFile(
+      new URL("windows-runtime-copy-retry.test.ps1", import.meta.url),
+      "utf8"
+    )
+  ]);
+  assert.match(
+    runtimeCommon,
+    /function Test-BpaTransientFileSharingViolation\([\s\S]*?\$NativeCode -eq 32 -or \$NativeCode -eq 33/u
+  );
+  assert.match(
+    installer,
+    /\$InstallId = \[Guid\]::NewGuid\(\)\.ToString\("N"\)[\s\S]*?\$StagingRoot = Join-Path \$InstallRoot "\.install\.\$InstallId"/u
+  );
+  assert.match(
+    runtimeCommon,
+    /function Assert-BpaFreshInstallStagingPath[\s\S]*?\^\\\.install\\\.\[a-f0-9\]\{32\}\$/u
+  );
+  assert.match(
+    runtimeCommon,
+    /function Remove-BpaFreshInstallStaging[\s\S]*?\[int\]\$MaximumAttempts = 5/u
+  );
+  assert.match(
+    runtimeCommon,
+    /function Copy-BpaPackagedRuntimeForFreshInstall[\s\S]*?\[int\]\$MaximumAttempts = 4[\s\S]*?\[int\]\$CleanupMaximumAttempts = 5/u
+  );
+  assert.match(
+    runtimeCommon,
+    /\$Retryable = Test-BpaTransientFileSharingViolation \$_\.Exception[\s\S]*?Remove-BpaFreshInstallStaging[\s\S]*?if \(-not \$Retryable -or \$Attempt -eq \$MaximumAttempts\)[\s\S]*?throw \$CopyFailure/u
+  );
+  assert.match(
+    runtimeCommon,
+    /\[System\.AggregateException\]::new\([\s\S]*?\$CopyFailure\.Exception,[\s\S]*?\$CleanupFailure\.Exception/u
+  );
+  assert.match(
+    installer,
+    /Write-RuntimeInstallTrace "fresh-install-copy-started" \$Version\s+Copy-BpaPackagedRuntimeForFreshInstall[\s\S]*?-OnRetry \{[\s\S]*?"fresh-install-copy-retry"[\s\S]*?Copy-Item\s+`\s+-LiteralPath \(Join-Path \$StagingRoot "extension"\)/u
+  );
+  assert.doesNotMatch(installer, /function Copy-BpaPackagedRuntimeForFreshInstall/u);
+  for (const expected of [
+    "-2147024864",
+    "-2147024863",
+    "-2147024891",
+    "-MaximumAttempts 3",
+    ".install.not-a-guid",
+    "[System.AggregateException]"
+  ]) {
+    assert.ok(
+      behaviorTest.includes(expected),
+      `Windows Runtime copy behavior test is missing ${expected}`
+    );
+  }
+});
+
 test("rejects legacy names and metadata drift", () => {
   const release = createReleaseMetadata({
     runtimeVersion: "0.4.0",

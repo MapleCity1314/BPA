@@ -455,7 +455,13 @@ export function createCliProgram(options: CliProgramOptions): Command {
         "run.create",
         { workflowId, workflowVersion, input, resourceBindings, actor }
       );
-      const terminal = new Set(["succeeded", "failed", "cancelled", "uncertain"]);
+      const terminal = new Set([
+        "succeeded",
+        "rejected",
+        "failed",
+        "cancelled",
+        "uncertain"
+      ]);
       const deadline =
         Date.now() + Number(commandOptions.waitSeconds) * 1_000;
       while (!terminal.has(run.status) && Date.now() < deadline) {

@@ -17,7 +17,7 @@ spec:
       lease: { type: object }
   outputSchema:
     type: object
-  limits: { maxDepth: 3, maxStepExecutions: 5000 }
+  limits: { maxDepth: 3, maxStepExecutions: 6000 }
   resourceSlots:
     doudian_browser:
       kind: browser

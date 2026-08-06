@@ -305,6 +305,61 @@ describe("UdsControlBackend", () => {
     ]);
   });
 
+  it("maps compatibility and IR2 rejected events to a safe blocked terminal", async () => {
+    const client = new FakeRequester()
+      .respond(CONSOLE_CONTROL_METHODS.runInspect, {
+        id: "run-rejected",
+        workflowId: "research",
+        workflowVersion: "1.0.0",
+        status: "rejected",
+        createdAt: "2026-07-30T03:00:00.000Z",
+        updatedAt: "2026-07-30T03:01:00.000Z"
+      })
+      .respond(CONSOLE_CONTROL_METHODS.runEvents, [
+        {
+          id: "event-compatibility",
+          sequence: 1,
+          type: "RUN_REJECTED",
+          occurredAt: "2026-07-30T03:00:30.000Z",
+          payload: { error: { code: "SESSION_EXPIRED" } }
+        },
+        {
+          id: "event-ir2",
+          sequence: 2,
+          type: "RUNTIME_RESULT_APPLIED",
+          occurredAt: "2026-07-30T03:01:00.000Z",
+          payload: {
+            status: "rejected",
+            outcomeStatus: "rejected",
+            errorCode: "CAPTCHA_REQUIRED"
+          }
+        }
+      ]);
+
+    const run = await backend(client).getRun("run-rejected");
+
+    expect(run).toMatchObject({
+      status: "rejected",
+      completedAt: "2026-07-30T03:01:00.000Z",
+      timeline: [
+        {
+          title: "任务已被安全阻断",
+          state: "failed",
+          summary:
+            "任务已作为不可恢复终态安全阻断；处理拒绝原因后请重新发起。"
+        },
+        {
+          title: "任务已被安全阻断",
+          state: "failed",
+          summary:
+            "任务已作为不可恢复终态安全阻断；处理拒绝原因后请重新发起。"
+        }
+      ]
+    });
+    expect(JSON.stringify(run)).not.toContain("SESSION_EXPIRED");
+    expect(JSON.stringify(run)).not.toContain("CAPTCHA_REQUIRED");
+  });
+
   it("creates a 15-minute exact Design Mode grant and can stop it", async () => {
     const client = new FakeRequester()
       .respond(CONSOLE_CONTROL_METHODS.authoringDesignModeRequest, {

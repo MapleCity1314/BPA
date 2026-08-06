@@ -227,7 +227,7 @@ $RequiredAssets = @(
   @{
     type = "workflow"
     file = "doudian.alliance-retired-products-monitor.workflow.yaml"
-    sha256 = "97d22c6ad687c2c3716402f8a4d0cd02652d53fb12d6676ff1882ccf4b71318e"
+    sha256 = "eef860b6978b66bc9199a9499b84968cdbc4377b1d5d3ac2eebe78546044d845"
   }
 )
 foreach ($Asset in $RequiredAssets) {

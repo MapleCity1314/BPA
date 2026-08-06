@@ -208,11 +208,10 @@ export class LocalWorkflowEngine {
     let target: string | undefined;
     if (effectiveResult.status === "succeeded") {
       target = compiledNode.next ?? compiledNode.on.success;
-    } else {
+    } else if (effectiveResult.status !== "rejected") {
       const transitionKey:
         | "failure"
         | "timeout"
-        | "rejected"
         | "cancelled"
         | "uncertain" =
         effectiveResult.status === "timed_out"
@@ -232,8 +231,9 @@ export class LocalWorkflowEngine {
       );
     }
     const terminalStatus: RunStatus =
+      effectiveResult.status === "rejected" ||
       effectiveResult.status === "uncertain"
-        ? "uncertain"
+        ? effectiveResult.status
         : effectiveResult.status === "cancelled"
           ? "cancelled"
           : effectiveResult.status === "succeeded"

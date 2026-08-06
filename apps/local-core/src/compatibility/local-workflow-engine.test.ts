@@ -93,6 +93,34 @@ describe("Runtime 0.3 Local Core compatibility engine", () => {
     persistence.close();
   });
 
+  it("terminates rejected browser results without a recovery route", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const engine = new LocalWorkflowEngine(persistence);
+    const waiting = engine.start(workflow, {});
+    const rejected = engine.acceptBrowserResult(
+      workflow,
+      dispatchedExecution(persistence, waiting.id),
+      {
+        status: "rejected",
+        fencingToken: 1,
+        error: {
+          code: "CAPTCHA_REQUIRED",
+          message: "Human verification required.",
+          retryable: false
+        }
+      }
+    );
+
+    expect(rejected.status).toBe("rejected");
+    expect(persistence.listEvents(rejected.id).at(-1)).toMatchObject({
+      type: "RUN_REJECTED",
+      payload: {
+        error: { code: "CAPTCHA_REQUIRED" }
+      }
+    });
+    persistence.close();
+  });
+
   it("rejects stale browser fencing tokens", () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const engine = new LocalWorkflowEngine(persistence);

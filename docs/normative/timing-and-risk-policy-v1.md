@@ -85,8 +85,10 @@ Canonical Schema：
 | `PAGE_CONTEXT_CHANGED` | Tab、URL 或业务上下文变化 | 阻断，重新发起节点 |
 
 Blocking Signal 通过 `command.result.risk_signals` 返回，并将 Result 标记为
-`rejected`。Engine 不自动重试 `rejected`；Workflow 如需人工接管，应显式配置
-`on.rejected` 到 Human Node。
+`rejected`。Engine 不重试、不转入失败路由，也不执行自定义恢复；当前 Run 立即以
+不可恢复的 `rejected` 终态结束。v1alpha1 的拒绝恢复字段已移除；规范化
+`handlers.rejected` 如存在，也只能显式声明一个 `rejected` terminal，不能转到
+Human Node。运营人员处理登录、权限、风控或人工拒绝原因后，应重新发起新的 Run。
 
 ## 5. 分层职责
 
