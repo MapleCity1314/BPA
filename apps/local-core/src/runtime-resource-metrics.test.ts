@@ -44,7 +44,9 @@ describe("Core runtime resource metrics", () => {
         }
       });
       expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(snapshot);
-      expect(statSync(path).mode & 0o777).toBe(0o600);
+      if (process.platform !== "win32") {
+        expect(statSync(path).mode & 0o777).toBe(0o600);
+      }
       expect(Object.keys(snapshot).sort()).toEqual([
         "pid",
         "runtimeIdentity",
