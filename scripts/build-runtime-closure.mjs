@@ -110,6 +110,10 @@ const entryPoints = {
     repositoryRoot,
     "scripts/windows-core-launcher.mjs"
   ),
+  "bpa-core-identity": join(
+    repositoryRoot,
+    "scripts/verify-core-process-identity.mjs"
+  ),
   bpa: join(repositoryRoot, "apps/cli/src/main.ts"),
   "bpa-console-host": join(
     repositoryRoot,
@@ -391,6 +395,28 @@ if (
       extensionManifest.version_name ?? extensionManifest.version
     )}`
   );
+}
+if (targetPlatform === "darwin") {
+  const wrapperTargets = {
+    bpa: "bpa.js",
+    "bpa-core": "bpa-core.js",
+    "bpa-native-host": "bpa-native-host.js",
+    "bpa-mcp": "bpa-mcp.js"
+  };
+  for (const [name, target] of Object.entries(wrapperTargets)) {
+    const wrapperPath = join(outputRoot, "bin", name);
+    await writeFile(
+      wrapperPath,
+      `#!/bin/zsh
+set -euo pipefail
+SCRIPT_ROOT="\${0:A:h}"
+VERSION_ROOT="\${SCRIPT_ROOT:h}"
+export BPA_RUNTIME_ID="${release.identity}"
+exec "\$VERSION_ROOT/node/bin/node" "\$VERSION_ROOT/bin/${target}" "\$@"
+`
+    );
+    await chmod(wrapperPath, 0o755);
+  }
 }
 const migrationSource = await readFile(
   join(repositoryRoot, "packages/persistence-sqlite/src/migrations.ts"),

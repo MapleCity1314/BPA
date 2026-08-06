@@ -14,7 +14,7 @@
   复制一个会随提交立刻过期的哈希。该分支尚未合并或明确放弃，因此阶段 0 的 Git
   收敛门禁仍未完成。
 - 验证基线：固定 Node `24.18.0` 下 `pnpm verify` 通过，macOS、Windows、性能与发布
-  闭包 CI 全绿。本轮完整门禁为 124 个测试文件、763 项测试全绿，文档 Catalog 80 条
+  闭包 CI 全绿。本轮完整门禁为 125 个测试文件、764 项测试全绿，文档 Catalog 80 条
   有效，Astro 0 诊断。
 - 生产原则：库存公司业务不中断；任何运行中进程、状态、schedule 或有效 lease 存在
   时，只观察，不重启、不叠加触发。
@@ -86,9 +86,12 @@ mode `0600` 的原子白名单快照；采集器只复制通过 schema 校验的
 socket、CLI、Team Worker 与 Extension E2E；这证明交付物包含该能力，但不等于已部署。
 
 当前生产 sampler 是旧窗口，不能追溯补入 page cache；必须在受保护的预编译 Core
-切换完成后开启新采样窗口。并且现有 macOS installer 仍会在 manifest 验证后生成未被
-哈希的 wrapper，首次源码 Core 回滚也不完整，所以生产切换仍被阻断。阶段 0 保持
-未完成，不得把隔离测试或旧窗口写成生产 page cache 曲线。
+切换完成后开启新采样窗口。macOS launcher 已改为闭包构建期生成并纳入 manifest，
+固定写入 release identity；installer 在停止旧 Core 前核对 lock PID、可执行文件、
+entrypoint 与 live command，启动新 Core 后再次核对精确 release，并为首次切换备份和
+恢复原 launchd plist 与 Native Host manifest。生产切换仍被 maintenance fencing、
+正式 `core.env` 归位和 source-to-closure 故障注入 E2E 阻断。阶段 0 保持未完成，不得
+把隔离测试或旧窗口写成生产 page cache 曲线。
 
 库存生产侧新增只读 readiness 判定器，统一核对 host/PostgreSQL 时钟、launchd PID、
 原子状态文件、全表 running schedule/collection、有效 PostgreSQL 与 Browser Control

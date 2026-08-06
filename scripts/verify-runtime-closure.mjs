@@ -75,12 +75,17 @@ const wrapperFiles = [
   `bin/bpa-native-host${wrapperSuffix}`,
   `bin/bpa-mcp${wrapperSuffix}`
 ];
+const manifestWrapperFiles =
+  release.platform === "darwin" ? wrapperFiles : [];
+const externalWrapperFiles =
+  release.platform === "win32" ? wrapperFiles : [];
 const requiredFiles = [
   nodeExecutable,
   "bin/bpa.js",
   "bin/bpa-console-host.js",
   "bin/bpa-core.js",
   "bin/bpa-core-launcher.js",
+  "bin/bpa-core-identity.js",
   "bin/bpa-native-host.js",
   "bin/bpa-mcp.js",
   "bin/bpa-team-worker.js",
@@ -102,6 +107,7 @@ const requiredFiles = [
   "extension/manifest.json",
   "console/index.html"
 ];
+requiredFiles.push(...manifestWrapperFiles);
 if (manifest.sqliteObservability.status === "available") {
   requiredFiles.push(manifest.sqliteObservability.path);
 }
@@ -110,10 +116,10 @@ if (release.platform === "win32") {
 }
 const expected = new Set([
   "runtime-manifest.json",
-  ...wrapperFiles,
+  ...externalWrapperFiles,
   ...manifest.files.map((file) => String(file.path))
 ]);
-if (expected.size !== manifest.files.length + 5) {
+if (expected.size !== manifest.files.length + 1 + externalWrapperFiles.length) {
   throw new Error("Runtime manifest contains duplicate file paths");
 }
 const actual = await collect(root);
@@ -125,7 +131,7 @@ for (const path of actual) {
 for (const path of expected) {
   if (
     !actual.includes(path) &&
-    !wrapperFiles.includes(path)
+    !externalWrapperFiles.includes(path)
   ) {
     throw new Error(`Runtime closure file is missing: ${path}`);
   }
@@ -169,6 +175,17 @@ if (totalBytes !== manifest.totalBytes) {
 for (const required of requiredFiles) {
   if (!manifest.files.some((file) => file.path === required)) {
     throw new Error(`Runtime manifest omits required file: ${required}`);
+  }
+}
+if (release.platform === "darwin") {
+  for (const wrapper of wrapperFiles) {
+    const source = await readFile(join(root, wrapper), "utf8");
+    if (
+      !source.includes(`export BPA_RUNTIME_ID="${release.identity}"`) ||
+      !source.includes('VERSION_ROOT="${SCRIPT_ROOT:h}"')
+    ) {
+      throw new Error(`Runtime wrapper identity is invalid: ${wrapper}`);
+    }
   }
 }
 if (sensitiveFindings.length > 0) {

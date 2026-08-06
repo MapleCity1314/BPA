@@ -147,6 +147,52 @@ for (const required of [
   }
 }
 
+const [macosInstall, closureBuilder, closureVerifier] = await Promise.all([
+  readFile(join(scriptsRoot, "install-macos-arm64.sh"), "utf8"),
+  readFile(join(scriptsRoot, "build-runtime-closure.mjs"), "utf8"),
+  readFile(join(scriptsRoot, "verify-runtime-closure.mjs"), "utf8")
+]);
+if (macosInstall.includes('cat > "$STAGING_ROOT/bin/bpa-core"')) {
+  throw new Error("macOS installer must not generate unverified runtime wrappers");
+}
+for (const required of [
+  '"$PACKAGED_RUNTIME/bin/bpa-core-identity.js"',
+  '"$VERSION_ROOT/bin/bpa-core-identity.js"',
+  '--identity "$VERSION"',
+  '--entrypoint "$VERSION_ROOT/bin/bpa-core.js"'
+]) {
+  if (!macosInstall.includes(required)) {
+    throw new Error(`macOS Core process identity gate is missing ${required}`);
+  }
+}
+for (const required of [
+  "AGENT_BACKUP=",
+  "HOST_MANIFEST_BACKUP=",
+  'cp "$AGENT_BACKUP" "$LAUNCH_AGENT"',
+  'cp "$HOST_MANIFEST_BACKUP" "$HOST_MANIFEST"'
+]) {
+  if (!macosInstall.includes(required)) {
+    throw new Error(`macOS first-cutover rollback is missing ${required}`);
+  }
+}
+for (const required of [
+  'export BPA_RUNTIME_ID="${release.identity}"',
+  'VERSION_ROOT="\\${SCRIPT_ROOT:h}"',
+  "await chmod(wrapperPath, 0o755)"
+]) {
+  if (!closureBuilder.includes(required)) {
+    throw new Error(`macOS hashed Runtime wrapper is missing ${required}`);
+  }
+}
+for (const required of [
+  "requiredFiles.push(...manifestWrapperFiles)",
+  "Runtime wrapper identity is invalid"
+]) {
+  if (!closureVerifier.includes(required)) {
+    throw new Error(`macOS wrapper verification is missing ${required}`);
+  }
+}
+
 process.stdout.write(
   `Verified ${shellScripts.length} shell and ${powerShellScripts.length} PowerShell scripts.\n`
 );
