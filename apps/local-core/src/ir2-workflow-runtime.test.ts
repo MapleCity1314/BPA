@@ -131,7 +131,7 @@ function plan(
           succeeded: "done",
           failed: "failed",
           timed_out: "failed",
-          rejected: "failed",
+          rejected: "rejected",
           cancelled: "failed",
           uncertain: "uncertain"
         }
@@ -142,6 +142,11 @@ function plan(
         key: "failed",
         status: "failed",
         errorCode: "CALL_FAILED"
+      },
+      rejected: {
+        kind: "terminal",
+        key: "rejected",
+        status: "rejected"
       },
       uncertain: {
         kind: "terminal",
@@ -485,7 +490,7 @@ describe("Local Core IR2 runtime", () => {
         retryable: false
       }
     });
-    expect(persistence.getRun(run.id)).toMatchObject({ status: "failed" });
+    expect(persistence.getRun(run.id)).toMatchObject({ status: "rejected" });
     persistence.close();
   });
 
@@ -566,7 +571,7 @@ describe("Local Core IR2 runtime", () => {
           retryable: false
         }
       });
-      expect(persistence.getRun(run.id)).toMatchObject({ status: "failed" });
+      expect(persistence.getRun(run.id)).toMatchObject({ status: "rejected" });
       persistence.close();
     }
   );

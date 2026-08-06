@@ -176,7 +176,7 @@ export interface AssistanceStep {
 export interface TerminalStep {
   key: StepKey;
   kind: "terminal";
-  status: "succeeded" | "failed" | "cancelled" | "uncertain";
+  status: "succeeded" | "rejected" | "failed" | "cancelled" | "uncertain";
   output?: SafeValue;
   error?: {
     code: string;

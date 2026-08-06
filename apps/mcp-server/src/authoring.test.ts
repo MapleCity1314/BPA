@@ -87,9 +87,11 @@ describe("MCP authoring helpers", () => {
     expect(result.workflow.spec.nodes.step_1?.on).toMatchObject({
       failure: "fail",
       timeout: "fail",
-      rejected: "fail",
       cancelled: "fail"
     });
+    expect(result.workflow.spec.nodes.step_1?.on).not.toHaveProperty(
+      "rejected"
+    );
     expect(result.workflow.spec.nodes.step_1?.on?.uncertain).toBeUndefined();
     expect(result.workflow.spec.nodes.fail?.use).toBe("control.fail@1.0.0");
   });

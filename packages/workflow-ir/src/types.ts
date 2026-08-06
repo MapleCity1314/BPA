@@ -152,7 +152,6 @@ export interface ResolvedRetryPolicy {
   readonly retryableOutcomes: readonly (
     | "failed"
     | "timed_out"
-    | "rejected"
   )[];
   readonly retryableErrorCodes: readonly string[];
   readonly backoff: {
@@ -435,6 +434,7 @@ export interface TerminalStep extends StepBase {
    */
   readonly status:
     | "succeeded"
+    | "rejected"
     | "failed"
     | "unresolved"
     | "cancelled"

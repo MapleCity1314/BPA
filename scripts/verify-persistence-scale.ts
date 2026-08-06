@@ -107,7 +107,9 @@ try {
 
   const activeRunSql = `
     SELECT id FROM workflow_runs
-    WHERE status NOT IN ('succeeded', 'failed', 'cancelled', 'uncertain')
+    WHERE status NOT IN (
+      'succeeded', 'rejected', 'failed', 'cancelled', 'uncertain'
+    )
     ORDER BY updated_at LIMIT ?
   `;
   const eventSql = `

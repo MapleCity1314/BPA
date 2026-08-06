@@ -1265,5 +1265,16 @@ export const migrations: Migration[] = [
         ON gateway_commands(command_seq, node_execution_id)
         WHERE state = 'terminal' AND result_json IS NOT NULL;
     `
+  },
+  {
+    version: 14,
+    sql: `
+      DROP INDEX workflow_runs_active_updated;
+      CREATE INDEX workflow_runs_active_updated
+        ON workflow_runs(status, updated_at)
+        WHERE status NOT IN (
+          'succeeded', 'rejected', 'failed', 'cancelled', 'uncertain'
+        );
+    `
   }
 ];

@@ -43,7 +43,6 @@ export interface TransitionMap {
   success?: NodeKey;
   failure?: NodeKey;
   timeout?: NodeKey;
-  rejected?: NodeKey;
   cancelled?: NodeKey;
   uncertain?: NodeKey;
 }

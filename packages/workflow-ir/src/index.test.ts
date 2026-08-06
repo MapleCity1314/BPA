@@ -150,7 +150,7 @@ function validPlan(): ExecutionPlan {
     ],
     limits: {
       maxDepth: 3,
-      maxStepExecutions: 30
+      maxStepExecutions: 33
     },
     entry: "collect",
     steps: {
@@ -159,7 +159,7 @@ function validPlan(): ExecutionPlan {
           succeeded: "review",
           failed: "failed",
           timed_out: "failed",
-          rejected: "failed",
+          rejected: "rejected",
           cancelled: "cancelled",
           uncertain: "uncertain"
         }),
@@ -202,7 +202,7 @@ function validPlan(): ExecutionPlan {
           maxItems: 5,
           maxDurationMs: 120_000,
           maxDepth: 1,
-          maxStepExecutions: 20
+          maxStepExecutions: 25
         },
         onItemError: "collect",
         body: {
@@ -213,7 +213,7 @@ function validPlan(): ExecutionPlan {
                 succeeded: "item-succeeded",
                 failed: "item-failed",
                 timed_out: "item-failed",
-                rejected: "item-failed",
+                rejected: "item-rejected",
                 cancelled: "item-failed",
                 uncertain: "item-uncertain"
               })
@@ -228,6 +228,11 @@ function validPlan(): ExecutionPlan {
               key: "item-failed",
               status: "failed",
               errorCode: "ITEM_FAILED"
+            },
+            "item-rejected": {
+              kind: "terminal",
+              key: "item-rejected",
+              status: "rejected"
             },
             "item-uncertain": {
               kind: "terminal",
@@ -261,6 +266,11 @@ function validPlan(): ExecutionPlan {
         key: "failed",
         status: "failed",
         errorCode: "WORKFLOW_FAILED"
+      },
+      rejected: {
+        kind: "terminal",
+        key: "rejected",
+        status: "rejected"
       },
       cancelled: {
         kind: "terminal",
@@ -346,6 +356,7 @@ describe("execution plan", () => {
       "done",
       "failed",
       "items",
+      "rejected",
       "review",
       "uncertain"
     ]);
@@ -368,8 +379,24 @@ describe("execution plan", () => {
     const plan = createExecutionPlan(validPlan());
     expect(executionPlanIssues(plan)).toEqual([]);
     expect(estimateMaxDepth(plan)).toBe(1);
-    // Seven top-level steps plus five possible four-step item executions.
-    expect(estimateMaxStepExecutions(plan)).toBe(27n);
+    // Eight top-level steps plus five possible five-step item executions.
+    expect(estimateMaxStepExecutions(plan)).toBe(33n);
+  });
+
+  it("requires rejected calls to target a rejected terminal directly", () => {
+    const plan = mutablePlan();
+    const collect = plan.steps.collect;
+    if (collect?.kind !== "call") throw new Error("test fixture changed");
+    collect.routes.rejected = "failed";
+
+    expect(executionPlanIssues(plan)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "INVALID_STEP",
+          path: "/steps/collect/routes/rejected"
+        })
+      ])
+    );
   });
 
   it("rejects call assets that are not in the immutable closure", () => {
@@ -398,7 +425,7 @@ describe("execution plan", () => {
         succeeded: "collect",
         failed: "failed",
         timed_out: "failed",
-        rejected: "failed",
+        rejected: "rejected",
         cancelled: "cancelled",
         uncertain: "uncertain"
       })

@@ -86,7 +86,7 @@ function planWithForeach(count = 2): ExecutionPlan {
     succeeded: "item_ok",
     failed: "item_failed",
     timed_out: "item_failed",
-    rejected: "item_failed",
+    rejected: "item_rejected",
     cancelled: "item_failed",
     uncertain: "item_uncertain"
   };
@@ -120,6 +120,11 @@ function planWithForeach(count = 2): ExecutionPlan {
           key: "item_failed",
           status: "failed",
           errorCode: "ITEM_FAILED"
+        },
+        item_rejected: {
+          kind: "terminal",
+          key: "item_rejected",
+          status: "rejected"
         },
         item_uncertain: {
           kind: "terminal",
@@ -645,6 +650,46 @@ describe("deterministic IR2 engine", () => {
     expect(stopped.state.status).toBe("uncertain");
     expect(stopped.effects).toEqual([]);
     expect(stopped.state.cursor).toBeUndefined();
+  });
+
+  it("stops immediately on rejected outcomes without weakening the reason", () => {
+    const engine = new DeterministicWorkflowEngine(
+      planWithForeach(),
+      dependencies()
+    );
+    const waiting = engine.start("run-rejected", {
+      items: [{ id: "a" }]
+    });
+    const active = waiting.state.active;
+    if (active?.kind !== "call") throw new Error("fixture changed");
+    const stopped = engine.acceptRuntimeOutcome({
+      state: waiting.state,
+      invocationId: active.invocation.invocationId,
+      fencingToken: 1,
+      outcome: {
+        status: "rejected",
+        error: {
+          code: "CAPTCHA_REQUIRED",
+          message: "Human verification required.",
+          retryable: false
+        },
+        evidence: [],
+        riskSignals: []
+      }
+    });
+    expect(stopped).toMatchObject({
+      effects: [],
+      state: {
+        status: "rejected",
+        cursor: undefined,
+        active: undefined,
+        error: {
+          code: "CAPTCHA_REQUIRED",
+          message: "Human verification required."
+        }
+      }
+    });
+    expect(engine.cancel(stopped.state).disposition).toBe("stale");
   });
 
   it("pauses only for blocking assistance and resumes by explicit route", () => {

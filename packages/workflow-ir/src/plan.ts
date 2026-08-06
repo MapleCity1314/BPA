@@ -628,7 +628,7 @@ function retryPolicyIssues(
       )
     );
   }
-  const allowedOutcomes = new Set(["failed", "timed_out", "rejected"]);
+  const allowedOutcomes = new Set(["failed", "timed_out"]);
   const seenOutcomes = new Set<string>();
   retry.retryableOutcomes.forEach((outcome, index) => {
     if (!allowedOutcomes.has(outcome) || seenOutcomes.has(outcome)) {
@@ -636,7 +636,7 @@ function retryPolicyIssues(
         issue(
           "INVALID_VALUE",
           `${path}/retryableOutcomes/${index}`,
-          "retryable outcomes must be unique failed, timed_out or rejected values"
+          "retryable outcomes must be unique failed or timed_out values"
         )
       );
     }
@@ -1368,6 +1368,19 @@ function blockIssues(
               closedDigest
                 ? `node digest does not match closed digest "${closedDigest}"`
                 : "node is absent from the artifact closure"
+            )
+          );
+        }
+        const rejectedTarget = block.steps[step.routes.rejected];
+        if (
+          rejectedTarget?.kind !== "terminal" ||
+          rejectedTarget.status !== "rejected"
+        ) {
+          issues.push(
+            issue(
+              "INVALID_STEP",
+              `${stepPath}/routes/rejected`,
+              "call rejected must directly target a rejected terminal"
             )
           );
         }

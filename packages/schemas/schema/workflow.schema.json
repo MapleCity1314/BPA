@@ -72,7 +72,6 @@
         "success": { "$ref": "#/$defs/nodeKey" },
         "failure": { "$ref": "#/$defs/nodeKey" },
         "timeout": { "$ref": "#/$defs/nodeKey" },
-        "rejected": { "$ref": "#/$defs/nodeKey" },
         "cancelled": { "$ref": "#/$defs/nodeKey" },
         "uncertain": { "$ref": "#/$defs/nodeKey" }
       }

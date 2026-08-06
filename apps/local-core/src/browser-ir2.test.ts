@@ -100,7 +100,7 @@ function plan(node: NodeDefinition): ExecutionPlan {
           succeeded: "done",
           failed: "failed",
           timed_out: "failed",
-          rejected: "failed",
+          rejected: "rejected",
           cancelled: "failed",
           uncertain: "uncertain"
         }
@@ -111,6 +111,11 @@ function plan(node: NodeDefinition): ExecutionPlan {
         key: "failed",
         status: "failed",
         errorCode: "BROWSER_FAILED"
+      },
+      rejected: {
+        kind: "terminal",
+        key: "rejected",
+        status: "rejected"
       },
       uncertain: {
         kind: "terminal",

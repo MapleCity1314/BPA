@@ -665,7 +665,7 @@ describe("local browser gateway", () => {
       }
     });
     await riskDrain;
-    expect(persistence.getRun(riskRunId)?.status).toBe("uncertain");
+    expect(persistence.getRun(riskRunId)?.status).toBe("rejected");
     expect(
       persistence
         .listEvents(riskRunId)

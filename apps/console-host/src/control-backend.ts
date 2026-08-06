@@ -187,6 +187,7 @@ function mapRunStatus(value: unknown): RunView["status"] {
     case "queued":
     case "running":
     case "succeeded":
+    case "rejected":
     case "failed":
     case "uncertain":
     case "cancelled":
@@ -205,6 +206,7 @@ const eventTitles: Record<string, string> = {
   NODE_SUCCEEDED: "检查步骤已完成",
   NODE_FAILED: "检查步骤未完成",
   RUN_SUCCEEDED: "任务已完成",
+  RUN_REJECTED: "任务已被安全阻断",
   RUN_FAILED: "任务执行失败",
   RUN_UNCERTAIN: "任务需要复核",
   RUN_CANCELLED: "任务已取消"
@@ -570,14 +572,18 @@ export class UdsControlBackend implements ControlBackend {
             ? "任务已完成，可在报告与资产中查看结果。"
             : status === "waiting"
               ? "任务已安全暂停，请查看任务中心。"
-              : status === "failed" || status === "uncertain"
+              : status === "rejected" ||
+                  status === "failed" ||
+                  status === "uncertain"
                 ? "任务没有确定完成，请按提示复核。"
                 : currentNode
                   ? `正在执行：${currentNode}`
                   : "任务正在准备执行。",
         startedAt,
         ...(typeof run.updatedAt === "string" &&
-        ["succeeded", "failed", "uncertain", "cancelled"].includes(status)
+        ["succeeded", "rejected", "failed", "uncertain", "cancelled"].includes(
+          status
+        )
           ? { completedAt: safeTimestamp(run.updatedAt, startedAt) }
           : {}),
         timeline: records(eventValue).map((event) =>

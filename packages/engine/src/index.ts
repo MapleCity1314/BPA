@@ -95,6 +95,7 @@ export type EngineStatus =
   | "waiting_runtime"
   | "waiting_assistance"
   | "succeeded"
+  | "rejected"
   | "failed"
   | "cancelled"
   | "uncertain";
@@ -541,17 +542,22 @@ function completeItem(
   terminal: TerminalStep,
   deps: EngineDependencies
 ): EngineTransition {
-  if (terminal.status === "uncertain") {
+  if (terminal.status === "rejected" || terminal.status === "uncertain") {
+    const rejected = terminal.status === "rejected";
     return {
       state: immutableState(
         {
           ...state,
-          status: "uncertain",
+          status: terminal.status,
           cursor: undefined,
           active: undefined,
           error: {
-            code: terminal.errorCode ?? "ITEM_UNCERTAIN",
-            message: "An item outcome is uncertain."
+            code:
+              terminal.errorCode ??
+              (rejected ? "ITEM_REJECTED" : "ITEM_UNCERTAIN"),
+            message: rejected
+              ? "An item outcome was rejected."
+              : "An item outcome is uncertain."
           }
         },
         state.revision
@@ -890,11 +896,18 @@ function drive(
           cursor: undefined,
           active: undefined,
           output,
-          ...(step.status === "failed"
+          ...(["rejected", "failed"].includes(step.status)
             ? {
                 error: {
-                  code: step.errorCode ?? "WORKFLOW_FAILED",
-                  message: "Workflow reached a failed terminal."
+                  code:
+                    step.errorCode ??
+                    (step.status === "rejected"
+                      ? "WORKFLOW_REJECTED"
+                      : "WORKFLOW_FAILED"),
+                  message:
+                    step.status === "rejected"
+                      ? "Workflow reached a rejected terminal."
+                      : "Workflow reached a failed terminal."
                 }
               }
             : {})
@@ -949,7 +962,11 @@ export class DeterministicWorkflowEngine {
     if (state.status === "cancelled") {
       return { state, effects: [], disposition: "duplicate" };
     }
-    if (["succeeded", "failed", "uncertain"].includes(state.status)) {
+    if (
+      ["succeeded", "rejected", "failed", "uncertain"].includes(
+        state.status
+      )
+    ) {
       return { state, effects: [], disposition: "stale" };
     }
     const externalId =
@@ -1007,12 +1024,15 @@ export class DeterministicWorkflowEngine {
       ...state.completedExternalIds,
       input.invocationId
     ];
-    if (input.outcome.status === "uncertain") {
+    if (
+      input.outcome.status === "rejected" ||
+      input.outcome.status === "uncertain"
+    ) {
       return {
         state: immutableState(
           {
             ...state,
-            status: "uncertain",
+            status: input.outcome.status,
             cursor: undefined,
             active: undefined,
             completedExternalIds,

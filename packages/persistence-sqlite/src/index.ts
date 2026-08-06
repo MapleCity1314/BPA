@@ -5133,7 +5133,13 @@ export class SqlitePersistence implements Persistence {
     return this.#db.transaction(() => {
       const run = this.getRun(runId);
       if (!run) throw new Error(`Run not found: ${runId}`);
-      if (["succeeded", "failed", "cancelled"].includes(run.status)) return run;
+      if (
+        ["succeeded", "rejected", "failed", "cancelled", "uncertain"].includes(
+          run.status
+        )
+      ) {
+        return run;
+      }
       const occurredAt = now();
       const result = this.#db
         .prepare(

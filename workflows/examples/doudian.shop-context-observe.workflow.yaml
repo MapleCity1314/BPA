@@ -73,7 +73,7 @@ spec:
             steps:
               - key: observe_blocked
                 kind: terminal
-                status: uncertain
+                status: rejected
                 error:
                   code: DOUDIAN_SHOP_CONTEXT_BLOCKED
                   message: 登录、验证码、风控或页面身份阻断了读取。

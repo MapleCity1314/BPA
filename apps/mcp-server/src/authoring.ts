@@ -152,7 +152,6 @@ export function generateWorkflowDraft(
       on: {
         failure: "fail",
         timeout: "fail",
-        rejected: "fail",
         cancelled: "fail"
       }
     };
