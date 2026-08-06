@@ -11,6 +11,8 @@ set -a
 set +a
 : "${BPA_NODE_BIN:?BPA_NODE_BIN is required}"
 : "${BPA_REPOSITORY_ROOT:?BPA_REPOSITORY_ROOT is required}"
+. "$BPA_REPOSITORY_ROOT/apps/inventory-monitor/deploy/production-layout.sh"
+bpa_assert_production_root
 test "$("$BPA_NODE_BIN" --version)" = "v24.18.0"
 cd "$BPA_REPOSITORY_ROOT"
 
@@ -23,6 +25,14 @@ case "$component" in
     ;;
   scheduler)
     exec "$BPA_NODE_BIN" --import tsx apps/inventory-monitor/src/scheduler-main.ts
+    ;;
+  feishu-report)
+    export BPA_FEISHU_REPORT_KIND=daily
+    exec "$BPA_NODE_BIN" --import tsx apps/inventory-monitor/src/feishu-report-main.ts
+    ;;
+  feishu-alert)
+    export BPA_FEISHU_REPORT_KIND=alert
+    exec "$BPA_NODE_BIN" --import tsx apps/inventory-monitor/src/feishu-report-main.ts
     ;;
   migrate)
     exec "$BPA_NODE_BIN" --import tsx apps/inventory-monitor/src/migrate-main.ts

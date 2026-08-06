@@ -15,4 +15,14 @@ describe("MySQL sales source configuration", () => {
       BPA_MYSQL_DATABASE: "ecom_profit"
     })).toMatchObject({ host: "127.0.0.1", port: 3306, database: "ecom_profit" });
   });
+
+  it("can isolate a high-volume historical backfill without disabling recent demand", () => {
+    expect(mysqlOptionsFromEnvironment({
+      BPA_MYSQL_HOST:"127.0.0.1",
+      BPA_MYSQL_USER:"reader",
+      BPA_MYSQL_PASSWORD:"test",
+      BPA_MYSQL_DATABASE:"ecom_profit",
+      BPA_MYSQL_MANUAL_SKIP_SHOP_IDS:"10461048, 200"
+    })?.manualSkipShopIds).toEqual(["10461048","200"]);
+  });
 });

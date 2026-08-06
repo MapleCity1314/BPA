@@ -114,7 +114,7 @@ describe("balanced inventory risk", () => {
 
   it("suppresses deterministic risk for stale inventory", () => {
     const result = evaluateInventoryRisk({
-      evaluatedAt: "2026-08-02T13:00:00Z",
+      evaluatedAt: "2026-08-02T14:01:00Z",
       envelope,
       forecasts: {},
       channelEstimates: {}
@@ -127,12 +127,12 @@ describe("balanced inventory risk", () => {
     const result = evaluateInventoryRisk({
       evaluatedAt:"2026-08-02T12:00:00Z",envelope,forecasts:{},channelEstimates:{},
       demandQuality:{
-        recentObservedAt:"2026-08-02T10:59:00Z",
+        recentObservedAt:"2026-08-02T09:59:00Z",
         historicalCompleteThrough:"2026-08-01T00:00:00Z"
       }
     });
     expect(result).toMatchObject({ severity:"unknown",findings:[{ kind:"data_quality" }] });
-    expect(result.findings[0]?.reason).toContain("60 minutes");
+    expect(result.findings[0]?.reason).toContain("120 minutes");
   });
 });
 
@@ -148,6 +148,7 @@ describe("incident hysteresis", () => {
     const healthyTwo = transitionIncident(healthyOne, "normal");
     expect(healthyOne.state).toBe("open");
     expect(healthyTwo.state).toBe("resolved");
-    expect(transitionIncident(undefined, "unknown").state).toBe("open");
+    expect(transitionIncident(undefined, "unknown").state).toBe("resolved");
+    expect(transitionIncident(critical, "unknown").state).toBe("resolved");
   });
 });

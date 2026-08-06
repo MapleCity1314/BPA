@@ -42,6 +42,13 @@ export const TEAM_WORKER_HANDLER_MANIFEST = [
     )
   },
   {
+    ref: "inventory.forecast-input.read@1.0.1",
+    implementationDigest: implementationDigest(
+      "inventory.forecast-input.read@1.0.1",
+      "inventory-service-uds:forecast-input:quality-fallback:repeatable-read:v2"
+    )
+  },
+  {
     ref: "inventory.forecast.persist@1.0.0",
     implementationDigest: implementationDigest(
       "inventory.forecast.persist@1.0.0",

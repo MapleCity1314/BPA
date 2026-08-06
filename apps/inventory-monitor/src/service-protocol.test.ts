@@ -45,4 +45,34 @@ describe("inventory service protocol", () => {
       await server.close();
     }
   });
+
+  it("maps each browser-observed shop only to its configured identity", async () => {
+    const repository = {
+      assertLease:vi.fn(async () => undefined),
+      persistSnapshot:vi.fn(async (snapshot: unknown) => ({ snapshot }))
+    };
+    const server = new InventoryServiceProtocol("unused",repository as never,undefined,[
+      { id:"shop-1",name:"一号店" },
+      { id:"shop-2",name:"二号店" }
+    ]);
+    const frame = (shop: { id: string; name: string }) => Buffer.from(JSON.stringify({
+      id:"persist",
+      operation:"inventory.snapshot.persist",
+      input:{
+        lease:{ leaseKey:"inventory-shadow:shop-2",holderId:"holder",fencingToken:1 },
+        snapshot:{
+          status:"complete",snapshotVersion:"1.0.0",observedAt:"2026-08-03T00:00:00.000Z",
+          shop,product:{ id:"12345",title:"商品",totalStock:0 },skus:[],diagnostics:[],formMutations:0
+        }
+      }
+    }));
+    await expect(server.handle(frame({ id:"name:observed",name:"二号店" }))).resolves.toMatchObject({
+      ok:true,id:"persist"
+    });
+    expect(repository.persistSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      shop:{ id:"shop-2",name:"二号店" }
+    }));
+    await expect(server.handle(frame({ id:"name:unknown",name:"未配置店" })))
+      .rejects.toThrow("SHOP_IDENTITY_MISMATCH");
+  });
 });

@@ -2,9 +2,9 @@ apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: inventory.risk.shadow.evaluate
-  version: 1.0.0
-  title: 评估并持久化影子库存风险
-  description: 针对一个已持久化商品快照读取固定订单版本，运行预测、渠道估算和风险规则，只写影子事件与模拟通知数据。
+  version: 1.0.1
+  title: 评估并持久化库存风险
+  description: 针对一个已持久化商品快照读取固定订单版本，运行预测、渠道估算和风险规则，并写入风险事件与提醒预览数据。
 spec:
   riskLevel: R1
   inputSchema:
@@ -24,7 +24,7 @@ spec:
     steps:
       - key: read_forecast_inputs
         kind: call
-        use: inventory.forecast-input.read@1.0.0
+        use: inventory.forecast-input.read@1.0.1
         with:
           shopId: ${input.envelope.scope.shopId}
           productId: ${input.envelope.facts.productId}

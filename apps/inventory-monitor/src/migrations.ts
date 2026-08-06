@@ -255,5 +255,49 @@ export const INVENTORY_MIGRATIONS: readonly AppMigration[] = [
       CREATE INDEX IF NOT EXISTS order_line_fact_period_end_idx
         ON source.order_line_fact(shop_id,source_period_end DESC);
     `
+  },
+  {
+    version: 4,
+    name: "inventory-production-cycle-v2",
+    sql: `
+      CREATE TABLE ops.collection_run (
+        collection_run_id text PRIMARY KEY,
+        trigger_kind text NOT NULL CHECK(trigger_kind IN ('manual','schedule','recovery')),
+        status text NOT NULL CHECK(status IN (
+          'running','succeeded','partial','blocked','degraded','failed','skipped'
+        )),
+        browser_instance_id text NOT NULL,
+        fencing_token bigint NOT NULL CHECK(fencing_token >= 1),
+        shop_count integer NOT NULL CHECK(shop_count >= 0),
+        completed_shop_count integer NOT NULL DEFAULT 0 CHECK(completed_shop_count >= 0),
+        summary jsonb NOT NULL DEFAULT '{}'::jsonb,
+        diagnostics jsonb NOT NULL DEFAULT '[]'::jsonb,
+        started_at timestamptz NOT NULL DEFAULT now(),
+        completed_at timestamptz
+      );
+      CREATE INDEX collection_run_recent_idx
+        ON ops.collection_run(started_at DESC);
+
+      CREATE TABLE ops.collection_step (
+        collection_run_id text NOT NULL REFERENCES ops.collection_run(collection_run_id) ON DELETE RESTRICT,
+        shop_id text NOT NULL,
+        shop_name text NOT NULL,
+        component text NOT NULL CHECK(component IN ('canary','orders','inventory','risk')),
+        status text NOT NULL CHECK(status IN (
+          'running','succeeded','fresh_reused','partial','blocked','degraded','failed','skipped'
+        )),
+        attempted integer NOT NULL DEFAULT 0 CHECK(attempted >= 0),
+        persisted integer NOT NULL DEFAULT 0 CHECK(persisted >= 0),
+        failed integer NOT NULL DEFAULT 0 CHECK(failed >= 0),
+        coverage numeric(7,6) CHECK(coverage IS NULL OR (coverage >= 0 AND coverage <= 1)),
+        diagnostic text,
+        details jsonb NOT NULL DEFAULT '{}'::jsonb,
+        started_at timestamptz NOT NULL DEFAULT now(),
+        completed_at timestamptz,
+        PRIMARY KEY(collection_run_id,shop_id,component)
+      );
+      CREATE INDEX collection_step_shop_recent_idx
+        ON ops.collection_step(shop_id,started_at DESC);
+    `
   }
 ];

@@ -1,6 +1,6 @@
 export const CONTROL_PROTOCOL_VERSION = "bpa.control/1" as const;
 export const CONTROL_HELLO_PROTOCOL_VERSION = "bpa.control/hello/1" as const;
-export const CONTROL_MAX_MESSAGE_BYTES = 512 * 1024;
+export const CONTROL_MAX_MESSAGE_BYTES = 1024 * 1024;
 export const CONTROL_MIN_NEGOTIATED_FRAME_BYTES = 4 * 1024;
 
 export interface ControlRuntimeIdentity {

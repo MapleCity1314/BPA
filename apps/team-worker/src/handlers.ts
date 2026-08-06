@@ -92,6 +92,7 @@ export const SALES_DEMAND_SYNC_HANDLER_REF = "ecom.sales-demand.sync@1.0.0";
 export const SALES_DEMAND_RECENT_PERSIST_HANDLER_REF = "ecom.sales-demand.recent.persist@1.0.0";
 export const INVENTORY_SNAPSHOT_PERSIST_HANDLER_REF = "inventory.snapshot.persist@1.0.0";
 export const INVENTORY_FORECAST_INPUT_READ_HANDLER_REF = "inventory.forecast-input.read@1.0.0";
+export const INVENTORY_FORECAST_INPUT_READ_V101_HANDLER_REF = "inventory.forecast-input.read@1.0.1";
 export const INVENTORY_FORECAST_PERSIST_HANDLER_REF = "inventory.forecast.persist@1.0.0";
 export const INVENTORY_RISK_PERSIST_HANDLER_REF = "inventory.risk.persist@1.0.0";
 export const INVENTORY_SHADOW_PRODUCT_COMPUTE_HANDLER_REF = "inventory.shadow.product.compute@1.0.0";
@@ -270,6 +271,18 @@ export const teamHandlerRegistry = new TeamHandlerRegistry([
   {
     node: { id: "inventory.forecast-input.read", version: "1.0.0" },
     implementationDigest: manifestDigest(INVENTORY_FORECAST_INPUT_READ_HANDLER_REF),
+    invoke(input, signal) {
+      const candidate = inputObject(input, "Inventory forecast input read");
+      return invokeInventoryService("inventory.forecast-input.read", {
+        shopId: boundedString(candidate.shopId, "shopId", 200),
+        productId: boundedString(candidate.productId, "productId", 200),
+        asOf: boundedString(candidate.asOf, "asOf", 100)
+      }, signal);
+    }
+  },
+  {
+    node: { id: "inventory.forecast-input.read", version: "1.0.1" },
+    implementationDigest: manifestDigest(INVENTORY_FORECAST_INPUT_READ_V101_HANDLER_REF),
     invoke(input, signal) {
       const candidate = inputObject(input, "Inventory forecast input read");
       return invokeInventoryService("inventory.forecast-input.read", {

@@ -63,13 +63,28 @@ function response(socket: Socket, value: unknown): void {
 
 export class InventoryServiceProtocol {
   #server: Server | undefined;
+  readonly configuredShops: readonly { readonly id: string; readonly name: string }[];
 
   constructor(
     readonly socketPath: string,
     readonly repository: InventoryRepository,
     readonly salesSync?: MysqlSalesDemandSync,
-    readonly configuredShop?: { readonly id: string; readonly name: string }
-  ) {}
+    configuredShops?:
+      | { readonly id: string; readonly name: string }
+      | readonly { readonly id: string; readonly name: string }[]
+  ) {
+    this.configuredShops = configuredShops
+      ? (Array.isArray(configuredShops) ? configuredShops : [configuredShops])
+      : [];
+  }
+
+  private configuredShop(id: string, name: string): { readonly id: string; readonly name: string } {
+    const exact = this.configuredShops.find((shop) => shop.id === id && shop.name === name);
+    if (exact) return exact;
+    const byName = this.configuredShops.filter((shop) => shop.name === name);
+    if (byName.length === 1 && id.startsWith("name:")) return byName[0]!;
+    throw new Error("SHOP_IDENTITY_MISMATCH");
+  }
 
   async start(): Promise<void> {
     if (this.#server) return;
@@ -179,24 +194,22 @@ export class InventoryServiceProtocol {
       const requestedShop = {
         name:text(input.shopName,"shopName",200),id:text(input.shopId,"shopId",200)
       };
-      if (this.configuredShop && (
-        requestedShop.id !== this.configuredShop.id || requestedShop.name !== this.configuredShop.name
-      )) throw new Error("SHOP_IDENTITY_MISMATCH");
+      this.configuredShop(requestedShop.id, requestedShop.name);
       result = await this.salesSync.sync({
         shopName: requestedShop.name,
         expectedShopId: requestedShop.id,
         lease:writeFence!
       });
     } else if (operation === "inventory.snapshot.persist") {
-      if (!this.configuredShop) throw new Error("SHOP_IDENTITY_NOT_CONFIGURED");
+      if (this.configuredShops.length === 0) throw new Error("SHOP_IDENTITY_NOT_CONFIGURED");
       const snapshot = record(input.snapshot,"snapshot") as unknown as PersistableDoudianSnapshot;
-      if (snapshot.shop.name !== this.configuredShop.name) throw new Error("SHOP_IDENTITY_MISMATCH");
-      result = await this.repository.persistSnapshot({ ...snapshot,shop:this.configuredShop });
+      const configuredShop = this.configuredShop(snapshot.shop.id, snapshot.shop.name);
+      result = await this.repository.persistSnapshot({ ...snapshot,shop:configuredShop });
     } else if (operation === "sales-demand.recent.persist") {
-      if (!this.configuredShop) throw new Error("SHOP_IDENTITY_NOT_CONFIGURED");
+      if (this.configuredShops.length === 0) throw new Error("SHOP_IDENTITY_NOT_CONFIGURED");
       const snapshot = record(input.snapshot,"snapshot") as unknown as PersistableRecentOrders;
-      if (snapshot.shop.name !== this.configuredShop.name) throw new Error("SHOP_IDENTITY_MISMATCH");
-      result = await this.repository.persistRecentOrders({ ...snapshot,shop:this.configuredShop });
+      const configuredShop = this.configuredShop(snapshot.shop.id, snapshot.shop.name);
+      result = await this.repository.persistRecentOrders({ ...snapshot,shop:configuredShop });
     } else if (operation === "inventory.forecast-input.read") {
       result = await this.repository.forecastInputs({
         shopId: text(input.shopId, "shopId", 200),

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { parsePackagingDataset } from "./index.js";
 
 const workbookPath =
-  "/Users/yibazhua/Documents/重点项检查插件/outputs/feishu_export_20260723/产品索引_产品包装版本_2026-07-23.xlsx";
+  "/Users/yibazhua/Documents/02-internal-systems/重点项检查插件/outputs/feishu_export_20260723/产品索引_产品包装版本_2026-07-23.xlsx";
 
 function xmlEscape(value: string): string {
   return value

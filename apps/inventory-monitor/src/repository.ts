@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { inTransaction, row } from "@bpa/app-postgres";
 import {
   factDigest,
+  INVENTORY_DATA_VALIDITY_MINUTES,
   INVENTORY_FACT_SCHEMA_VERSION,
   transitionIncident,
   type DemandForecast,
@@ -9,9 +10,14 @@ import {
   type IncidentProjection,
   type InventoryProductFact,
   type InventoryRiskEvaluation,
+  type MappingConfidence,
   type RiskFinding
 } from "@bpa/inventory-domain";
 import type { Pool, PoolClient } from "pg";
+import {
+  buildOperationalReminders,
+  buildStoreDemandBacktest
+} from "./dashboard-analytics.js";
 
 export interface PersistableDoudianSnapshot {
   readonly snapshotVersion: string;
@@ -154,6 +160,91 @@ export class InventoryRepository {
        VALUES ($1,'inventory-monitor','inventory.configuration.observe','configuration',$2,$3)
        ON CONFLICT(event_id) DO NOTHING`,
       [`config:${digest.slice(7,39)}`,digest,JSON.stringify(details)]
+    );
+  }
+
+  async recentOrderFreshness(shopId: string): Promise<{
+    observedAt?: string;
+    ageMinutes?: number;
+    fresh: boolean;
+  }> {
+    const result = await this.pool.query<{ observed_at: Date; age_minutes: string }>(
+      `SELECT observed_at,
+              extract(epoch FROM (now()-observed_at))/60 AS age_minutes
+       FROM dataset.version WHERE dataset_id=$1
+       ORDER BY observed_at DESC LIMIT 1`,
+      [`sales-demand-recent:${shopId}`]
+    );
+    const latest = result.rows[0];
+    if (!latest) return { fresh:false };
+    const ageMinutes = Math.max(0,Number(latest.age_minutes));
+    return {
+      observedAt:latest.observed_at.toISOString(),ageMinutes,
+      fresh:ageMinutes <= 120
+    };
+  }
+
+  async startCollectionRun(input: {
+    collectionRunId:string;
+    triggerKind:"manual"|"schedule"|"recovery";
+    browserInstanceId:string;
+    fencingToken:number;
+    shopCount:number;
+  }): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO ops.collection_run(
+        collection_run_id,trigger_kind,status,browser_instance_id,fencing_token,shop_count
+      ) VALUES ($1,$2,'running',$3,$4,$5)`,
+      [input.collectionRunId,input.triggerKind,input.browserInstanceId,input.fencingToken,input.shopCount]
+    );
+  }
+
+  async recordCollectionStep(input: {
+    collectionRunId:string;shopId:string;shopName:string;
+    component:"canary"|"orders"|"inventory"|"risk";
+    status:"running"|"succeeded"|"fresh_reused"|"partial"|"blocked"|"degraded"|"failed"|"skipped";
+    attempted?:number;persisted?:number;failed?:number;coverage?:number;
+    diagnostic?:string;details?:Record<string,unknown>;completed?:boolean;
+  }): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO ops.collection_step(
+        collection_run_id,shop_id,shop_name,component,status,attempted,persisted,
+        failed,coverage,diagnostic,details,completed_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,CASE WHEN $12 THEN now() ELSE NULL END)
+      ON CONFLICT(collection_run_id,shop_id,component) DO UPDATE SET
+        status=EXCLUDED.status,attempted=EXCLUDED.attempted,persisted=EXCLUDED.persisted,
+        failed=EXCLUDED.failed,coverage=EXCLUDED.coverage,diagnostic=EXCLUDED.diagnostic,
+        details=EXCLUDED.details,completed_at=EXCLUDED.completed_at`,
+      [input.collectionRunId,input.shopId,input.shopName,input.component,input.status,
+       input.attempted ?? 0,input.persisted ?? 0,input.failed ?? 0,input.coverage ?? null,
+       input.diagnostic ?? null,JSON.stringify(input.details ?? {}),input.completed ?? true]
+    );
+  }
+
+  async updateCollectionProgress(input: {
+    collectionRunId:string;
+    completedShopCount:number;
+  }): Promise<void> {
+    await this.pool.query(
+      `UPDATE ops.collection_run
+       SET completed_shop_count=$2
+       WHERE collection_run_id=$1 AND status='running'`,
+      [input.collectionRunId,input.completedShopCount]
+    );
+  }
+
+  async completeCollectionRun(input: {
+    collectionRunId:string;
+    status:"succeeded"|"partial"|"blocked"|"degraded"|"failed"|"skipped";
+    completedShopCount:number;
+    summary:Record<string,unknown>;
+    diagnostics:readonly string[];
+  }): Promise<void> {
+    await this.pool.query(
+      `UPDATE ops.collection_run SET status=$2,completed_shop_count=$3,summary=$4,
+         diagnostics=$5,completed_at=now() WHERE collection_run_id=$1`,
+      [input.collectionRunId,input.status,input.completedShopCount,
+       JSON.stringify(input.summary),JSON.stringify(input.diagnostics)]
     );
   }
 
@@ -332,6 +423,114 @@ export class InventoryRepository {
     return { snapshotId, envelope: factEnvelope };
   }
 
+  async latestSnapshotFacts(
+    shopId: string,
+    observedAfter: string
+  ): Promise<readonly {
+    snapshotId: string;
+    envelope: FactEnvelope<InventoryProductFact>;
+  }[]> {
+    const snapshots = await this.pool.query<{
+      snapshot_id: string;
+      dataset_id: string;
+      data_version: string;
+      source_digest: string;
+      product_id: string;
+      product_title: string;
+      total_stock: number;
+      observed_at: Date;
+      completeness: string;
+      mapping_confidence: MappingConfidence;
+      diagnostics: unknown;
+    }>(
+      `SELECT DISTINCT ON (product_id)
+         snapshot_id,dataset_id,data_version,source_digest,product_id,product_title,
+         total_stock,observed_at,completeness,mapping_confidence,diagnostics
+       FROM inventory.snapshot
+       WHERE shop_id=$1 AND observed_at >= $2::timestamptz
+       ORDER BY product_id,observed_at DESC`,
+      [shopId,observedAfter]
+    );
+    if (snapshots.rowCount === 0) return [];
+    const snapshotIds = snapshots.rows.map((snapshot) => snapshot.snapshot_id);
+    const skus = await this.pool.query<{
+      snapshot_id: string;
+      platform_sku_id: string;
+      merchant_code: string;
+      current_stock: number;
+      occupied_stock: number;
+      unoccupied_stock: number;
+      channels: unknown;
+    }>(
+      `SELECT ss.snapshot_id,ss.platform_sku_id,ss.merchant_code,
+              ss.current_stock,ss.occupied_stock,ss.unoccupied_stock,
+              COALESCE(jsonb_agg(jsonb_build_object(
+                'channelGoodsId',sc.channel_goods_id,'stock',sc.stock
+              ) ORDER BY sc.channel_goods_id) FILTER (WHERE sc.channel_goods_id IS NOT NULL),'[]'::jsonb) AS channels
+       FROM inventory.snapshot_sku ss
+       LEFT JOIN inventory.snapshot_channel sc
+         ON sc.snapshot_id=ss.snapshot_id AND sc.platform_sku_id=ss.platform_sku_id
+       WHERE ss.snapshot_id=ANY($1::text[])
+       GROUP BY ss.snapshot_id,ss.platform_sku_id,ss.merchant_code,
+                ss.current_stock,ss.occupied_stock,ss.unoccupied_stock
+       ORDER BY ss.snapshot_id,ss.platform_sku_id`,
+      [snapshotIds]
+    );
+    const bySnapshot = new Map<string, typeof skus.rows>();
+    for (const sku of skus.rows) {
+      const values = bySnapshot.get(sku.snapshot_id) ?? [];
+      values.push(sku);
+      bySnapshot.set(sku.snapshot_id,values);
+    }
+    return snapshots.rows.map((snapshot) => {
+      const observedAt = snapshot.observed_at.toISOString();
+      return {
+        snapshotId:snapshot.snapshot_id,
+        envelope:{
+          schemaVersion:INVENTORY_FACT_SCHEMA_VERSION,
+          observedAt,
+          asOf:observedAt,
+          scope:{ shopId,productId:snapshot.product_id },
+          facts:{
+            productId:snapshot.product_id,
+            title:snapshot.product_title,
+            totalStock:snapshot.total_stock,
+            skus:(bySnapshot.get(snapshot.snapshot_id) ?? []).map((sku) => ({
+              platformSkuId:sku.platform_sku_id,
+              merchantCode:sku.merchant_code,
+              currentStock:sku.current_stock,
+              occupiedStock:sku.occupied_stock,
+              unoccupiedStock:sku.unoccupied_stock,
+              channels:Array.isArray(sku.channels)
+                ? sku.channels.flatMap((entry) => {
+                    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+                    const channel = entry as Record<string,unknown>;
+                    return typeof channel.channelGoodsId === "string" && Number.isSafeInteger(Number(channel.stock))
+                      ? [{ channelGoodsId:channel.channelGoodsId,stock:Number(channel.stock) }]
+                      : [];
+                  })
+                : []
+            }))
+          },
+          quality:{
+            freshness:"fresh",
+            completeness:Number(snapshot.completeness),
+            mappingConfidence:snapshot.mapping_confidence,
+            diagnostics:Array.isArray(snapshot.diagnostics)
+              ? snapshot.diagnostics.map(String)
+              : []
+          },
+          source:{
+            kind:"doudian.inventory.product.snapshot.read",
+            datasetId:snapshot.dataset_id,
+            datasetVersion:snapshot.data_version,
+            digest:snapshot.source_digest
+          }
+        }
+      };
+    });
+  }
+
   private async updateBinding(
     client: PoolClient,
     snapshot: PersistableDoudianSnapshot,
@@ -468,20 +667,67 @@ export class InventoryRepository {
     inserted: number;
     updated: number;
   }> {
+    const deduplicated = new Map<string, NormalizedOrderLine>();
+    for (const item of rows) {
+      const sourceItemKey = factDigest([
+        item.shopId,item.childOrderId,item.productId,item.merchantCode
+      ]);
+      const current = deduplicated.get(sourceItemKey);
+      if (
+        !current ||
+        item.sourceLoadedAt > current.sourceLoadedAt ||
+        (
+          item.sourceLoadedAt === current.sourceLoadedAt &&
+          item.sourceBatchId > current.sourceBatchId
+        )
+      ) {
+        deduplicated.set(sourceItemKey,item);
+      }
+    }
+    if (deduplicated.size === 0) return { inserted:0,updated:0 };
+    const payload = [...deduplicated].map(([sourceItemKey,item]) => ({
+      source_item_key:sourceItemKey,
+      shop_id:item.shopId,
+      shop_name:item.shopName,
+      child_order_id:item.childOrderId,
+      product_id:item.productId,
+      merchant_code:item.merchantCode,
+      specification:item.specification,
+      submitted_at:item.submittedAt,
+      paid_at:item.paidAt ?? null,
+      shipped_at:item.shippedAt ?? null,
+      order_status:item.orderStatus,
+      aftersales_status:item.aftersalesStatus,
+      source_quantity:item.sourceQuantity,
+      demand_quantity:item.demandQuantity,
+      source_batch_id:item.sourceBatchId,
+      source_row_hash:item.sourceRowHash,
+      source_loaded_at:item.sourceLoadedAt,
+      source_period_end:item.sourcePeriodEnd ?? null
+    }));
     return inTransaction(this.pool, async (client) => {
-      let inserted = 0;
-      let updated = 0;
-      for (const item of rows) {
-        const sourceItemKey = factDigest([
-          item.shopId,item.childOrderId,item.productId,item.merchantCode
-        ]);
-        const result = await client.query<{ inserted: boolean }>(
-          `INSERT INTO source.order_line_fact(
+      const result = await client.query<{ inserted: string; updated: string }>(
+        `WITH incoming AS (
+           SELECT * FROM jsonb_to_recordset($1::jsonb) AS item(
+             source_item_key text,shop_id text,shop_name text,child_order_id text,
+             product_id text,merchant_code text,specification text,
+             submitted_at timestamptz,paid_at timestamptz,shipped_at timestamptz,
+             order_status text,aftersales_status text,source_quantity integer,
+             demand_quantity integer,source_batch_id bigint,source_row_hash text,
+             source_loaded_at timestamptz,source_period_end timestamptz
+           )
+         ), changed AS (
+           INSERT INTO source.order_line_fact(
             source_item_key,shop_id,shop_name,child_order_id,product_id,
             merchant_code,specification,submitted_at,paid_at,shipped_at,
             order_status,aftersales_status,source_quantity,demand_quantity,
             source_batch_id,source_row_hash,source_loaded_at,source_period_end
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+           ) SELECT
+             source_item_key,shop_id,shop_name,child_order_id,product_id,
+             merchant_code,specification,submitted_at,paid_at,shipped_at,
+             order_status,aftersales_status,source_quantity,demand_quantity,
+             source_batch_id,source_row_hash,source_loaded_at,source_period_end
+           FROM incoming
           ON CONFLICT(source_item_key) DO UPDATE SET
             specification=EXCLUDED.specification,paid_at=EXCLUDED.paid_at,
             shipped_at=EXCLUDED.shipped_at,order_status=EXCLUDED.order_status,
@@ -490,17 +736,15 @@ export class InventoryRepository {
             source_batch_id=EXCLUDED.source_batch_id,source_row_hash=EXCLUDED.source_row_hash,
             source_loaded_at=EXCLUDED.source_loaded_at,source_period_end=EXCLUDED.source_period_end,updated_at=now()
           WHERE source.order_line_fact.source_loaded_at <= EXCLUDED.source_loaded_at
-          RETURNING (xmax = 0) AS inserted`,
-          [sourceItemKey,item.shopId,item.shopName,item.childOrderId,item.productId,
-           item.merchantCode,item.specification,item.submittedAt,item.paidAt ?? null,
-           item.shippedAt ?? null,item.orderStatus,item.aftersalesStatus,
-           item.sourceQuantity,item.demandQuantity,item.sourceBatchId,
-           item.sourceRowHash,item.sourceLoadedAt,item.sourcePeriodEnd ?? null]
-        );
-        if (result.rows[0]?.inserted) inserted += 1;
-        else if (result.rowCount) updated += 1;
-      }
-      return { inserted, updated };
+          RETURNING (xmax = 0) AS was_inserted
+         ) SELECT
+           count(*) FILTER (WHERE was_inserted)::text AS inserted,
+           count(*) FILTER (WHERE NOT was_inserted)::text AS updated
+         FROM changed`,
+        [JSON.stringify(payload)]
+      );
+      const counts = row(result.rows,"order chunk upsert counts");
+      return { inserted:Number(counts.inserted),updated:Number(counts.updated) };
     });
   }
 
@@ -562,11 +806,31 @@ export class InventoryRepository {
     const observedAt = new Date(input.observedAt);
     if (!Number.isFinite(observedAt.getTime())) throw new Error("RECENT_ORDER_OBSERVED_AT_INVALID");
     const sourceBatchId = Math.floor(observedAt.getTime() / 1000);
-    const rows: NormalizedOrderLine[] = input.records.map((record) => {
+    const merchantCodes = [...new Set(input.records.map((record) => record.merchantCode))];
+    const bindings = merchantCodes.length ? await this.pool.query<{
+      merchant_code: string;
+      product_id: string;
+    }>(
+      `SELECT merchant_code,product_id FROM inventory.sku_binding
+       WHERE shop_id=$1 AND merchant_code=ANY($2::text[]) AND valid_to IS NULL`,
+      [input.shop.id,merchantCodes]
+    ) : { rows: [] as { merchant_code: string; product_id: string }[] };
+    const productsByMerchant = new Map<string,Set<string>>();
+    for (const binding of bindings.rows) {
+      const products = productsByMerchant.get(binding.merchant_code) ?? new Set<string>();
+      products.add(binding.product_id);
+      productsByMerchant.set(binding.merchant_code,products);
+    }
+    const rows: NormalizedOrderLine[] = input.records.flatMap((record) => {
+      const mapped = productsByMerchant.get(record.merchantCode);
+      const productId = mapped?.has(record.productId)
+        ? record.productId
+        : mapped?.size === 1 ? [...mapped][0] : undefined;
+      if (!productId) return [];
       const cancelledBeforeShipment = /关闭|取消/u.test(record.orderStatus) && !record.shippedAt;
-      return {
+      return [{
         shopId:input.shop.id,shopName:input.shop.name,childOrderId:record.childOrderId,
-        productId:record.productId,merchantCode:record.merchantCode,
+        productId,merchantCode:record.merchantCode,
         specification:record.specification,submittedAt:record.submittedAt,
         ...(record.paidAt ? { paidAt:record.paidAt } : {}),
         ...(record.shippedAt ? { shippedAt:record.shippedAt } : {}),
@@ -574,7 +838,7 @@ export class InventoryRepository {
         sourceQuantity:record.quantity,
         demandQuantity:record.paidAt && !cancelledBeforeShipment ? record.quantity : 0,
         sourceBatchId,sourceRowHash:factDigest(record),sourceLoadedAt:input.observedAt
-      };
+      }];
     });
     const changes = await this.upsertOrderChunk(rows);
     const sourceDigest = factDigest({ shop:input.shop,observedAt:input.observedAt,records:input.records });
@@ -770,7 +1034,9 @@ export class InventoryRepository {
       [scopeKey,policyVersion]
     );
     const prior = result.rows[0];
-    if (!prior && finding.severity === "normal") return false;
+    // Normal and unknown findings remain available on risk_evaluation. They do
+    // not need a new ops incident unless one already exists and must be closed.
+    if (!prior && (finding.severity === "normal" || finding.severity === "unknown")) return false;
     const next = transitionIncident(prior ? {
       state: prior.state,severity: prior.severity,warningStreak: prior.warning_streak,
       healthyStreak: prior.healthy_streak,revision: prior.revision
@@ -809,26 +1075,55 @@ export class InventoryRepository {
     const freshness = await this.pool.query<{
       latest_inventory_at: Date | null;
       latest_order_at: Date | null;
+      historical_complete_through: Date | null;
       product_count: number;
+      fresh_product_count: number;
       sku_count: number;
     }>(
       `SELECT
         (SELECT max(observed_at) FROM inventory.snapshot WHERE shop_id=$1) AS latest_inventory_at,
-        (SELECT max(paid_at) FROM source.order_line_fact WHERE shop_id=$1) AS latest_order_at,
+        (SELECT max(observed_at) FROM dataset.version
+          WHERE dataset_id='sales-demand-recent:' || $1) AS latest_order_at,
+        (SELECT max(source_period_end) FROM source.order_line_fact WHERE shop_id=$1) AS historical_complete_through,
         (SELECT count(DISTINCT product_id)::int FROM inventory.snapshot WHERE shop_id=$1) AS product_count,
+        (SELECT count(DISTINCT product_id)::int FROM inventory.snapshot
+          WHERE shop_id=$1
+            AND observed_at >= now()-make_interval(mins => $2)) AS fresh_product_count,
         (SELECT count(*)::int FROM inventory.sku_binding WHERE shop_id=$1 AND valid_to IS NULL) AS sku_count`,
-      [shopId]
+      [shopId,INVENTORY_DATA_VALIDITY_MINUTES]
     );
     const incidents = await this.pool.query(
-      `SELECT i.incident_id,i.state,i.severity,i.first_seen_at,i.last_seen_at,
-              r.product_id,r.findings,r.policy_version,r.evaluated_at,r.diagnostics,
-              s.snapshot_id,s.observed_at AS snapshot_observed_at,s.dataset_id,s.data_version,s.source_digest
-       FROM ops.incident i JOIN inventory.risk_evaluation r
-         ON r.evaluation_id=i.latest_evaluation_id
-       JOIN inventory.snapshot s ON s.snapshot_id=r.snapshot_id
-       WHERE r.shop_id=$1 ORDER BY
-         CASE i.severity WHEN 'critical' THEN 1 WHEN 'warning' THEN 2 WHEN 'unknown' THEN 3 ELSE 4 END,
-         i.last_seen_at DESC LIMIT 200`,
+      `WITH latest_product_evaluation AS (
+         SELECT DISTINCT ON (product_id) evaluation_id,product_id
+         FROM inventory.risk_evaluation
+         WHERE shop_id=$1
+         ORDER BY product_id,evaluated_at DESC,evaluation_id DESC
+       ), ranked AS (
+         SELECT i.incident_id,i.state,i.severity,i.first_seen_at,i.last_seen_at,
+                r.product_id,r.findings,r.policy_version,r.evaluated_at,r.diagnostics,
+                s.snapshot_id,s.product_title,s.observed_at AS snapshot_observed_at,
+                s.dataset_id,s.data_version,s.source_digest,
+                row_number() OVER (
+                  PARTITION BY CASE
+                    WHEN i.severity='unknown' THEN r.product_id
+                    ELSE i.incident_id
+                  END
+                  ORDER BY i.last_seen_at DESC
+                ) AS ui_rank
+         FROM ops.incident i JOIN inventory.risk_evaluation r
+           ON r.evaluation_id=i.latest_evaluation_id
+         JOIN latest_product_evaluation latest
+           ON latest.evaluation_id=r.evaluation_id
+         JOIN inventory.snapshot s ON s.snapshot_id=r.snapshot_id
+         WHERE r.shop_id=$1
+           AND i.severity IN ('critical','warning')
+       )
+       SELECT incident_id,state,severity,first_seen_at,last_seen_at,product_id,
+              findings,policy_version,evaluated_at,diagnostics,snapshot_id,
+              product_title,snapshot_observed_at,dataset_id,data_version,source_digest
+       FROM ranked WHERE ui_rank=1 ORDER BY
+         CASE severity WHEN 'critical' THEN 1 WHEN 'warning' THEN 2 WHEN 'unknown' THEN 3 ELSE 4 END,
+         last_seen_at DESC LIMIT 200`,
       [shopId]
     );
     const products = await this.pool.query(
@@ -881,25 +1176,131 @@ export class InventoryRepository {
       }))
     }));
     const schedules = await this.pool.query(
-      `SELECT schedule_run_id,scheduled_for,status,workflow_runs,diagnostics,started_at,completed_at
-       FROM ops.schedule_run WHERE lease_key=$1 ORDER BY scheduled_for DESC LIMIT 48`,
-      [`inventory-shadow:${shopId}`]
+      `SELECT cr.collection_run_id AS schedule_run_id,
+              cr.started_at AS scheduled_for,
+              CASE
+                WHEN bool_or(cs.status='blocked') THEN 'blocked'
+                WHEN bool_or(cs.status='failed') THEN 'failed'
+                WHEN bool_or(cs.status='partial') THEN 'partial'
+                WHEN bool_or(cs.status='degraded') THEN 'degraded'
+                WHEN bool_or(cs.status='running') THEN 'running'
+                ELSE 'succeeded'
+              END AS status,
+              '[]'::jsonb AS workflow_runs,
+              COALESCE(jsonb_agg(to_jsonb(cs.diagnostic) ORDER BY cs.component)
+                FILTER (WHERE cs.diagnostic IS NOT NULL),'[]'::jsonb) AS diagnostics,
+              cr.started_at,cr.completed_at,
+              COALESCE(jsonb_agg(jsonb_build_object(
+                'component',cs.component,'status',cs.status,'coverage',cs.coverage,
+                'attempted',cs.attempted,'persisted',cs.persisted,'failed',cs.failed
+              ) ORDER BY cs.component) FILTER (WHERE cs.component IS NOT NULL),'[]'::jsonb) AS components
+       FROM ops.collection_run cr
+       LEFT JOIN ops.collection_step cs
+         ON cs.collection_run_id=cr.collection_run_id AND cs.shop_id=$1
+       WHERE EXISTS (
+         SELECT 1 FROM ops.collection_step selected
+         WHERE selected.collection_run_id=cr.collection_run_id AND selected.shop_id=$1
+       )
+       GROUP BY cr.collection_run_id,cr.started_at,cr.completed_at
+       ORDER BY cr.started_at DESC LIMIT 48`,
+      [shopId]
+    );
+    const feishuReport = await this.pool.query<{ target_id: string; occurred_at: Date }>(
+      `SELECT target_id,occurred_at FROM audit.change_event
+       WHERE action='inventory.feishu.report.sent'
+         AND (details->>'shopId'=$1 OR (details->'shopIds') ? $1)
+       ORDER BY occurred_at DESC LIMIT 1`,
+      [shopId]
+    );
+    const dailyDemand = await this.pool.query<{ date: string; actual: number }>(
+      `WITH bounds AS (
+         SELECT date_trunc('day',max(paid_at)) AS end_day
+         FROM source.order_line_fact
+         WHERE shop_id=$1 AND paid_at IS NOT NULL AND demand_quantity > 0
+       ), days AS (
+         SELECT generate_series(end_day-interval '89 days',end_day,interval '1 day') AS day
+         FROM bounds WHERE end_day IS NOT NULL
+       ), demand AS (
+         SELECT date_trunc('day',paid_at) AS day,sum(demand_quantity)::int AS actual
+         FROM source.order_line_fact,bounds
+         WHERE shop_id=$1 AND paid_at >= bounds.end_day-interval '89 days'
+           AND paid_at < bounds.end_day+interval '1 day' AND demand_quantity > 0
+         GROUP BY date_trunc('day',paid_at)
+       )
+       SELECT to_char(days.day,'YYYY-MM-DD') AS date,COALESCE(demand.actual,0)::int AS actual
+       FROM days LEFT JOIN demand USING(day) ORDER BY days.day`,
+      [shopId]
+    );
+    const coldStart = await this.pool.query<{
+      direct_model: number;
+      hierarchical_fallback: number;
+      store_baseline: number;
+      total_order_skus: number;
+    }>(
+      `WITH history AS (
+         SELECT product_id,merchant_code,count(DISTINCT paid_at::date)::int AS active_days
+         FROM source.order_line_fact
+         WHERE shop_id=$1 AND paid_at IS NOT NULL AND demand_quantity > 0
+         GROUP BY product_id,merchant_code
+       )
+       SELECT
+         count(*) FILTER (WHERE active_days >= 14)::int AS direct_model,
+         count(*) FILTER (WHERE active_days BETWEEN 3 AND 13)::int AS hierarchical_fallback,
+         count(*) FILTER (WHERE active_days < 3)::int AS store_baseline,
+         count(*)::int AS total_order_skus
+       FROM history`,
+      [shopId]
     );
     const state = row(freshness.rows, "inventory overview");
+    const generatedAt = new Date().toISOString();
+    const backtest = buildStoreDemandBacktest(dailyDemand.rows);
+    const coldStartState = row(coldStart.rows,"inventory cold-start overview");
+    const reminders = buildOperationalReminders({
+      now:generatedAt,
+      latestInventoryAt:state.latest_inventory_at?.toISOString() ?? null,
+      latestOrderAt:state.latest_order_at?.toISOString() ?? null,
+      productCount:state.product_count,
+      freshProductCount:state.fresh_product_count,
+      scheduleCount:schedules.rows.length,
+      collectionRunning:schedules.rows.some((schedule) => schedule.status === "running"),
+      incidents:incidents.rows as Record<string, unknown>[],
+      backtest
+    });
     return {
-      generatedAt: new Date().toISOString(),
+      generatedAt,
       databaseTime: health.databaseTime,
       shopId,
       freshness: {
         latestInventoryAt: state.latest_inventory_at?.toISOString() ?? null,
-        latestOrderAt: state.latest_order_at?.toISOString() ?? null
+        latestOrderAt: state.latest_order_at?.toISOString() ?? null,
+        historicalCompleteThrough: state.historical_complete_through?.toISOString() ?? null
       },
-      counts: { products: state.product_count, skus: state.sku_count, incidents: incidents.rows.length },
+      counts: {
+        products: state.product_count,
+        freshProducts: state.fresh_product_count,
+        skus: state.sku_count,
+        incidents: incidents.rows.length
+      },
       products: detailedProducts,
       incidents: incidents.rows,
       schedules: schedules.rows,
+      notifications: {
+        feishu: {
+          lastSentAt:feishuReport.rows[0]?.occurred_at.toISOString() ?? null,
+          reportKey:feishuReport.rows[0]?.target_id ?? null
+        }
+      },
+      reminders,
+      backtest,
+      coldStart: {
+        directModel: coldStartState.direct_model,
+        hierarchicalFallback: coldStartState.hierarchical_fallback,
+        storeBaseline: coldStartState.store_baseline,
+        totalOrderSkus: coldStartState.total_order_skus,
+        inventoryMappedSkus: state.sku_count
+      },
       rules: {
-        policyVersion: "inventory-balanced-shadow/1.0.0",
+        policyVersion: "库存均衡策略 v1.0",
         skuChannelCritical: "P90 需求在 2 小时内耗尽",
         skuChannelWarning: "P90 需求在 6 小时内耗尽，且连续两个快照",
         reserveCritical: "未占用库存不能补足全部渠道未来 6 小时缺口",

@@ -5,6 +5,8 @@ export const INVENTORY_FORECAST_ALGORITHM_VERSION =
   "inventory-demand-ensemble-conformal/1.0.0";
 export const INVENTORY_RISK_POLICY_VERSION =
   "inventory-balanced-shadow/1.0.0";
+export const INVENTORY_DATA_VALIDITY_MINUTES = 120;
+export const RECENT_ORDER_DATA_VALIDITY_MINUTES = 120;
 
 export type MappingConfidence = "high" | "medium" | "low" | "unknown";
 export type RiskSeverity = "normal" | "warning" | "critical" | "unknown";
@@ -467,7 +469,8 @@ export function evaluateInventoryRisk(input: {
 }): InventoryRiskEvaluation {
   const evaluatedAt = parsedTime(input.evaluatedAt, "evaluatedAt");
   const observedAt = parsedTime(input.envelope.observedAt, "envelope.observedAt");
-  const maximumAge = (input.maximumInventoryAgeMinutes ?? 45) * 60_000;
+  const maximumAge =
+    (input.maximumInventoryAgeMinutes ?? INVENTORY_DATA_VALIDITY_MINUTES) * 60_000;
   const findings: RiskFinding[] = [];
   const diagnostics = [...input.envelope.quality.diagnostics];
   const stale =
@@ -498,7 +501,8 @@ export function evaluateInventoryRisk(input: {
     ? parsedTime(input.demandQuality.historicalCompleteThrough,"demandQuality.historicalCompleteThrough")
     : undefined;
   if (
-    recentObservedAt === undefined || evaluatedAt - recentObservedAt > 60 * 60_000 ||
+    recentObservedAt === undefined ||
+    evaluatedAt - recentObservedAt > RECENT_ORDER_DATA_VALIDITY_MINUTES * 60_000 ||
     historicalCompleteThrough === undefined || evaluatedAt - historicalCompleteThrough > 36 * 60 * 60_000
   ) {
     findings.push({
@@ -506,7 +510,7 @@ export function evaluateInventoryRisk(input: {
       kind: "data_quality",
       severity: "unknown",
       legacyBelow200: false,
-      reason: "Recent orders exceed 60 minutes or the latest complete historical order day exceeds 36 hours; deterministic risk was suppressed."
+      reason: "Recent orders exceed 120 minutes or the latest complete historical order day exceeds 36 hours; deterministic risk was suppressed."
     });
     return {
       policyVersion: INVENTORY_RISK_POLICY_VERSION,
@@ -625,7 +629,10 @@ export function transitionIncident(
   };
   if (severity === "unknown") {
     return {
-      state: "open",
+      // Unknown is an evidence-quality outcome, not a deterministic inventory
+      // risk. Keep it in the immutable evaluation trail without presenting it
+      // as an open operational incident.
+      state: "resolved",
       severity,
       warningStreak: 0,
       healthyStreak: 0,

@@ -4,7 +4,7 @@ metadata:
   id: ecom.sales-demand.recent.persist
   version: 1.0.0
   title: 持久化近期订单热事实
-  description: 通过受限库存服务保存浏览器读取的订单需求白名单字段，刷新 60 分钟近期订单质量水位。
+  description: 通过受限库存服务保存浏览器读取的订单需求白名单字段，刷新 2 小时近期订单质量水位。
 runtime: engine_team
 inputSchema:
   type: object

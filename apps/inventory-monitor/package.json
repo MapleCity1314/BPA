@@ -6,9 +6,13 @@
   "scripts": {
     "start": "node dist/main.js",
     "scheduler": "node dist/scheduler-main.js",
+    "refresh-once": "node dist/refresh-once.js",
+    "refresh-missing": "node dist/refresh-missing.js",
+    "production-cycle": "node dist/production-cycle.js",
+    "feishu-report": "node dist/feishu-report-main.js",
     "migrate": "node dist/migrate-main.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run src"
+    "test": "vitest run --root ../.. apps/inventory-monitor/src"
   },
   "dependencies": {
     "@bpa/app-postgres": "workspace:*",
