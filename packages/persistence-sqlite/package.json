@@ -14,5 +14,8 @@
     "@bpa/schemas": "workspace:*",
     "@bpa/source-core": "workspace:*",
     "better-sqlite3": "12.10.0"
+  },
+  "devDependencies": {
+    "@bpa/sqlite-observability": "workspace:*"
   }
 }

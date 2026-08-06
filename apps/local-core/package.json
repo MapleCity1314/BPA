@@ -27,6 +27,7 @@
     "@bpa/persistence-sqlite": "workspace:*",
     "@bpa/resource-binding": "workspace:*",
     "@bpa/schemas": "workspace:*",
+    "@bpa/sqlite-observability": "workspace:*",
     "@bpa/team-runtime": "workspace:*",
     "@bpa/workflow-ir": "workspace:*"
   }

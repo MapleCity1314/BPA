@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
+import { resolveSqliteObservabilityExtension } from "@bpa/sqlite-observability";
 import { loadOrCreateCoreSigningKey } from "@bpa/gateway-core";
 import { LocalWorkflowEngine } from "./compatibility/local-workflow-engine.js";
 import { LocalBrowserGateway } from "./browser-gateway.js";
@@ -8,6 +9,7 @@ import { BrowserEvidenceReceiver } from "./browser-evidence.js";
 import { LocalControlServer, LocalCoreService } from "./control.js";
 import { resolveBpaPaths } from "./paths.js";
 import { CoreInstanceLock } from "./instance-lock.js";
+import { writeRuntimeResourceMetrics } from "./runtime-resource-metrics.js";
 import {
   LocalStagingTransferServer,
   StagingTransferService
@@ -19,7 +21,13 @@ mkdirSync(paths.logs, { recursive: true, mode: 0o700 });
 const instanceLock = new CoreInstanceLock(paths.lock);
 instanceLock.acquire();
 
-const persistence = new SqlitePersistence({ path: paths.database });
+const sqliteObservability = resolveSqliteObservabilityExtension();
+const persistence = new SqlitePersistence({
+  path: paths.database,
+  ...(sqliteObservability.status === "available"
+    ? { sqliteObservabilityExtensionPath: sqliteObservability.extensionPath }
+    : {})
+});
 if (process.argv.includes("--migrate-only")) {
   persistence.close();
   instanceLock.release();
@@ -54,6 +62,35 @@ const service = new LocalCoreService(
   paths.data,
   join(paths.run, "runtime-maintenance.lock")
 );
+const writeResourceMetrics = (): void => {
+  if (sqliteObservability.status !== "available") return;
+  writeRuntimeResourceMetrics(
+    paths.resourceMetrics,
+    persistence.readSqliteResourceMetrics(),
+    { runtimeIdentity: process.env.BPA_RUNTIME_ID?.trim() || null }
+  );
+};
+try {
+  writeResourceMetrics();
+} catch (error) {
+  process.stderr.write(
+    `[runtime-resource-metrics] ${
+      error instanceof Error ? error.stack ?? error.message : String(error)
+    }\n`
+  );
+}
+const resourceMetricsTimer = setInterval(() => {
+  try {
+    writeResourceMetrics();
+  } catch (error) {
+    process.stderr.write(
+      `[runtime-resource-metrics] ${
+        error instanceof Error ? error.stack ?? error.message : String(error)
+      }\n`
+    );
+  }
+}, 60_000);
+resourceMetricsTimer.unref();
 browserGateway.recoverTerminalResults();
 browserGateway.recoverCancellations();
 const server = new LocalControlServer(
@@ -99,6 +136,7 @@ gatewayTimer.unref();
 
 const shutdown = async (): Promise<void> => {
   clearInterval(gatewayTimer);
+  clearInterval(resourceMetricsTimer);
   await server.stop().catch(() => undefined);
   await stagingServer.stop().catch(() => undefined);
   persistence.close();

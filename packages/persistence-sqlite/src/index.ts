@@ -282,9 +282,19 @@ function now(): string {
 export interface SqlitePersistenceOptions {
   path: string;
   readonly?: boolean;
+  sqliteObservabilityExtensionPath?: string;
   failureInjector?: (point: string) => void;
   clock?: () => Date;
   idFactory?: () => string;
+}
+
+export interface SqliteResourceMetrics {
+  configuredCacheBytes: number;
+  pageSizeBytes: number;
+  cacheSizeSetting: number;
+  cacheUsedBytes: number;
+  schemaUsedBytes: number;
+  statementUsedBytes: number;
 }
 
 export class SqlitePersistence implements Persistence {
@@ -306,6 +316,9 @@ export class SqlitePersistence implements Persistence {
     this.#clock = options.clock ?? (() => new Date());
     this.#idFactory = options.idFactory ?? randomUUID;
     try {
+      if (options.sqliteObservabilityExtensionPath) {
+        this.#db.loadExtension(options.sqliteObservabilityExtensionPath);
+      }
       this.#db.pragma("foreign_keys = ON");
       this.#db.pragma("busy_timeout = 5000");
       if (!(options.readonly ?? false)) {
@@ -316,6 +329,45 @@ export class SqlitePersistence implements Persistence {
       this.#db.close();
       throw error;
     }
+  }
+
+  readSqliteResourceMetrics(): SqliteResourceMetrics {
+    const pageSizeBytes = Number(this.#db.pragma("page_size", { simple: true }));
+    const cacheSizeSetting = Number(
+      this.#db.pragma("cache_size", { simple: true })
+    );
+    const row = this.#db
+      .prepare(`
+        SELECT
+          bpa_sqlite_cache_used() AS cache_used_bytes,
+          bpa_sqlite_schema_used() AS schema_used_bytes,
+          bpa_sqlite_statement_used() AS statement_used_bytes
+      `)
+      .get() as {
+        cache_used_bytes: number;
+        schema_used_bytes: number;
+        statement_used_bytes: number;
+      };
+    const metrics = {
+      configuredCacheBytes:
+        cacheSizeSetting < 0
+          ? Math.abs(cacheSizeSetting) * 1024
+          : cacheSizeSetting * pageSizeBytes,
+      pageSizeBytes,
+      cacheSizeSetting,
+      cacheUsedBytes: row.cache_used_bytes,
+      schemaUsedBytes: row.schema_used_bytes,
+      statementUsedBytes: row.statement_used_bytes
+    };
+    for (const [name, value] of Object.entries(metrics)) {
+      if (
+        !Number.isSafeInteger(value) ||
+        (name !== "cacheSizeSetting" && value < 0)
+      ) {
+        throw new Error(`SQLite resource metric ${name} is invalid`);
+      }
+    }
+    return metrics;
   }
 
   #migrate(): void {

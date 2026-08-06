@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, statSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  statSync
+} from "node:fs";
 import { dirname } from "node:path";
 
 const SCHEMA = "bpa.runtime-resource-sample/1";
@@ -21,6 +26,7 @@ function usage() {
     "  --interval-seconds <n>      Interval between samples, minimum 10",
     "  --chrome-profile <path>     Aggregate only Chrome processes for this profile",
     "  --sqlite <path>             Record database, WAL and SHM file sizes",
+    "  --core-metrics <path>       Read allowlisted same-connection Core metrics",
     "  --label <launchd-label>     Replace the default BPA launchd labels; repeatable",
     "  --help                      Show this help"
   ].join("\n");
@@ -56,6 +62,7 @@ function parseArguments(argv) {
       options.intervalSeconds = parsePositiveInteger(value, argument, 10);
     } else if (argument === "--chrome-profile") options.chromeProfile = value;
     else if (argument === "--sqlite") options.sqlitePath = value;
+    else if (argument === "--core-metrics") options.coreMetricsPath = value;
     else if (argument === "--label") options.labels.push(value);
     else throw new Error(`Unknown option: ${argument}`);
   }
@@ -151,6 +158,57 @@ function sqliteFiles(sqlitePath) {
   };
 }
 
+function safeInteger(value, minimum = 0) {
+  return Number.isSafeInteger(value) && value >= minimum;
+}
+
+function coreMetrics(path) {
+  if (!path) return null;
+  let document;
+  try {
+    document = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    return {
+      status:
+        error && typeof error === "object" && error.code === "ENOENT"
+          ? "missing"
+          : "invalid"
+    };
+  }
+  const sqlite = document?.sqlite;
+  const valid =
+    document?.schema === "bpa.core-runtime-metrics/1" &&
+    Number.isFinite(Date.parse(document.sampledAt)) &&
+    safeInteger(document.pid, 1) &&
+    (document.runtimeIdentity === null ||
+      (typeof document.runtimeIdentity === "string" &&
+        document.runtimeIdentity.length > 0 &&
+        document.runtimeIdentity.length <= 200)) &&
+    sqlite?.measurement === "same_connection_db_status64" &&
+    safeInteger(sqlite.configuredCacheBytes) &&
+    safeInteger(sqlite.pageSizeBytes, 1) &&
+    Number.isSafeInteger(sqlite.cacheSizeSetting) &&
+    safeInteger(sqlite.cacheUsedBytes) &&
+    safeInteger(sqlite.schemaUsedBytes) &&
+    safeInteger(sqlite.statementUsedBytes);
+  if (!valid) return { status: "invalid" };
+  return {
+    status: "available",
+    sampledAt: document.sampledAt,
+    pid: document.pid,
+    runtimeIdentity: document.runtimeIdentity,
+    sqlite: {
+      measurement: sqlite.measurement,
+      configuredCacheBytes: sqlite.configuredCacheBytes,
+      pageSizeBytes: sqlite.pageSizeBytes,
+      cacheSizeSetting: sqlite.cacheSizeSetting,
+      cacheUsedBytes: sqlite.cacheUsedBytes,
+      schemaUsedBytes: sqlite.schemaUsedBytes,
+      statementUsedBytes: sqlite.statementUsedBytes
+    }
+  };
+}
+
 function collectSample(options) {
   const pids = launchdPids();
   const processes = processTable();
@@ -163,7 +221,8 @@ function collectSample(options) {
     sampledAt: new Date().toISOString(),
     services,
     chromeProfile: aggregateChrome(processes, options.chromeProfile),
-    sqlite: sqliteFiles(options.sqlitePath)
+    sqlite: sqliteFiles(options.sqlitePath),
+    coreMetrics: coreMetrics(options.coreMetricsPath)
   };
 }
 

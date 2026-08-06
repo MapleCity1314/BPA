@@ -239,7 +239,7 @@ await build({
   format: "esm",
   target: "node24",
   packages: "bundle",
-  external: ["better-sqlite3"],
+  external: ["better-sqlite3", "@bpa/sqlite-observability"],
   banner: {
     js: 'import { createRequire as __bpaCreateRequire } from "node:module"; const require = __bpaCreateRequire(import.meta.url);'
   },
@@ -303,6 +303,57 @@ const fileUriToPath = await copyRuntimeDependency(
   ["package.json", "LICENSE", "index.js"],
   bindingsPath
 );
+const sqliteObservabilityRoot = join(
+  repositoryRoot,
+  "packages/sqlite-observability"
+);
+const sqliteObservabilityPackage = JSON.parse(
+  await readFile(join(sqliteObservabilityRoot, "package.json"), "utf8")
+);
+const packagedSqliteObservabilityRoot = join(
+  outputRoot,
+  "node_modules/@bpa/sqlite-observability"
+);
+await copyFile(
+  join(sqliteObservabilityRoot, "index.js"),
+  join(packagedSqliteObservabilityRoot, "index.js")
+);
+await writeFile(
+  join(packagedSqliteObservabilityRoot, "package.json"),
+  `${JSON.stringify(
+    {
+      name: sqliteObservabilityPackage.name,
+      version: sqliteObservabilityPackage.version,
+      private: true,
+      license: sqliteObservabilityPackage.license,
+      type: "module",
+      main: "index.js",
+      exports: { ".": "./index.js" }
+    },
+    null,
+    2
+  )}\n`
+);
+const sqliteObservability =
+  targetPlatform === "darwin" && targetArchitecture === "arm64"
+    ? {
+        status: "available",
+        entryPoint: "sqlite3_bpasqliteobservability_init",
+        path: "node_modules/@bpa/sqlite-observability/dist/bpa_sqlite_observability.dylib"
+      }
+    : {
+        status: "unsupported_platform",
+        target: `${targetPlatform}-${targetArchitecture}`
+      };
+if (sqliteObservability.status === "available") {
+  await copyFile(
+    join(
+      sqliteObservabilityRoot,
+      "dist/bpa_sqlite_observability.dylib"
+    ),
+    join(outputRoot, sqliteObservability.path)
+  );
+}
 const packagedNodeRelative =
   targetPlatform === "win32" ? "node/node.exe" : "node/bin/node";
 await copyFile(
@@ -362,7 +413,10 @@ await writeFile(
       private: true,
       type: "module",
       engines: { node: ">=24 <25" },
-      dependencies: { "better-sqlite3": betterSqlite.version },
+      dependencies: {
+        "better-sqlite3": betterSqlite.version,
+        "@bpa/sqlite-observability": sqliteObservabilityPackage.version
+      },
       bpaRelease: release
     },
     null,
@@ -393,7 +447,13 @@ await writeFile(
           name: dependency.name,
           versionInfo: dependency.version,
           licenseConcluded: dependency.license
-        }))
+        })),
+        {
+          SPDXID: "SPDXRef-Package-bpa-sqlite-observability",
+          name: sqliteObservabilityPackage.name,
+          versionInfo: sqliteObservabilityPackage.version,
+          licenseConcluded: "NOASSERTION"
+        }
       ]
     },
     null,
@@ -461,6 +521,7 @@ await writeFile(
         extensionVersion: release.runtimeVersion
       },
       databaseSchemaVersion,
+      sqliteObservability,
       source: {
         gitCommit: release.gitCommit,
         dirty: false

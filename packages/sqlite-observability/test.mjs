@@ -3,19 +3,20 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
+import { resolveSqliteObservabilityExtension } from "./index.js";
 
 const temporaryRoot = mkdtempSync(join(tmpdir(), "bpa-sqlite-observability-"));
 const database = new Database(join(temporaryRoot, "probe.db"));
 const isolatedDatabase = new Database(":memory:");
 try {
+  const extension = resolveSqliteObservabilityExtension();
+  assert.equal(extension.status, "available");
+  if (extension.status !== "available") throw new Error("unreachable");
   assert.throws(
     () => database.prepare("SELECT bpa_sqlite_cache_used()").get(),
     /no such function/
   );
-  database.loadExtension(
-    join(import.meta.dirname, "dist/bpa_sqlite_observability.dylib"),
-    "sqlite3_bpaobservability_init"
-  );
+  database.loadExtension(extension.extensionPath);
   database.exec(`
     CREATE TABLE resource_probe(id INTEGER PRIMARY KEY, payload TEXT NOT NULL);
     WITH RECURSIVE counter(value) AS (

@@ -32,6 +32,17 @@ const manifest = JSON.parse(
   await readFile(join(root, "runtime-manifest.json"), "utf8")
 );
 const release = validateReleaseMetadata(manifest.release);
+const expectedSqliteObservabilityTarget =
+  `${release.platform}-${release.architecture}`;
+const sqliteObservabilityIdentityValid =
+  release.platform === "darwin" && release.architecture === "arm64"
+    ? manifest.sqliteObservability?.status === "available" &&
+      manifest.sqliteObservability?.entryPoint ===
+        "sqlite3_bpasqliteobservability_init" &&
+      manifest.sqliteObservability?.path ===
+        "node_modules/@bpa/sqlite-observability/dist/bpa_sqlite_observability.dylib"
+    : manifest.sqliteObservability?.status === "unsupported_platform" &&
+      manifest.sqliteObservability?.target === expectedSqliteObservabilityTarget;
 if (
   manifest.schemaVersion !== 2 ||
   manifest.browserProtocol !== "bpa.browser/2" ||
@@ -46,6 +57,7 @@ if (
   manifest.databaseSchemaVersion < 1 ||
   manifest.platform !== release.platform ||
   manifest.architecture !== release.architecture ||
+  !sqliteObservabilityIdentityValid ||
   (!staticHostVerification && process.versions.node !== release.nodeVersion) ||
   (!staticHostVerification && process.platform !== release.platform) ||
   (!staticHostVerification && process.arch !== release.architecture) ||
@@ -76,6 +88,8 @@ const requiredFiles = [
   "bin/bpa-release-scan.js",
   "bin/bpa-sqlite-tool.js",
   "package.json",
+  "node_modules/@bpa/sqlite-observability/index.js",
+  "node_modules/@bpa/sqlite-observability/package.json",
   "sbom.spdx.json",
   "schema/browser-protocol-v2.schema.json",
   "assets/adapters/doudian-alliance.adapter.yaml",
@@ -88,6 +102,9 @@ const requiredFiles = [
   "extension/manifest.json",
   "console/index.html"
 ];
+if (manifest.sqliteObservability.status === "available") {
+  requiredFiles.push(manifest.sqliteObservability.path);
+}
 if (release.platform === "win32") {
   requiredFiles.push("bin/bpa-native-host.exe");
 }

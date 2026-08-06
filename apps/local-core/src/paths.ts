@@ -15,6 +15,7 @@ export interface BpaPaths {
   database: string;
   signingKey: string;
   lock: string;
+  resourceMetrics: string;
 }
 
 export function resolveBpaPaths(
@@ -37,6 +38,7 @@ export function resolveBpaPaths(
     transferSocket: resolveLocalIpcEndpoint(root, "staging", platform),
     database: join(data, "bpa.sqlite"),
     signingKey: join(data, "core-signing-key.pem"),
-    lock: join(run, "core.lock")
+    lock: join(run, "core.lock"),
+    resourceMetrics: join(run, "runtime-resource-metrics.json")
   };
 }

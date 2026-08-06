@@ -75,7 +75,7 @@ static int bpa_register(
 #if defined(_WIN32)
 __declspec(dllexport)
 #endif
-int sqlite3_bpaobservability_init(
+int sqlite3_bpasqliteobservability_init(
   sqlite3 *database,
   char **error_message,
   const sqlite3_api_routines *api

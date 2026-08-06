@@ -200,7 +200,7 @@ function chromeSummary(samples) {
   };
 }
 
-function sqliteSummary(samples) {
+function sqliteSummary(samples, expectedIntervalSeconds) {
   const firstTimestamp = samples[0].timestamp;
   const durationHours =
     (samples.at(-1).timestamp - firstTimestamp) / (60 * 60 * 1_000);
@@ -219,15 +219,65 @@ function sqliteSummary(samples) {
       }));
     return seriesSummary(points, durationHours);
   };
+  const connectionObservations = samples.map(({ sample, timestamp }) => {
+    const metrics = sample.coreMetrics;
+    if (metrics?.status !== "available") {
+      return { status: metrics?.status ?? "not_collected" };
+    }
+    const metricsTimestamp = Date.parse(metrics.sampledAt);
+    if (!Number.isFinite(metricsTimestamp)) return { status: "invalid" };
+    const ageSeconds = (timestamp - metricsTimestamp) / 1_000;
+    const corePid = sample.services["com.bpa.core"]?.pid;
+    const fresh =
+      ageSeconds >= -5 && ageSeconds <= expectedIntervalSeconds * 2;
+    const identityValid =
+      typeof metrics.runtimeIdentity === "string" &&
+      metrics.runtimeIdentity.length > 0;
+    const pidMatches =
+      Number.isSafeInteger(corePid) && metrics.pid === corePid;
+    if (!fresh) return { status: "stale" };
+    if (!identityValid || !pidMatches) return { status: "identity_mismatch" };
+    return {
+      status: "measured",
+      metrics,
+      hour: (timestamp - firstTimestamp) / (60 * 60 * 1_000)
+    };
+  });
+  const measured = connectionObservations.filter(
+    (observation) => observation.status === "measured"
+  );
+  const complete = measured.length === samples.length;
+  const summarizeMetric = (key) =>
+    complete
+      ? seriesSummary(
+          measured.map(({ metrics, hour }) => ({
+            hour,
+            value: finiteNumber(
+              metrics.sqlite[key],
+              `SQLite connection metric ${key}`
+            )
+          })),
+          durationHours
+        )
+      : null;
   return {
-    measurementBoundary: "file_sizes_only",
+    measurementBoundary: complete
+      ? "same_connection_db_status64"
+      : "file_sizes_only",
     databaseBytes: summarizeFile("databaseBytes"),
     walBytes: summarizeFile("walBytes"),
     shmBytes: summarizeFile("shmBytes"),
     pageCache: {
-      status: "not_measured",
-      configuredBytes: null,
-      actualBytes: null
+      status: complete ? "measured" : "not_measured",
+      measuredSamples: measured.length,
+      missingSamples: samples.length - measured.length,
+      configuredBytes: summarizeMetric("configuredCacheBytes"),
+      actualBytes: summarizeMetric("cacheUsedBytes"),
+      schemaBytes: summarizeMetric("schemaUsedBytes"),
+      statementBytes: summarizeMetric("statementUsedBytes"),
+      runtimeIdentities: complete
+        ? [...new Set(measured.map(({ metrics }) => metrics.runtimeIdentity))]
+        : []
     }
   };
 }
@@ -252,6 +302,11 @@ function analyze(samples, options) {
   };
   const windowComplete = durationHours >= options.minimumDurationHours;
   const continuityComplete = continuity.gapsOverDoubleInterval === 0;
+  const sqlite = sqliteSummary(samples, options.expectedIntervalSeconds);
+  const sqlitePageCacheMeasurable =
+    windowComplete &&
+    continuityComplete &&
+    sqlite.pageCache.status === "measured";
   return {
     schema: OUTPUT_SCHEMA,
     source: {
@@ -268,12 +323,15 @@ function analyze(samples, options) {
       windowComplete,
       continuityComplete,
       nodeAndChromeMeasurable: windowComplete && continuityComplete,
-      sqlitePageCacheMeasurable: false,
-      phaseZeroResourceMeasurementComplete: false,
+      sqlitePageCacheMeasurable,
+      phaseZeroResourceMeasurementComplete:
+        windowComplete && continuityComplete && sqlitePageCacheMeasurable,
       blockers: [
         ...(!windowComplete ? ["minimum_duration_not_reached"] : []),
         ...(!continuityComplete ? ["sampling_gaps_exceed_limit"] : []),
-        "sqlite_page_cache_not_measured"
+        ...(sqlite.pageCache.status !== "measured"
+          ? ["sqlite_page_cache_not_measured"]
+          : [])
       ]
     },
     services: Object.fromEntries(
@@ -283,7 +341,7 @@ function analyze(samples, options) {
       ])
     ),
     chromeProfile: chromeSummary(samples),
-    sqlite: sqliteSummary(samples)
+    sqlite
   };
 }
 

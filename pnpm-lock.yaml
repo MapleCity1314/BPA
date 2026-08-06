@@ -306,6 +306,9 @@ importers:
       '@bpa/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
+      '@bpa/sqlite-observability':
+        specifier: workspace:*
+        version: link:../../packages/sqlite-observability
       '@bpa/team-runtime':
         specifier: workspace:*
         version: link:../../packages/team-runtime
@@ -634,6 +637,10 @@ importers:
       better-sqlite3:
         specifier: 12.10.0
         version: 12.10.0
+    devDependencies:
+      '@bpa/sqlite-observability':
+        specifier: workspace:*
+        version: link:../sqlite-observability
 
   packages/platform-runtime: {}
 

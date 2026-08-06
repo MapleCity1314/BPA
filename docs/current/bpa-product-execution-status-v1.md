@@ -14,7 +14,7 @@
   复制一个会随提交立刻过期的哈希。该分支尚未合并或明确放弃，因此阶段 0 的 Git
   收敛门禁仍未完成。
 - 验证基线：固定 Node `24.18.0` 下 `pnpm verify` 通过，macOS、Windows、性能与发布
-  闭包 CI 全绿。本轮完整门禁为 121 个测试文件、753 项测试全绿，文档 Catalog 80 条
+  闭包 CI 全绿。本轮完整门禁为 124 个测试文件、763 项测试全绿，文档 Catalog 80 条
   有效，Astro 0 诊断。
 - 生产原则：库存公司业务不中断；任何运行中进程、状态、schedule 或有效 lease 存在
   时，只观察，不重启、不叠加触发。
@@ -62,9 +62,9 @@
 
 新增 `scripts/analyze-macos-runtime-metrics.mjs` 作为确定性结论门禁。它校验时间顺序、
 采样窗口、连续性和 PID 变化，并输出 RSS/CPU/Chrome 进程数的起止值、峰值与每小时
-线性斜率。2026-08-06 19:46 的早期只读试算覆盖 46 个样本、约 0.75 小时，连续性
-正常，Core、库存服务和 Chrome 均无 PID 变化；窗口不足 24 小时，因此不作泄漏或
-稳定结论。
+线性斜率。2026-08-06 20:26 的早期只读试算覆盖 86 个样本、约 1.42 小时，最大间隔
+61 秒且无超过 120 秒的断点；Core、库存服务和 Chrome 均无 PID 变化，Chrome 进程数
+保持 11。窗口不足 24 小时，因此不作泄漏或稳定结论。
 
 分析器明确把 SQLite 标记为 `file_sizes_only`，并将 page cache 的配置与实际占用标记
 为 `not_measured`。即使当前 JSONL 采样跑满 24 小时，也只能闭合 Node 与 Chrome 桶，
@@ -74,9 +74,21 @@
 SQLite 官方的 `sqlite3_db_status64`，在 better-sqlite3 持有的同一连接内返回 page
 cache、schema 与 statement 内存；测试同时验证连接局部注册、SQL
 `load_extension()` 仍被禁止、`shrink_memory` 后全表扫描会重新填充缓存，以及 macOS
-bundle 不携带本机 install name 且重复构建字节一致。当前边界仍只是 macOS arm64
-隔离代码证据，尚未打入 Runtime 闭包、接入 Core 主连接或生产采样，所以阶段 0 继续
-保持未完成，也不得把隔离测试数值写成生产 page cache 曲线。
+bundle 不携带本机 install name 且重复构建字节一致。
+
+第二层代码已经把扩展接到 `SqlitePersistence` 的唯一私有连接，由 Core 每 60 秒发布
+mode `0600` 的原子白名单快照；采集器只复制通过 schema 校验的数字字段，分析器要求
+快照新鲜、PID 与 Core 相同且 Runtime identity 非空。macOS arm64 闭包构建路径会把
+内部 package 与 dylib 一起放入 manifest 哈希和 SBOM；Windows x64 在 DLL 门禁完成前
+明确为 `unsupported_platform`，不能伪装为已测量。隔离 Core 已真实启动并写出
+`cacheUsedBytes=823936` 的同连接快照，但这仍是临时空库代码证据，不是生产数值。
+本轮正式 RC 闭包已完成 150 个文件的摘要验证，并通过打包态迁移、
+socket、CLI、Team Worker 与 Extension E2E；这证明交付物包含该能力，但不等于已部署。
+
+当前生产 sampler 是旧窗口，不能追溯补入 page cache；必须在受保护的预编译 Core
+切换完成后开启新采样窗口。并且现有 macOS installer 仍会在 manifest 验证后生成未被
+哈希的 wrapper，首次源码 Core 回滚也不完整，所以生产切换仍被阻断。阶段 0 保持
+未完成，不得把隔离测试或旧窗口写成生产 page cache 曲线。
 
 库存生产侧新增只读 readiness 判定器，统一核对 host/PostgreSQL 时钟、launchd PID、
 原子状态文件、全表 running schedule/collection、有效 PostgreSQL 与 Browser Control
@@ -155,8 +167,8 @@ TriggerSpec 快照，并把 Workflow 的 `rejected` / `uncertain` 压缩成较�
 
 1. ~~将当前工作区按规范、协议/Trigger、库存生产、Rust Kernel 分组并分别验证提交。~~
 2. ~~为当前 JSONL 增加确定性分析器，且把 SQLite 文件大小与 page cache 证据分开。~~
-3. 等待并分析 Node、Chrome 24 小时采样结果；将已通过隔离验证的 SQLite 同连接遥测
-   打入固定路径、manifest-hashed 的 Runtime 闭包并接入生产前隔离 Core。
+3. 等待并分析 Node、Chrome 24 小时采样结果；SQLite 同连接遥测已接入生产前隔离
+   Core，待安全切换后重启包含 page cache 的新采样窗口。
 4. 复用已有 macOS 预编译 Core 闭包，在隔离 `BPA_HOME` 验证后制定生产切换门禁；
    当前采样期间不替代生产 `tsx`。
 5. 启动 Core 7 天稳定性窗口并记录重启、RSS 趋势与运行事件。
