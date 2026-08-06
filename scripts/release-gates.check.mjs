@@ -204,6 +204,47 @@ test("retries transient Windows package verification cleanup", async () => {
   assert.match(verifier, /Remove-VerificationStage -Path \$Stage/u);
 });
 
+test("bounds fresh Windows Runtime copy retries to sharing violations", async () => {
+  const installer = await readFile(
+    new URL("install-windows-x64.ps1", import.meta.url),
+    "utf8"
+  );
+  assert.match(
+    installer,
+    /function Test-TransientFileSharingViolation\(\[Exception\]\$Exception\)/u
+  );
+  assert.match(installer, /\$NativeCode -eq 32 -or \$NativeCode -eq 33/u);
+  assert.match(
+    installer,
+    /\$InstallId = \[Guid\]::NewGuid\(\)\.ToString\("N"\)[\s\S]*?\$StagingRoot = Join-Path \$InstallRoot "\.install\.\$InstallId"/u
+  );
+  assert.match(
+    installer,
+    /function Remove-FreshInstallStaging\(\[int\]\$MaximumAttempts = 5\)/u
+  );
+  assert.match(
+    installer,
+    /Remove-Item[\s\S]*?-LiteralPath \$StagingRoot[\s\S]*?-ErrorAction Stop/u
+  );
+  assert.match(
+    installer,
+    /function Copy-PackagedRuntimeForFreshInstall\(\[int\]\$MaximumAttempts = 4\)/u
+  );
+  assert.match(
+    installer,
+    /Copy-Item[\s\S]*?-LiteralPath \$PackagedRuntime[\s\S]*?-Destination \$StagingRoot[\s\S]*?-ErrorAction Stop/u
+  );
+  assert.match(
+    installer,
+    /\$Retryable = Test-TransientFileSharingViolation \$_\.Exception[\s\S]*?Remove-FreshInstallStaging[\s\S]*?if \(-not \$Retryable -or \$Attempt -eq \$MaximumAttempts\)[\s\S]*?throw \$CopyFailure/u
+  );
+  assert.match(installer, /"fresh-install-copy-retry"/u);
+  assert.match(
+    installer,
+    /Write-RuntimeInstallTrace "fresh-install-copy-started" \$Version\s+Copy-PackagedRuntimeForFreshInstall\s+Copy-Item\s+`\s+-LiteralPath \(Join-Path \$StagingRoot "extension"\)/u
+  );
+});
+
 test("rejects legacy names and metadata drift", () => {
   const release = createReleaseMetadata({
     runtimeVersion: "0.4.0",
