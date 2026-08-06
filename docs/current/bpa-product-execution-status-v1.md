@@ -9,8 +9,11 @@
 
 - 当前阶段：**阶段 0，稳住上阵**。
 - 当前分支：`codex/protocol-v2-decoupled-runtime`。
-- 远端基线：本轮审计时本地 HEAD 与 `origin/codex/protocol-v2-decoupled-runtime`
-  同为 `58c277d`，但工作区仍有大量未提交改动，尚未形成新基线。
+- Git 基线：本地 HEAD 与 `origin/codex/protocol-v2-decoupled-runtime` 已同步到
+  `f7edc23`，工作区干净；本轮将历史改动拆为文档、Rust Kernel、Trigger、浏览器
+  绑定、抖店采集与库存生产六个提交。
+- 验证基线：Node `24.18.0` 下 `pnpm verify` 通过，119 个测试文件、746 项测试通过；
+  文档 Catalog 80 条有效，Astro 0 诊断。
 - 生产原则：库存公司业务不中断；任何运行中进程、状态、schedule 或有效 lease 存在
   时，只观察，不重启、不叠加触发。
 - Rust 判定：暂不切换生产 Core，保留实现、测试和候选架构；完成阶段 0 数据采集后
@@ -22,7 +25,7 @@
 
 | 阶段 | 状态 | 当前最重要缺口 | 退出证据 |
 | --- | --- | --- | --- |
-| 0 稳住上阵 | **进行中** | 工作区未收敛；24 小时资源曲线和 browser profile 结论缺失 | 干净 Git 基线、`pnpm check`、三类资源曲线、Core 7 天稳定 |
+| 0 稳住上阵 | **进行中** | Git 与 browser profile 已收敛；24 小时资源曲线和 Core 7 天稳定性仍缺失 | 干净 Git 基线、`pnpm check`、三类资源曲线、Core 7 天稳定 |
 | 1 无人值守 | 未开始 | 登录失效恢复、失败推送、统一控制台、固定 Trigger 覆盖 | 无 SSH 认证恢复、100% 失败推送、AI 触发占比持续降至零 |
 | 2 造流程易用 | 未开始 | Web 校正界面、截图/元素候选回传、非技术用户验收 | 非技术同事独立完成真实流程发布 |
 | 3 通用能力 | 未开始 | HTTP Request、File Write、JSON Transform、导出、自愈 | 不写 Adapter 覆盖主要通用需求 |
@@ -39,6 +42,21 @@
 4. Node 侧瘦身后如果仍不满足 SLO，再评审独立 Rust Core 方案。
 
 这是一项延后决策，不是删除 Rust 方向。
+
+## 3.1 阶段 0 首次服务器测量
+
+2026-08-06 19:00（Asia/Shanghai）完成第一轮只读核验：
+
+- 生产目录存在，但不包含 `.git`；GitHub 是源码事实来源，生产目录是部署副本。
+- 库存 Chrome 明确使用持久化的 `chrome-inventory-profile`；它当前由 launchd
+  `KeepAlive` 常驻，不是每轮新 profile，也不是按需启动。
+- 单点样本中 Core 约 195 MiB RSS、34.5% CPU；库存服务约 32 MiB RSS。
+- BPA 库存 Chrome profile 共 11 个进程、约 1.23 GiB RSS。
+- SQLite 主库约 1.43 GiB，WAL 约 7.6 MiB。单点文件大小不等于 page cache 占用。
+
+以上只是一个瞬时样本，不能证明泄漏。已启动 60 秒间隔、持续 24 小时的只读 JSONL
+采样，记录 Core/库存服务/Chrome 的 CPU 与 RSS，以及 SQLite/WAL/SHM 文件大小。采样
+不读取进程命令正文、环境变量、数据库内容或页面内容，不触发工作流，也不持有租约。
 
 ## 4. Codex 过渡状态
 
@@ -103,9 +121,9 @@
 
 ## 7. 当前执行顺序
 
-1. 将当前工作区按规范、协议/Trigger、库存生产、Rust Kernel 分组并分别验证提交。
-2. 建立 Node、Chrome、SQLite 24 小时采样工具和证据目录。
-3. 查清服务器 Chrome user data dir 是否持久化。
-4. 用预编译产物替代生产 `tsx`，再测量进程与内存。
+1. ~~将当前工作区按规范、协议/Trigger、库存生产、Rust Kernel 分组并分别验证提交。~~
+2. 等待并分析 Node、Chrome、SQLite 24 小时采样结果。
+3. 设计生产预编译启动路径；先在非生产闭包验证，再替代生产 `tsx`。
+4. 启动 Core 7 天稳定性窗口并记录重启、RSS 趋势与运行事件。
 5. 进入阶段 1，优先完成登录恢复、告警、统一控制台和固定 Trigger。
 6. 依次完成清退商品、库存监控、爆款图片证据流的正式产品回归。
