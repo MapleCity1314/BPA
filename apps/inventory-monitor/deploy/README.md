@@ -13,6 +13,15 @@ The production directory contract is enforced by `production-layout.sh`:
 
 Production launchers fail closed when an environment file points outside this layout. Do not place extension builds, application copies, backup folders, or migration archives directly in `/Users/yyerybz`.
 
+Before any Core cutover or one-off inventory recovery, run
+`run-production-readiness.sh`. It performs read-only, allowlisted checks across
+launchd, the atomic recovery status file, every running PostgreSQL schedule and
+collection row, effective PostgreSQL and Browser Control leases, Core health,
+and the bound inventory browser pages. Only `idle_ready` with the relevant
+eligibility flag set to `true` is actionable. `observe_only`, missing evidence,
+clock skew, or conflicting evidence forbids restart and retriggering. The tool
+does not invoke any refresh implementation or mutate a lease/run record.
+
 The local job enforces 14 daily copies and 8 weekly copies. Its encrypted iCloud
 destination is append-only because macOS File Provider permits launchd to create
 a unique file but denies directory enumeration, rename, and deletion. Review

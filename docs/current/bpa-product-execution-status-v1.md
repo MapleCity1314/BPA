@@ -14,7 +14,7 @@
   复制一个会随提交立刻过期的哈希。该分支尚未合并或明确放弃，因此阶段 0 的 Git
   收敛门禁仍未完成。
 - 验证基线：固定 Node `24.18.0` 下 `pnpm verify` 通过，macOS、Windows、性能与发布
-  闭包 CI 全绿。本轮完整门禁为 120 个测试文件、748 项测试全绿，文档 Catalog 80 条
+  闭包 CI 全绿。本轮完整门禁为 121 个测试文件、753 项测试全绿，文档 Catalog 80 条
   有效，Astro 0 诊断。
 - 生产原则：库存公司业务不中断；任何运行中进程、状态、schedule 或有效 lease 存在
   时，只观察，不重启、不叠加触发。
@@ -69,6 +69,12 @@
 分析器明确把 SQLite 标记为 `file_sizes_only`，并将 page cache 的配置与实际占用标记
 为 `not_measured`。即使当前 JSONL 采样跑满 24 小时，也只能闭合 Node 与 Chrome 桶，
 不能把数据库文件大小冒充 page cache 证据。阶段 0 继续保持未完成。
+
+库存生产侧新增只读 readiness 判定器，统一核对 host/PostgreSQL 时钟、launchd PID、
+原子状态文件、全表 running schedule/collection、有效 PostgreSQL 与 Browser Control
+Lease、Core 健康及绑定页面认证状态。任何证据缺失或冲突都返回 `observe_only`；该工具
+不获取租约、不写数据库，也不调用任何内部刷新实现。当前生产部署副本尚未切入此提交，
+因此这里只构成代码与测试证据，不构成生产现场证据。
 
 ## 4. Codex 过渡状态
 
