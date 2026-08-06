@@ -22,6 +22,7 @@
     "architecture:check": "node scripts/verify-architecture-boundaries.mjs",
     "supply-chain:check": "node scripts/verify-supply-chain.mjs",
     "performance:check": "tsx scripts/verify-persistence-scale.ts",
+    "runtime:analyze": "node scripts/analyze-macos-runtime-metrics.mjs",
     "native:build": "pnpm --filter @bpa/inventory-kernel build:release",
     "native:test": "pnpm --filter @bpa/inventory-kernel test",
     "native:check": "pnpm --filter @bpa/inventory-kernel lint && pnpm native:build && pnpm native:test",

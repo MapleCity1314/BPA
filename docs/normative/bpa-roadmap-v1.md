@@ -51,7 +51,8 @@
 
 **判据：曲线平 = 起步高，属于架构成本；曲线爬 = 真泄漏，在 7×24 服务器上是致命的。**
 
-- 起步高的结构性原因（已定位，未验证）：`tsx` 源码运行覆盖 44 个包；
+- 起步高的结构性原因（已定位，未验证）：公司生产仍由 `tsx` 从源码启动 Core 与
+  库存 App；当前 monorepo 包含 36 个 library packages、10 个 apps 与 2 个 adapters；
   六个独立 Node 进程各带一份 V8 基线。
 - 爬升的可疑点（已定位，未验证）：`apps/local-core/src/browser-gateway.ts`
   中的常驻 Set/Map 结构、事件累积、SQLite page cache。
@@ -81,8 +82,8 @@
 
 ### 0.5 顺带
 
-- `CLAUDE.md` 已过时（描述约 10 个包 / 1 个 adapter；实际 44 包 / 10 apps / 2 adapters）。
-  在阶段 0 内更新，因为它是所有 AI 协作的入口文档，过时会持续放大成本。
+- `CLAUDE.md` 的产品定义、Protocol 和工程索引已在阶段 0 更新；后续结构变化必须与
+  该入口文档同步，避免 AI 协作继续依赖过期架构。
 
 ### 0.6 Codex 过渡期
 
