@@ -137,14 +137,22 @@ running collection 全部为 0，状态文件与最新 collection 均为终态�
 `succeeded`，但自身没有 `completedShopCount` 字段，因此 13/13 结论只来自数据库权威
 行，不从状态文件反推。
 
+第二个自然周期于 23:33:07 启动，2026-08-07 00:01:43 成功终止，证明恢复不是一次性
+人工闭包。权威 collection 仍为 13/13、52 个 step 全部终态：13 个 canary、13 个
+inventory 和 13 个 risk 均 succeeded，orders 为 5 个 succeeded 与 8 个 fresh_reused；
+库存再次为 attempted/persisted 319/319、failed 0，diagnostics 为空。状态文件、launchd
+exit 0、数据库终态、recovery PID、running schedule/collection、有效 PostgreSQL lease
+和 Browser Control lease 全部收敛，过程中没有人工触发、重启或浏览器动作。
+
 终态后 recovery PID、running schedule、running collection、有效 PostgreSQL lease 和
 Browser Control lease 均为 0。Core 仍是 PID 47140，Chrome launch PID 48106；Browser
 Bridge connected/ready，1 个活动 Session、2 个 `authenticated + ready` 页面、0 个
 阻断页。以上关闭了上一轮 lease renew unconfirmed 的生产回归，但不替代长期稳定门禁。
 
 旧资源样本跨越 Core PID 切换，已经终止并保留；新 24 小时窗口从 Core PID 47140
-重新计时，同时采集同连接 `sqlite3_db_status64`。截至 23:23，79 个样本覆盖约 1.30 小时，
-最大间隔 61 秒，无超过 120 秒的断点或缺失服务 PID；79/79 Core metrics 可用，Runtime identity 固定为
+重新计时，同时采集同连接 `sqlite3_db_status64`。截至 2026-08-07 00:03，120 个样本
+覆盖约 1.99 小时，最大间隔 61 秒，无超过 120 秒的断点或缺失服务 PID；120/120 Core
+metrics 可用，Core、Chrome 和库存 Monitor PID 均未变化，Runtime identity 固定为
 生产闭包，同连接 cache 使用值保持稳定。该窗口仍不足 24 小时，不能据此得出长期稳定
 或内存泄漏结论。
 
