@@ -57,31 +57,60 @@ export function writeRuntimeResourceMetrics(
   let file: number | undefined;
   let temporaryCreated = false;
   let renamed = false;
+  let primaryError: unknown;
   try {
     file = openSync(temporaryPath, flags, 0o600);
     temporaryCreated = true;
     writeFileSync(file, `${JSON.stringify(snapshot)}\n`, "utf8");
     fsyncSync(file);
-    closeSync(file);
+    const descriptor = file;
     file = undefined;
+    closeSync(descriptor);
     chmodSync(temporaryPath, 0o600);
     renameSync(temporaryPath, path);
     renamed = true;
-  } finally {
-    if (file !== undefined) closeSync(file);
-    if (temporaryCreated && !renamed) {
-      try {
-        unlinkSync(temporaryPath);
-      } catch (error) {
-        if (
-          !(error instanceof Error) ||
-          !("code" in error) ||
-          error.code !== "ENOENT"
-        ) {
-          throw error;
-        }
+  } catch (error) {
+    primaryError = error;
+  }
+  const cleanupErrors: unknown[] = [];
+  if (file !== undefined) {
+    try {
+      const descriptor = file;
+      file = undefined;
+      closeSync(descriptor);
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  if (temporaryCreated && !renamed) {
+    try {
+      unlinkSync(temporaryPath);
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !("code" in error) ||
+        error.code !== "ENOENT"
+      ) {
+        cleanupErrors.push(error);
       }
     }
+  }
+  if (primaryError !== undefined) {
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [primaryError, ...cleanupErrors],
+        "Runtime resource metrics write and cleanup failed",
+        { cause: primaryError }
+      );
+    }
+    throw primaryError;
+  }
+  if (cleanupErrors.length === 1) throw cleanupErrors[0];
+  if (cleanupErrors.length > 1) {
+    throw new AggregateError(
+      cleanupErrors,
+      "Runtime resource metrics cleanup failed"
+    );
   }
   return snapshot;
 }

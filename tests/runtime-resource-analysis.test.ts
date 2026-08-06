@@ -118,7 +118,44 @@ describe("runtime resource analysis", () => {
     expect(result.conclusionGate.phaseZeroResourceMeasurementComplete).toBe(false);
     expect(result.conclusionGate.blockers).toEqual([
       "core_pid_changed",
-      "core_runtime_identity_missing",
+      "sqlite_page_cache_not_measured"
+    ]);
+  });
+
+  it("keeps a stable legacy file-size window measurable for Node and Chrome", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-analysis-"));
+    const input = join(root, "samples.jsonl");
+    writeFileSync(
+      input,
+      `${JSON.stringify(sample("2026-08-05T00:00:00.000Z", 10, 100))}\n${JSON.stringify(
+        sample("2026-08-06T00:00:00.000Z", 10, 120)
+      )}\n`
+    );
+    const result = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          script,
+          "--input",
+          input,
+          "--expected-interval-seconds",
+          "43200"
+        ],
+        { encoding: "utf8" }
+      )
+    );
+
+    expect(result.coreIdentity).toMatchObject({
+      pidStable: true,
+      runtimeIdentityExpected: false,
+      runtimeIdentityStable: false
+    });
+    expect(result.conclusionGate).toMatchObject({
+      nodeAndChromeMeasurable: true,
+      sqlitePageCacheMeasurable: false,
+      phaseZeroResourceMeasurementComplete: false
+    });
+    expect(result.conclusionGate.blockers).toEqual([
       "sqlite_page_cache_not_measured"
     ]);
   });
@@ -170,6 +207,7 @@ describe("runtime resource analysis", () => {
       pidStable: true,
       missingRuntimeIdentitySamples: 0,
       runtimeIdentities: ["0.6.0-test"],
+      runtimeIdentityExpected: true,
       runtimeIdentityStable: true
     });
   });
@@ -207,6 +245,7 @@ describe("runtime resource analysis", () => {
       pidStable: false,
       missingRuntimeIdentitySamples: 1,
       runtimeIdentities: ["0.6.0-test", "0.6.1-test"],
+      runtimeIdentityExpected: true,
       runtimeIdentityStable: false
     });
     expect(result.conclusionGate).toMatchObject({

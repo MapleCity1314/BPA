@@ -203,6 +203,9 @@ function chromeSummary(samples) {
 function coreIdentitySummary(samples, expectedIntervalSeconds) {
   const pids = [];
   const runtimeIdentities = [];
+  const runtimeIdentityExpected = samples.some(
+    ({ sample }) => sample.coreMetrics !== undefined && sample.coreMetrics !== null
+  );
   let missingPidSamples = 0;
   let missingRuntimeIdentitySamples = 0;
   for (const { sample, timestamp } of samples) {
@@ -237,7 +240,9 @@ function coreIdentitySummary(samples, expectedIntervalSeconds) {
     pidStable: missingPidSamples === 0 && uniquePids.length === 1,
     missingRuntimeIdentitySamples,
     runtimeIdentities: uniqueRuntimeIdentities,
+    runtimeIdentityExpected,
     runtimeIdentityStable:
+      runtimeIdentityExpected &&
       missingRuntimeIdentitySamples === 0 &&
       uniqueRuntimeIdentities.length === 1
   };
@@ -375,7 +380,7 @@ function analyze(samples, options) {
       corePidStable: coreIdentity.pidStable,
       coreRuntimeIdentityStable: coreIdentity.runtimeIdentityStable,
       nodeAndChromeMeasurable:
-        windowComplete && continuityComplete && coreIdentityStable,
+        windowComplete && continuityComplete && coreIdentity.pidStable,
       sqlitePageCacheMeasurable,
       phaseZeroResourceMeasurementComplete:
         windowComplete &&
@@ -387,10 +392,12 @@ function analyze(samples, options) {
         ...(!continuityComplete ? ["sampling_gaps_exceed_limit"] : []),
         ...(coreIdentity.missingPidSamples > 0 ? ["core_pid_missing"] : []),
         ...(coreIdentity.uniquePids.length > 1 ? ["core_pid_changed"] : []),
-        ...(coreIdentity.missingRuntimeIdentitySamples > 0
+        ...(coreIdentity.runtimeIdentityExpected &&
+        coreIdentity.missingRuntimeIdentitySamples > 0
           ? ["core_runtime_identity_missing"]
           : []),
-        ...(coreIdentity.runtimeIdentities.length > 1
+        ...(coreIdentity.runtimeIdentityExpected &&
+        coreIdentity.runtimeIdentities.length > 1
           ? ["core_runtime_identity_changed"]
           : []),
         ...(sqlite.pageCache.status !== "measured"
