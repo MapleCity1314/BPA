@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { relative, resolve } from "node:path";
 
 function parseArguments(argv) {
   const options = {};
@@ -21,6 +21,24 @@ function parseArguments(argv) {
 
 function validPath(value) {
   return typeof value === "string" && value.length > 0 && resolve(value) === value;
+}
+
+function canonicalPath(value) {
+  return realpathSync(value);
+}
+
+function processWorkingDirectory(pid) {
+  const output = execFileSync(
+    "lsof",
+    ["-a", "-p", String(pid), "-d", "cwd", "-Fn"],
+    { encoding: "utf8" }
+  );
+  const path = output
+    .split("\n")
+    .find((line) => line.startsWith("n"))
+    ?.slice(1);
+  if (!path) throw new Error("Core process working directory is unavailable");
+  return canonicalPath(path);
 }
 
 export function verifyCoreProcessIdentity(options) {
@@ -46,13 +64,13 @@ export function verifyCoreProcessIdentity(options) {
   }
   if (
     options.executablePath !== undefined &&
-    resolve(options.executablePath) !== resolve(lock.executablePath)
+    canonicalPath(options.executablePath) !== canonicalPath(lock.executablePath)
   ) {
     throw new Error("Core executable path does not match the expected release");
   }
   if (
     options.entryPointPath !== undefined &&
-    resolve(options.entryPointPath) !== resolve(lock.entryPointPath)
+    canonicalPath(options.entryPointPath) !== canonicalPath(lock.entryPointPath)
   ) {
     throw new Error("Core entrypoint path does not match the expected release");
   }
@@ -62,10 +80,23 @@ export function verifyCoreProcessIdentity(options) {
     ["-p", String(options.pid), "-o", "command="],
     { encoding: "utf8" }
   ).trim();
-  if (
-    !command.includes(lock.executablePath) ||
-    !command.includes(lock.entryPointPath)
-  ) {
+  const executablePath = canonicalPath(lock.executablePath);
+  const entryPointPath = canonicalPath(lock.entryPointPath);
+  const executableMatches =
+    command.includes(lock.executablePath) || command.includes(executablePath);
+  let entryPointMatches =
+    command.includes(lock.entryPointPath) || command.includes(entryPointPath);
+  if (!entryPointMatches) {
+    const relativeEntryPoint = relative(
+      processWorkingDirectory(options.pid),
+      entryPointPath
+    );
+    entryPointMatches =
+      relativeEntryPoint.length > 0 &&
+      !relativeEntryPoint.startsWith("..") &&
+      command.split(/\s+/u).includes(relativeEntryPoint);
+  }
+  if (!executableMatches || !entryPointMatches) {
     throw new Error("Live process command does not match the Core identity lock");
   }
   return {

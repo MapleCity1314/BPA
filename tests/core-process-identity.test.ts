@@ -24,7 +24,8 @@ describe.runIf(process.platform !== "win32")(
         const entryPointPath = join(root, "core-fixture.mjs");
         const lockPath = join(root, "core.lock");
         writeFileSync(entryPointPath, "setInterval(() => {}, 1000);\n");
-        const child = spawn(process.execPath, [entryPointPath], {
+        const child = spawn(process.execPath, ["core-fixture.mjs"], {
+          cwd: root,
           stdio: "ignore"
         });
         children.push(child);
