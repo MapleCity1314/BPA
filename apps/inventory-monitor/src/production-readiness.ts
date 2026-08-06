@@ -132,7 +132,7 @@ export function evaluateInventoryProductionReadiness(
   return {
     schema: "bpa.inventory-production-readiness/1",
     observedAt: snapshot.observedAt,
-    mode: allBlockers.length === 0 ? "idle_ready" : "observe_only",
+    mode: eligibleForCoreCutover ? "idle_ready" : "observe_only",
     eligibleForCoreCutover,
     eligibleForOneRecoveryTrigger: allBlockers.length === 0,
     blockers: allBlockers,

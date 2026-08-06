@@ -102,6 +102,24 @@ describe("inventory production readiness", () => {
     expect(result.blockers).toContain("INVENTORY_PAGE_BLOCKED_OR_UNKNOWN");
   });
 
+  it("separates idle Core-cutover eligibility from browser trigger readiness", () => {
+    const snapshot = idleSnapshot();
+    const result = evaluateInventoryProductionReadiness({
+      ...snapshot,
+      core: {
+        ...snapshot.core,
+        browserReady: false,
+        connectedInventorySessionCount: 0,
+        readyAuthenticatedPageCount: 0
+      }
+    });
+
+    expect(result.mode).toBe("idle_ready");
+    expect(result.eligibleForCoreCutover).toBe(true);
+    expect(result.eligibleForOneRecoveryTrigger).toBe(false);
+    expect(result.blockers).toContain("BROWSER_BRIDGE_NOT_READY");
+  });
+
   it("rejects an unrecognized status-file state", () => {
     const snapshot = idleSnapshot();
     const result = evaluateInventoryProductionReadiness({
