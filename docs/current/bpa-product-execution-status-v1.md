@@ -16,7 +16,8 @@
 - 验证基线：固定 Node `24.18.0` 下当前候选 `pnpm verify` 通过。本轮完整门禁为 125 个
   测试文件、765 项测试全绿，文档 Catalog 80 条有效，Astro 0 诊断。前一 GitHub
   提交的 macOS、性能和发布闭包已通过；Windows 因把 POSIX `0600` 断言直接用于
-  Windows 文件 mode 而失败，当前候选已按平台语义修正，等待新一轮 CI 复核。
+  Windows 文件 mode 而失败，修正后新一轮 `verify-windows` 已通过。后续提交仍须重新
+  接受相同门禁，不能继承旧提交的绿色结论。
 - 生产原则：库存公司业务不中断；任何运行中进程、状态、schedule 或有效 lease 存在
   时，只观察，不重启、不叠加触发。
 - Rust 判定：暂不切换生产 Core，保留实现、测试和候选架构；完成阶段 0 数据采集后
@@ -165,6 +166,19 @@ schedule 和 collection 均为 0，但该周期只完成 1/13 店。该店已经
 编码为 `null`。查询计划测试、控制协议 E2E、租约 fail-closed 测试和固定 Node 24
 typecheck 已通过；生产尚未部署该候选。修复部署前继续只读观察，不手工补触发、不重启
 Core，也不把新的失败周期覆盖为成功。
+
+候选 RC 已完成首次 source-to-closure 故障注入：在隔离 Home 和 v12 临时数据库中，
+强制让新 launch agent bootstrap 以状态 42 失败。installer 随后恢复了旧 launchd
+plist、Native Host manifest、Extension 与 v12 数据库，删除了新 Runtime 指针和安装
+目录，释放 install/maintenance 两把锁；恢复后的数据库 `integrity_check=ok`，并再次
+尝试 bootstrap 旧 agent。该证据没有触碰生产 Home 或生产进程。
+
+2026-08-06 21:21 的第二次生产只读 readiness 为瞬时 `idle_ready`：无 recovery PID、
+无 PostgreSQL/Browser Control Lease、无 running schedule/collection；Core 与浏览器
+桥接可达，库存 Browser Instance 有 1 个连接会话、2 个 authenticated ready 页面、
+0 个阻断页面。检查同时暴露 readiness 请求上限 500 与持久层最大 200 不一致；候选已
+统一为 200 并通过控制协议与 readiness 测试。`idle_ready` 不是持续许可，正式切换前
+必须再次运行同一检查，任何新周期或租约出现都立即回到 `observe_only`。
 
 剩余验收：连续稳定窗口、固定 Trigger、统一控制台、登录失效恢复，以及业务能力迁入
 正式 Node / Workflow 后的无中断切换。

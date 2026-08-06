@@ -819,7 +819,7 @@ export class LocalCoreService {
       case "browser.page-observation.list":
         {
           const pages = this.persistence.listBrowserPageObservations({
-            limit: Math.min(500, Math.max(1, Number(params.limit) || 200)),
+            limit: Math.min(200, Math.max(1, Number(params.limit) || 200)),
             ...(params.sessionId === undefined
               ? {}
               : { sessionId: String(params.sessionId) }),

@@ -153,7 +153,7 @@ async function coreSnapshot(browserInstanceId: string) {
       client.request<BrowserSessionRecord[]>("browser.session.list", { limit: 200 }),
       client.request<BrowserPageObservationRecord[]>(
         "browser.page-observation.list",
-        { browserInstanceId, limit: 500 }
+        { browserInstanceId, limit: 200 }
       )
     ]);
     const matchingSessions = sessions.filter(

@@ -231,6 +231,21 @@ describe("local control socket", () => {
       requestId: "lease-acquire-busy",
       result: null
     });
+    await expect(
+      sendV1(socketPath, {
+        version: "bpa.control/1",
+        kind: "request",
+        requestId: "page-observation-limit",
+        method: "browser.page-observation.list",
+        deadline: new Date(Date.now() + 10_000).toISOString(),
+        params: { limit: 500 }
+      })
+    ).resolves.toEqual({
+      version: "bpa.control/1",
+      kind: "result",
+      requestId: "page-observation-limit",
+      result: []
+    });
   });
 
   it("negotiates hello before application requests", async () => {
