@@ -16,7 +16,6 @@ export interface CandidateDraftStep {
 export interface CandidateExceptionPolicy {
   failure: "fail" | "collect" | "request_assistance";
   timeout: "fail" | "collect" | "request_assistance";
-  rejected: "fail" | "collect" | "request_assistance";
   cancelled: "fail" | "collect" | "request_assistance";
   uncertain: "request_assistance" | "stop_uncertain";
 }

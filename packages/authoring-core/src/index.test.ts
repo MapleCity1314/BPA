@@ -665,7 +665,6 @@ describe("typed incremental Draft authoring", () => {
         policy: {
           failure: "collect",
           timeout: "collect",
-          rejected: "fail",
           cancelled: "fail",
           uncertain: "stop_uncertain"
         }
@@ -820,7 +819,6 @@ describe("typed incremental Draft authoring", () => {
           policy: {
             failure: "collect",
             timeout: "collect",
-            rejected: "fail",
             cancelled: "fail",
             uncertain: "fail"
           } as never
@@ -828,6 +826,64 @@ describe("typed incremental Draft authoring", () => {
         now
       )
     ).toThrow(/Invalid exception policy/);
+    expect(() =>
+      applyDraftOperation(
+        withStep,
+        1,
+        {
+          operationId: "legacy-rejected-policy",
+          type: "exception-policy.set",
+          stepKey: "inspect",
+          policy: {
+            failure: "collect",
+            timeout: "collect",
+            rejected: "fail",
+            cancelled: "fail",
+            uncertain: "stop_uncertain"
+          }
+        } as never,
+        now
+      )
+    ).toThrow(/must define exactly failure, timeout, cancelled, and uncertain/);
+    expect(() =>
+      applyDraftOperation(
+        withStep,
+        1,
+        {
+          operationId: "legacy-rejected-edge",
+          type: "edge.set",
+          edge: {
+            from: "inspect",
+            outcome: "rejected",
+            to: "inspect"
+          }
+        } as never,
+        now
+      )
+    ).toThrow(/Invalid Draft edge outcome: rejected/);
+
+    const legacyDraft = structuredClone(withStep);
+    legacyDraft.steps.inspect!.exceptionPolicy = {
+      failure: "collect",
+      timeout: "collect",
+      rejected: "fail",
+      cancelled: "fail",
+      uncertain: "stop_uncertain"
+    } as never;
+    legacyDraft.edges = [
+      {
+        from: "inspect",
+        outcome: "rejected",
+        to: "inspect"
+      } as never
+    ];
+    expect(validateWorkflowCandidateDraft(legacyDraft, 1)).toMatchObject({
+      valid: false,
+      issues: expect.arrayContaining([
+        expect.stringContaining("invalid exception policy"),
+        expect.stringContaining("rejected has an invalid outcome")
+      ])
+    });
   });
 });
 

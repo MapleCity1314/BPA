@@ -112,20 +112,20 @@ export type DraftExceptionAction =
 export interface DraftExceptionPolicy {
   failure: Exclude<DraftExceptionAction, "stop_uncertain">;
   timeout: Exclude<DraftExceptionAction, "stop_uncertain">;
-  rejected: Exclude<DraftExceptionAction, "stop_uncertain">;
   cancelled: Exclude<DraftExceptionAction, "stop_uncertain">;
   uncertain: "request_assistance" | "stop_uncertain";
 }
 
+export type DraftEdgeOutcome =
+  | "success"
+  | "failure"
+  | "timeout"
+  | "cancelled"
+  | "uncertain";
+
 export interface DraftEdge {
   from: string;
-  outcome:
-    | "success"
-    | "failure"
-    | "timeout"
-    | "rejected"
-    | "cancelled"
-    | "uncertain";
+  outcome: DraftEdgeOutcome;
   to: string;
 }
 
@@ -406,7 +406,6 @@ function validateExceptionPolicy(policy: DraftExceptionPolicy): void {
   const expectedOutcomes = [
     "failure",
     "timeout",
-    "rejected",
     "cancelled",
     "uncertain"
   ] as const;
@@ -416,7 +415,7 @@ function validateExceptionPolicy(policy: DraftExceptionPolicy): void {
     expectedOutcomes.some((outcome) => !(outcome in policy))
   ) {
     throw new InvalidDraftOperationError(
-      "Exception policy must define exactly failure, timeout, rejected, cancelled, and uncertain"
+      "Exception policy must define exactly failure, timeout, cancelled, and uncertain"
     );
   }
   const ordinary = new Set<DraftExceptionAction>([
@@ -434,6 +433,22 @@ function validateExceptionPolicy(policy: DraftExceptionPolicy): void {
         `Invalid exception policy action ${String(action)} for ${outcome}`
       );
     }
+  }
+}
+
+const draftEdgeOutcomes = new Set<DraftEdgeOutcome>([
+  "success",
+  "failure",
+  "timeout",
+  "cancelled",
+  "uncertain"
+]);
+
+function validateDraftEdgeOutcome(outcome: unknown): void {
+  if (!draftEdgeOutcomes.has(outcome as DraftEdgeOutcome)) {
+    throw new InvalidDraftOperationError(
+      `Invalid Draft edge outcome: ${String(outcome)}`
+    );
   }
 }
 
@@ -592,6 +607,7 @@ function applyUnchecked(
     case "edge.set":
       assertPresent(draft.steps, operation.edge.from, "Edge source step");
       assertPresent(draft.steps, operation.edge.to, "Edge target step");
+      validateDraftEdgeOutcome(operation.edge.outcome);
       if (operation.edge.from === operation.edge.to) {
         throw new InvalidDraftOperationError(
           "Draft edges cannot create a direct self-loop"
@@ -607,6 +623,7 @@ function applyUnchecked(
       draft.edges.push(clone(operation.edge));
       break;
     case "edge.remove": {
+      validateDraftEdgeOutcome(operation.outcome);
       const nextEdges = draft.edges.filter(
         (edge) =>
           !(
@@ -714,8 +731,24 @@ export function workflowDraftIssues(draft: WorkflowDraft): string[] {
     if (!EXACT_REF_PATTERN.test(step.nodeRef)) {
       issues.push(`Step ${step.key} does not pin an exact Node SemVer`);
     }
+    if (step.exceptionPolicy) {
+      try {
+        validateExceptionPolicy(step.exceptionPolicy);
+      } catch (error) {
+        issues.push(
+          `Step ${step.key} has an invalid exception policy: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    }
   }
   for (const edge of draft.edges) {
+    if (!draftEdgeOutcomes.has(edge.outcome as DraftEdgeOutcome)) {
+      issues.push(
+        `Edge ${edge.from}:${String(edge.outcome)} has an invalid outcome`
+      );
+    }
     if (!draft.steps[edge.from] || !draft.steps[edge.to]) {
       issues.push(
         `Edge ${edge.from}:${edge.outcome}->${edge.to} references a missing step`

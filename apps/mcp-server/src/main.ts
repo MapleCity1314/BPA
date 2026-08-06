@@ -454,7 +454,7 @@ server.registerTool(
   {
     title: "Set one Workflow Draft exception policy",
     description:
-      "CAS-edit deterministic failure, timeout, rejection, cancellation, and uncertain handling for one step.",
+      "CAS-edit deterministic failure, timeout, cancellation, and uncertain handling for one step. Rejected is an immutable terminal outcome.",
     inputSchema: {
       draft_id: z.string(),
       expected_revision: z.number().int().nonnegative(),
@@ -462,7 +462,6 @@ server.registerTool(
       step_key: z.string(),
       failure: z.enum(["fail", "collect", "request_assistance"]),
       timeout: z.enum(["fail", "collect", "request_assistance"]),
-      rejected: z.enum(["fail", "collect", "request_assistance"]),
       cancelled: z.enum(["fail", "collect", "request_assistance"]),
       uncertain: z.enum(["request_assistance", "stop_uncertain"])
     }
@@ -474,7 +473,6 @@ server.registerTool(
     step_key,
     failure,
     timeout,
-    rejected,
     cancelled,
     uncertain
   }) =>
@@ -488,7 +486,6 @@ server.registerTool(
           policy: {
             failure,
             timeout,
-            rejected,
             cancelled,
             uncertain
           }

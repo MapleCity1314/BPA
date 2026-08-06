@@ -44,7 +44,6 @@ describe("MCP typed Draft protocol payloads", () => {
         policy: {
           failure: "collect",
           timeout: "collect",
-          rejected: "fail",
           cancelled: "fail",
           uncertain: "stop_uncertain"
         }

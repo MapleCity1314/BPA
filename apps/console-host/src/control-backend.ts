@@ -217,8 +217,13 @@ function timelineEntry(
   fallbackTime: string
 ): RunTimelineEntry {
   const type = text(value.type, "RUN_EVENT");
+  const payload = record(value.payload);
+  const rejected =
+    type === "RUN_REJECTED" ||
+    payload?.status === "rejected" ||
+    payload?.outcomeStatus === "rejected";
   const state: RunTimelineEntry["state"] =
-    /FAILED|UNCERTAIN/.test(type)
+    rejected || /FAILED|UNCERTAIN/.test(type)
       ? "failed"
       : /WAITING|PAUSED/.test(type)
         ? "waiting"
@@ -228,13 +233,17 @@ function timelineEntry(
   return {
     id: text(value.id, `event-${integer(value.sequence)}`),
     at: safeTimestamp(value.occurredAt, fallbackTime),
-    title: eventTitles[type] ?? "任务状态已更新",
+    title: rejected
+      ? eventTitles.RUN_REJECTED!
+      : eventTitles[type] ?? "任务状态已更新",
     summary:
-      state === "failed"
-        ? "此步骤未能确定完成，请按任务中心提示处理。"
-        : state === "waiting"
-          ? "流程已安全暂停，完成所需操作后会从原位置继续。"
-          : "该步骤已经记录，可在技术细节中查看事件编号。",
+      rejected
+        ? "任务已作为不可恢复终态安全阻断；处理拒绝原因后请重新发起。"
+        : state === "failed"
+          ? "此步骤未能确定完成，请按任务中心提示处理。"
+          : state === "waiting"
+            ? "流程已安全暂停，完成所需操作后会从原位置继续。"
+            : "该步骤已经记录，可在技术细节中查看事件编号。",
     state,
     technicalDetails: `event=${type} · sequence=${integer(value.sequence)}`
   };
