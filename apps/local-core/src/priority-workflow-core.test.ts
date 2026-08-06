@@ -356,6 +356,64 @@ describe("Local Core priority inspection workflow", () => {
       "workflows/examples/doudian.priority-items-readonly-inspect.workflow.yaml"
     );
 
+    store.openBrowserSession({
+      session: {
+        id: "session-priority",
+        browserInstanceId: "browser-1",
+        extensionId: "extension-priority",
+        extensionVersion: "0.6.0",
+        protocolVersion: "2.0.0",
+        incomingSeq: 0,
+        outgoingSeq: 0,
+        lastAckedCommandSeq: 0,
+        capabilityDigest: `sha256:${"a".repeat(64)}`,
+        resumeTokenDigest: `sha256:${"b".repeat(64)}`,
+        resumeTokenExpiresAt: "2026-07-29T00:00:00.000Z",
+        connectedAt: timestamp
+      },
+      now: timestamp
+    });
+    store.replaceBrowserCapabilities(
+      "session-priority",
+      [
+        ["doudian.shop.context.read", "1.3.0", ["browser.dom.read", "browser.tabs.read"]],
+        ["doudian.product.scope.collect", "1.1.0", ["browser.dom.read", "browser.tabs.read"]],
+        ["doudian.product.scope.restore", "1.0.0", ["browser.dom.read", "browser.tabs.read", "browser.tabs.navigate"]],
+        ["doudian.product.editor.open", "1.1.0", ["browser.dom.read", "browser.tabs.read", "browser.tabs.navigate"]],
+        ["doudian.editor.priority-items.inspect", "1.1.0", ["browser.dom.read", "browser.tabs.read"]]
+      ].map(([nodeId, nodeVersion, permissions]) => ({
+        nodeId: String(nodeId),
+        nodeVersion: String(nodeVersion),
+        riskLevel: "R2",
+        permissions: permissions as string[],
+        routes: [
+          {
+            origin: "https://fxg.jinritemai.com",
+            pathnamePrefixes: ["/ffa/g/list", "/ffa/g/create"],
+            observerCapabilityId: "doudian.page"
+          }
+        ],
+        adapterId: "doudian",
+        adapterVersion: "1.2.0"
+      }))
+    );
+    store.upsertBrowserPageObservation({
+      sessionId: "session-priority",
+      browserInstanceId: "browser-1",
+      tabId: 1,
+      windowId: 1,
+      origin: "https://fxg.jinritemai.com",
+      pathname: "/ffa/g/list",
+      contentScriptReady: true,
+      authentication: "authenticated",
+      authenticationContextRef: "auth-context-priority",
+      observationState: "ready",
+      pageEpoch: "tab-1:1:priority",
+      observerCapabilityId: "doudian.page",
+      revision: 1,
+      observedAt: new Date().toISOString()
+    });
+
     const created = service.handle({
       id: "run",
       method: "run.create",
@@ -365,6 +423,14 @@ describe("Local Core priority inspection workflow", () => {
         input: {
           dataset: { id: "packaging-master", version: "1.0.0" },
           platformFillCheck: false
+        },
+        resourceBindings: {
+          doudian_browser: {
+            sessionId: "session-priority",
+            browserInstanceId: "browser-1",
+            tabId: 1,
+            observationRevision: 1
+          }
         }
       }
     });

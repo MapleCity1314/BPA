@@ -3,10 +3,13 @@ import { createPackagingMasterRecord } from "@bpa/packaging-domain";
 import type { JsonValue } from "@bpa/workflow-ir";
 import {
   ISSUES_RECONCILE_HANDLER_REF,
+  INVENTORY_CHANNEL_ESTIMATE_HANDLER_REF,
+  INVENTORY_RISK_EVALUATE_HANDLER_REF,
   PACKAGING_INSPECTION_MATCH_HANDLER_REF,
   PACKAGING_MATCH_HANDLER_REF,
   PACKAGING_PRODUCTS_NORMALIZE_HANDLER_REF,
   REPORT_ISSUE_BUILD_HANDLER_REF,
+  SALES_DEMAND_FORECAST_HANDLER_REF,
   TEAM_WORKER_CODE_DIGEST,
   TEAM_WORKER_HANDLER_REFS,
   teamHandlerRegistry
@@ -27,6 +30,37 @@ async function invoke(
 }
 
 describe("trusted Team Worker handlers", () => {
+  it("runs bounded inventory forecast, channel estimation and risk handlers", async () => {
+    const forecast = await invoke(SALES_DEMAND_FORECAST_HANDLER_REF, {
+      asOf: "2026-08-02T12:00:00.000Z",
+      observations: Array.from({ length: 35 * 24 }, (_, index) => ({
+        at: new Date(Date.parse("2026-06-28T12:00:00.000Z") + index * 3_600_000).toISOString(),
+        quantity: 1
+      }))
+    });
+    expect(forecast).toMatchObject({
+      algorithmVersion: "inventory-demand-ensemble-conformal/1.0.0",
+      horizons: [{ hours: 2 }, { hours: 6 }, { hours: 24 }]
+    });
+    await expect(invoke(INVENTORY_CHANNEL_ESTIMATE_HANDLER_REF, {
+      asOf: "2026-08-02T12:00:00.000Z",
+      points: []
+    })).resolves.toMatchObject({ status: "unknown" });
+    await expect(invoke(INVENTORY_RISK_EVALUATE_HANDLER_REF, {
+      evaluatedAt: "2026-08-02T12:00:00.000Z",
+      envelope: {
+        schemaVersion: "bpa.inventory-fact/1",
+        observedAt: "2026-08-02T10:00:00.000Z",
+        asOf: "2026-08-02T10:00:00.000Z",
+        scope: { shopId: "shop-1", productId: "product-1" },
+        facts: { productId: "product-1", title: "商品", totalStock: 0, skus: [] },
+        quality: { freshness: "stale", completeness: 1, mappingConfidence: "high", diagnostics: [] },
+        source: { kind: "test", datasetId: "inventory", datasetVersion: "v1", digest: `sha256:${"a".repeat(64)}` }
+      },
+      forecasts: {},
+      channelEstimates: {}
+    })).resolves.toMatchObject({ severity: "unknown" });
+  });
   it("normalizes collected scope products and keeps unmatched products inspectable", async () => {
     const normalized = await invoke(PACKAGING_PRODUCTS_NORMALIZE_HANDLER_REF, {
       shopId: "shop-1",

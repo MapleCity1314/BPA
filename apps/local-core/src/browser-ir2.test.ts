@@ -156,7 +156,7 @@ function boundPlan(node: NodeDefinition): ExecutionPlan {
 }
 
 describe("IR2 browser provider", () => {
-  it("durably bridges a frozen invocation through Browser Protocol v1", async () => {
+  it("durably bridges a frozen invocation through Browser Protocol v2", async () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");
     const signingKey: CoreSigningKey = {
@@ -180,13 +180,13 @@ describe("IR2 browser provider", () => {
       }).ok
     ).toBe(true);
     const outgoing: Array<Record<string, any>> = [];
-    gateway.attach(
+    const primaryConnection = gateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
       (message) => outgoing.push(message)
     );
     gateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "hello-ir2",
       session_id: "new",
       seq: 0,
@@ -197,14 +197,16 @@ describe("IR2 browser provider", () => {
         browser_instance_id: "browser-ir2",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
         extension_version: "0.3.0",
-        supported_protocols: ["bpa.browser/1"],
+        bridge_build_id: "v0.3.0-test.node24.18.0",
+        supported_protocols: ["bpa.browser/2"],
+        features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         last_acked_command_seq: 0
       }
-    });
+    }, primaryConnection);
     const sessionId = String(outgoing.at(-1)?.session_id);
     gateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "capability-ir2",
       session_id: sessionId,
       seq: 1,
@@ -218,13 +220,21 @@ describe("IR2 browser provider", () => {
             versions: [node.metadata.version],
             risk_level: node.risk.level,
             permissions: node.risk.permissions,
+            routes: [
+              {
+                origin: "https://fxg.jinritemai.com",
+                pathname_prefixes: ["/ffa/g/list"],
+                observer_capability_id: "doudian.page"
+              }
+            ],
             adapter_id: "doudian",
             adapter_version: "1.1.0"
           }
         ],
+        features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         manifest_digest: `sha256:${"c".repeat(64)}`
       }
-    });
+    }, primaryConnection);
     persistence.updateBrowserSessionObservation({
       id: sessionId,
       expectedRevision: 0,
@@ -233,6 +243,84 @@ describe("IR2 browser provider", () => {
       observedAuthentication: "authenticated",
       observationState: "available",
       observedAt: new Date().toISOString()
+    });
+    persistence.upsertBrowserPageObservation({
+      sessionId,
+      browserInstanceId: "browser-ir2",
+      tabId: 10,
+      windowId: 20,
+      origin: "https://fxg.jinritemai.com",
+      pathname: "/ffa/g/list",
+      contentScriptReady: true,
+      authentication: "authenticated",
+      authenticationContextRef: "auth-context-ir2",
+      observationState: "ready",
+      pageEpoch: "epoch-1",
+      observerCapabilityId: "doudian.page",
+      revision: 1,
+      observedAt: new Date().toISOString(),
+    });
+    const decoyOutgoing: Array<Record<string, any>> = [];
+    const decoyConnection = gateway.attach(
+      `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      (message) => decoyOutgoing.push(message)
+    );
+    gateway.handle({
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
+      message_id: "hello-ir2-decoy",
+      session_id: "new",
+      seq: 0,
+      sent_at: new Date().toISOString(),
+      type: "session.hello",
+      trace_id: "trace-ir2-decoy",
+      payload: {
+        browser_instance_id: "browser-ir2-decoy",
+        extension_id: DEFAULT_BPA_EXTENSION_ID,
+        extension_version: "0.4.0",
+        bridge_build_id: "v0.4.0-test.node24.18.0",
+        supported_protocols: ["bpa.browser/2"],
+        features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
+        last_acked_command_seq: 0
+      }
+    }, decoyConnection);
+    const decoySessionId = String(decoyOutgoing.at(-1)?.session_id);
+    gateway.handle({
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
+      message_id: "capability-ir2-decoy",
+      session_id: decoySessionId,
+      seq: 1,
+      sent_at: new Date().toISOString(),
+      type: "capability.report",
+      trace_id: "trace-ir2-decoy",
+      payload: {
+        capabilities: [
+          {
+            node_id: node.metadata.id,
+            versions: [node.metadata.version],
+            risk_level: node.risk.level,
+            permissions: node.risk.permissions,
+            routes: [
+              {
+                origin: "https://fxg.jinritemai.com",
+                pathname_prefixes: ["/ffa/g/list"],
+                observer_capability_id: "doudian.page"
+              }
+            ],
+            adapter_id: "doudian",
+            adapter_version: "1.1.0"
+          }
+        ],
+        features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
+        manifest_digest: `sha256:${"d".repeat(64)}`
+      }
+    }, decoyConnection);
+    expect(gateway.status()).toMatchObject({
+      ready: true,
+      activeSessionCount: 2,
+      sessionId: decoySessionId,
+      browserInstanceId: "browser-ir2-decoy"
     });
     const executionPlan = boundPlan(node);
     const run = service.ir2Runtime.start(
@@ -249,9 +337,16 @@ describe("IR2 browser provider", () => {
             revision: 1,
             slotName: "shop_source",
             sessionId,
+            browserInstanceId: "browser-ir2",
+            tabId: 10,
+            windowId: 20,
             capabilityDigest: `sha256:${"c".repeat(64)}`,
             origin: "https://fxg.jinritemai.com",
+            pathname: "/ffa/g/list",
+            pageEpoch: "epoch-1",
+            observerCapabilityId: "doudian.page",
             authentication: "authenticated",
+            authenticationContextRef: "auth-context-ir2",
             frozenAt: 1,
             approvedBy: "test"
           }
@@ -264,6 +359,9 @@ describe("IR2 browser provider", () => {
       (message) => message.type === "command.dispatch"
     );
     if (!command) throw new Error("IR2 browser command was not dispatched");
+    expect(
+      decoyOutgoing.some((message) => message.type === "command.dispatch")
+    ).toBe(false);
     expect(command.payload).toMatchObject({
       run_id: run.id,
       node: {
@@ -272,8 +370,8 @@ describe("IR2 browser provider", () => {
       }
     });
     gateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "result-ir2",
       session_id: sessionId,
       seq: 2,
@@ -304,7 +402,7 @@ describe("IR2 browser provider", () => {
         },
         evidence_refs: []
       }
-    });
+    }, primaryConnection);
     expect(gateway.status().lastError).toBeUndefined();
     expect(
       persistence.getGatewayCommand(String(command.payload.command_id))
@@ -365,8 +463,8 @@ describe("IR2 browser provider", () => {
       (message) => firstOutgoing.push(message)
     );
     firstGateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "hello-cancel-1",
       session_id: "new",
       seq: 0,
@@ -377,14 +475,16 @@ describe("IR2 browser provider", () => {
         browser_instance_id: "browser-cancel",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
         extension_version: "0.3.0",
-        supported_protocols: ["bpa.browser/1"],
+        bridge_build_id: "v0.3.0-test.node24.18.0",
+        supported_protocols: ["bpa.browser/2"],
+        features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         last_acked_command_seq: 0
       }
     });
     const firstSessionId = String(firstOutgoing.at(-1)?.session_id);
     firstGateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "capability-cancel-1",
       session_id: firstSessionId,
       seq: 1,
@@ -398,10 +498,18 @@ describe("IR2 browser provider", () => {
             versions: [node.metadata.version],
             risk_level: node.risk.level,
             permissions: node.risk.permissions,
+            routes: [
+              {
+                origin: "https://fxg.jinritemai.com",
+                pathname_prefixes: ["/ffa/g/list"],
+                observer_capability_id: "doudian.page"
+              }
+            ],
             adapter_id: "doudian",
             adapter_version: "1.1.0"
           }
         ],
+        features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         manifest_digest: `sha256:${"d".repeat(64)}`
       }
     });
@@ -446,8 +554,8 @@ describe("IR2 browser provider", () => {
       (message) => restartedOutgoing.push(message)
     );
     restartedGateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "hello-cancel-2",
       session_id: "new",
       seq: 0,
@@ -458,7 +566,9 @@ describe("IR2 browser provider", () => {
         browser_instance_id: "browser-cancel",
         extension_id: DEFAULT_BPA_EXTENSION_ID,
         extension_version: "0.3.0",
-        supported_protocols: ["bpa.browser/1"],
+        bridge_build_id: "v0.3.0-test.node24.18.0",
+        supported_protocols: ["bpa.browser/2"],
+        features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         last_acked_command_seq: 0
       }
     });
@@ -466,8 +576,8 @@ describe("IR2 browser provider", () => {
       restartedOutgoing.at(-1)?.session_id
     );
     restartedGateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "capability-cancel-2",
       session_id: restartedSessionId,
       seq: 1,
@@ -481,10 +591,18 @@ describe("IR2 browser provider", () => {
             versions: [node.metadata.version],
             risk_level: node.risk.level,
             permissions: node.risk.permissions,
+            routes: [
+              {
+                origin: "https://fxg.jinritemai.com",
+                pathname_prefixes: ["/ffa/g/list"],
+                observer_capability_id: "doudian.page"
+              }
+            ],
             adapter_id: "doudian",
             adapter_version: "1.1.0"
           }
         ],
+        features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
         manifest_digest: `sha256:${"e".repeat(64)}`
       }
     });
@@ -511,8 +629,8 @@ describe("IR2 browser provider", () => {
     ).toHaveLength(1);
 
     restartedGateway.handle({
-      protocol: "bpa.browser/1",
-      version: "1.0.0",
+      protocol: "bpa.browser/2",
+      version: "2.0.0",
       message_id: "late-result-cancel",
       session_id: restartedSessionId,
       seq: 2,

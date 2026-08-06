@@ -18,12 +18,14 @@ import {
   validateResourceBinding
 } from "./index.js";
 
-const clock = {
-  value: 1_000,
-  now() {
-    return this.value++;
-  }
-};
+function createClock() {
+  return {
+    value: 1_000,
+    now() {
+      return this.value++;
+    }
+  };
+}
 
 const requirement: BrowserResourceRequirementSnapshot = {
   kind: "browser",
@@ -38,15 +40,22 @@ const binding: ResourceBindingRef = {
   revision: 1,
   slotName: "metrics_source",
   sessionId: "session-1",
+  browserInstanceId: "browser-1",
+  tabId: 42,
   capabilityDigest: "a".repeat(64),
   origin: "https://www.chanmama.com",
+  pathname: "/metrics",
+  pageEpoch: "tab-42:1:test",
+  observerCapabilityId: "chanmama.page",
   authentication: "membership",
+  authenticationContextRef: "auth-context-member",
   frozenAt: 1_002,
   approvedBy: "user:test"
 };
 
 describe("Resource Binding state", () => {
   it("moves through requested, validated, frozen and available with injected time", () => {
+    const clock = createClock();
     const requested = requestResourceBinding(
       {
         bindingId: "binding-1",
@@ -97,6 +106,7 @@ describe("Resource Binding state", () => {
   });
 
   it("rejects skipped and terminal transitions", () => {
+    const clock = createClock();
     const requested = requestResourceBinding(
       {
         bindingId: "binding-1",
@@ -118,6 +128,35 @@ describe("Resource Binding state", () => {
       revokeResourceBinding(revoked.record, "AGAIN", clock)
     ).toThrow(InvalidResourceBindingTransitionError);
   });
+
+  it("accepts an anonymous page when authentication is optional", () => {
+    const clock = createClock();
+    const optionalRequirement = {
+      ...requirement,
+      authentication: "optional" as const
+    };
+    const requested = requestResourceBinding(
+      {
+        bindingId: "binding-optional",
+        runId: "run-optional",
+        slotName: "metrics_source",
+        requirement: optionalRequirement
+      },
+      clock
+    );
+    const { authenticationContextRef: _authContext,...anonymousBinding } = binding;
+    expect(() =>
+      validateResourceBinding(
+        requested.record,
+        {
+          ...anonymousBinding,
+          bindingId: "binding-optional",
+          authentication: "anonymous"
+        },
+        clock
+      )
+    ).not.toThrow();
+  });
 });
 
 describe("invocation Resource Binding validation", () => {
@@ -130,10 +169,17 @@ describe("invocation Resource Binding validation", () => {
   };
   const session = {
     sessionId: "session-1",
+    browserInstanceId: "browser-1",
+    tabId: 42,
+    observationRevision: 1,
     capabilityDigest: "a".repeat(64),
     capabilities: ["browser.dom.read", "browser.evidence.write"],
     origin: "https://www.chanmama.com",
+    pathname: "/metrics",
+    pageEpoch: "tab-42:1:test",
+    observerCapabilityId: "chanmama.page",
     authentication: "membership" as const,
+    authenticationContextRef: "auth-context-member",
     state: "available" as const
   };
 
@@ -153,6 +199,25 @@ describe("invocation Resource Binding validation", () => {
       [field]: value
     });
     expect(issues.map((issue) => issue.code)).toContain(code);
+  });
+
+  it("does not require authentication for an optional resource", () => {
+    const { authenticationContextRef: _bindingContext,...anonymousBinding } = binding;
+    const { authenticationContextRef: _sessionContext,...anonymousSession } = session;
+    const optionalResource: InvocationResourceBinding = {
+      ...resource,
+      requirement: { ...requirement, authentication: "optional" },
+      binding: {
+        ...anonymousBinding,
+        authentication: "anonymous"
+      }
+    };
+    expect(
+      validateInvocationResourceBinding(optionalResource, {
+        ...anonymousSession,
+        authentication: "anonymous"
+      })
+    ).toEqual([]);
   });
 });
 
@@ -214,5 +279,35 @@ describe("Run Resource Binding Snapshot", () => {
         plan
       )
     ).toThrow("requirement drifted");
+  });
+
+  it("accepts an anonymous frozen binding for an optional slot", () => {
+    const optionalRequirement = {
+      ...requirement,
+      authentication: "optional" as const
+    };
+    const {
+      authenticationContextRef: _authenticationContext,
+      ...anonymousBinding
+    } = snapshot.bindings.metrics_source;
+    expect(() =>
+      assertResourceBindingSnapshotForPlan(
+        "run-1",
+        {
+          ...snapshot,
+          resourceSlots: { metrics_source: optionalRequirement },
+          bindings: {
+            metrics_source: {
+              ...anonymousBinding,
+              authentication: "anonymous"
+            }
+          }
+        },
+        {
+          ...plan,
+          resourceSlots: { metrics_source: optionalRequirement }
+        }
+      )
+    ).not.toThrow();
   });
 });

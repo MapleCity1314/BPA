@@ -1,0 +1,34 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: inventory.forecast.persist
+  version: 1.0.0
+  title: 持久化销量预测
+  description: 经受限 Unix Socket 幂等保存 SKU 预测、算法版本和订单数据集血缘。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [shopId, productId, platformSkuId, merchantCode, sourceDataset, forecast, lease]
+  properties:
+    shopId: { type: string, minLength: 1, maxLength: 200 }
+    productId: { type: string, minLength: 1, maxLength: 200 }
+    platformSkuId: { type: string, minLength: 1, maxLength: 200 }
+    merchantCode: { type: string, minLength: 1, maxLength: 200 }
+    sourceDataset: { type: object }
+    forecast: { type: object }
+    lease: { type: object }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [forecastId]
+  properties:
+    forecastId: { type: string }
+risk:
+  level: R1
+  permissions: [inventory.service.forecast.write]
+execution:
+  timeoutDefault: 30s
+  idempotency: verified_write
+  cancellable: true
+errors: [INVENTORY_SERVICE_NOT_CONFIGURED, INVENTORY_SERVICE_UNAVAILABLE, INVENTORY_SERVICE_FAILED, LEASE_FENCE_INVALID, SCHEDULER_LEASE_LOST]

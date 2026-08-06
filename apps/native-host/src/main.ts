@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { createConnection } from "node:net";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import {
   DEFAULT_BPA_EXTENSION_ID,
   assertNativeHostOrigin
-} from "@bpa/gateway-core";
+} from "@bpa/native-host-contract";
+import {
+  resolveDefaultBpaHome,
+  resolveLocalIpcEndpoint
+} from "@bpa/platform-runtime";
 import {
   attachJsonFrameDecoder,
   encodeCoreFrame,
@@ -34,10 +36,10 @@ try {
   fail(error);
 }
 
-const root =
-  process.env.BPA_HOME ??
-  join(homedir(), "Library", "Application Support", "BPA");
-const socketPath = join(root, "run", "core.sock");
+const root = resolveDefaultBpaHome(
+  process.env.BPA_HOME ? { bpaHome: process.env.BPA_HOME } : {}
+);
+const socketPath = resolveLocalIpcEndpoint(root, "core");
 const socket = createConnection(socketPath);
 const attachId = randomUUID();
 let attached = false;

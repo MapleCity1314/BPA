@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { join } from "node:path";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
+import { resolveSqliteObservabilityExtension } from "@bpa/sqlite-observability";
 import { loadOrCreateCoreSigningKey } from "@bpa/gateway-core";
 import { LocalWorkflowEngine } from "./compatibility/local-workflow-engine.js";
 import { LocalBrowserGateway } from "./browser-gateway.js";
@@ -8,22 +9,29 @@ import { BrowserEvidenceReceiver } from "./browser-evidence.js";
 import { LocalControlServer, LocalCoreService } from "./control.js";
 import { resolveBpaPaths } from "./paths.js";
 import { CoreInstanceLock } from "./instance-lock.js";
+import { writeRuntimeResourceMetrics } from "./runtime-resource-metrics.js";
 import {
   LocalStagingTransferServer,
   StagingTransferService
 } from "./staging-transfer.js";
 
 const paths = resolveBpaPaths();
-mkdirSync(dirname(paths.socket), { recursive: true, mode: 0o700 });
+mkdirSync(paths.run, { recursive: true, mode: 0o700 });
 mkdirSync(paths.logs, { recursive: true, mode: 0o700 });
 const instanceLock = new CoreInstanceLock(paths.lock);
 instanceLock.acquire();
 
-const persistence = new SqlitePersistence({ path: paths.database });
+const sqliteObservability = resolveSqliteObservabilityExtension();
+const persistence = new SqlitePersistence({
+  path: paths.database,
+  ...(sqliteObservability.status === "available"
+    ? { sqliteObservabilityExtensionPath: sqliteObservability.extensionPath }
+    : {})
+});
 if (process.argv.includes("--migrate-only")) {
   persistence.close();
   instanceLock.release();
-  process.stderr.write("BPA migrations completed successfully.\n");
+  process.stdout.write("BPA migrations completed successfully.\n");
   process.exit(0);
 }
 const signingKey = loadOrCreateCoreSigningKey(paths.signingKey);
@@ -50,8 +58,39 @@ const service = new LocalCoreService(
   persistence,
   browserGateway,
   undefined,
-  stagingTransfers
+  stagingTransfers,
+  paths.data,
+  join(paths.run, "runtime-maintenance.lock")
 );
+const writeResourceMetrics = (): void => {
+  if (sqliteObservability.status !== "available") return;
+  writeRuntimeResourceMetrics(
+    paths.resourceMetrics,
+    persistence.readSqliteResourceMetrics(),
+    { runtimeIdentity: process.env.BPA_RUNTIME_ID?.trim() || null }
+  );
+};
+try {
+  writeResourceMetrics();
+} catch (error) {
+  process.stderr.write(
+    `[runtime-resource-metrics] ${
+      error instanceof Error ? error.stack ?? error.message : String(error)
+    }\n`
+  );
+}
+const resourceMetricsTimer = setInterval(() => {
+  try {
+    writeResourceMetrics();
+  } catch (error) {
+    process.stderr.write(
+      `[runtime-resource-metrics] ${
+        error instanceof Error ? error.stack ?? error.message : String(error)
+      }\n`
+    );
+  }
+}, 60_000);
+resourceMetricsTimer.unref();
 browserGateway.recoverTerminalResults();
 browserGateway.recoverCancellations();
 const server = new LocalControlServer(
@@ -59,9 +98,15 @@ const server = new LocalControlServer(
   service
 );
 let drainingIr2 = false;
+let triggerTick = 0;
 const gatewayTimer = setInterval(() => {
   try {
     browserGateway.tick();
+    triggerTick += 1;
+    if (triggerTick >= 2) {
+      triggerTick = 0;
+      service.triggers.tick();
+    }
     if (!drainingIr2) {
       drainingIr2 = true;
       void service.ir2Runtime
@@ -91,6 +136,7 @@ gatewayTimer.unref();
 
 const shutdown = async (): Promise<void> => {
   clearInterval(gatewayTimer);
+  clearInterval(resourceMetricsTimer);
   await server.stop().catch(() => undefined);
   await stagingServer.stop().catch(() => undefined);
   persistence.close();

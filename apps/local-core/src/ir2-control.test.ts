@@ -229,6 +229,21 @@ describe("Local Core IR2 control integration", () => {
         permissions: [...resourceNode.risk.permissions]
       }
     ]);
+    persistence.upsertBrowserPageObservation({
+      sessionId: "session-resource",
+      browserInstanceId: "browser-test",
+      tabId: 42,
+      origin: "https://example.com",
+      pathname: "/source",
+      contentScriptReady: true,
+      authentication: "authenticated",
+      authenticationContextRef: "auth-context-resource",
+      observationState: "ready",
+      pageEpoch: "tab-42:1:test",
+      observerCapabilityId: "test.page",
+      revision: 1,
+      observedAt: new Date().toISOString(),
+    });
     const created = service.handle({
       id: "create-resource-run",
       method: "run.create",
@@ -236,7 +251,14 @@ describe("Local Core IR2 control integration", () => {
         workflowId: resourceWorkflow.metadata.id,
         workflowVersion: resourceWorkflow.metadata.version,
         input: {},
-        resourceBindings: { source: "session-resource" },
+        resourceBindings: {
+          source: {
+            sessionId: "session-resource",
+            browserInstanceId: "browser-test",
+            tabId: 42,
+            observationRevision: 1
+          }
+        },
         actor: "operator"
       }
     });
@@ -255,17 +277,23 @@ describe("Local Core IR2 control integration", () => {
       bindings: {
         source: {
           sessionId: "session-resource",
+          browserInstanceId: "browser-test",
+          tabId: 42,
           origin: "https://example.com",
+          pathname: "/source",
+          pageEpoch: "tab-42:1:test",
           authentication: "authenticated",
           approvedBy: "operator"
         }
       }
     });
-    expect(persistence.getBrowserSession("session-resource")).toMatchObject({
-      observationRevision: 1,
-      observationState: "available",
-      observedOrigin: "https://example.com",
-      observedAuthentication: "authenticated"
+    expect(
+      persistence.getBrowserPageObservation("session-resource", 42)
+    ).toMatchObject({
+      revision: 1,
+      observationState: "ready",
+      origin: "https://example.com",
+      authentication: "authenticated"
     });
     persistence.close();
   });
@@ -420,6 +448,134 @@ describe("Local Core IR2 control integration", () => {
           actor: "test",
           nodeId: constantNode.metadata.id,
           previewDigest
+        }
+      }
+    });
+    persistence.close();
+  });
+
+  it("runs one resource-bearing Node only with an exact Browser Session binding", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    persistence.publish({
+      assetType: "node",
+      assetId: resourceNode.metadata.id,
+      version: resourceNode.metadata.version,
+      digest: contentDigest(resourceNode),
+      content: resourceNode,
+      actor: "test"
+    });
+    persistence.openBrowserSession({
+      session: {
+        id: "session-resource-node",
+        browserInstanceId: "browser-test",
+        extensionId: "extension-test",
+        extensionVersion: "0.5.0",
+        protocolVersion: "1.0.0",
+        incomingSeq: 0,
+        outgoingSeq: 0,
+        lastAckedCommandSeq: 0,
+        capabilityDigest: `sha256:${"a".repeat(64)}`,
+        resumeTokenDigest: `sha256:${"b".repeat(64)}`,
+        resumeTokenExpiresAt: "2099-07-30T12:00:00.000Z",
+        connectedAt: "2026-07-30T11:00:00.000Z"
+      },
+      now: "2026-07-30T11:00:00.000Z"
+    });
+    persistence.replaceBrowserCapabilities("session-resource-node", [
+      {
+        nodeId: resourceNode.metadata.id,
+        nodeVersion: resourceNode.metadata.version,
+        riskLevel: resourceNode.risk.level,
+        permissions: [...resourceNode.risk.permissions]
+      }
+    ]);
+    persistence.upsertBrowserPageObservation({
+      sessionId: "session-resource-node",
+      browserInstanceId: "browser-test",
+      tabId: 84,
+      origin: "https://example.com",
+      pathname: "/source",
+      contentScriptReady: true,
+      authentication: "authenticated",
+      authenticationContextRef: "auth-context-resource-node",
+      observationState: "ready",
+      pageEpoch: "tab-84:1:test",
+      observerCapabilityId: "test.page",
+      revision: 1,
+      observedAt: new Date().toISOString(),
+    });
+    const service = new LocalCoreService(persistence);
+    const preview = service.handle({
+      id: "resource-node-preview",
+      method: "run.node.preview",
+      params: {
+        nodeId: resourceNode.metadata.id,
+        nodeVersion: resourceNode.metadata.version,
+        input: {}
+      }
+    });
+    expect(preview).toMatchObject({
+      ok: true,
+      result: {
+        requiresConfirmation: true,
+        resourceSlots: {
+          page_session: resourceNode.resources!.page_session
+        }
+      }
+    });
+    const previewDigest = (preview.result as { previewDigest: string })
+      .previewDigest;
+    expect(
+      service.handle({
+        id: "resource-node-missing-binding",
+        method: "run.node.create",
+        params: {
+          nodeId: resourceNode.metadata.id,
+          nodeVersion: resourceNode.metadata.version,
+          input: {},
+          expectedPreviewDigest: previewDigest,
+          confirmed: true,
+          actor: "operator",
+          resourceBindings: {}
+        }
+      })
+    ).toMatchObject({ ok: false });
+    const created = service.handle({
+      id: "resource-node-run",
+      method: "run.node.create",
+      params: {
+        nodeId: resourceNode.metadata.id,
+        nodeVersion: resourceNode.metadata.version,
+        input: {},
+        expectedPreviewDigest: previewDigest,
+        confirmed: true,
+        actor: "operator",
+        resourceBindings: {
+          page_session: {
+            sessionId: "session-resource-node",
+            browserInstanceId: "browser-test",
+            tabId: 84,
+            observationRevision: 1
+          }
+        }
+      }
+    });
+    expect(created).toMatchObject({
+      ok: true,
+      result: { status: "waiting_browser" }
+    });
+    const runId = (created.result as { id: string }).id;
+    expect(
+      persistence.getRunResourceBindingSnapshot(runId)
+    ).toMatchObject({
+      resourceSlots: {
+        page_session: resourceNode.resources!.page_session
+      },
+      bindings: {
+        page_session: {
+          sessionId: "session-resource-node",
+          origin: "https://example.com",
+          approvedBy: "operator"
         }
       }
     });

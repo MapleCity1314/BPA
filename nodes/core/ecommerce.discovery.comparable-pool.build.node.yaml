@@ -1,0 +1,37 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: ecommerce.discovery.comparable-pool.build
+  version: 1.0.0
+  title: 筛选三平台可比商品池
+  description: 用明确的核心商品词、包装边界词和排除词分出直接竞品、替代及内容参考、拒绝项，避免把全部搜索结果视为竞品。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [poolId, categorySpace, discovery, rules]
+  properties:
+    poolId: { type: string, minLength: 1, maxLength: 200 }
+    categorySpace: { type: object }
+    discovery: { type: object }
+    rules:
+      type: object
+      additionalProperties: false
+      required: [coreTerms, packagingTerms, excludeTerms]
+      properties:
+        coreTerms: { type: array, minItems: 1, maxItems: 30, items: { type: string } }
+        packagingTerms: { type: array, minItems: 1, maxItems: 30, items: { type: string } }
+        excludeTerms: { type: array, maxItems: 50, items: { type: string } }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [schemaVersion, poolId, comparisonRule, tiers, rejectedProducts]
+  properties:
+    schemaVersion: { const: comparable-pool/v0.3 }
+    poolId: { type: string }
+    comparisonRule: { type: object }
+    tiers: { type: array, maxItems: 2, items: { type: object } }
+    rejectedProducts: { type: array, maxItems: 150, items: { type: object } }
+risk: { level: R0, permissions: [] }
+execution: { timeoutDefault: 10s, idempotency: pure, cancellable: true }
+errors: [TEAM_HANDLER_INPUT_INVALID, TEAM_HANDLER_RESULT_LIMIT_EXCEEDED, TEAM_HANDLER_CANCELLED, TEAM_HANDLER_TIMEOUT]

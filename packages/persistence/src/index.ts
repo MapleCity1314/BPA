@@ -1,11 +1,16 @@
 import type {
   AssetRecordDefinition,
   AssistanceTaskDefinition,
+  AuthoringSessionDefinition,
+  CandidateBundleDefinition,
   DatasetVersionDefinition,
   DecisionRecordDefinition,
   EvidenceLinkDefinition,
+  PageSnapshotDefinition,
+  ScenarioSpecDefinition,
   SourceRecordDefinition
 } from "@bpa/schemas";
+import type { TriggerSpecDefinition } from "@bpa/schemas";
 import type {
   BlobRecord,
   StagingLeaseRecord
@@ -25,11 +30,16 @@ import type {
 export type {
   AssetRecordDefinition,
   AssistanceTaskDefinition,
+  AuthoringSessionDefinition,
+  CandidateBundleDefinition,
   DatasetVersionDefinition,
   DecisionRecordDefinition,
   EvidenceLinkDefinition,
+  PageSnapshotDefinition,
+  ScenarioSpecDefinition,
   SourceRecordDefinition
 } from "@bpa/schemas";
+export type { TriggerSpecDefinition } from "@bpa/schemas";
 export type { BlobRecord, StagingLeaseRecord } from "@bpa/asset-core";
 export type {
   EvidenceChunkRecord,
@@ -78,6 +88,11 @@ export interface PublishArtifactInput {
 export interface RegistryStore {
   saveCandidate(input: PublishArtifactInput): ArtifactRecord;
   publish(input: PublishArtifactInput): ArtifactRecord;
+  getCandidate(
+    assetType: ArtifactType,
+    assetId: string,
+    version: string
+  ): ArtifactRecord | undefined;
   getPublished(
     assetType: ArtifactType,
     assetId: string,
@@ -537,6 +552,22 @@ export interface GatewayDeliveryUnitOfWork {
     | "evidence_invalid";
 }
 
+export interface GatewayCommandStore extends GatewayDeliveryUnitOfWork {
+  listPendingEngineOutbox(): OutboxMessage[];
+  listPendingGatewayCommands(
+    afterCommandSeq?: number
+  ): GatewayCommandRecord[];
+  listGatewayCommandsForRun(runId: string): GatewayCommandRecord[];
+  listGatewayCommandsNeedingApplication(): GatewayCommandRecord[];
+  getGatewayCommand(id: string): GatewayCommandRecord | undefined;
+  markGatewayCommandState(
+    id: string,
+    state: GatewayCommandRecord["state"],
+    updatedAt: string
+  ): GatewayCommandRecord;
+  nextGatewayCommandSequence(): number;
+}
+
 export type BrowserSessionRole =
   | "general"
   | "metrics_source"
@@ -548,6 +579,40 @@ export type BrowserSessionObservationState =
   | "available"
   | "auth_required"
   | "revoked";
+
+export type BrowserPageAuthentication =
+  | "unknown"
+  | "anonymous"
+  | "authenticated"
+  | "membership";
+
+export type BrowserPageObservationState =
+  | "content_script_missing"
+  | "loading"
+  | "probing"
+  | "auth_required"
+  | "challenge"
+  | "ready"
+  | "departed"
+  | "stale";
+
+export interface BrowserPageObservationRecord {
+  sessionId: string;
+  browserInstanceId: string;
+  tabId: number;
+  windowId?: number;
+  origin: string;
+  pathname: string;
+  contentScriptReady: boolean;
+  authentication: BrowserPageAuthentication;
+  authenticationContextRef?: string;
+  observationState: BrowserPageObservationState;
+  pageEpoch: string;
+  observerCapabilityId: string;
+  revision: number;
+  observedAt: string;
+  reasonCode?: string;
+}
 
 export interface BrowserSessionRecord {
   id: string;
@@ -582,6 +647,66 @@ export interface BrowserCapabilityRecord {
   nodeVersion: string;
   riskLevel: string;
   permissions: string[];
+  routes?: Array<{
+    origin: string;
+    pathnamePrefixes: string[];
+    observerCapabilityId: string;
+  }>;
+  adapterId?: string;
+  adapterVersion?: string;
+}
+
+/**
+ * Narrow, platform-neutral browser resource port. Consumers receive only
+ * observed browser facts and capability projections; SQLite details and
+ * ecommerce identities are intentionally absent.
+ */
+export interface BrowserObservationStore {
+  openBrowserSession(input: OpenBrowserSessionInput): {
+    session: BrowserSessionRecord;
+    resumedFrom?: BrowserSessionRecord;
+  };
+  updateBrowserSession(input: {
+    id: string;
+    incomingSeq?: number;
+    outgoingSeq?: number;
+    lastAckedCommandSeq?: number;
+    capabilityDigest?: string;
+    disconnectedAt?: string;
+  }): BrowserSessionRecord;
+  getBrowserSession(id: string): BrowserSessionRecord | undefined;
+  listBrowserSessions(input: {
+    limit: number;
+    role?: BrowserSessionRole;
+    observationState?: BrowserSessionObservationState;
+    cursor?: EvidenceListCursor;
+  }): EvidenceListPage<BrowserSessionRecord>;
+  upsertBrowserPageObservation(
+    input: BrowserPageObservationRecord
+  ): BrowserPageObservationRecord;
+  getBrowserPageObservation(
+    sessionId: string,
+    tabId: number
+  ): BrowserPageObservationRecord | undefined;
+  listBrowserPageObservations(input: {
+    limit: number;
+    sessionId?: string;
+    browserInstanceId?: string;
+  }): BrowserPageObservationRecord[];
+  invalidateBrowserPageObservations(input: {
+    sessionId: string;
+    observedAt: string;
+    reasonCode: string;
+  }): number;
+  resetBrowserPageObservations(sessionId: string): number;
+  pruneBrowserPageObservations(input: {
+    observedBefore: string;
+  }): number;
+  replaceBrowserCapabilities(
+    sessionId: string,
+    capabilities: BrowserCapabilityRecord[]
+  ): void;
+  listBrowserCapabilities(sessionId: string): BrowserCapabilityRecord[];
 }
 
 export interface ExecutionStore {
@@ -598,6 +723,123 @@ export interface AuditRecord {
   target: string;
   detail: unknown;
   occurredAt: string;
+}
+
+export type TriggerRunStatus =
+  | "due"
+  | "lease_acquired"
+  | "run_created"
+  | "running"
+  | "complete"
+  | "partial"
+  | "blocked"
+  | "degraded"
+  | "failed"
+  | "skipped";
+
+export interface TriggerSpecRecord {
+  spec: TriggerSpecDefinition;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  updatedBy: string;
+}
+
+export interface TriggerRunRecord {
+  triggerRunId: string;
+  triggerId: string;
+  triggerVersion: string;
+  occurrenceKey: string;
+  status: TriggerRunStatus;
+  workflowRunId?: string;
+  fencingToken?: number;
+  datasetId?: string;
+  datasetVersion?: string;
+  diagnostic?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BrowserControlLeaseRecord {
+  resourceId: string;
+  ownerId: string;
+  fencingToken: number;
+  acquiredAt: string;
+  expiresAt: string;
+}
+
+export interface TriggerStore {
+  putTriggerSpec(input: {
+    spec: TriggerSpecDefinition;
+    actor: string;
+    occurredAt: string;
+  }): TriggerSpecRecord;
+  setTriggerEnabled(input: {
+    id: string;
+    expectedRevision: number;
+    enabled: boolean;
+    actor: string;
+    occurredAt: string;
+  }): TriggerSpecRecord;
+  getTriggerSpec(id: string): TriggerSpecRecord | undefined;
+  listTriggerSpecs(): TriggerSpecRecord[];
+  claimTriggerOccurrence(input: TriggerRunRecord):
+    | { status: "accepted"; record: TriggerRunRecord }
+    | { status: "duplicate"; record: TriggerRunRecord };
+  updateTriggerRun(input: {
+    triggerRunId: string;
+    status: TriggerRunStatus;
+    updatedAt: string;
+    workflowRunId?: string;
+    fencingToken?: number;
+    diagnostic?: string;
+  }): TriggerRunRecord;
+  listTriggerRuns(triggerId?: string): TriggerRunRecord[];
+  latestDatasetVersion(datasetId: string): {
+    id: string;
+    version: string;
+    createdAt: string;
+  } | undefined;
+  acquireTriggerLease(input: {
+    concurrencyKey: string;
+    ownerId: string;
+    now: string;
+    ttlSeconds: number;
+  }): BrowserControlLeaseRecord | undefined;
+  renewTriggerLease(input: {
+    concurrencyKey: string;
+    ownerId: string;
+    fencingToken: number;
+    now: string;
+    ttlSeconds: number;
+  }): BrowserControlLeaseRecord | undefined;
+  releaseTriggerLease(input: {
+    concurrencyKey: string;
+    ownerId: string;
+    fencingToken: number;
+    releasedAt: string;
+  }): boolean;
+  acquireBrowserControlLease(input: {
+    resourceId: string;
+    ownerId: string;
+    now: string;
+    ttlSeconds: number;
+  }): BrowserControlLeaseRecord | undefined;
+  renewBrowserControlLease(input: {
+    resourceId: string;
+    ownerId: string;
+    fencingToken: number;
+    now: string;
+    ttlSeconds: number;
+  }): BrowserControlLeaseRecord | undefined;
+  releaseBrowserControlLease(input: {
+    resourceId: string;
+    ownerId: string;
+    fencingToken: number;
+    releasedAt: string;
+  }): boolean;
+  listBrowserControlLeases(now: string): BrowserControlLeaseRecord[];
 }
 
 export interface WorkflowDraftRecord {
@@ -663,6 +905,175 @@ export interface WorkflowAuthoringStore {
   getWorkflowCandidate(
     candidateId: string
   ): WorkflowCandidateRecord | undefined;
+}
+
+export interface AuthoringScenarioRecord {
+  scenario: ScenarioSpecDefinition;
+  digest: string;
+  createdAt: string;
+}
+
+export interface AuthoringSessionRevisionRecord {
+  sessionId: string;
+  revision: number;
+  operationId?: string;
+  operationDigest?: string;
+  session: AuthoringSessionDefinition;
+  createdAt: string;
+}
+
+export interface ApplyAuthoringSessionInput {
+  sessionId: string;
+  expectedRevision: number;
+  operationId: string;
+  next: AuthoringSessionDefinition;
+  actor: string;
+}
+
+export type ApplyAuthoringSessionResult =
+  | {
+      status: "accepted" | "duplicate";
+      current: AuthoringSessionDefinition;
+      revision: AuthoringSessionRevisionRecord;
+    }
+  | {
+      status: "stale";
+      actualRevision: number;
+    };
+
+export type DesignModeGrantState =
+  | "requested"
+  | "active"
+  | "stopped"
+  | "expired"
+  | "revoked"
+  | "invalidated";
+
+export type DesignModeCaptureOperation =
+  | "semantic_snapshot"
+  | "screenshot_once";
+
+export interface DesignModeGrantRecord {
+  grantId: string;
+  authoringSessionId: string;
+  revision: number;
+  state: DesignModeGrantState;
+  approvedBy: string;
+  browserSessionId: string;
+  profileId: string;
+  tabId: number;
+  origin: string;
+  pageEpoch: string;
+  allowedOperations: readonly DesignModeCaptureOperation[];
+  issuedAt: string;
+  expiresAt: string;
+  updatedAt: string;
+  terminalReason?: string;
+}
+
+export interface TransitionDesignModeGrantInput {
+  grantId: string;
+  expectedRevision: number;
+  nextState: Exclude<DesignModeGrantState, "requested">;
+  actor: string;
+  occurredAt: string;
+  reason?: string;
+}
+
+export interface AttachPageSnapshotInput
+  extends ApplyAuthoringSessionInput {
+  snapshot: PageSnapshotDefinition;
+}
+
+export interface CandidateBundleValidationRecord {
+  bundleId: string;
+  checkType:
+    | "schema"
+    | "contracts"
+    | "replay"
+    | "permissions"
+    | "risk";
+  valid: boolean;
+  issueCount: number;
+  reportAssetId?: string;
+  createdAt: string;
+}
+
+export interface SaveCandidateBundleInput
+  extends ApplyAuthoringSessionInput {
+  bundle: CandidateBundleDefinition;
+  validationResults: readonly CandidateBundleValidationRecord[];
+}
+
+export interface CandidateBundleRecord {
+  bundle: CandidateBundleDefinition;
+  digest: string;
+  createdAt: string;
+}
+
+export interface CandidateExportRecord {
+  exportId: string;
+  bundleId: string;
+  bundleDigest: string;
+  archiveDigest: string;
+  manifestDigest: string;
+  destinationRef: string;
+  actor: string;
+  createdAt: string;
+}
+
+/**
+ * Durable boundary for BPA 0.5 authoring. Scenario, snapshot and bundle
+ * bodies are Schema-owned values; session mutation remains CAS and
+ * operation-idempotent.
+ */
+export interface AuthoringStore {
+  putAuthoringScenario(
+    record: AuthoringScenarioRecord
+  ): { status: "accepted" | "duplicate"; record: AuthoringScenarioRecord };
+  getAuthoringScenario(
+    scenarioId: string,
+    version: string
+  ): AuthoringScenarioRecord | undefined;
+  createAuthoringSession(
+    session: AuthoringSessionDefinition
+  ): AuthoringSessionDefinition;
+  getAuthoringSession(
+    sessionId: string
+  ): AuthoringSessionDefinition | undefined;
+  getAuthoringSessionRevision(
+    sessionId: string,
+    revision: number
+  ): AuthoringSessionRevisionRecord | undefined;
+  applyAuthoringSession(
+    input: ApplyAuthoringSessionInput
+  ): ApplyAuthoringSessionResult;
+  putDesignModeGrant(grant: DesignModeGrantRecord): DesignModeGrantRecord;
+  getDesignModeGrant(grantId: string): DesignModeGrantRecord | undefined;
+  transitionDesignModeGrant(
+    input: TransitionDesignModeGrantInput
+  ): DesignModeGrantRecord;
+  attachPageSnapshot(
+    input: AttachPageSnapshotInput
+  ): ApplyAuthoringSessionResult;
+  getPageSnapshot(
+    snapshotId: string
+  ): PageSnapshotDefinition | undefined;
+  saveCandidateBundle(
+    input: SaveCandidateBundleInput
+  ): {
+    status: "accepted" | "duplicate" | "stale";
+    record?: CandidateBundleRecord;
+    actualRevision?: number;
+  };
+  getCandidateBundle(bundleId: string): CandidateBundleRecord | undefined;
+  listCandidateBundleValidation(
+    bundleId: string
+  ): CandidateBundleValidationRecord[];
+  putCandidateExport(
+    record: CandidateExportRecord
+  ): { status: "accepted" | "duplicate"; record: CandidateExportRecord };
+  getCandidateExport(exportId: string): CandidateExportRecord | undefined;
 }
 
 export interface RetentionJobRecord {
@@ -841,10 +1252,14 @@ export interface Persistence
     GatewayDeliveryUnitOfWork,
     ExecutionStore,
     WorkflowAuthoringStore,
+    AuthoringStore,
     SourceAssetStore,
     EvidenceTransferUnitOfWork,
     TrustedLineageStore,
-    ExportStore {
+    ExportStore,
+    BrowserObservationStore,
+    GatewayCommandStore,
+    TriggerStore {
   health(): {
     adapter: string;
     schemaVersion: number;
@@ -891,6 +1306,26 @@ export interface Persistence
     observationState: BrowserSessionObservationState;
     observedAt: string;
   }): BrowserSessionRecord;
+  upsertBrowserPageObservation(
+    input: BrowserPageObservationRecord
+  ): BrowserPageObservationRecord;
+  getBrowserPageObservation(
+    sessionId: string,
+    tabId: number
+  ): BrowserPageObservationRecord | undefined;
+  listBrowserPageObservations(input: {
+    limit: number;
+    sessionId?: string;
+    browserInstanceId?: string;
+  }): BrowserPageObservationRecord[];
+  invalidateBrowserPageObservations(input: {
+    sessionId: string;
+    observedAt: string;
+    reasonCode: string;
+  }): number;
+  pruneBrowserPageObservations(input: {
+    observedBefore: string;
+  }): number;
   replaceBrowserCapabilities(
     sessionId: string,
     capabilities: BrowserCapabilityRecord[]
@@ -906,6 +1341,10 @@ export class StaleFencingTokenError extends Error {}
 export class WorkflowDraftConflictError extends Error {}
 export class WorkflowOperationConflictError extends Error {}
 export class WorkflowCandidateConflictError extends Error {}
+export class AuthoringConflictError extends Error {}
+export class AuthoringOperationConflictError extends Error {}
+export class DesignModeGrantConflictError extends Error {}
+export class CandidateBundleConflictError extends Error {}
 export class EvidenceConflictError extends Error {}
 export class EvidenceOwnershipError extends Error {}
 export class AssetReferenceConflictError extends Error {}

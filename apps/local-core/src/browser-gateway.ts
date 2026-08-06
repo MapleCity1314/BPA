@@ -14,9 +14,14 @@ import {
   type PermissionGrantBody
 } from "@bpa/gateway-core";
 import type {
+  AuthoringStore,
+  BrowserObservationStore,
   BrowserCapabilityRecord,
+  ExecutionStore,
   GatewayCommandRecord,
-  Persistence
+  GatewayCommandStore,
+  RecoveryStateStore,
+  RegistryStore
 } from "@bpa/persistence";
 import type {
   RuntimeInvocation,
@@ -41,9 +46,17 @@ type Message = BrowserProtocolMessage & {
   payload: Record<string, unknown>;
 };
 
+type BrowserGatewayPersistence = BrowserObservationStore &
+  ExecutionStore &
+  GatewayCommandStore &
+  RecoveryStateStore &
+  RegistryStore &
+  Pick<AuthoringStore, "getDesignModeGrant">;
+
 export interface BrowserGatewayStatus {
   connected: boolean;
   ready: boolean;
+  activeSessionCount?: number;
   sessionId?: string;
   browserInstanceId?: string;
   extensionId: string;
@@ -54,6 +67,9 @@ export interface BrowserGatewayStatus {
 interface ActiveSession {
   id: string;
   browserInstanceId: string;
+  extensionVersion: string;
+  bridgeBuildId: string;
+  connectedAt: number;
   incoming: ProtocolSessionGuard;
   incomingSeq: number;
   outgoingSeq: number;
@@ -62,69 +78,241 @@ interface ActiveSession {
   capabilities: BrowserCapabilityRecord[];
 }
 
+interface BrowserConnection {
+  id: string;
+  attachedOrder: number;
+  send: (message: Message) => void;
+  session?: ActiveSession;
+  lastError?: string;
+  cancelRequests: Set<string>;
+}
+
+export function observationCoversFrozenRevision(
+  currentRevision: number,
+  frozenRevision: number
+): boolean {
+  return (
+    Number.isSafeInteger(currentRevision) &&
+    Number.isSafeInteger(frozenRevision) &&
+    currentRevision >= frozenRevision
+  );
+}
+
+function compareExtensionVersions(left: string, right: string): number {
+  const leftParts = left.split(".").map((part) => Number(part));
+  const rightParts = right.split(".").map((part) => Number(part));
+  const width = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < width; index += 1) {
+    const difference =
+      (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return left.localeCompare(right);
+}
+
+function rejectDesignCapture(
+  code: string,
+  message: string
+): RuntimeOutcome {
+  return {
+    status: "rejected",
+    error: { code, message, retryable: false },
+    evidence: [],
+    riskSignals: []
+  };
+}
+
+export function validateDesignCaptureInvocation(
+  persistence: Pick<AuthoringStore, "getDesignModeGrant">,
+  invocation: RuntimeInvocation
+): RuntimeOutcome | undefined {
+  if (invocation.node.id !== "browser.design.snapshot.capture") {
+    return undefined;
+  }
+  const input =
+    invocation.input !== null &&
+    typeof invocation.input === "object" &&
+    !Array.isArray(invocation.input)
+      ? (invocation.input as Record<string, JsonValue>)
+      : undefined;
+  if (!input) {
+    return rejectDesignCapture(
+      "DESIGN_GRANT_INVALID",
+      "Design capture requires a governed object input."
+    );
+  }
+  const grantId = input.designGrantId;
+  const grant =
+    typeof grantId === "string"
+      ? persistence.getDesignModeGrant(grantId)
+      : undefined;
+  if (!grant) {
+    return rejectDesignCapture(
+      "DESIGN_GRANT_MISSING",
+      "The exact Design Mode Grant is unavailable."
+    );
+  }
+  if (
+    grant.state !== "active" ||
+    Date.parse(grant.expiresAt) <= Date.now()
+  ) {
+    return rejectDesignCapture(
+      "DESIGN_GRANT_INACTIVE",
+      "The Design Mode Grant is inactive or expired."
+    );
+  }
+  const boundSessionIds = [
+    ...new Set(
+      Object.values(invocation.resourceBindings ?? {}).map(
+        (resource) => resource.binding.sessionId
+      )
+    )
+  ];
+  const boundOrigins = [
+    ...new Set(
+      Object.values(invocation.resourceBindings ?? {}).map(
+        (resource) => resource.binding.origin
+      )
+    )
+  ];
+  if (
+    boundSessionIds.length !== 1 ||
+    boundSessionIds[0] !== grant.browserSessionId ||
+    boundOrigins.length !== 1 ||
+    boundOrigins[0] !== grant.origin
+  ) {
+    return rejectDesignCapture(
+      "DESIGN_GRANT_RESOURCE_MISMATCH",
+      "The frozen Browser Resource differs from the Design Mode Grant."
+    );
+  }
+  if (
+    input.authoringSessionId !== grant.authoringSessionId ||
+    input.profileId !== grant.profileId ||
+    input.pageEpoch !== grant.pageEpoch ||
+    !grant.pageEpoch.startsWith(`tab-${grant.tabId}:`) ||
+    !grant.allowedOperations.includes("semantic_snapshot")
+  ) {
+    return rejectDesignCapture(
+      "DESIGN_GRANT_CONTEXT_MISMATCH",
+      "Session, profile, tab, page epoch, or operation differs from the grant."
+    );
+  }
+  return undefined;
+}
+
 export class LocalBrowserGateway implements RuntimeProvider {
   readonly id = "browser";
   readonly #extensionId: string;
-  #send: ((message: Message) => void) | undefined;
-  #session: ActiveSession | undefined;
-  #lastError: string | undefined;
-  #connectionId: string | undefined;
-  readonly #cancelRequests = new Set<string>();
+  readonly #connections = new Map<string, BrowserConnection>();
+  #attachedOrder = 0;
+  readonly #pageProbeRequestedAt = new Map<string, number>();
 
   constructor(
-    readonly persistence: Persistence,
+    readonly persistence: BrowserGatewayPersistence,
     readonly engine: LocalWorkflowEngine,
     readonly signingKey: CoreSigningKey,
     extensionId =
       process.env.BPA_EXTENSION_ID ?? DEFAULT_BPA_EXTENSION_ID,
-    readonly evidence?: BrowserEvidenceReceiver
+    readonly evidence?: BrowserEvidenceReceiver,
+    readonly expectedBridgeBuildId = process.env.BPA_RUNTIME_ID?.trim()
   ) {
     this.#extensionId = extensionId;
+    this.persistence.pruneBrowserPageObservations({
+      observedBefore: new Date(
+        Date.now() - 30 * 24 * 60 * 60 * 1_000
+      ).toISOString()
+    });
   }
 
   attach(origin: string, send: (message: Message) => void): string {
     assertNativeHostOrigin(origin, this.#extensionId);
-    if (this.#session) {
-      this.persistence.updateBrowserSession({
-        id: this.#session.id,
-        disconnectedAt: new Date().toISOString()
-      });
-    }
     const connectionId = randomUUID();
-    this.#connectionId = connectionId;
-    this.#send = send;
-    this.#session = undefined;
-    this.#lastError = undefined;
-    this.#cancelRequests.clear();
+    this.#connections.set(connectionId, {
+      id: connectionId,
+      attachedOrder: ++this.#attachedOrder,
+      send,
+      cancelRequests: new Set()
+    });
     return connectionId;
   }
 
   detach(connectionId?: string): void {
-    if (connectionId && connectionId !== this.#connectionId) return;
-    if (this.#session) {
+    const connection = connectionId
+      ? this.#connections.get(connectionId)
+      : this.#primaryConnection(false);
+    if (!connection) return;
+    if (connection.session) {
+      const disconnectedAt = new Date().toISOString();
       this.persistence.updateBrowserSession({
-        id: this.#session.id,
-        disconnectedAt: new Date().toISOString()
+        id: connection.session.id,
+        disconnectedAt
+      });
+      this.persistence.invalidateBrowserPageObservations({
+        sessionId: connection.session.id,
+        observedAt: disconnectedAt,
+        reasonCode: "BROWSER_BRIDGE_DISCONNECTED"
       });
     }
-    this.#send = undefined;
-    this.#session = undefined;
-    this.#connectionId = undefined;
-    this.#cancelRequests.clear();
+    this.#connections.delete(connection.id);
   }
 
   status(): BrowserGatewayStatus {
+    const primary =
+      this.#primaryConnection() ?? this.#primaryConnection(false);
     return {
-      connected: Boolean(this.#send),
-      ready: this.#session?.ready ?? false,
-      ...(this.#session ? { sessionId: this.#session.id } : {}),
-      ...(this.#session
-        ? { browserInstanceId: this.#session.browserInstanceId }
+      connected: this.#connections.size > 0,
+      ready: Boolean(primary?.session?.ready),
+      activeSessionCount: [...this.#connections.values()].filter(
+        (connection) => connection.session?.ready
+      ).length,
+      ...(primary?.session ? { sessionId: primary.session.id } : {}),
+      ...(primary?.session
+        ? { browserInstanceId: primary.session.browserInstanceId }
         : {}),
       extensionId: this.#extensionId,
-      capabilityCount: this.#session?.capabilities.length ?? 0,
-      ...(this.#lastError ? { lastError: this.#lastError } : {})
+      capabilityCount: primary?.session?.capabilities.length ?? 0,
+      ...(primary?.lastError ? { lastError: primary.lastError } : {})
     };
+  }
+
+  requestPageProbe(input: {
+    sessionId: string;
+    browserInstanceId: string;
+    tabId: number;
+    windowId?: number;
+    origin: string;
+    timeoutMs?: number;
+  }): { requestId: string; deadline: string } {
+    const connection = [...this.#connections.values()].find(
+      (candidate) =>
+        candidate.session?.ready === true &&
+        candidate.session.id === input.sessionId &&
+        candidate.session.browserInstanceId === input.browserInstanceId
+    );
+    if (!connection) throw new Error("BROWSER_BRIDGE_DISCONNECTED");
+    const requestId = randomUUID();
+    const deadline = new Date(
+      Date.now() + Math.min(10_000, Math.max(500, input.timeoutMs ?? 5_000))
+    ).toISOString();
+    this.#sendMessage(
+      connection,
+      "page.probe.request",
+      {
+        request_id: requestId,
+        tab_ref: {
+          browser_instance_id: input.browserInstanceId,
+          tab_id: input.tabId,
+          ...(input.windowId === undefined
+            ? {}
+            : { window_id: input.windowId }),
+          origin: input.origin
+        },
+        deadline
+      },
+      `trace-page-probe-${requestId}`
+    );
+    return { requestId, deadline };
   }
 
   supports(node: ArtifactRef & { readonly kind: "node" }): boolean {
@@ -156,6 +344,11 @@ export class LocalBrowserGateway implements RuntimeProvider {
         riskSignals: []
       });
     }
+    const designRejection = validateDesignCaptureInvocation(
+      this.persistence,
+      invocation
+    );
+    if (designRejection) return Promise.resolve(designRejection);
     const boundSessionIds = [
       ...new Set(
         Object.values(invocation.resourceBindings ?? {}).map(
@@ -229,81 +422,198 @@ export class LocalBrowserGateway implements RuntimeProvider {
     this.#cancelRuntimeCommand(this.#runtimeCommandId(invocationId));
   }
 
-  handle(message: unknown): void {
+  handle(message: unknown, connectionId?: string): void {
+    const connection = this.#resolveConnection(connectionId);
     try {
       const candidate = message as Message;
-      if (!this.#session) {
-        this.#handleHello(candidate);
+      if (!connection.session) {
+        const features = Array.isArray(candidate.payload?.features)
+          ? candidate.payload.features.map(String)
+          : [];
+        if (
+          candidate.type === "session.hello" &&
+          (!features.includes("page_observation_v2") ||
+            !features.includes("exact_tab_binding_v2") ||
+            !features.includes("active_page_probe_v1"))
+        ) {
+          throw new Error("BROWSER_BRIDGE_FEATURE_MISMATCH");
+        }
+        if (
+          this.expectedBridgeBuildId &&
+          candidate.payload?.bridge_build_id !== this.expectedBridgeBuildId
+        ) {
+          throw new Error("BROWSER_BRIDGE_BUILD_MISMATCH");
+        }
+        this.#handleHello(connection, candidate);
         return;
       }
-      const acceptance = this.#session.incoming.accept(candidate);
+      if (
+        candidate.type === "capability.report" &&
+        (!Array.isArray(candidate.payload?.features) ||
+          !candidate.payload.features.includes("page_observation_v2") ||
+          !candidate.payload.features.includes("exact_tab_binding_v2") ||
+          !candidate.payload.features.includes("active_page_probe_v1"))
+      ) {
+        throw new Error("BROWSER_BRIDGE_FEATURE_MISMATCH");
+      }
+      const acceptance = connection.session.incoming.accept(candidate);
       if (acceptance.status === "duplicate") {
         if (candidate.type === "command.result") {
-          this.#handleResult(candidate);
+          this.#handleResult(connection, candidate);
         }
         return;
       }
-      this.#session.incomingSeq = candidate.seq;
+      connection.session.incomingSeq = candidate.seq;
       this.persistence.updateBrowserSession({
-        id: this.#session.id,
+        id: connection.session.id,
         incomingSeq: candidate.seq
       });
       switch (candidate.type) {
         case "capability.report":
-          this.#handleCapabilities(candidate);
+          this.#handleCapabilities(connection, candidate);
+          break;
+        case "page.observation":
+          this.#handlePageObservation(connection, candidate);
+          this.dispatchPending();
+          break;
+        case "page.probe.result":
           break;
         case "command.ack":
-          this.#handleCommandAck(candidate);
+          this.#handleCommandAck(connection, candidate);
           break;
         case "command.result":
-          this.#handleResult(candidate);
+          this.#handleResult(connection, candidate);
           break;
         case "heartbeat.pong":
           break;
         case "cancel.ack":
           break;
         case "cancel.effective":
-          this.#handleCancelEffective(candidate);
+          this.#handleCancelEffective(connection, candidate);
           break;
         case "evidence.begin":
         case "evidence.chunk":
         case "evidence.complete":
-          this.#handleEvidence(candidate);
+          this.#handleEvidence(connection, candidate);
           break;
         default:
           this.#sendError(
+            connection,
             "UNEXPECTED_MESSAGE",
             `Bridge message is not valid in the current state: ${candidate.type}`,
             candidate.message_id
           );
       }
     } catch (error) {
-      this.#lastError = error instanceof Error ? error.message : String(error);
-      this.#sendError("PROTOCOL_VIOLATION", this.#lastError, undefined, true);
+      connection.lastError =
+        error instanceof Error ? error.message : String(error);
+      this.#sendError(
+        connection,
+        "PROTOCOL_VIOLATION",
+        connection.lastError,
+        undefined,
+        true
+      );
     }
   }
 
+  #handlePageObservation(
+    connection: BrowserConnection,
+    message: Message
+  ): void {
+    if (message.type !== "page.observation" || !connection.session?.ready) {
+      throw new Error("Page observation requires a ready Browser Session");
+    }
+    const payload = (
+      message as Extract<BrowserProtocolMessage, { type: "page.observation" }>
+    ).payload;
+    if (
+      payload.tab_ref.browser_instance_id !==
+      connection.session.browserInstanceId
+    ) {
+      throw new Error(
+        "Page observation Browser Instance differs from the Session"
+      );
+    }
+    this.persistence.upsertBrowserPageObservation({
+      sessionId: connection.session.id,
+      browserInstanceId: payload.tab_ref.browser_instance_id,
+      tabId: payload.tab_ref.tab_id,
+      ...(payload.tab_ref.window_id === undefined
+        ? {}
+        : { windowId: payload.tab_ref.window_id }),
+      origin: payload.tab_ref.origin,
+      pathname: payload.pathname,
+      contentScriptReady: payload.content_script_ready,
+      authentication: payload.authentication.state,
+      ...(!("context_ref" in payload.authentication)
+        ? {}
+        : {
+            authenticationContextRef: payload.authentication.context_ref
+          }),
+      observationState: payload.observation_state,
+      pageEpoch: payload.page_epoch,
+      observerCapabilityId: payload.observer_capability_id,
+      revision: payload.observation_revision,
+      observedAt: payload.observed_at,
+      ...(payload.reason_code
+        ? { reasonCode: payload.reason_code }
+        : {})
+    });
+  }
+
   dispatchPending(): number {
-    const session = this.#session;
-    if (!session?.ready) return 0;
+    if (!this.#primaryConnection()) return 0;
     this.recoverCancellations();
     this.#promoteEngineMessages();
     let dispatched = 0;
-    for (const command of this.persistence.listPendingGatewayCommands(
-      session.lastAckedCommandSeq
-    )) {
+    const pending = this.persistence.listPendingGatewayCommands();
+    const occupiedTabs = new Map<string, string>();
+    for (const command of pending) {
+      const tabKey = this.#commandTabKey(command);
+      if (tabKey && command.state !== "queued") {
+        occupiedTabs.set(tabKey, command.id);
+      }
+    }
+    for (const command of pending) {
       if (this.#runIsCancelled(command)) continue;
-      const requiredSessionIds = this.#requiredSessionIds(command);
-      if (
-        requiredSessionIds === undefined ||
-        requiredSessionIds.length > 1 ||
-        (requiredSessionIds.length === 1 &&
-          requiredSessionIds[0] !== session.id)
-      ) {
+      const tabKey = this.#commandTabKey(command);
+      const occupyingCommand = tabKey
+        ? occupiedTabs.get(tabKey)
+        : undefined;
+      if (occupyingCommand && occupyingCommand !== command.id) {
         continue;
       }
-      if (!this.#supports(command)) continue;
+      const boundPageError = this.#boundPageError(command);
+      if (boundPageError) {
+        if (
+          boundPageError === "BROWSER_OBSERVATION_STALE" &&
+          this.#requestBoundPageRefresh(command)
+        ) {
+          continue;
+        }
+        this.#commitResult(`stale-page-${command.id}`, {
+          command_seq: command.commandSeq,
+          command_id: command.id,
+          node_execution_id: command.nodeExecutionId,
+          idempotency_key: command.idempotencyKey,
+          fencing_token: command.fencingToken,
+          status: "rejected",
+          error: {
+            code: boundPageError,
+            message:
+              boundPageError === "BROWSER_ORIGIN_MISMATCH"
+                ? "The observed browser page Origin differs from the frozen binding."
+                : "The frozen browser page observation is no longer current.",
+            retryable: false
+          }
+        });
+        continue;
+      }
+      const connection = this.#connectionForCommand(command);
+      if (!connection || !this.#supports(connection, command)) continue;
       this.#sendMessage(
+        connection,
         "command.dispatch",
         command.payload as Record<string, unknown>,
         `trace-${command.nodeExecutionId}`
@@ -313,6 +623,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
         "delivered",
         new Date().toISOString()
       );
+      if (tabKey) occupiedTabs.set(tabKey, command.id);
       dispatched += 1;
     }
     return dispatched;
@@ -395,7 +706,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
     return requested;
   }
 
-  #handleHello(message: Message): void {
+  #handleHello(connection: BrowserConnection, message: Message): void {
     const guard = new ProtocolSessionGuard();
     guard.accept(message);
     const payload = message.payload;
@@ -433,10 +744,29 @@ export class LocalBrowserGateway implements RuntimeProvider {
       now: now.toISOString()
     });
     const activeSessionId = opened.session.id;
+    if (opened.resumedFrom) {
+      // A resumed extension process has lost its in-memory page revision
+      // namespace. Remove the disconnected observations before accepting the
+      // new process' revision 1 reports; every existing binding remains stale
+      // and must be resolved again from fresh page facts.
+      this.persistence.resetBrowserPageObservations(activeSessionId);
+      for (const [otherId, other] of this.#connections) {
+        if (
+          otherId !== connection.id &&
+          other.session?.id === activeSessionId
+        ) {
+          other.lastError = "BROWSER_SESSION_SUPERSEDED";
+          this.#connections.delete(otherId);
+        }
+      }
+    }
     guard.establish(activeSessionId, 0);
-    this.#session = {
+    connection.session = {
       id: activeSessionId,
       browserInstanceId: opened.session.browserInstanceId,
+      extensionVersion: opened.session.extensionVersion,
+      bridgeBuildId: String(payload.bridge_build_id ?? "unknown"),
+      connectedAt: Date.parse(opened.session.connectedAt),
       incoming: guard,
       incomingSeq: 0,
       outgoingSeq: 0,
@@ -445,6 +775,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
       capabilities: []
     };
     this.#sendMessage(
+      connection,
       "session.welcome",
       {
         selected_protocol: BROWSER_PROTOCOL,
@@ -462,6 +793,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
     );
     if (opened.resumedFrom) {
       this.#sendMessage(
+        connection,
         "session.resume",
         {
           accepted: true,
@@ -473,20 +805,54 @@ export class LocalBrowserGateway implements RuntimeProvider {
     }
   }
 
-  #handleCapabilities(message: Message): void {
-    const session = this.#session!;
+  #handleCapabilities(
+    connection: BrowserConnection,
+    message: Message
+  ): void {
+    const session = connection.session!;
+    const features = new Set(
+      Array.isArray(message.payload.features)
+        ? message.payload.features.map(String)
+        : []
+    );
+    if (
+      !features.has("page_observation_v2") ||
+      !features.has("exact_tab_binding_v2") ||
+      !features.has("active_page_probe_v1")
+    ) {
+      connection.lastError = "BROWSER_BRIDGE_FEATURE_MISMATCH";
+      throw new Error("BROWSER_BRIDGE_FEATURE_MISMATCH");
+    }
     const reported = message.payload.capabilities as Array<{
       node_id: string;
       versions: string[];
       risk_level: string;
       permissions: string[];
+      routes: Array<{
+        origin: string;
+        pathname_prefixes: string[];
+        observer_capability_id: string;
+      }>;
+      adapter_id?: string;
+      adapter_version?: string;
     }>;
     const capabilities = reported.flatMap((capability) =>
       capability.versions.map((version) => ({
         nodeId: capability.node_id,
         nodeVersion: version,
         riskLevel: capability.risk_level,
-        permissions: capability.permissions
+        permissions: capability.permissions,
+        routes: capability.routes.map((route) => ({
+          origin: route.origin,
+          pathnamePrefixes: route.pathname_prefixes,
+          observerCapabilityId: route.observer_capability_id
+        })),
+        ...(capability.adapter_id === undefined
+          ? {}
+          : { adapterId: capability.adapter_id }),
+        ...(capability.adapter_version === undefined
+          ? {}
+          : { adapterVersion: capability.adapter_version })
       }))
     );
     this.persistence.replaceBrowserCapabilities(session.id, capabilities);
@@ -496,11 +862,14 @@ export class LocalBrowserGateway implements RuntimeProvider {
     });
     session.capabilities = capabilities;
     session.ready = true;
-    this.#lastError = undefined;
+    delete connection.lastError;
     this.dispatchPending();
   }
 
-  #handleCommandAck(message: Message): void {
+  #handleCommandAck(
+    connection: BrowserConnection,
+    message: Message
+  ): void {
     const payload = message.payload;
     const command = this.persistence.getGatewayCommand(
       String(payload.command_id)
@@ -512,6 +881,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
     ) {
       throw new Error("Command ACK does not match an active command");
     }
+    this.#assertCommandSession(connection, command);
     if (payload.accepted === true) {
       this.persistence.markGatewayCommandState(
         command.id,
@@ -536,7 +906,14 @@ export class LocalBrowserGateway implements RuntimeProvider {
     this.#commitResult(message.message_id, synthetic);
   }
 
-  #handleResult(message: Message): void {
+  #handleResult(
+    connection: BrowserConnection,
+    message: Message
+  ): void {
+    const command = this.persistence.getGatewayCommand(
+      String(message.payload.command_id)
+    );
+    if (command) this.#assertCommandSession(connection, command);
     let outcome:
       | "accepted"
       | "duplicate"
@@ -552,25 +929,29 @@ export class LocalBrowserGateway implements RuntimeProvider {
           ? "evidence_not_ready"
           : "evidence_invalid";
     }
-    this.#cancelRequests.delete(String(message.payload.command_id));
+    connection.cancelRequests.delete(String(message.payload.command_id));
     const accepted = outcome === "accepted" || outcome === "duplicate";
-    if (accepted) this.#lastError = undefined;
+    if (accepted) delete connection.lastError;
     if (accepted) {
-      const command = this.persistence.getGatewayCommand(
-        String(message.payload.command_id)
-      );
-      if (command) {
-        this.#session!.lastAckedCommandSeq = Math.max(
-          this.#session!.lastAckedCommandSeq,
-          command.commandSeq
+      const acceptedCommand =
+        command ??
+        this.persistence.getGatewayCommand(
+          String(message.payload.command_id)
+        );
+      if (acceptedCommand) {
+        connection.session!.lastAckedCommandSeq = Math.max(
+          connection.session!.lastAckedCommandSeq,
+          acceptedCommand.commandSeq
         );
         this.persistence.updateBrowserSession({
-          id: this.#session!.id,
-          lastAckedCommandSeq: this.#session!.lastAckedCommandSeq
+          id: connection.session!.id,
+          lastAckedCommandSeq:
+            connection.session!.lastAckedCommandSeq
         });
       }
     }
     this.#sendMessage(
+      connection,
       "result.ack",
       {
         command_id: String(message.payload.command_id),
@@ -591,7 +972,10 @@ export class LocalBrowserGateway implements RuntimeProvider {
     );
   }
 
-  #handleCancelEffective(message: Message): void {
+  #handleCancelEffective(
+    connection: BrowserConnection,
+    message: Message
+  ): void {
     const command = this.persistence.getGatewayCommand(
       String(message.payload.command_id)
     );
@@ -603,6 +987,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
     ) {
       throw new Error("Cancel Effective does not match an active command");
     }
+    this.#assertCommandSession(connection, command);
     this.#commitResult(message.message_id, {
       command_seq: command.commandSeq,
       command_id: command.id,
@@ -611,7 +996,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
       fencing_token: command.fencingToken,
       status: message.payload.status
     });
-    this.#cancelRequests.delete(command.id);
+    connection.cancelRequests.delete(command.id);
   }
 
   #commitResult(
@@ -839,6 +1224,11 @@ export class LocalBrowserGateway implements RuntimeProvider {
       this.signingKey.keyId,
       this.signingKey.privateKey
     );
+    const frozenBindings = Object.values(
+      invocation.resourceBindings ?? {}
+    ).map((resource) => resource.binding);
+    const frozenPage =
+      frozenBindings.length === 1 ? frozenBindings[0] : undefined;
     const payload = {
       command_seq: commandSeq,
       run_id: invocation.identity.runId,
@@ -863,7 +1253,27 @@ export class LocalBrowserGateway implements RuntimeProvider {
             ).timingPolicy
           }),
       permission_grant: permissionGrant,
-      deadline
+      deadline,
+      ...(frozenPage
+        ? {
+            tab_ref: {
+              browser_instance_id: frozenPage.browserInstanceId,
+              tab_id: frozenPage.tabId,
+              ...(frozenPage.windowId === undefined
+                ? {}
+                : { window_id: frozenPage.windowId }),
+              origin: frozenPage.origin
+            },
+            page_epoch: frozenPage.pageEpoch,
+            observation_revision: frozenPage.revision,
+            ...(frozenPage.authenticationContextRef === undefined
+              ? {}
+              : {
+                  authentication_context_ref:
+                    frozenPage.authenticationContextRef
+                })
+          }
+        : {})
     };
     this.persistence.enqueueCommand(
       {
@@ -908,9 +1318,11 @@ export class LocalBrowserGateway implements RuntimeProvider {
       });
       return true;
     }
-    if (this.#session?.ready) {
-      if (this.#cancelRequests.has(command.id)) return false;
+    const connection = this.#connectionForCommand(command);
+    if (connection?.session?.ready) {
+      if (connection.cancelRequests.has(command.id)) return false;
       this.#sendMessage(
+        connection,
         "cancel.request",
         {
           command_id: command.id,
@@ -920,7 +1332,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
         },
         `trace-${command.nodeExecutionId}`
       );
-      this.#cancelRequests.add(command.id);
+      connection.cancelRequests.add(command.id);
       return true;
     }
     if (command.id.startsWith("ir2:")) {
@@ -948,6 +1360,198 @@ export class LocalBrowserGateway implements RuntimeProvider {
   #runId(command: GatewayCommandRecord): string | undefined {
     const runId = (command.payload as Record<string, unknown>).run_id;
     return typeof runId === "string" && runId.length > 0 ? runId : undefined;
+  }
+
+  #resolveConnection(connectionId?: string): BrowserConnection {
+    if (connectionId) {
+      const connection = this.#connections.get(connectionId);
+      if (!connection) {
+        throw new Error(`Browser connection is unavailable: ${connectionId}`);
+      }
+      return connection;
+    }
+    if (this.#connections.size === 1) {
+      return this.#connections.values().next().value as BrowserConnection;
+    }
+    throw new Error(
+      "Browser connection identity is required when multiple sessions are attached"
+    );
+  }
+
+  #primaryConnection(
+    readyOnly = true
+  ): BrowserConnection | undefined {
+    return [...this.#connections.values()]
+      .filter(
+        (connection) =>
+          !readyOnly || connection.session?.ready === true
+      )
+      .sort((left, right) => {
+        const versionOrder = compareExtensionVersions(
+          right.session?.extensionVersion ?? "0.0.0",
+          left.session?.extensionVersion ?? "0.0.0"
+        );
+        if (versionOrder !== 0) return versionOrder;
+        const connectedOrder =
+          (right.session?.connectedAt ?? 0) -
+          (left.session?.connectedAt ?? 0);
+        return connectedOrder !== 0
+          ? connectedOrder
+          : right.attachedOrder - left.attachedOrder;
+      })[0];
+  }
+
+  #connectionForCommand(
+    command: GatewayCommandRecord
+  ): BrowserConnection | undefined {
+    const requiredSessionIds = this.#requiredSessionIds(command);
+    if (requiredSessionIds === undefined || requiredSessionIds.length > 1) {
+      return undefined;
+    }
+    if (requiredSessionIds.length === 0) {
+      return this.#primaryConnection();
+    }
+    return [...this.#connections.values()].find(
+      (connection) =>
+        connection.session?.ready === true &&
+        connection.session.id === requiredSessionIds[0]
+    );
+  }
+
+  #boundPageError(
+    command: GatewayCommandRecord
+  ): "BROWSER_ORIGIN_MISMATCH" | "BROWSER_OBSERVATION_STALE" | undefined {
+    const payload = command.payload as {
+      tab_ref?: {
+        browser_instance_id?: unknown;
+        tab_id?: unknown;
+        origin?: unknown;
+      };
+      page_epoch?: unknown;
+      observation_revision?: unknown;
+    };
+    if (!payload.tab_ref) return undefined;
+    const sessionIds = this.#requiredSessionIds(command);
+    if (!sessionIds || sessionIds.length !== 1) {
+      return "BROWSER_OBSERVATION_STALE";
+    }
+    const page = this.persistence.getBrowserPageObservation(
+      sessionIds[0]!,
+      Number(payload.tab_ref.tab_id)
+    );
+    if (page && page.origin !== payload.tab_ref.origin) {
+      return "BROWSER_ORIGIN_MISMATCH";
+    }
+    return Boolean(
+      page &&
+        page.observationState === "ready" &&
+        page.contentScriptReady &&
+        Date.now() - Date.parse(page.observedAt) <= 30_000 &&
+        page.browserInstanceId === payload.tab_ref.browser_instance_id &&
+        page.origin === payload.tab_ref.origin &&
+        page.pageEpoch === payload.page_epoch &&
+        observationCoversFrozenRevision(
+          page.revision,
+          Number(payload.observation_revision)
+        ) &&
+        page.authenticationContextRef ===
+          (payload as { authentication_context_ref?: unknown })
+            .authentication_context_ref
+    )
+      ? undefined
+      : "BROWSER_OBSERVATION_STALE";
+  }
+
+  #requestBoundPageRefresh(command: GatewayCommandRecord): boolean {
+    const payload = command.payload as {
+      tab_ref?: {
+        browser_instance_id?: unknown;
+        tab_id?: unknown;
+        window_id?: unknown;
+        origin?: unknown;
+      };
+      page_epoch?: unknown;
+      observation_revision?: unknown;
+      authentication_context_ref?: unknown;
+    };
+    const sessionIds = this.#requiredSessionIds(command);
+    if (!payload.tab_ref || !sessionIds || sessionIds.length !== 1) {
+      return false;
+    }
+    const sessionId = sessionIds[0]!;
+    const tabId = Number(payload.tab_ref.tab_id);
+    const page = this.persistence.getBrowserPageObservation(sessionId, tabId);
+    if (
+      !page ||
+      page.observationState !== "ready" ||
+      !page.contentScriptReady ||
+      page.browserInstanceId !== payload.tab_ref.browser_instance_id ||
+      page.origin !== payload.tab_ref.origin ||
+      page.pageEpoch !== payload.page_epoch ||
+      !observationCoversFrozenRevision(
+        page.revision,
+        Number(payload.observation_revision)
+      ) ||
+      page.authenticationContextRef !==
+        payload.authentication_context_ref ||
+      Date.now() - Date.parse(page.observedAt) <= 30_000
+    ) {
+      return false;
+    }
+    const key = `${sessionId}:${tabId}`;
+    const now = Date.now();
+    if (now - (this.#pageProbeRequestedAt.get(key) ?? 0) < 1_000) {
+      return true;
+    }
+    this.#pageProbeRequestedAt.set(key, now);
+    this.requestPageProbe({
+      sessionId,
+      browserInstanceId: page.browserInstanceId,
+      tabId: page.tabId,
+      ...(page.windowId === undefined ? {} : { windowId: page.windowId }),
+      origin: page.origin,
+      timeoutMs: 5_000
+    });
+    return true;
+  }
+
+  #commandTabKey(command: GatewayCommandRecord): string | undefined {
+    const payload = command.payload as {
+      tab_ref?: {
+        browser_instance_id?: unknown;
+        tab_id?: unknown;
+      };
+    };
+    const sessionIds = this.#requiredSessionIds(command);
+    if (
+      !payload.tab_ref ||
+      !sessionIds ||
+      sessionIds.length !== 1 ||
+      typeof payload.tab_ref.browser_instance_id !== "string" ||
+      !Number.isSafeInteger(payload.tab_ref.tab_id)
+    ) {
+      return undefined;
+    }
+    return `${sessionIds[0]}:${payload.tab_ref.browser_instance_id}:${String(
+      payload.tab_ref.tab_id
+    )}`;
+  }
+
+  #assertCommandSession(
+    connection: BrowserConnection,
+    command: GatewayCommandRecord
+  ): void {
+    const requiredSessionIds = this.#requiredSessionIds(command);
+    if (
+      requiredSessionIds === undefined ||
+      requiredSessionIds.length > 1 ||
+      (requiredSessionIds.length === 1 &&
+        requiredSessionIds[0] !== connection.session?.id)
+    ) {
+      throw new Error(
+        "Browser message does not match the command's frozen Session"
+      );
+    }
   }
 
   #requiredSessionIds(
@@ -1055,7 +1659,10 @@ export class LocalBrowserGateway implements RuntimeProvider {
     };
   }
 
-  #supports(command: GatewayCommandRecord): boolean {
+  #supports(
+    connection: BrowserConnection,
+    command: GatewayCommandRecord
+  ): boolean {
     const payload = command.payload as Record<string, unknown>;
     const node = payload.node as { id: string; version: string };
     const grant = payload.permission_grant as {
@@ -1063,7 +1670,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
       risk_level: RiskLevel;
     };
     return (
-      this.#session?.capabilities.some(
+      connection.session?.capabilities.some(
         (capability) =>
           capability.nodeId === node.id &&
           capability.nodeVersion === node.version &&
@@ -1076,12 +1683,13 @@ export class LocalBrowserGateway implements RuntimeProvider {
   }
 
   #sendMessage(
+    connection: BrowserConnection,
     type: string,
     payload: Record<string, unknown>,
     traceId: string
   ): void {
-    const session = this.#session;
-    if (!session || !this.#send) {
+    const session = connection.session;
+    if (!session) {
       throw new Error("Browser session is not attached");
     }
     session.outgoingSeq += 1;
@@ -1100,13 +1708,17 @@ export class LocalBrowserGateway implements RuntimeProvider {
       id: session.id,
       outgoingSeq: session.outgoingSeq
     });
-    this.#send(message);
+    connection.send(message);
   }
 
-  #handleEvidence(message: Message): void {
+  #handleEvidence(
+    connection: BrowserConnection,
+    message: Message
+  ): void {
     const evidenceId = String(message.payload.evidence_id);
     if (!this.evidence) {
       this.#sendEvidenceAcknowledgement(
+        connection,
         {
           evidenceId,
           accepted: false,
@@ -1118,20 +1730,22 @@ export class LocalBrowserGateway implements RuntimeProvider {
     }
     try {
       if (message.type === "evidence.begin") {
-        this.evidence.begin(this.#session!.id, message.payload);
+        this.evidence.begin(connection.session!.id, message.payload);
         return;
       }
       if (message.type === "evidence.chunk") {
-        this.evidence.chunk(this.#session!.id, message.payload);
+        this.evidence.chunk(connection.session!.id, message.payload);
         return;
       }
       this.#sendEvidenceAcknowledgement(
-        this.evidence.complete(this.#session!.id, message.payload),
+        connection,
+        this.evidence.complete(connection.session!.id, message.payload),
         message.trace_id
       );
     } catch (error) {
       if (!(error instanceof BrowserEvidenceError)) throw error;
       this.#sendEvidenceAcknowledgement(
+        connection,
         {
           evidenceId,
           accepted: false,
@@ -1146,10 +1760,12 @@ export class LocalBrowserGateway implements RuntimeProvider {
   }
 
   #sendEvidenceAcknowledgement(
+    connection: BrowserConnection,
     acknowledgement: BrowserEvidenceAcknowledgement,
     traceId: string
   ): void {
     this.#sendMessage(
+      connection,
       "evidence.ack",
       {
         evidence_id: acknowledgement.evidenceId,
@@ -1166,13 +1782,15 @@ export class LocalBrowserGateway implements RuntimeProvider {
   }
 
   #sendError(
+    connection: BrowserConnection,
     code: string,
     detail: string,
     relatedMessageId?: string,
     fatal = false
   ): void {
-    if (!this.#session || !this.#send) return;
+    if (!connection.session) return;
     this.#sendMessage(
+      connection,
       "session.error",
       {
         code,

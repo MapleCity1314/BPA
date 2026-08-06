@@ -1,0 +1,104 @@
+{
+  "apiVersion": "bpa.authoring/v1alpha1",
+  "kind": "ScenarioSpec",
+  "metadata": {
+    "id": "chanmama.product-rank.read",
+    "version": "0.1.0",
+    "title": "读取蝉妈妈商品爆品榜",
+    "description": "从用户已登录并授权的蝉妈妈商品库读取关键词一致、周期一致的可见商品榜单候选。"
+  },
+  "businessGoal": "以用户给定商品关键词和榜单周期为边界，只读提取有界商品榜单，保留商品标题、商品详情地址、主图、佣金、销量区间、直播/视频/商品卡销量及关联达人和视频数量；所有蝉妈妈数据保留预估与区间属性，不把搜索误命中项自动视为可比商品。",
+  "platform": {
+    "id": "chanmama",
+    "origins": ["https://www.chanmama.com"]
+  },
+  "riskCeiling": "R1",
+  "inputs": [
+    {
+      "name": "query",
+      "type": "string",
+      "required": true,
+      "description": "商品标题或关键词。"
+    },
+    {
+      "name": "period",
+      "type": "enum:yesterday|7d|30d",
+      "required": true,
+      "description": "榜单统计周期；本轮使用 yesterday。"
+    },
+    {
+      "name": "max_items",
+      "type": "integer:1..50",
+      "required": true,
+      "description": "单次最多读取的可见商品数。"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "product_ranking",
+      "type": "chanmama.product-ranking/v1",
+      "required": true,
+      "description": "带查询词、统计周期、观察时间、预估标记、原始区间和来源地址的商品榜单。"
+    }
+  ],
+  "resourceRequirements": [
+    {
+      "slot": "rank_source",
+      "purpose": "读取蝉妈妈商品库中关键词和周期一致的可见商品榜单",
+      "origin": "https://www.chanmama.com",
+      "authentication": "membership"
+    }
+  ],
+  "successCriteria": [
+    "页面位于蝉妈妈商品库且搜索词与输入完全一致",
+    "所选统计周期与输入完全一致",
+    "每个商品保留榜单位置、标题、详情地址和可见主图地址",
+    "销量与成交指标保留页面原始区间并标记为蝉妈妈预估数据",
+    "煎饼粉、酱料、包装袋等误命中项只作为搜索候选输出，不自动判定为可比商品"
+  ],
+  "failurePolicy": {
+    "failure": "fail",
+    "timeout": "request_assistance",
+    "cancelled": "cancel",
+    "uncertain": "stop_uncertain"
+  },
+  "evidencePolicy": {
+    "classification": "restricted",
+    "rawRetentionHours": 24,
+    "screenshotDefault": false
+  },
+  "acceptanceTests": [
+    {
+      "id": "rank-visible",
+      "scenario": "success",
+      "input": {
+        "fixture": "promotion-rank-yesterday-prepackaged-pancake"
+      },
+      "expected": {
+        "queryConfirmed": true,
+        "periodConfirmed": true,
+        "estimated": true
+      }
+    },
+    {
+      "id": "membership-hidden",
+      "scenario": "business_failure",
+      "input": {
+        "fixture": "promotion-rank-membership-hidden"
+      },
+      "expected": {
+        "error": "UNAVAILABLE_MEMBERSHIP"
+      }
+    },
+    {
+      "id": "page-structure-changed",
+      "scenario": "page_change",
+      "input": {
+        "fixture": "promotion-rank-unknown-structure"
+      },
+      "expected": {
+        "error": "CHANMAMA_STRUCTURE_UNCONFIRMED"
+      }
+    }
+  ]
+}

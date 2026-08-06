@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { parsePackagingDataset } from "./index.js";
 
 const workbookPath =
-  "/Users/yibazhua/Documents/重点项检查插件/outputs/feishu_export_20260723/产品索引_产品包装版本_2026-07-23.xlsx";
+  "/Users/yibazhua/Documents/02-internal-systems/重点项检查插件/outputs/feishu_export_20260723/产品索引_产品包装版本_2026-07-23.xlsx";
 
 function xmlEscape(value: string): string {
   return value
@@ -151,5 +151,28 @@ describe("packaging-master-v1 Excel profile", () => {
         version: "1.0.0"
       })
     ).toThrow("safe .xlsx");
+  });
+
+  it("rejects unsafe ZIP paths and extreme compression before XML parsing", () => {
+    const unsafePath = parsePackagingDataset({
+      bytes: zipSync({ "../xl/workbook.xml": strToU8("<workbook/>") }),
+      fileName: "master.xlsx",
+      version: "1.0.0"
+    });
+    expect(unsafePath.status).toBe("invalid");
+    expect(unsafePath.errors[0]).toContain("不安全路径");
+
+    const compressedBomb = parsePackagingDataset({
+      bytes: zipSync(
+        {
+          "xl/workbook.xml": new Uint8Array(2 * 1024 * 1024).fill(65)
+        },
+        { level: 9 }
+      ),
+      fileName: "master.xlsx",
+      version: "1.0.0"
+    });
+    expect(compressedBomb.status).toBe("invalid");
+    expect(compressedBomb.errors[0]).toContain("压缩比");
   });
 });

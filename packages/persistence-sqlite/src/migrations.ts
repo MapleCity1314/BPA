@@ -812,5 +812,458 @@ export const migrations: Migration[] = [
         SELECT RAISE(ABORT, 'export records are immutable');
       END;
     `
+  },
+  {
+    version: 9,
+    sql: `
+      CREATE TABLE authoring_scenarios (
+        scenario_id TEXT NOT NULL,
+        version TEXT NOT NULL,
+        scenario_digest TEXT NOT NULL CHECK (
+          scenario_digest GLOB 'sha256:*' AND length(scenario_digest) = 71
+        ),
+        canonical_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(scenario_id, version)
+      ) STRICT;
+
+      CREATE TABLE authoring_sessions (
+        session_id TEXT PRIMARY KEY,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        state TEXT NOT NULL CHECK (
+          state IN (
+            'intake', 'catalog', 'discovery', 'modeling', 'assembly',
+            'validation', 'candidate', 'closed', 'failed'
+          )
+        ),
+        scenario_id TEXT NOT NULL,
+        scenario_version TEXT NOT NULL,
+        scenario_digest TEXT NOT NULL,
+        canonical_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(scenario_id, scenario_version)
+          REFERENCES authoring_scenarios(scenario_id, version)
+          ON DELETE RESTRICT
+      ) STRICT;
+
+      CREATE TABLE authoring_session_revisions (
+        session_id TEXT NOT NULL
+          REFERENCES authoring_sessions(session_id) ON DELETE RESTRICT,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        operation_id TEXT,
+        operation_digest TEXT,
+        state TEXT NOT NULL,
+        canonical_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(session_id, revision),
+        UNIQUE(session_id, operation_id),
+        CHECK (
+          (revision = 0 AND operation_id IS NULL AND operation_digest IS NULL)
+          OR
+          (revision > 0 AND operation_id IS NOT NULL AND operation_digest IS NOT NULL)
+        )
+      ) STRICT;
+
+      CREATE TABLE design_mode_grants (
+        grant_id TEXT PRIMARY KEY,
+        authoring_session_id TEXT NOT NULL
+          REFERENCES authoring_sessions(session_id) ON DELETE RESTRICT,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        state TEXT NOT NULL CHECK (
+          state IN (
+            'requested', 'active', 'stopped', 'expired', 'revoked', 'invalidated'
+          )
+        ),
+        approved_by TEXT NOT NULL,
+        browser_session_id TEXT NOT NULL
+          REFERENCES browser_sessions(id) ON DELETE RESTRICT,
+        profile_id TEXT NOT NULL,
+        tab_id INTEGER NOT NULL CHECK (tab_id >= 0),
+        origin TEXT NOT NULL,
+        page_epoch TEXT NOT NULL,
+        allowed_operations_json TEXT NOT NULL,
+        issued_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        terminal_reason TEXT
+      ) STRICT;
+
+      CREATE TABLE design_mode_grant_revisions (
+        grant_id TEXT NOT NULL
+          REFERENCES design_mode_grants(grant_id) ON DELETE RESTRICT,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        state TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        reason TEXT,
+        occurred_at TEXT NOT NULL,
+        PRIMARY KEY(grant_id, revision)
+      ) STRICT;
+
+      CREATE TABLE authoring_page_snapshots (
+        snapshot_id TEXT PRIMARY KEY,
+        authoring_session_id TEXT NOT NULL
+          REFERENCES authoring_sessions(session_id) ON DELETE RESTRICT,
+        design_grant_id TEXT NOT NULL
+          REFERENCES design_mode_grants(grant_id) ON DELETE RESTRICT,
+        page_state TEXT NOT NULL,
+        evidence_id TEXT NOT NULL UNIQUE
+          REFERENCES evidence_transfers(evidence_id) ON DELETE RESTRICT,
+        asset_id TEXT NOT NULL
+          REFERENCES asset_records(asset_id) ON DELETE RESTRICT,
+        content_digest TEXT NOT NULL CHECK (
+          content_digest GLOB 'sha256:*' AND length(content_digest) = 71
+        ),
+        canonical_json TEXT NOT NULL,
+        captured_at TEXT NOT NULL,
+        raw_evidence_expires_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE INDEX authoring_page_snapshots_session
+        ON authoring_page_snapshots(
+          authoring_session_id, captured_at, snapshot_id
+        );
+
+      CREATE TABLE candidate_bundles (
+        bundle_id TEXT PRIMARY KEY,
+        version TEXT NOT NULL,
+        authoring_session_id TEXT NOT NULL,
+        source_revision INTEGER NOT NULL CHECK (source_revision >= 0),
+        record_digest TEXT NOT NULL CHECK (
+          record_digest GLOB 'sha256:*' AND length(record_digest) = 71
+        ),
+        canonical_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(authoring_session_id, source_revision)
+          REFERENCES authoring_session_revisions(session_id, revision)
+          ON DELETE RESTRICT
+      ) STRICT;
+
+      CREATE TABLE candidate_bundle_items (
+        bundle_id TEXT NOT NULL
+          REFERENCES candidate_bundles(bundle_id) ON DELETE RESTRICT,
+        item_type TEXT NOT NULL CHECK (item_type IN ('artifact', 'file')),
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        item_key TEXT NOT NULL,
+        digest TEXT NOT NULL CHECK (
+          digest GLOB 'sha256:*' AND length(digest) = 71
+        ),
+        canonical_json TEXT NOT NULL,
+        PRIMARY KEY(bundle_id, item_type, ordinal),
+        UNIQUE(bundle_id, item_type, item_key)
+      ) STRICT;
+
+      CREATE TABLE candidate_bundle_validations (
+        bundle_id TEXT NOT NULL
+          REFERENCES candidate_bundles(bundle_id) ON DELETE RESTRICT,
+        check_type TEXT NOT NULL CHECK (
+          check_type IN (
+            'schema', 'contracts', 'replay', 'permissions', 'risk'
+          )
+        ),
+        valid INTEGER NOT NULL CHECK (valid IN (0, 1)),
+        issue_count INTEGER NOT NULL CHECK (issue_count >= 0),
+        report_asset_id TEXT
+          REFERENCES asset_records(asset_id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(bundle_id, check_type)
+      ) STRICT;
+
+      CREATE TABLE candidate_exports (
+        export_id TEXT PRIMARY KEY,
+        bundle_id TEXT NOT NULL
+          REFERENCES candidate_bundles(bundle_id) ON DELETE RESTRICT,
+        bundle_digest TEXT NOT NULL,
+        archive_digest TEXT NOT NULL,
+        manifest_digest TEXT NOT NULL,
+        destination_ref TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE INDEX candidate_exports_bundle
+        ON candidate_exports(bundle_id, created_at, export_id);
+
+      CREATE TRIGGER authoring_scenarios_no_update
+      BEFORE UPDATE ON authoring_scenarios
+      BEGIN
+        SELECT RAISE(ABORT, 'authoring scenarios are immutable');
+      END;
+
+      CREATE TRIGGER authoring_scenarios_no_delete
+      BEFORE DELETE ON authoring_scenarios
+      BEGIN
+        SELECT RAISE(ABORT, 'authoring scenarios are immutable');
+      END;
+
+      CREATE TRIGGER authoring_session_revisions_no_update
+      BEFORE UPDATE ON authoring_session_revisions
+      BEGIN
+        SELECT RAISE(ABORT, 'authoring session revisions are append-only');
+      END;
+
+      CREATE TRIGGER authoring_session_revisions_no_delete
+      BEFORE DELETE ON authoring_session_revisions
+      BEGIN
+        SELECT RAISE(ABORT, 'authoring session revisions are append-only');
+      END;
+
+      CREATE TRIGGER design_mode_grant_revisions_no_update
+      BEFORE UPDATE ON design_mode_grant_revisions
+      BEGIN
+        SELECT RAISE(ABORT, 'design mode grant revisions are append-only');
+      END;
+
+      CREATE TRIGGER design_mode_grant_revisions_no_delete
+      BEFORE DELETE ON design_mode_grant_revisions
+      BEGIN
+        SELECT RAISE(ABORT, 'design mode grant revisions are append-only');
+      END;
+
+      CREATE TRIGGER authoring_page_snapshots_no_update
+      BEFORE UPDATE ON authoring_page_snapshots
+      BEGIN
+        SELECT RAISE(ABORT, 'authoring page snapshots are immutable');
+      END;
+
+      CREATE TRIGGER authoring_page_snapshots_no_delete
+      BEFORE DELETE ON authoring_page_snapshots
+      BEGIN
+        SELECT RAISE(ABORT, 'authoring page snapshots are immutable');
+      END;
+
+      CREATE TRIGGER candidate_bundles_no_update
+      BEFORE UPDATE ON candidate_bundles
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate bundles are immutable');
+      END;
+
+      CREATE TRIGGER candidate_bundles_no_delete
+      BEFORE DELETE ON candidate_bundles
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate bundles are immutable');
+      END;
+
+      CREATE TRIGGER candidate_bundle_items_no_update
+      BEFORE UPDATE ON candidate_bundle_items
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate bundle items are immutable');
+      END;
+
+      CREATE TRIGGER candidate_bundle_items_no_delete
+      BEFORE DELETE ON candidate_bundle_items
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate bundle items are immutable');
+      END;
+
+      CREATE TRIGGER candidate_bundle_validations_no_update
+      BEFORE UPDATE ON candidate_bundle_validations
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate validation results are immutable');
+      END;
+
+      CREATE TRIGGER candidate_bundle_validations_no_delete
+      BEFORE DELETE ON candidate_bundle_validations
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate validation results are immutable');
+      END;
+
+      CREATE TRIGGER candidate_exports_no_update
+      BEFORE UPDATE ON candidate_exports
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate exports are immutable');
+      END;
+
+      CREATE TRIGGER candidate_exports_no_delete
+      BEFORE DELETE ON candidate_exports
+      BEGIN
+        SELECT RAISE(ABORT, 'candidate exports are immutable');
+      END;
+    `
+  },
+  {
+    version: 10,
+    sql: `
+      CREATE TABLE browser_page_observations (
+        session_id TEXT NOT NULL
+          REFERENCES browser_sessions(id) ON DELETE CASCADE,
+        browser_instance_id TEXT NOT NULL,
+        tab_id INTEGER NOT NULL CHECK (tab_id >= 0),
+        window_id INTEGER CHECK (window_id IS NULL OR window_id >= 0),
+        origin TEXT NOT NULL,
+        pathname TEXT NOT NULL,
+        content_script_ready INTEGER NOT NULL CHECK (
+          content_script_ready IN (0, 1)
+        ),
+        authentication TEXT NOT NULL CHECK (
+          authentication IN (
+            'unknown', 'anonymous', 'authenticated', 'membership'
+          )
+        ),
+        observation_state TEXT NOT NULL CHECK (
+          observation_state IN (
+            'content_script_missing', 'loading', 'auth_required',
+            'challenge', 'available', 'invalidated'
+          )
+        ),
+        page_epoch TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        observed_at TEXT NOT NULL,
+        shop_identity_json TEXT,
+        reason_code TEXT,
+        PRIMARY KEY(session_id, tab_id)
+      ) STRICT;
+
+      CREATE INDEX browser_page_observations_instance_page
+        ON browser_page_observations(
+          browser_instance_id, origin, pathname, observation_state, observed_at
+        );
+      CREATE INDEX browser_page_observations_session
+        ON browser_page_observations(session_id, observed_at);
+    `
+  },
+  {
+    version: 11,
+    sql: `
+      ALTER TABLE browser_capabilities
+        ADD COLUMN routes_json TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE browser_capabilities ADD COLUMN adapter_id TEXT;
+      ALTER TABLE browser_capabilities ADD COLUMN adapter_version TEXT;
+
+      CREATE TABLE browser_page_observations_v11 (
+        session_id TEXT NOT NULL
+          REFERENCES browser_sessions(id) ON DELETE CASCADE,
+        browser_instance_id TEXT NOT NULL,
+        tab_id INTEGER NOT NULL CHECK (tab_id >= 0),
+        window_id INTEGER CHECK (window_id IS NULL OR window_id >= 0),
+        origin TEXT NOT NULL,
+        pathname TEXT NOT NULL,
+        content_script_ready INTEGER NOT NULL CHECK (
+          content_script_ready IN (0, 1)
+        ),
+        authentication TEXT NOT NULL CHECK (
+          authentication IN (
+            'unknown', 'anonymous', 'authenticated', 'membership'
+          )
+        ),
+        authentication_context_ref TEXT,
+        observation_state TEXT NOT NULL CHECK (
+          observation_state IN (
+            'content_script_missing', 'loading', 'probing',
+            'auth_required', 'challenge', 'ready', 'departed', 'stale'
+          )
+        ),
+        page_epoch TEXT NOT NULL,
+        observer_capability_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        observed_at TEXT NOT NULL,
+        reason_code TEXT,
+        PRIMARY KEY(session_id, tab_id),
+        CHECK (
+          authentication NOT IN ('authenticated', 'membership') OR
+          authentication_context_ref IS NOT NULL
+        )
+      ) STRICT;
+
+      INSERT INTO browser_page_observations_v11(
+        session_id, browser_instance_id, tab_id, window_id, origin, pathname,
+        content_script_ready, authentication, authentication_context_ref,
+        observation_state, page_epoch, observer_capability_id, revision,
+        observed_at, reason_code
+      )
+      SELECT
+        session_id, browser_instance_id, tab_id, window_id, origin, pathname,
+        0, 'unknown', NULL, 'stale', page_epoch, 'legacy.unknown', revision + 1,
+        observed_at, 'PROTOCOL_V2_REBIND_REQUIRED'
+      FROM browser_page_observations;
+
+      DROP TABLE browser_page_observations;
+      ALTER TABLE browser_page_observations_v11
+        RENAME TO browser_page_observations;
+
+      CREATE INDEX browser_page_observations_instance_page
+        ON browser_page_observations(
+          browser_instance_id, origin, pathname, observation_state, observed_at
+        );
+      CREATE INDEX browser_page_observations_session
+        ON browser_page_observations(session_id, observed_at);
+      CREATE INDEX browser_page_observations_expiry
+        ON browser_page_observations(observation_state, observed_at);
+      CREATE INDEX workflow_runs_active_updated
+        ON workflow_runs(status, updated_at)
+        WHERE status NOT IN ('succeeded', 'failed', 'cancelled', 'uncertain');
+    `
+  },
+  {
+    version: 12,
+    sql: `
+      CREATE TABLE trigger_specs (
+        trigger_id TEXT PRIMARY KEY,
+        trigger_version TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+        spec_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        updated_by TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE trigger_runs (
+        trigger_run_id TEXT PRIMARY KEY,
+        trigger_id TEXT NOT NULL REFERENCES trigger_specs(trigger_id) ON DELETE RESTRICT,
+        trigger_version TEXT NOT NULL,
+        occurrence_key TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (
+          'due', 'lease_acquired', 'run_created', 'running', 'complete',
+          'partial', 'blocked', 'degraded', 'failed', 'skipped'
+        )),
+        workflow_run_id TEXT REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        fencing_token INTEGER CHECK (fencing_token IS NULL OR fencing_token >= 1),
+        dataset_id TEXT,
+        dataset_version TEXT,
+        diagnostic TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(trigger_id, occurrence_key)
+      ) STRICT;
+      CREATE INDEX trigger_runs_recent
+        ON trigger_runs(trigger_id, created_at DESC);
+
+      CREATE TABLE trigger_leases (
+        concurrency_key TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        fencing_token INTEGER NOT NULL CHECK (fencing_token >= 1),
+        acquired_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX trigger_leases_expiry ON trigger_leases(expires_at);
+
+      CREATE TABLE browser_control_leases (
+        resource_id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        fencing_token INTEGER NOT NULL CHECK (fencing_token >= 1),
+        acquired_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX browser_control_leases_expiry
+        ON browser_control_leases(expires_at);
+    `
+  },
+  {
+    version: 13,
+    sql: `
+      CREATE INDEX engine_outbox_pending_created
+        ON engine_outbox(created_at, id)
+        WHERE acknowledged_at IS NULL;
+
+      CREATE INDEX gateway_commands_active_sequence
+        ON gateway_commands(command_seq)
+        WHERE state != 'terminal';
+
+      CREATE INDEX gateway_commands_terminal_result_sequence
+        ON gateway_commands(command_seq, node_execution_id)
+        WHERE state = 'terminal' AND result_json IS NOT NULL;
+    `
   }
 ];

@@ -1,0 +1,83 @@
+import { randomUUID } from "node:crypto";
+import { describe,expect,it } from "vitest";
+import type { RunRecord,TriggerSpecDefinition } from "@bpa/persistence";
+import { SqlitePersistence } from "@bpa/persistence-sqlite";
+import { TriggerRuntime } from "./trigger-runtime.js";
+
+const base:TriggerSpecDefinition = {
+  apiVersion:"bpa.trigger/v1alpha1",
+  id:"inventory.manual",
+  version:"1.0.0",
+  appId:"inventory-monitor",
+  kind:"manual",
+  workflow:{ id:"inventory.refresh",version:"1.0.0" },
+  enabled:true,
+  inputSchemaVersion:"inventory.refresh-input/1",
+  input:{ shopId:"10461048" },
+  concurrencyKey:"inventory:10461048",
+  idempotencyPolicy:"request_key",
+  retryPolicy:"none"
+};
+
+function runtime(
+  store:SqlitePersistence,
+  now:() => Date
+):TriggerRuntime {
+  return new TriggerRuntime(store,(_trigger,input) => {
+    const timestamp = now().toISOString();
+    const run:RunRecord = {
+      id:`run:${randomUUID()}`,workflowId:"inventory.refresh",
+      workflowVersion:"1.0.0",workflowDigest:"sha256:test",status:"running",
+      revision:0,input,createdAt:timestamp,updatedAt:timestamp
+    };
+    return store.createRun({
+      run,
+      event:{
+        id:randomUUID(),runId:run.id,sequence:1,type:"RUN_CREATED",
+        payload:{},occurredAt:timestamp
+      }
+    });
+  },now);
+}
+
+describe("deterministic Trigger Runtime",() => {
+  it("deduplicates one Manual request key and reconciles terminal workflow state",() => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    const trigger = store.putTriggerSpec({
+      spec:base,actor:"operator",occurredAt:"2026-08-05T00:00:00.000Z"
+    });
+    const engine = runtime(store,() => new Date("2026-08-05T00:00:00.000Z"));
+    const first = engine.fire({ trigger,occurrenceKey:"manual:req-1" });
+    expect(first).toMatchObject({ status:"run_created" });
+    expect(engine.fire({ trigger,occurrenceKey:"manual:req-1" }).triggerRunId)
+      .toBe(first.triggerRunId);
+    const run = store.getRun(first.workflowRunId!)!;
+    store.commitRunTransition({
+      runId:run.id,expectedRevision:run.revision,nextStatus:"succeeded",
+      event:{
+        id:randomUUID(),runId:run.id,sequence:2,type:"RUN_SUCCEEDED",
+        payload:{},occurredAt:"2026-08-05T00:00:01.000Z"
+      }
+    });
+    engine.tick();
+    expect(store.listTriggerRuns(base.id)[0]?.status).toBe("complete");
+    store.close();
+  });
+
+  it("creates at most one Schedule occurrence per interval",() => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    const schedule:TriggerSpecDefinition = {
+      ...base,id:"inventory.schedule",kind:"schedule",
+      idempotencyPolicy:"occurrence",missedRunPolicy:"run_once",
+      schedule:{ intervalSeconds:1800,timezone:"Asia/Shanghai" }
+    };
+    store.putTriggerSpec({
+      spec:schedule,actor:"operator",occurredAt:"2026-08-05T00:00:00.000Z"
+    });
+    const engine = runtime(store,() => new Date("2026-08-05T00:10:00.000Z"));
+    engine.tick();
+    engine.tick();
+    expect(store.listTriggerRuns(schedule.id)).toHaveLength(1);
+    store.close();
+  });
+});

@@ -2,6 +2,7 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -15,10 +16,41 @@ jobs:
           run_install: false
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
+
+  verify-windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+          run_install: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify
+
+  performance-gate:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+          run_install: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm performance:check
 
   release-package:
     runs-on: macos-15
@@ -31,7 +63,7 @@ jobs:
           run_install: false
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: pnpm
       - name: Verify release build host
         run: |
@@ -49,7 +81,8 @@ jobs:
         run: |
           commit="$(git rev-parse HEAD)"
           version="$(node -p 'require("./package.json").version')"
-          identity="v${version}-rc.${commit:0:12}"
+          node_version="$(node -p 'process.versions.node')"
+          identity="v${version}-rc.${commit:0:12}.node${node_version}"
           archive="$RUNNER_TEMP/bpa-local-${identity}-macos-arm64.tar.gz"
           BPA_BUNDLED_NODE="$(command -v node)" \
             BPA_PACKAGE_OUTPUT="$archive" \
@@ -63,3 +96,280 @@ jobs:
           path: |
             ${{ runner.temp }}/bpa-local-*-macos-arm64.tar.gz
             ${{ runner.temp }}/bpa-local-*-macos-arm64.tar.gz.sha256
+
+  release-package-windows:
+    needs: verify-windows
+    runs-on: windows-2025
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        builder: [1, 2]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+          run_install: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build and verify immutable Windows RC archive
+        shell: pwsh
+        run: |
+          $commit = git rev-parse HEAD
+          $version = node -p 'require("./package.json").version'
+          $nodeVersion = node -p 'process.versions.node'
+          $identity = "v$version-rc.$($commit.Substring(0, 12)).node$nodeVersion"
+          $firstDirectory = Join-Path $env:RUNNER_TEMP "build-first"
+          $secondDirectory = Join-Path $env:RUNNER_TEMP "build-second"
+          New-Item -ItemType Directory -Path $firstDirectory, $secondDirectory -Force | Out-Null
+          $firstArchive = Join-Path $firstDirectory "bpa-local-$identity-windows-x64.zip"
+          $secondArchive = Join-Path $secondDirectory "bpa-local-$identity-windows-x64.zip"
+          ./scripts/package-windows-x64.ps1 `
+            -Output $firstArchive `
+            -SkipRepositoryVerification
+          ./scripts/package-windows-x64.ps1 `
+            -Output $secondArchive `
+            -SkipRepositoryVerification
+          ./scripts/verify-package-windows-x64.ps1 -Archive $firstArchive
+          ./scripts/verify-package-windows-x64.ps1 -Archive $secondArchive
+          ./scripts/compare-windows-runtime-archives.ps1 `
+            -FirstArchive $firstArchive `
+            -SecondArchive $secondArchive
+      - name: Upload verified Windows RC archive
+        uses: actions/upload-artifact@v6
+        with:
+          name: bpa-windows-x64-rc-builder-${{ matrix.builder }}
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/build-first/bpa-local-*-windows-x64.zip
+            ${{ runner.temp }}/build-first/bpa-local-*-windows-x64.zip.sha256
+
+  verify-windows-reproducibility:
+    needs: release-package-windows
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: bpa-windows-x64-rc-builder-*
+          path: ${{ runner.temp }}/builders
+      - name: Compare independent Builder closures
+        shell: pwsh
+        run: |
+          $archives = @(Get-ChildItem `
+            -LiteralPath (Join-Path $env:RUNNER_TEMP "builders") `
+            -Filter "bpa-local-*-windows-x64.zip" `
+            -File `
+            -Recurse)
+          if ($archives.Count -ne 2) {
+            throw "Expected exactly two independent Builder archives"
+          }
+          ./scripts/compare-windows-runtime-archives.ps1 `
+            -FirstArchive $archives[0].FullName `
+            -SecondArchive $archives[1].FullName
+          $canonical = Join-Path $env:RUNNER_TEMP "canonical"
+          New-Item -ItemType Directory -Path $canonical -Force | Out-Null
+          Copy-Item -LiteralPath $archives[0].FullName -Destination $canonical
+          Copy-Item -LiteralPath "$($archives[0].FullName).sha256" -Destination $canonical
+      - name: Upload cross-Builder verified Runtime
+        uses: actions/upload-artifact@v6
+        with:
+          name: bpa-windows-x64-rc
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/canonical/bpa-local-*-windows-x64.zip
+            ${{ runner.temp }}/canonical/bpa-local-*-windows-x64.zip.sha256
+
+  release-workbuddy-skill:
+    needs: verify-windows-reproducibility
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+          run_install: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v6
+        with:
+          name: bpa-windows-x64-rc
+          path: ${{ runner.temp }}/windows-runtime
+      - name: Assemble and verify complete WorkBuddy Skill
+        run: |
+          runtime="$(find "$RUNNER_TEMP/windows-runtime" -name 'bpa-local-*-windows-x64.zip' -type f -print -quit)"
+          test -n "$runtime"
+          output="$RUNNER_TEMP/doudian-alliance-retired-monitor.skill.zip"
+          node scripts/package-doudian-alliance-skill.mjs \
+            --runtime "$runtime" \
+            --output "$output"
+          node scripts/verify-doudian-alliance-skill.mjs "$output"
+      - name: Upload verified WorkBuddy delivery
+        uses: actions/upload-artifact@v6
+        with:
+          name: doudian-alliance-retired-monitor-skill-rc
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/doudian-alliance-retired-monitor.skill.zip
+            ${{ runner.temp }}/doudian-alliance-retired-monitor.skill.zip.sha256
+
+  validate-workbuddy-skill-windows:
+    needs: release-workbuddy-skill
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v6
+        with:
+          name: doudian-alliance-retired-monitor-skill-rc
+          path: ${{ runner.temp }}/workbuddy-skill
+      - name: Parse installer and validate the packaged closure on Windows
+        shell: pwsh
+        run: |
+          $artifactRoot = Join-Path $env:RUNNER_TEMP "workbuddy-skill"
+          $archives = @(Get-ChildItem `
+            -LiteralPath $artifactRoot `
+            -Filter "doudian-alliance-retired-monitor.skill.zip" `
+            -File)
+          if ($archives.Count -ne 1) {
+            throw "Expected exactly one WorkBuddy Skill archive"
+          }
+          $archive = $archives[0].FullName
+          $sidecar = "$archive.sha256"
+          if (-not (Test-Path -LiteralPath $sidecar -PathType Leaf)) {
+            throw "WorkBuddy Skill checksum sidecar is missing"
+          }
+          $checksumFields = `
+            (Get-Content -LiteralPath $sidecar -Raw).Trim() -split "\s+"
+          $expected = $checksumFields[0]
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+          if ($expected.ToLowerInvariant() -ne $actual.ToLowerInvariant()) {
+            throw "WorkBuddy Skill checksum does not match"
+          }
+          $expanded = Join-Path $env:RUNNER_TEMP "expanded-workbuddy-skill"
+          Expand-Archive -LiteralPath $archive -DestinationPath $expanded
+          $installers = @(Get-ChildItem `
+            -LiteralPath $expanded `
+            -Filter "Install-DoudianAllianceMonitor.ps1" `
+            -File `
+            -Recurse)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one WorkBuddy installer"
+          }
+          $scriptRoot = Split-Path -Parent $installers[0].FullName
+          $skillRoot = Split-Path -Parent $scriptRoot
+          $resultText = @(& $installers[0].FullName `
+            -SkillRoot $skillRoot `
+            -ValidatePackageOnly)
+          $result = ($resultText -join "`n") | ConvertFrom-Json
+          if (
+            $result.status -ne "package_verified" -or
+            -not $result.runtimeIdentity -or
+            -not $result.runtimeSha256 -or
+            @($result.assets).Count -ne 5
+          ) {
+            throw "WorkBuddy package-only validation returned an invalid result"
+          }
+      - name: Install the Runtime through the real WorkBuddy entrypoint
+        shell: pwsh
+        run: |
+          $expanded = Join-Path $env:RUNNER_TEMP "expanded-workbuddy-skill"
+          $installer = @(Get-ChildItem `
+            -LiteralPath $expanded `
+            -Filter "Install-DoudianAllianceMonitor.ps1" `
+            -File `
+            -Recurse)[0]
+          $skillRoot = Split-Path -Parent (Split-Path -Parent $installer.FullName)
+          $installRoot = Join-Path $env:RUNNER_TEMP "bpa-real-install"
+          $recordsRoot = Join-Path $env:RUNNER_TEMP "bpa-real-records"
+          $resultPath = Join-Path $env:RUNNER_TEMP "fresh-install-result.json"
+          & powershell.exe `
+            -NoProfile `
+            -ExecutionPolicy Bypass `
+            -File $installer.FullName `
+            -SkillRoot $skillRoot `
+            -InstallRoot $installRoot `
+            -RecordsRoot $recordsRoot `
+            -ResultPath $resultPath
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $resultPath)) {
+            throw "WorkBuddy real install did not return a result file"
+          }
+          $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+          if (
+            $result.status -ne "needs_native_host" -or
+            $result.errorCode -ne "BROWSER_BRIDGE_DISCONNECTED" -or
+            $result.assetsPublished -ne $false
+          ) {
+            throw "Unexpected real install result: $($result | ConvertTo-Json -Compress)"
+          }
+          $current = (Get-Content `
+            -LiteralPath (Join-Path $installRoot "runtime\current.txt") `
+            -Raw).Trim()
+          if (-not $current -or $current -ne $result.runtimeIdentity) {
+            throw "Installed Runtime pointer differs from the package identity"
+          }
+          & (Join-Path $installRoot "bin\bpa.cmd") doctor | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installed Core failed its doctor check"
+          }
+      - name: Repair the same Runtime through the real WorkBuddy entrypoint
+        shell: pwsh
+        run: |
+          $expanded = Join-Path $env:RUNNER_TEMP "expanded-workbuddy-skill"
+          $installer = @(Get-ChildItem `
+            -LiteralPath $expanded `
+            -Filter "Install-DoudianAllianceMonitor.ps1" `
+            -File `
+            -Recurse)[0]
+          $skillRoot = Split-Path -Parent (Split-Path -Parent $installer.FullName)
+          $installRoot = Join-Path $env:RUNNER_TEMP "bpa-real-install"
+          $recordsRoot = Join-Path $env:RUNNER_TEMP "bpa-real-records"
+          $resultPath = Join-Path $env:RUNNER_TEMP "same-version-repair-result.json"
+          & powershell.exe `
+            -NoProfile `
+            -ExecutionPolicy Bypass `
+            -File $installer.FullName `
+            -SkillRoot $skillRoot `
+            -InstallRoot $installRoot `
+            -RecordsRoot $recordsRoot `
+            -ResultPath $resultPath
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $resultPath)) {
+            throw "WorkBuddy same-version repair did not return a result file"
+          }
+          $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+          if (
+            $result.status -ne "needs_native_host" -or
+            $result.errorCode -ne "BROWSER_BRIDGE_DISCONNECTED" -or
+            $result.assetsPublished -ne $false
+          ) {
+            throw "Unexpected same-version repair result: $($result | ConvertTo-Json -Compress)"
+          }
+          & (Join-Path $installRoot "bin\bpa.cmd") doctor | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Repaired Core failed its doctor check"
+          }
+      - name: Upload Windows installer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: workbuddy-windows-install-diagnostics
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/bpa-real-install/logs/*.log
+            ${{ runner.temp }}/*-result.json
+      - name: Remove the real Windows test installation
+        if: always()
+        shell: pwsh
+        run: |
+          ./scripts/uninstall-windows.ps1 `
+            -InstallRoot (Join-Path $env:RUNNER_TEMP "bpa-real-install") `
+            -PurgeData

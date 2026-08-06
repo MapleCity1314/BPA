@@ -84,9 +84,15 @@ function bindingSnapshot(
         revision: 1,
         slotName: "metrics_source",
         sessionId,
+        browserInstanceId: "browser:v8",
+        tabId: 42,
         capabilityDigest,
         origin: "https://www.chanmama.com",
+        pathname: "/metrics",
+        pageEpoch: "tab-42:1:test",
+        observerCapabilityId: "chanmama.page",
         authentication: "membership",
+        authenticationContextRef: "auth-context-member",
         frozenAt: 1,
         approvedBy: "user:test"
       }
@@ -99,6 +105,21 @@ function openObservedSession(database: SqlitePersistence, id = "session:v8") {
   expect(
     database.openBrowserSession({ session, now: timestamp }).session
   ).toEqual(session);
+  database.upsertBrowserPageObservation({
+    sessionId: id,
+    browserInstanceId: session.browserInstanceId,
+    tabId: 42,
+    origin: "https://www.chanmama.com",
+    pathname: "/metrics",
+    contentScriptReady: true,
+    authentication: "membership",
+    authenticationContextRef: "auth-context-member",
+    observationState: "ready",
+    pageEpoch: "tab-42:1:test",
+    observerCapabilityId: "chanmama.page",
+    revision: 1,
+    observedAt: timestamp,
+  });
   return database.updateBrowserSessionObservation({
     id,
     expectedRevision: 0,
@@ -149,8 +170,54 @@ function createBoundRun(
 }
 
 describe("SQLite v8 Resource Binding and Session observation", () => {
-  it("freezes an exact Resource Binding Snapshot with the recoverable Run", () => {
+  it("persists generic available pages and keeps stable observation revisions", () => {
     const database = new SqlitePersistence({ path: ":memory:" });
+    const session = browserSession("session:page");
+    database.openBrowserSession({ session, now: timestamp });
+    const first = database.upsertBrowserPageObservation({
+      sessionId: session.id,
+      browserInstanceId: session.browserInstanceId,
+      tabId: 7,
+      origin: "https://fxg.jinritemai.com",
+      pathname: "/ffa/g/list",
+      contentScriptReady: true,
+      authentication: "authenticated",
+      authenticationContextRef: "auth-context-shop",
+      observationState: "ready",
+      pageEpoch: "tab-7:1:test",
+      observerCapabilityId: "doudian.page",
+      revision: 1,
+      observedAt: timestamp
+    });
+    const refreshed = database.upsertBrowserPageObservation({
+      ...first,
+      observedAt: "2026-07-30T00:00:01.000Z"
+    });
+    expect(refreshed.revision).toBe(first.revision);
+    expect(
+      database.pruneBrowserPageObservations({
+        observedBefore: "2026-08-31T00:00:00.000Z"
+      })
+    ).toBe(0);
+    database.invalidateBrowserPageObservations({
+      sessionId: session.id,
+      observedAt: "2026-07-30T00:00:02.000Z",
+      reasonCode: "TEST_DISCONNECT"
+    });
+    expect(
+      database.pruneBrowserPageObservations({
+        observedBefore: "2026-08-31T00:00:00.000Z"
+      })
+    ).toBe(1);
+    expect(database.getBrowserPageObservation(session.id, 7)).toBeUndefined();
+    database.close();
+  });
+
+  it("freezes an exact Resource Binding Snapshot with the recoverable Run", () => {
+    const database = new SqlitePersistence({
+      path: ":memory:",
+      clock: () => new Date(timestamp)
+    });
     const observed = openObservedSession(database);
     expect(observed).toMatchObject({
       observationRevision: 1,
@@ -167,7 +234,10 @@ describe("SQLite v8 Resource Binding and Session observation", () => {
   });
 
   it("rejects slot drift, observed Session drift, and stale CAS", () => {
-    const database = new SqlitePersistence({ path: ":memory:" });
+    const database = new SqlitePersistence({
+      path: ":memory:",
+      clock: () => new Date(timestamp)
+    });
     openObservedSession(database);
     expect(() =>
       database.updateBrowserSessionObservation({
@@ -186,13 +256,18 @@ describe("SQLite v8 Resource Binding and Session observation", () => {
         bindings: {}
       })
     ).toThrow("exact IR resource slots");
-    database.updateBrowserSessionObservation({
-      id: "session:v8",
-      expectedRevision: 1,
-      role: "metrics_source",
-      observedOrigin: "https://www.chanmama.com",
-      observedAuthentication: "authenticated",
+    database.upsertBrowserPageObservation({
+      sessionId: "session:v8",
+      browserInstanceId: "browser:v8",
+      tabId: 42,
+      origin: "https://www.chanmama.com",
+      pathname: "/metrics",
+      contentScriptReady: true,
+      authentication: "anonymous",
       observationState: "auth_required",
+      pageEpoch: "tab-42:1:test",
+      observerCapabilityId: "chanmama.page",
+      revision: 2,
       observedAt: "2026-07-30T00:00:01.000Z"
     });
     expect(() => createBoundRun(database, "run:session-drift")).toThrow(
@@ -471,7 +546,10 @@ function seedLineage(database: SqlitePersistence) {
 
 describe("SQLite v8 lineage and Export metadata", () => {
   it("uses bounded stable cursors without returning Blob bodies", () => {
-    const database = new SqlitePersistence({ path: ":memory:" });
+    const database = new SqlitePersistence({
+      path: ":memory:",
+      clock: () => new Date(timestamp)
+    });
     const seeded = seedLineage(database);
     const first = database.listEvidenceTransfersForRun({
       runId: seeded.runId,
@@ -520,7 +598,10 @@ describe("SQLite v8 lineage and Export metadata", () => {
   });
 
   it("stores immutable Export metadata and AssetRefs only", () => {
-    const database = new SqlitePersistence({ path: ":memory:" });
+    const database = new SqlitePersistence({
+      path: ":memory:",
+      clock: () => new Date(timestamp)
+    });
     const seeded = seedLineage(database);
     const exportBody = Buffer.from([0xff, 0xd8, 0xff, 0xee]);
     const exportDigest = digestBytes(exportBody);
@@ -604,7 +685,7 @@ describe("migration v8", () => {
         })
     ).toThrow("crash");
     const recovered = new SqlitePersistence({ path });
-    expect(recovered.health().schemaVersion).toBe(8);
+    expect(recovered.health().schemaVersion).toBe(13);
     recovered.close();
   });
 });

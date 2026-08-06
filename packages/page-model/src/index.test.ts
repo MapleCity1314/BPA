@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createDesignModeSession,
   designModeSessionIssues,
+  evaluateDeclarativeRead,
   evaluateDesignModeSession,
   isExactOrigin,
   publishPageAssetCandidate,
@@ -507,5 +508,112 @@ describe("Design Mode lifecycle", () => {
     ).toContainEqual(
       expect.objectContaining({ code: "INVALID_DESIGN_SESSION" })
     );
+  });
+});
+
+describe("declarative read replay", () => {
+  const readContract: ElementContract = {
+    ...structuredClone(contract),
+    metadata: {
+      id: "product.total",
+      version: "1.0.0",
+      title: "商品总数"
+    },
+    intent: "读取商品总数",
+    scope: {
+      origins: [origin],
+      pathPattern: "/ffa/g/list",
+      pageState: "product-list-ready",
+      frame: "top"
+    },
+    candidates: [
+      {
+        strategy: "role-name",
+        role: "status",
+        name: "商品总数"
+      },
+      {
+        strategy: "css-diagnostic",
+        selector: "[data-testid='product-total']"
+      }
+    ],
+    preconditions: [],
+    postconditions: []
+  };
+  const semanticNode = {
+    id: "semantic-node-00001",
+    order: 0,
+    role: "status",
+    accessibleName: "商品总数",
+    text: "共 106 件商品",
+    states: {
+      visible: true,
+      interactive: false
+    },
+    digest: digestC
+  };
+
+  it("projects a stable semantic value without evaluating selectors", () => {
+    expect(
+      evaluateDeclarativeRead({
+        contract: readContract,
+        snapshot: {
+          origin,
+          path: "/ffa/g/list",
+          pageState: "product-list-ready",
+          semanticNodes: [semanticNode]
+        },
+        projection: { kind: "text" }
+      })
+    ).toEqual({
+      status: "succeeded",
+      candidateIndex: 0,
+      strategy: "role-name",
+      nodeIds: ["semantic-node-00001"],
+      value: "共 106 件商品"
+    });
+  });
+
+  it("fails closed when count or scope drifts", () => {
+    expect(
+      evaluateDeclarativeRead({
+        contract: readContract,
+        snapshot: {
+          origin,
+          path: "/ffa/g/create",
+          pageState: "product-list-ready",
+          semanticNodes: [semanticNode]
+        },
+        projection: { kind: "text" }
+      })
+    ).toMatchObject({
+      status: "failed",
+      code: "DECLARATIVE_LOCATOR_UNSTABLE"
+    });
+    expect(
+      evaluateDeclarativeRead({
+        contract: {
+          ...readContract,
+          candidates: [
+            {
+              strategy: "relative-anchor",
+              anchor: "product.header",
+              role: "status",
+              name: "商品总数"
+            }
+          ]
+        },
+        snapshot: {
+          origin,
+          path: "/ffa/g/list",
+          pageState: "product-list-ready",
+          semanticNodes: [semanticNode]
+        },
+        projection: { kind: "text" }
+      })
+    ).toMatchObject({
+      status: "failed",
+      code: "DECLARATIVE_COMPLEX_LOCATOR_REQUIRED"
+    });
   });
 });

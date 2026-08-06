@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { createConnection } from "node:net";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import {
   CONTROL_HELLO_PROTOCOL_VERSION,
   CONTROL_MAX_MESSAGE_BYTES,
@@ -14,6 +12,10 @@ import {
   type ControlRequestEnvelope,
   type ControlResponseEnvelope
 } from "@bpa/control-protocol";
+import {
+  resolveDefaultBpaHome,
+  resolveLocalIpcEndpoint
+} from "@bpa/platform-runtime";
 
 export interface ControlTransport {
   send(
@@ -171,12 +173,26 @@ export class ControlClient {
   }
 }
 
-export function resolveControlSocketPath(
-  root =
-    process.env.BPA_HOME ??
-    join(homedir(), "Library", "Application Support", "BPA")
+export function resolveControlEndpoint(
+  root = resolveDefaultBpaHome(
+    process.env.BPA_HOME ? { bpaHome: process.env.BPA_HOME } : {}
+  ),
+  platform: NodeJS.Platform = process.platform
 ): string {
-  return join(root, "run", "core.sock");
+  return resolveLocalIpcEndpoint(root, "core", platform);
+}
+
+/**
+ * Compatibility name retained for existing integrations. The returned value
+ * is a Unix-domain socket on macOS and a named pipe on Windows.
+ */
+export function resolveControlSocketPath(
+  root = resolveDefaultBpaHome(
+    process.env.BPA_HOME ? { bpaHome: process.env.BPA_HOME } : {}
+  ),
+  platform: NodeJS.Platform = process.platform
+): string {
+  return resolveControlEndpoint(root, platform);
 }
 
 export class UnixSocketControlTransport implements ControlTransport {
@@ -191,7 +207,7 @@ export class UnixSocketControlTransport implements ControlTransport {
     this.#negotiate = options.negotiate ?? true;
     this.#runtime = options.runtime ?? {
       name: "bpa-control-client",
-      version: "0.4.0"
+      version: "0.6.0"
     };
     this.#features = options.features ?? [];
   }
@@ -313,3 +329,7 @@ export class UnixSocketControlTransport implements ControlTransport {
     });
   }
 }
+
+export {
+  UnixSocketControlTransport as LocalSocketControlTransport
+};

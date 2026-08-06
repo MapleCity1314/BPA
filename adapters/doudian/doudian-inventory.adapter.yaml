@@ -1,0 +1,31 @@
+apiVersion: bpa.adapter/v1alpha1
+kind: Adapter
+metadata:
+  id: doudian-inventory
+  version: 1.0.0
+  title: 抖店库存与订单读取 Adapter
+  description: 通过受控页面交互打开库存抽屉并读取 SKU、占用、未占用、渠道库存及近期订单白名单字段，不提交库存或订单修改。
+platform: doudian
+origins:
+  - https://fxg.jinritemai.com
+extension:
+  minimumVersion: 0.6.0
+capabilities:
+  - nodeId: doudian.orders.recent.read
+    nodeVersions: [1.0.0]
+    handlerId: doudian.orders.recent.read
+    handlerVersion: 1.0.0
+    implementationDigest: sha256:64e02c6332c49de32a3e9d4d2ebd160ac41d275557394462576a2fe5fe6b18a8
+    permissions:
+      - browser.dom.read
+      - browser.tabs.read
+  - nodeId: doudian.inventory.product.snapshot.read
+    nodeVersions:
+      - 1.0.0
+    handlerId: doudian.inventory.product.snapshot.read
+    handlerVersion: 1.0.0
+    implementationDigest: sha256:2de8302a5b545a2bedfd1a17d7567f6fd4e65b79457e338586e3ab7705ea08ee
+    permissions:
+      - browser.dom.read
+      - browser.dom.write
+      - browser.tabs.read

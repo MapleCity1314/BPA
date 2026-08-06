@@ -1,4 +1,11 @@
 export type EcommerceEvidenceObject = Record<string, unknown>;
+export {
+  buildDiscoveryCategorySpace,
+  buildDiscoveryComparablePool,
+  buildDiscoveryReferencePack,
+  evaluateDiscoveryEvidence,
+  mergeMarketplaceProbes
+} from "./discovery.js";
 type JsonObject = EcommerceEvidenceObject;
 
 const DEFAULT_EXCLUSIONS = [

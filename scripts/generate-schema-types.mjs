@@ -23,6 +23,10 @@ const schemas = [
   "deterministic-result-validator-policy.schema.json",
   "dataset.schema.json",
   "decision-record.schema.json",
+  "scenario-spec.schema.json",
+  "authoring-session.schema.json",
+  "page-snapshot.schema.json",
+  "candidate-bundle.schema.json",
   "element-contract.schema.json",
   "page-model.schema.json",
   "event.schema.json",
@@ -30,9 +34,11 @@ const schemas = [
   "evidence.schema.json",
   "timing-policy.schema.json",
   "risk-signal.schema.json",
-  "browser-protocol-v1.schema.json"
+  "trigger-spec.schema.json",
+  "browser-protocol-v2.schema.json"
 ];
 const check = process.argv.includes("--check");
+const normalizeGeneratedText = (value) => value.replace(/\r\n?/gu, "\n");
 
 await mkdir(outputDirectory, { recursive: true });
 const mismatches = [];
@@ -46,7 +52,7 @@ for (const filename of schemas) {
     filename === "workflow.schema.json" ||
     filename === "workflow-v1alpha2.schema.json" ||
     filename === "workflow-v1alpha3.schema.json" ||
-    filename === "browser-protocol-v1.schema.json"
+    filename === "browser-protocol-v2.schema.json"
   ) {
     const timingPolicySchema = JSON.parse(
       await readFile(
@@ -65,7 +71,7 @@ for (const filename of schemas) {
     );
     schema = JSON.parse(serialized);
   }
-  if (filename === "browser-protocol-v1.schema.json") {
+  if (filename === "browser-protocol-v2.schema.json") {
     const permissionSchema = JSON.parse(
       await readFile(
         join(schemaDirectory, "permission.schema.json"),
@@ -89,21 +95,25 @@ for (const filename of schemas) {
   }
   const outputName = `${basename(filename, ".schema.json")
     .replaceAll("-", "_")}.d.ts`;
-  const generated = await compile(schema, schema.title, {
-    bannerComment:
-      "/* Generated from canonical JSON Schema. Do not edit manually. */",
-    cwd: schemaDirectory,
-    ignoreMinAndMaxItems: true,
-    style: {
-      singleQuote: false,
-      semi: true,
-      tabWidth: 2,
-      trailingComma: "none"
-    }
-  });
+  const generated = normalizeGeneratedText(
+    await compile(schema, schema.title, {
+      bannerComment:
+        "/* Generated from canonical JSON Schema. Do not edit manually. */",
+      cwd: schemaDirectory,
+      ignoreMinAndMaxItems: true,
+      style: {
+        singleQuote: false,
+        semi: true,
+        tabWidth: 2,
+        trailingComma: "none"
+      }
+    })
+  );
   const outputPath = join(outputDirectory, outputName);
   if (check) {
-    const current = await readFile(outputPath, "utf8").catch(() => "");
+    const current = normalizeGeneratedText(
+      await readFile(outputPath, "utf8").catch(() => "")
+    );
     if (current !== generated) mismatches.push(outputName);
   } else {
     await writeFile(outputPath, generated);
@@ -115,7 +125,7 @@ const permissionSchema = JSON.parse(
 );
 const browserProtocolSchema = JSON.parse(
   await readFile(
-    join(schemaDirectory, "browser-protocol-v1.schema.json"),
+    join(schemaDirectory, "browser-protocol-v2.schema.json"),
     "utf8"
   )
 );
@@ -135,16 +145,20 @@ ajv.addSchema(permissionSchema);
 ajv.addSchema(timingPolicySchema);
 ajv.addSchema(riskSignalSchema);
 const browserProtocolValidator = ajv.compile(browserProtocolSchema);
-const validatorSource = [
-  "/* Generated from canonical JSON Schema. Do not edit manually. */",
-  "// @ts-nocheck",
-  standaloneCode(ajv, browserProtocolValidator),
-  ""
-].join("\n");
-const validatorName = "browser_protocol_v1.validator.ts";
+const validatorSource = normalizeGeneratedText(
+  [
+    "/* Generated from canonical JSON Schema. Do not edit manually. */",
+    "// @ts-nocheck",
+    standaloneCode(ajv, browserProtocolValidator),
+    ""
+  ].join("\n")
+);
+const validatorName = "browser_protocol_v2.validator.ts";
 const validatorPath = join(outputDirectory, validatorName);
 if (check) {
-  const current = await readFile(validatorPath, "utf8").catch(() => "");
+  const current = normalizeGeneratedText(
+    await readFile(validatorPath, "utf8").catch(() => "")
+  );
   if (current !== validatorSource) mismatches.push(validatorName);
 } else {
   await writeFile(validatorPath, validatorSource);

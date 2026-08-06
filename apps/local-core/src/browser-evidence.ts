@@ -467,6 +467,31 @@ export class BrowserEvidenceReceiver {
     }
     const source = this.#sourceRecord(command, transfer);
     this.persistence.putSourceRecord(source);
+    if (!transfer.storageRef) {
+      throw new BrowserEvidenceError(
+        "EVIDENCE_NOT_READY",
+        "Evidence has no immutable Asset Store reference."
+      );
+    }
+    const assetId = `asset-${evidenceId}`;
+    this.persistence.putAssetRecord({
+      apiVersion: "bpa.asset/v1alpha1",
+      kind: "AssetRecord",
+      assetId,
+      digest: transfer.digest,
+      size: transfer.size,
+      mediaType: transfer.mediaType,
+      storageRef: transfer.storageRef,
+      classification: transfer.classification,
+      sourceIds: [source.sourceId],
+      createdAt: transfer.createdAt,
+      retention: {
+        policy: "restricted_24h",
+        retainUntil: new Date(
+          Date.parse(transfer.createdAt) + 24 * 60 * 60 * 1000
+        ).toISOString()
+      }
+    });
     return {
       apiVersion: "bpa.evidence/v1alpha1",
       kind: "EvidenceLink",
@@ -476,6 +501,7 @@ export class BrowserEvidenceReceiver {
       nodeExecutionId: transfer.nodeExecutionId,
       relation: "captures",
       sourceIds: [source.sourceId],
+      assetIds: [assetId],
       createdAt: transfer.createdAt
     };
   }

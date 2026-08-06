@@ -68,7 +68,7 @@ describe("UdsControlBackend", () => {
     const client = new FakeRequester()
       .respond(CONSOLE_CONTROL_METHODS.doctor, {
         status: "ok",
-        protocol: "bpa.browser/1",
+        protocol: "bpa.browser/2",
         persistence: {
           adapter: "sqlite",
           schemaVersion: 8,
@@ -84,7 +84,21 @@ describe("UdsControlBackend", () => {
       .respond(CONSOLE_CONTROL_METHODS.taskList, [
         { taskId: "task-1" }
       ])
-      .respond(CONSOLE_CONTROL_METHODS.browserSessionList, []);
+      .respond(CONSOLE_CONTROL_METHODS.browserPageObservationList, [
+        {
+          sessionId: "session-1",
+          browserInstanceId: "chrome-profile-1",
+          tabId: 7,
+          origin: "https://fxg.jinritemai.com",
+          pathname: "/ffa/g/list",
+          contentScriptReady: true,
+          authentication: "authenticated",
+          observationState: "ready",
+          pageEpoch: "tab-7:1",
+          revision: 3,
+          observedAt: "2026-07-30T03:59:30.000Z"
+        }
+      ]);
     const result = await backend(client).getDashboard();
     expect(result).toMatchObject({
       attention: "attention",
@@ -95,7 +109,9 @@ describe("UdsControlBackend", () => {
         { id: "persistence", status: "healthy" },
         { id: "browser", status: "healthy" }
       ],
-      browserSessions: [{ id: "session-1", status: "ready" }]
+      browserSessions: [
+        { id: "chrome-profile-1:7:3", status: "ready" }
+      ]
     });
     expect(client.calls).toEqual([
       { method: "doctor", params: {} },
@@ -113,8 +129,8 @@ describe("UdsControlBackend", () => {
         }
       },
       {
-        method: "browser.session.list",
-        params: { limit: 100 }
+        method: "browser.page-observation.list",
+        params: { limit: 200 }
       }
     ]);
   });
@@ -245,7 +261,14 @@ describe("UdsControlBackend", () => {
         workflowId: "research",
         workflowVersion: "1.0.0",
         inputs: { keyword: "煎饼" },
-        resourceBindings: { metrics: "session-1" }
+        resourceBindings: {
+          metrics: {
+            sessionId: "session-1",
+            browserInstanceId: "chrome-profile-1",
+            tabId: 7,
+            observationRevision: 3
+          }
+        }
       })
     ).resolves.toEqual({ runId: "run-1" });
     const run = await adapter.getRun("run-1");
@@ -267,11 +290,105 @@ describe("UdsControlBackend", () => {
           workflowId: "research",
           workflowVersion: "1.0.0",
           input: { keyword: "煎饼" },
-          resourceBindings: { metrics: "session-1" }
+          resourceBindings: {
+            metrics: {
+              sessionId: "session-1",
+              browserInstanceId: "chrome-profile-1",
+              tabId: 7,
+              observationRevision: 3
+            }
+          }
         }
       },
       { method: "run.inspect", params: { runId: "run-1" } },
       { method: "run.events", params: { runId: "run-1" } }
+    ]);
+  });
+
+  it("creates a 15-minute exact Design Mode grant and can stop it", async () => {
+    const client = new FakeRequester()
+      .respond(CONSOLE_CONTROL_METHODS.authoringDesignModeRequest, {
+        grantId: "design.grant-operation-1",
+        revision: 0,
+        state: "requested"
+      })
+      .respond(CONSOLE_CONTROL_METHODS.authoringDesignModeActivate, {
+        grantId: "design.grant-operation-1",
+        authoringSessionId: "authoring.session-1",
+        browserSessionId: "browser-session-1",
+        profileId: "chanmama.product-metrics",
+        revision: 1,
+        state: "active",
+        origin: "https://www.chanmama.com",
+        tabId: 7,
+        pageEpoch: "tab-7:1999999999999:design-1",
+        allowedOperations: ["semantic_snapshot"],
+        expiresAt: "2026-07-30T04:15:00.000Z"
+      })
+      .respond(CONSOLE_CONTROL_METHODS.authoringDesignModeStop, {
+        grantId: "design.grant-operation-1",
+        authoringSessionId: "authoring.session-1",
+        browserSessionId: "browser-session-1",
+        profileId: "chanmama.product-metrics",
+        revision: 2,
+        state: "stopped",
+        origin: "https://www.chanmama.com",
+        tabId: 7,
+        pageEpoch: "tab-7:1999999999999:design-1",
+        allowedOperations: ["semantic_snapshot"],
+        expiresAt: "2026-07-30T04:15:00.000Z"
+      });
+    const adapter = backend(client);
+    const active = await adapter.startDesignMode({
+      authoringSessionId: "authoring.session-1",
+      browserSessionId: "browser-session-1",
+      profileId: "chanmama.product-metrics",
+      screenshotApproved: false,
+      pageBinding: {
+        version: "bpa.design-page-binding/1",
+        tabId: 7,
+        origin: "https://www.chanmama.com",
+        pageEpoch: "tab-7:1999999999999:design-1",
+        issuedAt: "2026-07-30T03:59:00.000Z"
+      }
+    });
+    expect(active).toMatchObject({
+      id: "design.grant-operation-1",
+      state: "active",
+      screenshotApproved: false
+    });
+    await expect(
+      adapter.stopDesignMode(active.id, active.revision)
+    ).resolves.toMatchObject({ state: "stopped", revision: 2 });
+    expect(client.calls).toEqual([
+      {
+        method: "authoring.design-mode.request",
+        params: expect.objectContaining({
+          grantId: "design.grant-operation-1",
+          tabId: 7,
+          origin: "https://www.chanmama.com",
+          expiresAt: "2026-07-30T04:15:00.000Z"
+        })
+      },
+      {
+        method: "authoring.design-mode.activate",
+        params: {
+          grantId: "design.grant-operation-1",
+          expectedRevision: 0,
+          actor: "operator:test",
+          occurredAt: "2026-07-30T04:00:00.000Z"
+        }
+      },
+      {
+        method: "authoring.design-mode.stop",
+        params: {
+          grantId: "design.grant-operation-1",
+          expectedRevision: 1,
+          actor: "operator:test",
+          occurredAt: "2026-07-30T04:00:00.000Z",
+          reason: "operator_stopped"
+        }
+      }
     ]);
   });
 

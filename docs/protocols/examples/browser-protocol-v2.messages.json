@@ -1,0 +1,470 @@
+[
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-hello",
+    "session_id": "new",
+    "seq": 0,
+    "sent_at": "2026-07-27T06:00:00.000Z",
+    "type": "session.hello",
+    "trace_id": "trace-session",
+    "payload": {
+      "browser_instance_id": "browser-example-01",
+      "extension_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "extension_version": "0.4.0",
+      "bridge_build_id": "v0.4.0-example.node24.18.0",
+      "supported_protocols": ["bpa.browser/2"],
+      "features": [
+        "page_observation_v2",
+        "exact_tab_binding_v2",
+        "active_page_probe_v1"
+      ],
+      "last_acked_command_seq": 0
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-welcome",
+    "session_id": "session-01",
+    "seq": 1,
+    "sent_at": "2026-07-27T06:00:00.010Z",
+    "type": "session.welcome",
+    "trace_id": "trace-session",
+    "payload": {
+      "selected_protocol": "bpa.browser/2",
+      "heartbeat_ms": 20000,
+      "resume_token": "resume-token-01",
+      "resume_token_expires_at": "2026-07-28T06:00:00.010Z",
+      "core_signing_key": {
+        "key_id": "core-key-01",
+        "algorithm": "Ed25519",
+        "public_key_spki_base64": "MCowBQYDK2VwAyEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+      },
+      "max_message_bytes": 524288
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-capabilities",
+    "session_id": "session-01",
+    "seq": 1,
+    "sent_at": "2026-07-27T06:00:00.020Z",
+    "type": "capability.report",
+    "trace_id": "trace-session",
+    "payload": {
+      "capabilities": [
+        {
+          "node_id": "browser.page.context.read",
+          "versions": ["1.0.0", "1.1.0", "1.2.0"],
+          "risk_level": "R0",
+          "permissions": ["browser.dom.read", "browser.tabs.read"],
+          "routes": [
+            {
+              "origin": "https://example.com",
+              "pathname_prefixes": ["/"],
+              "observer_capability_id": "example.page"
+            }
+          ],
+          "adapter_id": "example",
+          "adapter_version": "1.1.0"
+        }
+      ],
+      "features": [
+        "page_observation_v2",
+        "exact_tab_binding_v2",
+        "active_page_probe_v1"
+      ],
+      "manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-command",
+    "session_id": "session-01",
+    "seq": 2,
+    "sent_at": "2026-07-27T06:00:01.000Z",
+    "type": "command.dispatch",
+    "trace_id": "trace-run-01",
+    "payload": {
+      "command_seq": 1,
+      "run_id": "run-01",
+      "workflow_id": "example.page-context-observe",
+      "workflow_version": "1.2.0",
+      "node_execution_id": "node-execution-01",
+      "command_id": "command-01",
+      "idempotency_key": "idempotency-01",
+      "fencing_token": 1,
+      "attempt": 1,
+      "node": {
+        "id": "browser.page.context.read",
+        "version": "1.2.0"
+      },
+      "input": {},
+      "timing_policy": {
+        "readiness": {
+          "timeoutMs": 8000,
+          "stableForMs": 300,
+          "pollIntervalMs": 200
+        },
+        "dispatchJitter": {
+          "minMs": 100,
+          "maxMs": 500,
+          "distribution": "uniform"
+        },
+        "retryBackoff": {
+          "strategy": "exponential",
+          "baseMs": 1000,
+          "maxMs": 5000,
+          "jitterRatio": 0.2
+        },
+        "rateLimit": {
+          "scope": "tab",
+          "minIntervalMs": 350,
+          "maxQueueMs": 3000
+        }
+      },
+      "permission_grant": {
+        "grant_id": "grant-01",
+        "permissions": ["browser.dom.read", "browser.tabs.read"],
+        "domains": ["https://example.com"],
+        "risk_level": "R0",
+        "expires_at": "2026-07-27T06:05:00.000Z",
+        "run_id": "run-01",
+        "node_execution_id": "node-execution-01",
+        "node_id": "browser.page.context.read",
+        "node_version": "1.2.0",
+        "fencing_token": 1,
+        "key_id": "core-key-01",
+        "grant_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "authorization_tag": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+      },
+      "deadline": "2026-07-27T06:00:11.000Z",
+      "tab_ref": {
+        "browser_instance_id": "browser-example-01",
+        "tab_id": 100,
+        "origin": "https://example.com"
+      },
+      "page_epoch": "page-epoch-01",
+      "observation_revision": 1,
+      "authentication_context_ref": "auth-context-example-01"
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-command-ack",
+    "session_id": "session-01",
+    "seq": 2,
+    "sent_at": "2026-07-27T06:00:01.010Z",
+    "type": "command.ack",
+    "trace_id": "trace-run-01",
+    "payload": {
+      "command_seq": 1,
+      "command_id": "command-01",
+      "node_execution_id": "node-execution-01",
+      "accepted": true,
+      "fencing_token": 1
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-result",
+    "session_id": "session-01",
+    "seq": 3,
+    "sent_at": "2026-07-27T06:00:02.000Z",
+    "type": "command.result",
+    "trace_id": "trace-run-01",
+    "payload": {
+      "command_seq": 1,
+      "command_id": "command-01",
+      "node_execution_id": "node-execution-01",
+      "idempotency_key": "idempotency-01",
+      "fencing_token": 1,
+      "status": "succeeded",
+      "output": {
+        "supported": true,
+        "page": {
+          "id": "page-01",
+          "title": "Example Console"
+        },
+        "tab_ref": {
+          "browser_instance_id": "browser-example-01",
+          "tab_id": 100,
+          "origin": "https://example.com"
+        },
+        "page_epoch": "page-epoch-01"
+      },
+      "evidence_refs": [],
+      "page_epoch": "page-epoch-01",
+      "risk_signals": [],
+      "timing_observation": {
+        "rate_limit_wait_ms": 0,
+        "readiness_wait_ms": 420,
+        "stable_for_ms": 300
+      }
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-result-ack",
+    "session_id": "session-01",
+    "seq": 3,
+    "sent_at": "2026-07-27T06:00:02.010Z",
+    "type": "result.ack",
+    "trace_id": "trace-run-01",
+    "payload": {
+      "command_id": "command-01",
+      "node_execution_id": "node-execution-01",
+      "accepted": true
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-heartbeat",
+    "session_id": "session-01",
+    "seq": 4,
+    "sent_at": "2026-07-27T06:00:20.000Z",
+    "type": "heartbeat.ping",
+    "trace_id": "trace-session",
+    "payload": {
+      "nonce": "heartbeat-01"
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-heartbeat-pong",
+    "session_id": "session-01",
+    "seq": 4,
+    "sent_at": "2026-07-27T06:00:20.010Z",
+    "type": "heartbeat.pong",
+    "trace_id": "trace-session",
+    "payload": {
+      "nonce": "heartbeat-01"
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-cancel-request",
+    "session_id": "session-01",
+    "seq": 5,
+    "sent_at": "2026-07-27T06:01:00.000Z",
+    "type": "cancel.request",
+    "trace_id": "trace-run-02",
+    "payload": {
+      "command_id": "command-02",
+      "node_execution_id": "node-execution-02",
+      "fencing_token": 2,
+      "reason_code": "USER_REQUESTED"
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-cancel-ack",
+    "session_id": "session-01",
+    "seq": 5,
+    "sent_at": "2026-07-27T06:01:00.010Z",
+    "type": "cancel.ack",
+    "trace_id": "trace-run-02",
+    "payload": {
+      "command_id": "command-02",
+      "node_execution_id": "node-execution-02",
+      "fencing_token": 2,
+      "acknowledged": true,
+      "action_started": true
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-cancel-effective",
+    "session_id": "session-01",
+    "seq": 6,
+    "sent_at": "2026-07-27T06:01:01.000Z",
+    "type": "cancel.effective",
+    "trace_id": "trace-run-02",
+    "payload": {
+      "command_id": "command-02",
+      "node_execution_id": "node-execution-02",
+      "fencing_token": 2,
+      "status": "uncertain",
+      "safe_stop": false
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-evidence-begin",
+    "session_id": "session-01",
+    "seq": 7,
+    "sent_at": "2026-07-27T06:02:00.000Z",
+    "type": "evidence.begin",
+    "trace_id": "trace-run-03",
+    "payload": {
+      "evidence_id": "evidence-01",
+      "run_id": "run-03",
+      "node_execution_id": "node-execution-03",
+      "kind": "verification",
+      "media_type": "text/plain",
+      "size": 1,
+      "digest": "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+      "chunk_size": 262144,
+      "chunk_count": 1
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-evidence-chunk",
+    "session_id": "session-01",
+    "seq": 8,
+    "sent_at": "2026-07-27T06:02:00.010Z",
+    "type": "evidence.chunk",
+    "trace_id": "trace-run-03",
+    "payload": {
+      "evidence_id": "evidence-01",
+      "index": 0,
+      "data_base64": "eA==",
+      "chunk_digest": "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-evidence-complete",
+    "session_id": "session-01",
+    "seq": 9,
+    "sent_at": "2026-07-27T06:02:00.020Z",
+    "type": "evidence.complete",
+    "trace_id": "trace-run-03",
+    "payload": {
+      "evidence_id": "evidence-01",
+      "digest": "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+      "chunk_count": 1
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-page-observation",
+    "session_id": "session-01",
+    "seq": 10,
+    "sent_at": "2026-07-27T06:02:00.025Z",
+    "type": "page.observation",
+    "trace_id": "trace-page-observation",
+    "payload": {
+      "tab_ref": {
+        "browser_instance_id": "browser-example-01",
+        "tab_id": 42,
+        "window_id": 7,
+        "origin": "https://merchant.example.com"
+      },
+      "pathname": "/products",
+      "content_script_ready": true,
+      "authentication": {
+        "state": "authenticated",
+        "context_ref": "auth-context-example-shop"
+      },
+      "observation_state": "ready",
+      "page_epoch": "tab-42:1722059999000:example",
+      "observation_revision": 1,
+      "observer_capability_id": "example.page",
+      "observed_at": "2026-07-27T06:02:00.025Z",
+      "reason_code": "PAGE_READY"
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-page-probe-request",
+    "session_id": "session-01",
+    "seq": 6,
+    "sent_at": "2026-07-27T06:02:00.026Z",
+    "type": "page.probe.request",
+    "trace_id": "trace-page-probe",
+    "payload": {
+      "request_id": "probe-request-01",
+      "tab_ref": {
+        "browser_instance_id": "browser-example-01",
+        "tab_id": 42,
+        "window_id": 7,
+        "origin": "https://merchant.example.com"
+      },
+      "deadline": "2026-07-27T06:02:05.026Z"
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-page-probe-result",
+    "session_id": "session-01",
+    "seq": 11,
+    "sent_at": "2026-07-27T06:02:00.027Z",
+    "type": "page.probe.result",
+    "trace_id": "trace-page-probe",
+    "payload": {
+      "request_id": "probe-request-01",
+      "tab_ref": {
+        "browser_instance_id": "browser-example-01",
+        "tab_id": 42,
+        "window_id": 7,
+        "origin": "https://merchant.example.com"
+      },
+      "accepted": true,
+      "observation_revision": 1
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-evidence-ack",
+    "session_id": "session-01",
+    "seq": 7,
+    "sent_at": "2026-07-27T06:02:00.030Z",
+    "type": "evidence.ack",
+    "trace_id": "trace-run-03",
+    "payload": {
+      "evidence_id": "evidence-01",
+      "accepted": true,
+      "next_chunk_index": 1
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-session-resume",
+    "session_id": "session-01",
+    "seq": 8,
+    "sent_at": "2026-07-27T06:03:00.000Z",
+    "type": "session.resume",
+    "trace_id": "trace-session",
+    "payload": {
+      "accepted": true,
+      "replay_from_command_seq": 2
+    }
+  },
+  {
+    "protocol": "bpa.browser/2",
+    "version": "2.0.0",
+    "message_id": "message-session-error",
+    "session_id": "session-01",
+    "seq": 9,
+    "sent_at": "2026-07-27T06:04:00.000Z",
+    "type": "session.error",
+    "trace_id": "trace-session",
+    "payload": {
+      "code": "CAPABILITY_MISMATCH",
+      "message": "Requested node version is unavailable.",
+      "fatal": false,
+      "related_message_id": "message-command"
+    }
+  }
+]

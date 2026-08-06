@@ -5,6 +5,8 @@ import type {
   CreateRunInput,
   DashboardSnapshot,
   DatasetImportResult,
+  DesignModeGrantInput,
+  DesignModeGrantView,
   DownloadPayload,
   DownloadView,
   EvidenceLineageView,
@@ -25,6 +27,7 @@ import type { StagingUploader } from "./staging-uploader.js";
 export const CONSOLE_CONTROL_METHODS = {
   doctor: "doctor",
   browserSessionList: "browser.session.list",
+  browserPageObservationList: "browser.page-observation.list",
   catalogList: "catalog.list",
   runCreate: "run.create",
   runInspect: "run.inspect",
@@ -36,7 +39,10 @@ export const CONSOLE_CONTROL_METHODS = {
   datasetImportStaged: "dataset.import.staged",
   evidenceLineageGet: "evidence.lineage.get",
   downloadList: "download.list",
-  downloadGet: "download.get"
+  downloadGet: "download.get",
+  authoringDesignModeRequest: "authoring.design-mode.request",
+  authoringDesignModeActivate: "authoring.design-mode.activate",
+  authoringDesignModeStop: "authoring.design-mode.stop"
 } as const;
 
 export interface ConsoleControlRequester {
@@ -262,6 +268,30 @@ function taskOutput(
   };
 }
 
+function designGrantView(value: unknown): DesignModeGrantView {
+  const grant = record(value);
+  if (
+    !grant ||
+    (grant.state !== "active" && grant.state !== "stopped")
+  ) {
+    throw new Error("invalid Design Mode Grant");
+  }
+  const allowedOperations = stringList(grant.allowedOperations);
+  return {
+    id: text(grant.grantId),
+    authoringSessionId: text(grant.authoringSessionId),
+    browserSessionId: text(grant.browserSessionId),
+    profileId: text(grant.profileId),
+    state: grant.state,
+    origin: text(grant.origin),
+    tabId: integer(grant.tabId, -1),
+    pageEpoch: text(grant.pageEpoch),
+    expiresAt: safeTimestamp(grant.expiresAt, new Date(0).toISOString()),
+    screenshotApproved: allowedOperations.includes("screenshot_once"),
+    revision: integer(grant.revision)
+  };
+}
+
 export class UdsControlBackend implements ControlBackend {
   readonly #client: ConsoleControlRequester;
   readonly #actorId: string;
@@ -290,7 +320,7 @@ export class UdsControlBackend implements ControlBackend {
   async getDashboard(): Promise<DashboardSnapshot> {
     const observedAt = this.#now().toISOString();
     try {
-      const [doctorValue, taskValue, sessionValue] = await Promise.all([
+      const [doctorValue, taskValue, pageValue] = await Promise.all([
         this.#client.request<unknown>(CONSOLE_CONTROL_METHODS.doctor),
         this.#client
           .request<unknown>(CONSOLE_CONTROL_METHODS.taskList, {
@@ -305,9 +335,10 @@ export class UdsControlBackend implements ControlBackend {
           })
           .catch(() => []),
         this.#client
-          .request<unknown>(CONSOLE_CONTROL_METHODS.browserSessionList, {
-            limit: 100
-          })
+          .request<unknown>(
+            CONSOLE_CONTROL_METHODS.browserPageObservationList,
+            { limit: 200 }
+          )
           .catch(() => [])
       ]);
       const doctor = record(doctorValue) ?? {};
@@ -315,52 +346,65 @@ export class UdsControlBackend implements ControlBackend {
       const browser = record(doctor.browser) ?? {};
       const browserReady = boolean(browser.ready);
       const browserConnected = boolean(browser.connected);
-      const persistedSessions = records(sessionValue);
+      const observedPages = records(pageValue);
       const browserSessions: BrowserSessionView[] =
-        persistedSessions.length > 0
-          ? persistedSessions.slice(-20).map((session) => {
+        observedPages.length > 0
+          ? observedPages.slice(0, 20).map((page) => {
               const observationState = text(
-                session.observationState,
+                page.observationState,
                 "unknown"
               );
-              const disconnected = typeof session.disconnectedAt === "string";
+              const contentReady = boolean(page.contentScriptReady);
+              const authentication = text(page.authentication);
+              const sessionId = text(page.sessionId);
+              const browserInstanceId = text(page.browserInstanceId);
+              const tabId = integer(page.tabId, -1);
+              const observationRevision = integer(page.revision, -1);
+              const validBinding =
+                sessionId.length > 0 &&
+                browserInstanceId.length > 0 &&
+                tabId >= 0 &&
+                observationRevision >= 1;
               return {
-                id: text(session.id),
-                label:
-                  text(session.role, "general") === "general"
-                    ? "Chrome 业务会话"
-                    : `Chrome · ${text(session.role)}`,
+                id: `${browserInstanceId}:${tabId}:${observationRevision}`,
+                label: `Chrome 标签页 ${tabId}`,
                 status:
-                  disconnected || observationState === "revoked"
+                  ["departed", "stale"].includes(observationState)
                     ? "offline"
-                    : observationState === "available"
+                    : observationState === "ready" && contentReady
                       ? "ready"
                       : "attention",
-                origin: text(session.observedOrigin, "等待选择业务来源"),
-                role: text(session.role, "浏览器自动化"),
+                origin: text(page.origin, "等待选择业务来源"),
+                role: text(page.observerCapabilityId, "浏览器页面"),
                 authenticated: ["authenticated", "membership"].includes(
-                  text(session.observedAuthentication)
+                  authentication
                 ),
-                lastSeenAt: safeTimestamp(
-                  session.observedAt,
-                  safeTimestamp(session.connectedAt, observedAt)
-                )
+                lastSeenAt: safeTimestamp(page.observedAt, observedAt),
+                ...(validBinding
+                  ? {
+                      binding: {
+                        sessionId,
+                        browserInstanceId,
+                        tabId,
+                        observationRevision
+                      }
+                    }
+                  : {})
               };
             })
           : browserConnected
             ? [
-            {
-              id: text(browser.sessionId, "browser-pending"),
-              label: browserReady ? "已连接的 Chrome" : "Chrome 正在准备",
-              status: browserReady ? "ready" : "attention",
-              origin: `chrome-extension://${text(
-                browser.extensionId,
-                "bpa-extension"
-              )}`,
-              role: "浏览器自动化",
-              authenticated: browserReady,
-              lastSeenAt: observedAt
-            }
+                {
+                  id: "browser-pending",
+                  label: browserReady
+                    ? "Chrome 已连接，等待页面"
+                    : "Chrome 正在准备",
+                  status: "attention",
+                  origin: "等待 Content Script 页面观察",
+                  role: "浏览器自动化",
+                  authenticated: false,
+                  lastSeenAt: observedAt
+                }
               ]
             : [];
       const pendingTaskCount = records(taskValue).length;
@@ -379,7 +423,7 @@ export class UdsControlBackend implements ControlBackend {
               : pendingTaskCount > 0
                 ? `有 ${pendingTaskCount} 项等待处理`
                 : "系统运行正常",
-        runtimeVersion: "0.4.0",
+        runtimeVersion: "0.6.0",
         components: [
           {
             id: "core",
@@ -424,7 +468,7 @@ export class UdsControlBackend implements ControlBackend {
       return {
         attention: "action",
         headline: "BPA 本地服务尚未连接",
-        runtimeVersion: "0.4.0",
+        runtimeVersion: "0.6.0",
         components: [
           {
             id: "core",
@@ -876,6 +920,103 @@ export class UdsControlBackend implements ControlBackend {
       });
     } catch {
       return [];
+    }
+  }
+
+  async startDesignMode(
+    input: DesignModeGrantInput
+  ): Promise<DesignModeGrantView> {
+    const now = this.#now();
+    const binding = input.pageBinding;
+    if (
+      binding.version !== "bpa.design-page-binding/1" ||
+      !Number.isSafeInteger(binding.tabId) ||
+      binding.tabId < 0 ||
+      !binding.pageEpoch.startsWith(`tab-${binding.tabId}:`) ||
+      !Number.isFinite(Date.parse(binding.issuedAt)) ||
+      now.getTime() - Date.parse(binding.issuedAt) > 5 * 60 * 1000 ||
+      Date.parse(binding.issuedAt) - now.getTime() > 30_000
+    ) {
+      throw new ConsoleUserFacingError(
+        "页面绑定码已失效，请在目标页面重新生成。"
+      );
+    }
+    let origin: URL;
+    try {
+      origin = new URL(binding.origin);
+    } catch {
+      throw new ConsoleUserFacingError("页面绑定码中的 Origin 无效。");
+    }
+    if (
+      origin.protocol !== "https:" ||
+      origin.origin !== binding.origin ||
+      ![
+        "https://fxg.jinritemai.com",
+        "https://www.chanmama.com"
+      ].includes(binding.origin)
+    ) {
+      throw new ConsoleUserFacingError(
+        "当前页面不在 Design Mode 只读允许范围内。"
+      );
+    }
+    try {
+      const grantId = `design.grant-${this.#operationId()}`;
+      const requested = await this.#client.request<unknown>(
+        CONSOLE_CONTROL_METHODS.authoringDesignModeRequest,
+        {
+          grantId,
+          authoringSessionId: input.authoringSessionId,
+          approvedBy: this.#actorId,
+          browserSessionId: input.browserSessionId,
+          profileId: input.profileId,
+          tabId: binding.tabId,
+          origin: binding.origin,
+          pageEpoch: binding.pageEpoch,
+          screenshotApproved: input.screenshotApproved,
+          issuedAt: now.toISOString(),
+          expiresAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString()
+        }
+      );
+      const requestedRecord = record(requested);
+      if (!requestedRecord || requestedRecord.state !== "requested") {
+        throw new Error("Design Mode request rejected");
+      }
+      return designGrantView(
+        await this.#client.request<unknown>(
+          CONSOLE_CONTROL_METHODS.authoringDesignModeActivate,
+          {
+            grantId,
+            expectedRevision: integer(requestedRecord.revision),
+            actor: this.#actorId,
+            occurredAt: this.#now().toISOString()
+          }
+        )
+      );
+    } catch (error) {
+      if (error instanceof ConsoleUserFacingError) throw error;
+      throw failureMessage("开启 Design Mode");
+    }
+  }
+
+  async stopDesignMode(
+    grantId: string,
+    expectedRevision: number
+  ): Promise<DesignModeGrantView> {
+    try {
+      return designGrantView(
+        await this.#client.request<unknown>(
+          CONSOLE_CONTROL_METHODS.authoringDesignModeStop,
+          {
+            grantId,
+            expectedRevision,
+            actor: this.#actorId,
+            occurredAt: this.#now().toISOString(),
+            reason: "operator_stopped"
+          }
+        )
+      );
+    } catch {
+      throw failureMessage("停止 Design Mode");
     }
   }
 

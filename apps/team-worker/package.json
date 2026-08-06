@@ -1,13 +1,15 @@
 {
   "name": "@bpa/team-worker",
-  "version": "0.1.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "dependencies": {
     "@bpa/dataset-core": "workspace:*",
     "@bpa/ecommerce-evidence-domain": "workspace:*",
+    "@bpa/inventory-domain": "workspace:*",
     "@bpa/packaging-dataset": "workspace:*",
     "@bpa/packaging-domain": "workspace:*",
+    "@bpa/platform-runtime": "workspace:*",
     "@bpa/team-runtime": "workspace:*",
     "@bpa/workflow-ir": "workspace:*"
   }

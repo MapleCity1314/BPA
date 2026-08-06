@@ -38,6 +38,8 @@ function element(options: FakeElementOptions = {}): Element {
 describe("doudian read-only browser actions", () => {
   it("collects every page and restores the original page and scroll", async () => {
     let currentPage = 2;
+    let renderedPage = 2;
+    let pendingRenderedPage: number | undefined;
     const navigation: number[] = [];
     const scroll = {
       scrollTop: 35,
@@ -58,11 +60,12 @@ describe("doudian read-only browser actions", () => {
         click() {
           navigation.push(page);
           currentPage = page;
+          pendingRenderedPage = page;
         }
       })
     );
     const currentProductRow = (): Element => {
-      const product = products[currentPage as 1 | 2];
+      const product = products[renderedPage as 1 | 2];
       return element({
         attributes: { "data-row-key": product.id },
         queries: {
@@ -123,7 +126,7 @@ describe("doudian read-only browser actions", () => {
         }
         if (
           selector ===
-          "[class*='pagination'] [title],[class*='pagination'] [data-page]"
+          ".ecom-g-pagination-item[title],[class*='pagination-item-'][title],[class*='pagination'] [data-page]"
         ) {
           return pageControls;
         }
@@ -138,14 +141,19 @@ describe("doudian read-only browser actions", () => {
       shop: { id: "shop-redacted", name: "脱敏旗舰店" },
       deadline: "2026-07-29T00:00:00.000Z",
       now: () => Date.parse("2026-07-28T00:00:00.000Z"),
-      wait: async () => {}
+      wait: async () => {
+        if (pendingRenderedPage !== undefined) {
+          renderedPage = pendingRenderedPage;
+          pendingRenderedPage = undefined;
+        }
+      }
     });
 
     expect(result).toMatchObject({
       status: "complete",
       collectorVersion: "1.1.0",
       expectedCount: 2,
-      scanRounds: 2,
+      scanRounds: 1,
       products: [{ id: "400001" }, { id: "400002" }],
       inspectionQueue: [{ id: "400001" }, { id: "400002" }],
       restore: {
@@ -160,7 +168,7 @@ describe("doudian read-only browser actions", () => {
     });
     expect(currentPage).toBe(2);
     expect(scroll.scrollTop).toBe(35);
-    expect(navigation).toEqual([1, 2, 1, 2]);
+    expect(navigation).toEqual([1, 2]);
     expect(legacyDoudianScopeCollectionResult(result)).toMatchObject({
       collectorVersion: "1.0.0",
       restore: { page: 2, scrollTop: 35, required: true }
@@ -170,6 +178,7 @@ describe("doudian read-only browser actions", () => {
     ).not.toHaveProperty("listUrl");
 
     currentPage = 1;
+    renderedPage = 1;
     scroll.scrollTop = 0;
     await expect(
       restoreDoudianProductScope(
@@ -178,7 +187,12 @@ describe("doudian read-only browser actions", () => {
         {
           deadline: "2026-07-29T00:00:00.000Z",
           now: () => Date.parse("2026-07-28T00:00:00.000Z"),
-          wait: async () => {}
+          wait: async () => {
+            if (pendingRenderedPage !== undefined) {
+              renderedPage = pendingRenderedPage;
+              pendingRenderedPage = undefined;
+            }
+          }
         }
       )
     ).resolves.toMatchObject({
@@ -190,7 +204,7 @@ describe("doudian read-only browser actions", () => {
     });
     expect(currentPage).toBe(2);
     expect(scroll.scrollTop).toBe(35);
-    expect(navigation).toEqual([1, 2, 1, 2, 2]);
+    expect(navigation).toEqual([1, 2, 2]);
     await expect(
       restoreDoudianProductScope(
         doc,
@@ -205,7 +219,101 @@ describe("doudian read-only browser actions", () => {
         }
       )
     ).rejects.toThrow("SCOPE_RESTORE_CONTEXT_MISMATCH");
-    expect(navigation).toEqual([1, 2, 1, 2, 2]);
+    expect(navigation).toEqual([1, 2, 2]);
+  });
+
+  it("stops an expanding virtual scroll after product IDs stop changing", async () => {
+    let waits = 0;
+    const scroll = {
+      scrollTop: 0,
+      clientHeight: 50,
+      get scrollHeight() {
+        return this.scrollTop + 100;
+      },
+      scrollTo(options: ScrollToOptions) {
+        this.scrollTop = Number(options.top ?? 0);
+      }
+    };
+    const productRow = element({
+      attributes: { "data-row-key": "400001" },
+      queries: {
+        "a,div,span,p": [
+          element({ text: "脱敏商品一" }),
+          element({ text: "ID：400001" })
+        ]
+      }
+    });
+    const activePage = element({
+      text: "1",
+      attributes: { title: "1" }
+    });
+    const doc = {
+      defaultView: {
+        location: { href: "https://fxg.jinritemai.com/ffa/g/list" }
+      },
+      body: { innerText: "" },
+      scrollingElement: scroll,
+      querySelector(selector: string) {
+        return selector === "tr[data-row-key]" ? productRow : null;
+      },
+      querySelectorAll(selector: string) {
+        if (
+          selector ===
+          "[role='tab'][aria-selected='true'],[role='tab'][class*='active']"
+        ) {
+          return [
+            element({
+              text: "在售商品",
+              attributes: { "data-tab-key": "selling" }
+            })
+          ];
+        }
+        if (
+          selector ===
+          "input:not([type='hidden']),[role='combobox'],[role='searchbox']"
+        ) {
+          return [];
+        }
+        if (
+          selector ===
+          ".ecom-g-pagination-total-text,[class*='pagination'] [class*='total']"
+        ) {
+          return [element({ text: "共 1 件" })];
+        }
+        if (
+          selector ===
+          ".ecom-g-pagination-item-active,[class*='pagination'] [aria-current='page']"
+        ) {
+          return [activePage];
+        }
+        if (
+          selector ===
+          ".ecom-g-pagination-item[title],[class*='pagination-item-'][title],[class*='pagination'] [data-page]"
+        ) {
+          return [activePage];
+        }
+        if (selector === "tr[data-row-key]") return [productRow];
+        return [];
+      }
+    } as unknown as Document;
+
+    const result = await collectDoudianProductScope(doc, {
+      shop: { id: "shop-redacted", name: "脱敏旗舰店" },
+      deadline: "2026-07-29T00:00:00.000Z",
+      now: () => Date.parse("2026-07-28T00:00:00.000Z"),
+      wait: async () => {
+        waits += 1;
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "complete",
+      expectedCount: 1,
+      scanRounds: 1,
+      products: [{ id: "400001" }]
+    });
+    expect(waits).toBe(6);
+    expect(scroll.scrollTop).toBe(0);
   });
 
   it("canonicalizes only the frozen Doudian editor target", () => {

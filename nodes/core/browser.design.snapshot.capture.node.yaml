@@ -1,0 +1,139 @@
+apiVersion: bpa/v1alpha2
+kind: Node
+metadata:
+  id: browser.design.snapshot.capture
+  version: 1.0.0
+  title: 捕获 Design Mode 脱敏语义快照
+  description: 在精确授权的浏览器会话、标签页、Origin 和 PageEpoch 内，只读采集有界语义节点；页面内容始终作为不可信数据。
+runtime: browser
+inputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - authoringSessionId
+    - designGrantId
+    - profileId
+    - pageState
+    - pageEpoch
+  properties:
+    authoringSessionId:
+      type: string
+      pattern: ^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$
+    designGrantId:
+      type: string
+      pattern: ^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$
+    profileId:
+      type: string
+      minLength: 1
+      maxLength: 300
+    pageState:
+      type: string
+      pattern: ^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$
+    pageEpoch:
+      type: string
+      pattern: ^tab-[0-9]+:[0-9]{10,16}:[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$
+outputSchema:
+  type: object
+  additionalProperties: false
+  required:
+    - apiVersion
+    - kind
+    - authoringSessionId
+    - designGrantId
+    - profileId
+    - pageState
+    - capturedAt
+    - origin
+    - path
+    - untrusted
+    - redaction
+    - semanticNodes
+    - contentDigest
+    - sizeBytes
+    - tab_ref
+    - page_epoch
+  properties:
+    apiVersion:
+      const: bpa.authoring/v1alpha1
+    kind:
+      const: SemanticSnapshotCapture
+    authoringSessionId:
+      type: string
+    designGrantId:
+      type: string
+    profileId:
+      type: string
+    pageState:
+      type: string
+    capturedAt:
+      type: string
+      format: date-time
+    origin:
+      type: string
+      format: uri
+    path:
+      type: string
+    untrusted:
+      const: true
+    redaction:
+      type: object
+    semanticNodes:
+      type: array
+      maxItems: 5000
+      items:
+        type: object
+    contentDigest:
+      type: string
+      pattern: ^sha256:[a-f0-9]{64}$
+    sizeBytes:
+      type: integer
+      minimum: 1
+      maximum: 5242880
+    tab_ref:
+      type: object
+    page_epoch:
+      type: string
+risk:
+  level: R0
+  permissions:
+    - browser.dom.read
+    - browser.tabs.read
+    - page-model.design.read
+  domains:
+    - https://fxg.jinritemai.com
+    - https://www.chanmama.com
+execution:
+  timeoutDefault: 30s
+  idempotency: repeatable_read
+  retryableErrors:
+    - BROWSER_DISCONNECTED
+    - CONTENT_SCRIPT_UNAVAILABLE
+  cancellable: true
+errors:
+  - BROWSER_DISCONNECTED
+  - CONTENT_SCRIPT_UNAVAILABLE
+  - DESIGN_CAPTURE_INPUT_INVALID
+  - DESIGN_GRANT_CONTEXT_MISMATCH
+  - DESIGN_GRANT_INACTIVE
+  - DESIGN_GRANT_MISSING
+  - DESIGN_GRANT_RESOURCE_MISMATCH
+  - PAGE_CONTEXT_CHANGED
+  - PAGE_EPOCH_INVALID
+  - PAGE_EPOCH_MISMATCH
+  - SEMANTIC_SNAPSHOT_TOO_LARGE
+evidence:
+  required:
+    - result
+    - error
+resources:
+  design_page:
+    kind: browser
+    capabilities:
+      - browser.dom.read
+      - browser.tabs.read
+      - page-model.design.read
+    allowedOrigins:
+      - https://fxg.jinritemai.com
+      - https://www.chanmama.com
+    authentication: optional
+    purpose: 只读捕获用户明确授权页面的脱敏语义状态

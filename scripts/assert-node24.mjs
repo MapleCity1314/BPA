@@ -1,10 +1,19 @@
-export function assertNode24(version = process.versions.node) {
-  const major = Number.parseInt(version.split(".", 1)[0] ?? "", 10);
-  if (major !== 24) {
+import { readFileSync } from "node:fs";
+
+const pinnedVersion = readFileSync(
+  new URL("../.nvmrc", import.meta.url),
+  "utf8"
+).trim();
+
+export function assertNode24(
+  version = process.versions.node,
+  expected = pinnedVersion
+) {
+  if (version !== expected) {
     throw new Error(
       [
-        `BPA requires Node.js 24.x; current runtime is ${version}.`,
-        "Use the Node.js bundled with the installed BPA Runtime or place an exact Node 24 binary first in PATH.",
+        `BPA requires Node.js ${expected}; current runtime is ${version}.`,
+        "Use the Node.js version pinned by .nvmrc or the Node bundled with the installed BPA Runtime.",
         "Continuing can load native dependencies with an incompatible ABI."
       ].join(" ")
     );

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,7 @@ import {
 } from "@bpa/control-protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
+import { resolveLocalIpcEndpoint } from "@bpa/platform-runtime";
 import {
   LocalControlServer,
   LocalCoreService,
@@ -19,6 +20,10 @@ import {
 } from "./control.js";
 
 const cleanups: Array<() => Promise<void>> = [];
+const controlEndpoint = (root: string) =>
+  process.platform === "win32"
+    ? resolveLocalIpcEndpoint(root, "core", "win32")
+    : join(root, "core.sock");
 
 function sendV1(
   socketPath: string,
@@ -101,9 +106,43 @@ afterEach(async () => {
 });
 
 describe("local control socket", () => {
+  it("rejects new Runs while a Runtime upgrade holds maintenance", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "bpa-maintenance-"));
+    const maintenancePath = join(directory, "runtime-maintenance.lock");
+    await writeFile(maintenancePath, "installer\n");
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const service = new LocalCoreService(
+      persistence,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      maintenancePath
+    );
+    cleanups.push(async () => {
+      persistence.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    expect(
+      service.handle({
+        id: "maintenance-run",
+        method: "run.create",
+        params: {
+          workflowId: "would-otherwise-be-looked-up",
+          workflowVersion: "1.0.0",
+          input: {}
+        }
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { message: "BPA_RUNTIME_MAINTENANCE" }
+    });
+  });
+
   it("serves doctor requests over a 0600 unix socket", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-control-"));
-    const socketPath = join(directory, "core.sock");
+    const socketPath = controlEndpoint(directory);
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const server = new LocalControlServer(
       socketPath,
@@ -119,13 +158,13 @@ describe("local control socket", () => {
       sendControlRequest(socketPath, "doctor")
     ).resolves.toMatchObject({
       status: "ok",
-      persistence: { adapter: "sqlite", schemaVersion: 8 }
+      persistence: { adapter: "sqlite", schemaVersion: 13 }
     });
   });
 
   it("serves versioned control envelopes without breaking legacy framing", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-control-v1-"));
-    const socketPath = join(directory, "core.sock");
+    const socketPath = controlEndpoint(directory);
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const server = new LocalControlServer(
       socketPath,
@@ -155,11 +194,63 @@ describe("local control socket", () => {
     await expect(sendControlRequest(socketPath, "doctor")).resolves.toMatchObject({
       status: "ok"
     });
+    await expect(
+      sendV1(socketPath, {
+        version: "bpa.control/1",
+        kind: "request",
+        requestId: "lease-acquire-1",
+        method: "browser.control-lease.acquire",
+        deadline: new Date(Date.now() + 10_000).toISOString(),
+        params: {
+          resourceId: "browser-instance:test",
+          ownerId: "owner-1",
+          ttlSeconds: 120
+        }
+      })
+    ).resolves.toMatchObject({
+      kind: "result",
+      requestId: "lease-acquire-1",
+      result: { fencingToken: 1 }
+    });
+    await expect(
+      sendV1(socketPath, {
+        version: "bpa.control/1",
+        kind: "request",
+        requestId: "lease-acquire-busy",
+        method: "browser.control-lease.acquire",
+        deadline: new Date(Date.now() + 10_000).toISOString(),
+        params: {
+          resourceId: "browser-instance:test",
+          ownerId: "owner-2",
+          ttlSeconds: 120
+        }
+      })
+    ).resolves.toEqual({
+      version: "bpa.control/1",
+      kind: "result",
+      requestId: "lease-acquire-busy",
+      result: null
+    });
+    await expect(
+      sendV1(socketPath, {
+        version: "bpa.control/1",
+        kind: "request",
+        requestId: "page-observation-limit",
+        method: "browser.page-observation.list",
+        deadline: new Date(Date.now() + 10_000).toISOString(),
+        params: { limit: 500 }
+      })
+    ).resolves.toEqual({
+      version: "bpa.control/1",
+      kind: "result",
+      requestId: "page-observation-limit",
+      result: []
+    });
   });
 
   it("negotiates hello before application requests", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-control-hello-"));
-    const socketPath = join(directory, "core.sock");
+    const socketPath = controlEndpoint(directory);
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const server = new LocalControlServer(
       socketPath,
@@ -189,7 +280,7 @@ describe("local control socket", () => {
 
   it("isolates an oversized connection without terminating Core", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-control-oversize-"));
-    const socketPath = join(directory, "core.sock");
+    const socketPath = controlEndpoint(directory);
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const server = new LocalControlServer(
       socketPath,
@@ -221,7 +312,7 @@ describe("local control socket", () => {
 
   it("rejects expired and unknown v1 requests with stable error codes", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-control-v1-errors-"));
-    const socketPath = join(directory, "core.sock");
+    const socketPath = controlEndpoint(directory);
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const server = new LocalControlServer(
       socketPath,

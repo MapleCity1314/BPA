@@ -1,7 +1,9 @@
 import { createConnection } from "node:net";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { UploadReceipt } from "@bpa/operator-console-contracts";
+import {
+  resolveDefaultBpaHome,
+  resolveLocalIpcEndpoint
+} from "@bpa/platform-runtime";
 
 const RESPONSE_LIMIT_BYTES = 64 * 1024;
 
@@ -17,11 +19,15 @@ export interface StagingUploader {
 }
 
 export function resolveStagingSocketPath(
-  root =
-    process.env.BPA_HOME ??
-    join(homedir(), "Library", "Application Support", "BPA")
+  root = resolveDefaultBpaHome(
+    process.env.BPA_HOME ? { bpaHome: process.env.BPA_HOME } : {}
+  ),
+  platform: NodeJS.Platform = process.platform
 ): string {
-  return process.env.BPA_STAGING_SOCKET ?? join(root, "run", "staging.sock");
+  return (
+    process.env.BPA_STAGING_SOCKET ??
+    resolveLocalIpcEndpoint(root, "staging", platform)
+  );
 }
 
 export class UnixSocketStagingUploader implements StagingUploader {

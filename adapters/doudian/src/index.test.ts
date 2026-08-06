@@ -1,3 +1,4 @@
+import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
 import {
   detectDoudianRiskSignals,
@@ -5,23 +6,14 @@ import {
 } from "./index.js";
 
 function documentFixture(): Document {
-  const element = {
-    textContent: "测试旗舰店",
-    parentElement: undefined,
-    getAttribute(name: string) {
-      return name === "data-shop-id" ? "123456789" : null;
-    }
-  };
-  return {
-    defaultView: {
-      location: {
-        href: "https://fxg.jinritemai.com/ffa/g/list"
-      }
-    },
-    querySelectorAll(selector: string) {
-      return selector.includes("userName") ? [element] : [];
-    }
-  } as unknown as Document;
+  const document = new JSDOM(`
+    <body><div id="fxg-pc-header"><div class="headerShopName">
+      <span class="userName" data-shop-id="123456789">测试旗舰店</span>
+    </div></div></body>
+  `, { url: "https://fxg.jinritemai.com/ffa/g/list" }).window.document;
+  document.querySelector(".userName")!.getBoundingClientRect = () =>
+    ({ top: 72, bottom: 96, width: 150, height: 24 }) as DOMRect;
+  return document;
 }
 
 describe("doudian adapter", () => {
@@ -47,40 +39,42 @@ describe("doudian adapter", () => {
   });
 
   it("uses a bounded visible header fallback when Doudian changes CSS classes", () => {
-    const shopElement = {
-      textContent: "榆园儿食品专营店",
-      parentElement: undefined,
-      getAttribute() {
-        return null;
-      },
-      getBoundingClientRect() {
-        return { top: 72, width: 150, height: 24 };
-      }
-    };
-    const productElement = {
-      ...shopElement,
-      textContent: "页面下方测试专营店",
-      getBoundingClientRect() {
-        return { top: 600, width: 150, height: 24 };
-      }
-    };
-    const doc = {
-      defaultView: {
-        location: {
-          href: "https://fxg.jinritemai.com/ffa/g/list"
-        }
-      },
-      querySelectorAll(selector: string) {
-        return selector === "body *"
-          ? [productElement, shopElement]
-          : [];
-      }
-    } as unknown as Document;
+    const doc = new JSDOM(`
+      <body><div class="new-account-layout"><span>榆园儿食品专营店</span></div>
+      <main><span>页面下方测试专营店</span></main></body>
+    `, { url: "https://fxg.jinritemai.com/ffa/g/list" }).window.document;
+    doc.querySelector(".new-account-layout span")!.getBoundingClientRect = () =>
+      ({ top: 72, bottom: 96, width: 150, height: 24 }) as DOMRect;
+    doc.querySelector("main span")!.getBoundingClientRect = () =>
+      ({ top: 600, bottom: 624, width: 150, height: 24 }) as DOMRect;
     expect(readDoudianShopContext(doc).shop).toEqual({
       id: "name:59dcdd52",
       name: "榆园儿食品专营店",
       identity_confirmed: false
     });
+  });
+
+  it("confirms a unique visible shop from an authenticated product shell", () => {
+    const doc = new JSDOM(`
+      <body>
+        <div class="top-navigation">
+          <span>精选联盟</span>
+          <div class="account-entry"><span>榆园儿食品专营店</span></div>
+        </div>
+        <input placeholder="请输入商品名称/商品ID/商家编码，多条可用逗号隔开" />
+      </body>
+    `).window.document;
+    const shop = doc.querySelector<HTMLElement>(".account-entry span")!;
+    shop.getBoundingClientRect = () =>
+      ({ top: 72, bottom: 96, width: 150, height: 24 }) as DOMRect;
+    expect(readDoudianShopContext(doc, "https://fxg.jinritemai.com/ffa/g/list"))
+      .toMatchObject({
+        shop: {
+          id: "name:59dcdd52",
+          name: "榆园儿食品专营店",
+          identity_confirmed: true
+        }
+      });
   });
 
   it("falls back to the first complete shop-name line in transformed layouts", () => {

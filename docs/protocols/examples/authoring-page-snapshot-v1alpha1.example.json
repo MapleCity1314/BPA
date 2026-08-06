@@ -1,0 +1,77 @@
+{
+  "apiVersion": "bpa.authoring/v1alpha1",
+  "kind": "PageSnapshot",
+  "snapshotId": "page-snapshot-product-detail-default",
+  "pageState": "product-detail-default",
+  "capturedAt": "2026-07-30T02:08:00.000Z",
+  "origin": "https://www.chanmama.com",
+  "path": "/product/detail/123456",
+  "binding": {
+    "designGrantId": "design-grant-001",
+    "browserSessionId": "browser-session-001",
+    "profileId": "chrome-profile-research",
+    "tabId": 42,
+    "pageEpoch": "page-epoch-8"
+  },
+  "captureSource": {
+    "runId": "run-design-capture-001",
+    "nodeExecutionId": "node-execution-capture-001",
+    "evidenceId": "evidence-page-snapshot-001",
+    "assetRef": {
+      "id": "asset-page-snapshot-001",
+      "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "sizeBytes": 2048
+    }
+  },
+  "classification": "restricted",
+  "untrusted": true,
+  "redaction": {
+    "applied": true,
+    "policyVersion": "1.0.0",
+    "coverage": {
+      "passwords": true,
+      "tokens": true,
+      "cookies": true,
+      "hiddenInputs": true,
+      "personalData": true,
+      "largeText": true
+    }
+  },
+  "semanticNodes": [
+    {
+      "id": "node-product-title",
+      "parentId": null,
+      "order": 0,
+      "role": "heading",
+      "accessibleName": "商品详情",
+      "text": "示例商品",
+      "region": "product-summary",
+      "stableAttributes": {
+        "data-testid": "product-title"
+      },
+      "states": {
+        "visible": true,
+        "interactive": false
+      },
+      "cssDiagnostic": "[data-testid=\"product-title\"]",
+      "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "id": "node-metric-yesterday-sales",
+      "parentId": null,
+      "order": 1,
+      "role": "definition",
+      "label": "昨日销量",
+      "text": "100–250",
+      "region": "metrics-summary",
+      "states": {
+        "visible": true,
+        "interactive": false
+      },
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  ],
+  "contentDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "sizeBytes": 2048,
+  "rawEvidenceExpiresAt": "2026-07-31T02:08:00.000Z"
+}

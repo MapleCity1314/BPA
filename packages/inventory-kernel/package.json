@@ -1,0 +1,27 @@
+{
+  "name": "@bpa/inventory-kernel",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "lint": "cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+    "build:release": "napi build --platform --release",
+    "test": "node --import tsx --test test.mjs",
+    "benchmark": "node --import tsx benchmark.mjs"
+  },
+  "napi": {
+    "binaryName": "bpa_inventory_kernel",
+    "targets": [
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.8.2",
+    "tsx": "^4.20.6"
+  }
+}

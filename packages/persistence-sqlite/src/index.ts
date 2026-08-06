@@ -4,7 +4,11 @@ import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import {
   AssetReferenceConflictError,
+  AuthoringConflictError,
+  AuthoringOperationConflictError,
   ArtifactConflictError,
+  CandidateBundleConflictError,
+  DesignModeGrantConflictError,
   EvidenceConflictError,
   EvidenceOwnershipError,
   RevisionConflictError,
@@ -14,18 +18,29 @@ import {
   WorkflowOperationConflictError,
   type ApplyWorkflowDraftRevisionInput,
   type ApplyWorkflowDraftRevisionResult,
+  type ApplyAuthoringSessionInput,
+  type ApplyAuthoringSessionResult,
+  type AttachPageSnapshotInput,
   type AssetRecordDefinition,
+  type AuthoringScenarioRecord,
+  type AuthoringSessionDefinition,
+  type AuthoringSessionRevisionRecord,
   type ArtifactRecord,
   type ArtifactType,
   type AssistanceTaskRecord,
   type AssistanceTaskListFilter,
   type AuditRecord,
   type BrowserCapabilityRecord,
+  type BrowserControlLeaseRecord,
+  type BrowserPageObservationRecord,
   type BrowserSessionObservationState,
   type BrowserSessionRecord,
   type BrowserSessionRole,
   type BlobRecord,
   type CreateRunInput,
+  type CandidateBundleRecord,
+  type CandidateBundleValidationRecord,
+  type CandidateExportRecord,
   type CreateBlockingAssistanceInput,
   type CommitAssistanceTaskRequestInput,
   type CommitAssistanceTaskRequestResult,
@@ -33,6 +48,7 @@ import {
   type DatasetStagingRecord,
   type DatasetVersionDefinition,
   type DecisionRecordDefinition,
+  type DesignModeGrantRecord,
   type EngineCheckpointRecord,
   type EvidenceChunkRecord,
   type EvidenceListCursor,
@@ -50,18 +66,25 @@ import {
   type OpenBrowserSessionInput,
   type NodeTransitionInput,
   type OutboxMessage,
+  type PageSnapshotDefinition,
   type Persistence,
   type PublishArtifactInput,
   type RetentionJobRecord,
   type RunRecord,
   type RunPlanSnapshotRecord,
   type RunTransitionInput,
+  type SaveCandidateBundleInput,
   type ResourceAuthentication,
   type ResourceBindingSnapshot,
   type SourceRecordDefinition,
   type StagingLeaseRecord,
   type StepInstanceRecord,
+  type TriggerRunRecord,
+  type TriggerRunStatus,
+  type TriggerSpecDefinition,
+  type TriggerSpecRecord,
   type SubmitAssistanceAndWakeInput,
+  type TransitionDesignModeGrantInput,
   type WorkflowCandidateRecord,
   type WorkflowDraftRecord,
   type WorkflowDraftRevisionRecord
@@ -82,6 +105,13 @@ import {
 } from "@bpa/evidence-core";
 import { assertSourceRecord } from "@bpa/source-core";
 import { assertResourceBindingSnapshotForPlan } from "@bpa/resource-binding";
+import {
+  formatValidationErrors,
+  validateAuthoringSession,
+  validateCandidateBundle,
+  validatePageSnapshot,
+  validateScenarioSpec
+} from "@bpa/schemas";
 import { migrations, type Migration } from "./migrations.js";
 
 type SqlRow = Record<string, unknown>;
@@ -178,6 +208,41 @@ function assertTimestamp(value: string, label: string): void {
   }
 }
 
+function assertDigest(value: string, label: string): void {
+  if (!/^sha256:[a-f0-9]{64}$/u.test(value)) {
+    throw new Error(`${label} must be a SHA-256 digest`);
+  }
+}
+
+function assertHttpsOrigin(value: string, label: string): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${label} must be an exact HTTPS Origin`);
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.origin !== value ||
+    url.username ||
+    url.password
+  ) {
+    throw new Error(`${label} must be an exact HTTPS Origin`);
+  }
+}
+
+function assertSchema(
+  valid: boolean,
+  errors: Parameters<typeof formatValidationErrors>[0],
+  label: string
+): void {
+  if (!valid) {
+    throw new Error(
+      `${label} is invalid: ${formatValidationErrors(errors).join("; ")}`
+    );
+  }
+}
+
 function assistanceFencingConsistent(
   record: AssistanceTaskRecord
 ): boolean {
@@ -217,9 +282,19 @@ function now(): string {
 export interface SqlitePersistenceOptions {
   path: string;
   readonly?: boolean;
+  sqliteObservabilityExtensionPath?: string;
   failureInjector?: (point: string) => void;
   clock?: () => Date;
   idFactory?: () => string;
+}
+
+export interface SqliteResourceMetrics {
+  configuredCacheBytes: number;
+  pageSizeBytes: number;
+  cacheSizeSetting: number;
+  cacheUsedBytes: number;
+  schemaUsedBytes: number;
+  statementUsedBytes: number;
 }
 
 export class SqlitePersistence implements Persistence {
@@ -241,6 +316,9 @@ export class SqlitePersistence implements Persistence {
     this.#clock = options.clock ?? (() => new Date());
     this.#idFactory = options.idFactory ?? randomUUID;
     try {
+      if (options.sqliteObservabilityExtensionPath) {
+        this.#db.loadExtension(options.sqliteObservabilityExtensionPath);
+      }
       this.#db.pragma("foreign_keys = ON");
       this.#db.pragma("busy_timeout = 5000");
       if (!(options.readonly ?? false)) {
@@ -251,6 +329,45 @@ export class SqlitePersistence implements Persistence {
       this.#db.close();
       throw error;
     }
+  }
+
+  readSqliteResourceMetrics(): SqliteResourceMetrics {
+    const pageSizeBytes = Number(this.#db.pragma("page_size", { simple: true }));
+    const cacheSizeSetting = Number(
+      this.#db.pragma("cache_size", { simple: true })
+    );
+    const row = this.#db
+      .prepare(`
+        SELECT
+          bpa_sqlite_cache_used() AS cache_used_bytes,
+          bpa_sqlite_schema_used() AS schema_used_bytes,
+          bpa_sqlite_statement_used() AS statement_used_bytes
+      `)
+      .get() as {
+        cache_used_bytes: number;
+        schema_used_bytes: number;
+        statement_used_bytes: number;
+      };
+    const metrics = {
+      configuredCacheBytes:
+        cacheSizeSetting < 0
+          ? Math.abs(cacheSizeSetting) * 1024
+          : cacheSizeSetting * pageSizeBytes,
+      pageSizeBytes,
+      cacheSizeSetting,
+      cacheUsedBytes: row.cache_used_bytes,
+      schemaUsedBytes: row.schema_used_bytes,
+      statementUsedBytes: row.statement_used_bytes
+    };
+    for (const [name, value] of Object.entries(metrics)) {
+      if (
+        !Number.isSafeInteger(value) ||
+        (name !== "cacheSizeSetting" && value < 0)
+      ) {
+        throw new Error(`SQLite resource metric ${name} is invalid`);
+      }
+    }
+    return metrics;
   }
 
   #migrate(): void {
@@ -588,6 +705,696 @@ export class SqlitePersistence implements Persistence {
     return row ? this.#readWorkflowCandidate(row) : undefined;
   }
 
+  putAuthoringScenario(
+    record: AuthoringScenarioRecord
+  ): { status: "accepted" | "duplicate"; record: AuthoringScenarioRecord } {
+    assertSchema(
+      validateScenarioSpec(record.scenario),
+      validateScenarioSpec.errors,
+      "ScenarioSpec"
+    );
+    assertDigest(record.digest, "scenario digest");
+    assertTimestamp(record.createdAt, "createdAt");
+    const expectedDigest = digest(record.scenario);
+    if (record.digest !== expectedDigest) {
+      throw new AuthoringConflictError(
+        `ScenarioSpec digest mismatch: expected ${expectedDigest}`
+      );
+    }
+    const scenarioId = record.scenario.metadata.id;
+    const version = record.scenario.metadata.version;
+    const canonical = canonicalJson(record.scenario);
+
+    return this.#db.transaction(() => {
+      const existing = this.#db
+        .prepare(
+          `SELECT * FROM authoring_scenarios
+           WHERE scenario_id = ? AND version = ?`
+        )
+        .get(scenarioId, version) as SqlRow | undefined;
+      if (existing) {
+        const current = this.#readAuthoringScenario(existing);
+        if (
+          current.digest !== record.digest ||
+          current.createdAt !== record.createdAt ||
+          canonicalJson(current.scenario) !== canonical
+        ) {
+          throw new AuthoringConflictError(
+            `ScenarioSpec is immutable: ${scenarioId}@${version}`
+          );
+        }
+        return { status: "duplicate" as const, record: current };
+      }
+      this.#db
+        .prepare(
+          `INSERT INTO authoring_scenarios(
+            scenario_id, version, scenario_digest, canonical_json, created_at
+          ) VALUES (?, ?, ?, ?, ?)`
+        )
+        .run(
+          scenarioId,
+          version,
+          record.digest,
+          canonical,
+          record.createdAt
+        );
+      this.#inject("authoring.scenario.after_insert");
+      this.#insertAudit(
+        "authoring.scenario.saved",
+        "system:authoring",
+        `scenario:${scenarioId}@${version}`,
+        { digest: record.digest }
+      );
+      this.#inject("authoring.scenario.after_audit");
+      return {
+        status: "accepted" as const,
+        record: this.getAuthoringScenario(scenarioId, version)!
+      };
+    }).immediate();
+  }
+
+  getAuthoringScenario(
+    scenarioId: string,
+    version: string
+  ): AuthoringScenarioRecord | undefined {
+    const row = this.#db
+      .prepare(
+        `SELECT * FROM authoring_scenarios
+         WHERE scenario_id = ? AND version = ?`
+      )
+      .get(scenarioId, version) as SqlRow | undefined;
+    return row ? this.#readAuthoringScenario(row) : undefined;
+  }
+
+  createAuthoringSession(
+    session: AuthoringSessionDefinition
+  ): AuthoringSessionDefinition {
+    this.#assertAuthoringSession(session);
+    if (session.revision !== 0 || session.state !== "intake") {
+      throw new AuthoringConflictError(
+        "A new Authoring Session must start at intake revision 0"
+      );
+    }
+    const scenario = this.getAuthoringScenario(
+      session.scenarioRef.id,
+      session.scenarioRef.version
+    );
+    if (!scenario || scenario.digest !== session.scenarioRef.digest) {
+      throw new AuthoringConflictError(
+        `ScenarioSpec does not exist: ${session.scenarioRef.id}@${session.scenarioRef.version}`
+      );
+    }
+    const canonical = authoringJson(session);
+    const actor = `${session.actor.type}:${session.actor.id}`;
+
+    return this.#db.transaction(() => {
+      if (this.getAuthoringSession(session.sessionId)) {
+        throw new AuthoringConflictError(
+          `Authoring Session already exists: ${session.sessionId}`
+        );
+      }
+      this.#db
+        .prepare(
+          `INSERT INTO authoring_sessions(
+            session_id, revision, state, scenario_id, scenario_version,
+            scenario_digest, canonical_json, created_at, updated_at
+          ) VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          session.sessionId,
+          session.state,
+          session.scenarioRef.id,
+          session.scenarioRef.version,
+          session.scenarioRef.digest,
+          canonical,
+          session.createdAt,
+          session.updatedAt
+        );
+      this.#inject("authoring.session.create.after_current");
+      this.#db
+        .prepare(
+          `INSERT INTO authoring_session_revisions(
+            session_id, revision, operation_id, operation_digest,
+            state, canonical_json, created_at
+          ) VALUES (?, 0, NULL, NULL, ?, ?, ?)`
+        )
+        .run(
+          session.sessionId,
+          session.state,
+          canonical,
+          session.createdAt
+        );
+      this.#inject("authoring.session.create.after_history");
+      this.#insertAudit(
+        "authoring.session.created",
+        actor,
+        `authoring-session:${session.sessionId}`,
+        {
+          revision: 0,
+          scenarioRef: session.scenarioRef
+        }
+      );
+      this.#inject("authoring.session.create.after_audit");
+      return this.getAuthoringSession(session.sessionId)!;
+    }).immediate();
+  }
+
+  getAuthoringSession(
+    sessionId: string
+  ): AuthoringSessionDefinition | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM authoring_sessions WHERE session_id = ?")
+      .get(sessionId) as SqlRow | undefined;
+    return row ? this.#readAuthoringSession(row) : undefined;
+  }
+
+  getAuthoringSessionRevision(
+    sessionId: string,
+    revision: number
+  ): AuthoringSessionRevisionRecord | undefined {
+    const row = this.#db
+      .prepare(
+        `SELECT * FROM authoring_session_revisions
+         WHERE session_id = ? AND revision = ?`
+      )
+      .get(sessionId, revision) as SqlRow | undefined;
+    return row ? this.#readAuthoringSessionRevision(row) : undefined;
+  }
+
+  applyAuthoringSession(
+    input: ApplyAuthoringSessionInput
+  ): ApplyAuthoringSessionResult {
+    this.#assertAuthoringMutation(input);
+    return this.#db
+      .transaction(() => this.#applyAuthoringSessionInTransaction(input))
+      .immediate();
+  }
+
+  putDesignModeGrant(grant: DesignModeGrantRecord): DesignModeGrantRecord {
+    this.#assertDesignModeGrant(grant);
+    if (grant.revision !== 0 || grant.state !== "requested") {
+      throw new DesignModeGrantConflictError(
+        "A Design Mode Grant must start at requested revision 0"
+      );
+    }
+    if (!this.getAuthoringSession(grant.authoringSessionId)) {
+      throw new DesignModeGrantConflictError(
+        `Authoring Session does not exist: ${grant.authoringSessionId}`
+      );
+    }
+    if (!this.getBrowserSession(grant.browserSessionId)) {
+      throw new DesignModeGrantConflictError(
+        `Browser Session does not exist: ${grant.browserSessionId}`
+      );
+    }
+
+    return this.#db.transaction(() => {
+      if (this.getDesignModeGrant(grant.grantId)) {
+        throw new DesignModeGrantConflictError(
+          `Design Mode Grant already exists: ${grant.grantId}`
+        );
+      }
+      this.#db
+        .prepare(
+          `INSERT INTO design_mode_grants(
+            grant_id, authoring_session_id, revision, state, approved_by,
+            browser_session_id, profile_id, tab_id, origin, page_epoch,
+            allowed_operations_json, issued_at, expires_at, updated_at,
+            terminal_reason
+          ) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          grant.grantId,
+          grant.authoringSessionId,
+          grant.state,
+          grant.approvedBy,
+          grant.browserSessionId,
+          grant.profileId,
+          grant.tabId,
+          grant.origin,
+          grant.pageEpoch,
+          json(grant.allowedOperations),
+          grant.issuedAt,
+          grant.expiresAt,
+          grant.updatedAt,
+          grant.terminalReason ?? null
+        );
+      this.#inject("authoring.grant.create.after_current");
+      this.#db
+        .prepare(
+          `INSERT INTO design_mode_grant_revisions(
+            grant_id, revision, state, actor, reason, occurred_at
+          ) VALUES (?, 0, ?, ?, NULL, ?)`
+        )
+        .run(
+          grant.grantId,
+          grant.state,
+          grant.approvedBy,
+          grant.issuedAt
+        );
+      this.#inject("authoring.grant.create.after_history");
+      this.#insertAudit(
+        "authoring.design-grant.requested",
+        grant.approvedBy,
+        `design-grant:${grant.grantId}`,
+        {
+          authoringSessionId: grant.authoringSessionId,
+          browserSessionId: grant.browserSessionId,
+          tabId: grant.tabId,
+          origin: grant.origin,
+          pageEpoch: grant.pageEpoch,
+          expiresAt: grant.expiresAt
+        }
+      );
+      this.#inject("authoring.grant.create.after_audit");
+      return this.getDesignModeGrant(grant.grantId)!;
+    }).immediate();
+  }
+
+  getDesignModeGrant(
+    grantId: string
+  ): DesignModeGrantRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM design_mode_grants WHERE grant_id = ?")
+      .get(grantId) as SqlRow | undefined;
+    return row ? this.#readDesignModeGrant(row) : undefined;
+  }
+
+  transitionDesignModeGrant(
+    input: TransitionDesignModeGrantInput
+  ): DesignModeGrantRecord {
+    assertAuthoringId(input.grantId, "grantId");
+    assertRevision(input.expectedRevision, "expectedRevision");
+    assertAuthoringId(input.actor, "actor");
+    assertTimestamp(input.occurredAt, "occurredAt");
+    if (input.reason != null && input.reason.length > 2000) {
+      throw new Error("Design Mode Grant reason exceeds 2000 characters");
+    }
+
+    return this.#db.transaction(() => {
+      const current = this.getDesignModeGrant(input.grantId);
+      if (!current) {
+        throw new DesignModeGrantConflictError(
+          `Design Mode Grant does not exist: ${input.grantId}`
+        );
+      }
+      if (current.revision !== input.expectedRevision) {
+        throw new RevisionConflictError(
+          `Design Mode Grant revision changed: ${current.revision}`
+        );
+      }
+      if (
+        !this.#canTransitionDesignModeGrant(
+          current.state,
+          input.nextState
+        )
+      ) {
+        throw new DesignModeGrantConflictError(
+          `Invalid Design Mode Grant transition: ${current.state} -> ${input.nextState}`
+        );
+      }
+      if (
+        input.nextState === "active" &&
+        Date.parse(input.occurredAt) >= Date.parse(current.expiresAt)
+      ) {
+        throw new DesignModeGrantConflictError(
+          "An expired Design Mode Grant cannot become active"
+        );
+      }
+      const nextRevision = current.revision + 1;
+      const terminalReason =
+        input.nextState === "active" ? undefined : input.reason;
+      const updated = this.#db
+        .prepare(
+          `UPDATE design_mode_grants
+           SET revision = ?, state = ?, updated_at = ?, terminal_reason = ?
+           WHERE grant_id = ? AND revision = ?`
+        )
+        .run(
+          nextRevision,
+          input.nextState,
+          input.occurredAt,
+          terminalReason ?? null,
+          input.grantId,
+          input.expectedRevision
+        );
+      if (updated.changes !== 1) {
+        throw new RevisionConflictError(
+          "Design Mode Grant changed concurrently"
+        );
+      }
+      this.#inject("authoring.grant.transition.after_current");
+      this.#db
+        .prepare(
+          `INSERT INTO design_mode_grant_revisions(
+            grant_id, revision, state, actor, reason, occurred_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          input.grantId,
+          nextRevision,
+          input.nextState,
+          input.actor,
+          input.reason ?? null,
+          input.occurredAt
+        );
+      this.#inject("authoring.grant.transition.after_history");
+      this.#insertAudit(
+        `authoring.design-grant.${input.nextState}`,
+        input.actor,
+        `design-grant:${input.grantId}`,
+        {
+          revision: nextRevision,
+          reason: input.reason ?? null
+        }
+      );
+      this.#inject("authoring.grant.transition.after_audit");
+      return this.getDesignModeGrant(input.grantId)!;
+    }).immediate();
+  }
+
+  attachPageSnapshot(
+    input: AttachPageSnapshotInput
+  ): ApplyAuthoringSessionResult {
+    this.#assertAuthoringMutation(input);
+    assertSchema(
+      validatePageSnapshot(input.snapshot),
+      validatePageSnapshot.errors,
+      "PageSnapshot"
+    );
+    const snapshot = input.snapshot;
+    const snapshotRefCount = input.next.snapshotRefs.filter(
+      (reference) =>
+        reference.id === snapshot.snapshotId &&
+        reference.digest === snapshot.contentDigest
+    ).length;
+    if (
+      snapshotRefCount !== 1 ||
+      !input.next.designGrantRefs.includes(
+        snapshot.binding.designGrantId
+      )
+    ) {
+      throw new AuthoringConflictError(
+        "Authoring Session must reference the exact PageSnapshot and Design Mode Grant"
+      );
+    }
+
+    return this.#db.transaction(() => {
+      const existing = this.getPageSnapshot(snapshot.snapshotId);
+      if (existing) {
+        if (canonicalJson(existing) !== canonicalJson(snapshot)) {
+          throw new AuthoringConflictError(
+            `PageSnapshot is immutable: ${snapshot.snapshotId}`
+          );
+        }
+        const replay = this.#applyAuthoringSessionInTransaction(input);
+        if (replay.status !== "duplicate") {
+          throw new AuthoringConflictError(
+            `PageSnapshot is already attached: ${snapshot.snapshotId}`
+          );
+        }
+        return replay;
+      }
+      this.#assertSnapshotOwnership(input.sessionId, snapshot);
+      this.#db
+        .prepare(
+          `INSERT INTO authoring_page_snapshots(
+            snapshot_id, authoring_session_id, design_grant_id, page_state,
+            evidence_id, asset_id, content_digest, canonical_json,
+            captured_at, raw_evidence_expires_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          snapshot.snapshotId,
+          input.sessionId,
+          snapshot.binding.designGrantId,
+          snapshot.pageState,
+          snapshot.captureSource.evidenceId,
+          snapshot.captureSource.assetRef.id,
+          snapshot.contentDigest,
+          authoringJson(snapshot),
+          snapshot.capturedAt,
+          snapshot.rawEvidenceExpiresAt
+        );
+      this.#inject("authoring.snapshot.after_insert");
+      const result = this.#applyAuthoringSessionInTransaction(input);
+      if (result.status === "stale") {
+        throw new RevisionConflictError(
+          `Authoring Session revision changed: ${result.actualRevision}`
+        );
+      }
+      this.#insertAudit(
+        "authoring.snapshot.attached",
+        input.actor,
+        `page-snapshot:${snapshot.snapshotId}`,
+        {
+          authoringSessionId: input.sessionId,
+          designGrantId: snapshot.binding.designGrantId,
+          evidenceId: snapshot.captureSource.evidenceId,
+          assetId: snapshot.captureSource.assetRef.id,
+          contentDigest: snapshot.contentDigest
+        }
+      );
+      this.#inject("authoring.snapshot.after_audit");
+      return result;
+    }).immediate();
+  }
+
+  getPageSnapshot(
+    snapshotId: string
+  ): PageSnapshotDefinition | undefined {
+    const row = this.#db
+      .prepare(
+        "SELECT canonical_json FROM authoring_page_snapshots WHERE snapshot_id = ?"
+      )
+      .get(snapshotId) as SqlRow | undefined;
+    return row
+      ? (parseJson(row.canonical_json) as PageSnapshotDefinition)
+      : undefined;
+  }
+
+  saveCandidateBundle(
+    input: SaveCandidateBundleInput
+  ): {
+    status: "accepted" | "duplicate" | "stale";
+    record?: CandidateBundleRecord;
+    actualRevision?: number;
+  } {
+    this.#assertAuthoringMutation(input);
+    assertSchema(
+      validateCandidateBundle(input.bundle),
+      validateCandidateBundle.errors,
+      "CandidateBundle"
+    );
+    const bundle = input.bundle;
+    const bundleId = bundle.metadata.id;
+    const recordDigest = digest(bundle);
+    this.#assertCandidateBundleInput(input, recordDigest);
+
+    return this.#db.transaction(() => {
+      const existing = this.getCandidateBundle(bundleId);
+      if (existing) {
+        if (
+          existing.digest !== recordDigest ||
+          canonicalJson(existing.bundle) !== canonicalJson(bundle)
+        ) {
+          throw new CandidateBundleConflictError(
+            `Candidate Bundle is immutable: ${bundleId}`
+          );
+        }
+        return { status: "duplicate" as const, record: existing };
+      }
+      const applied = this.#applyAuthoringSessionInTransaction(input);
+      if (applied.status === "stale") {
+        return {
+          status: "stale" as const,
+          actualRevision: applied.actualRevision
+        };
+      }
+      this.#db
+        .prepare(
+          `INSERT INTO candidate_bundles(
+            bundle_id, version, authoring_session_id, source_revision,
+            record_digest, canonical_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          bundleId,
+          bundle.metadata.version,
+          input.sessionId,
+          bundle.authoringSession.revision,
+          recordDigest,
+          authoringJson(bundle),
+          bundle.createdAt
+        );
+      this.#inject("authoring.bundle.after_insert");
+      const insertItem = this.#db.prepare(
+        `INSERT INTO candidate_bundle_items(
+          bundle_id, item_type, ordinal, item_key, digest, canonical_json
+        ) VALUES (?, ?, ?, ?, ?, ?)`
+      );
+      bundle.artifacts.forEach((artifact, ordinal) => {
+        insertItem.run(
+          bundleId,
+          "artifact",
+          ordinal,
+          `${artifact.kind}:${artifact.id}@${artifact.version}`,
+          artifact.digest,
+          authoringJson(artifact)
+        );
+      });
+      bundle.files.forEach((file, ordinal) => {
+        insertItem.run(
+          bundleId,
+          "file",
+          ordinal,
+          file.path,
+          file.digest,
+          authoringJson(file)
+        );
+      });
+      this.#inject("authoring.bundle.after_items");
+      const insertValidation = this.#db.prepare(
+        `INSERT INTO candidate_bundle_validations(
+          bundle_id, check_type, valid, issue_count, report_asset_id,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`
+      );
+      for (const validation of input.validationResults) {
+        insertValidation.run(
+          bundleId,
+          validation.checkType,
+          validation.valid ? 1 : 0,
+          validation.issueCount,
+          validation.reportAssetId ?? null,
+          validation.createdAt
+        );
+      }
+      this.#inject("authoring.bundle.after_validations");
+      this.#insertAudit(
+        "authoring.candidate-bundle.saved",
+        input.actor,
+        `candidate-bundle:${bundleId}`,
+        {
+          digest: recordDigest,
+          sourceRevision: bundle.authoringSession.revision,
+          fileCount: bundle.files.length,
+          artifactCount: bundle.artifacts.length
+        }
+      );
+      this.#inject("authoring.bundle.after_audit");
+      return {
+        status: "accepted" as const,
+        record: this.getCandidateBundle(bundleId)!
+      };
+    }).immediate();
+  }
+
+  getCandidateBundle(
+    bundleId: string
+  ): CandidateBundleRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM candidate_bundles WHERE bundle_id = ?")
+      .get(bundleId) as SqlRow | undefined;
+    return row ? this.#readCandidateBundle(row) : undefined;
+  }
+
+  listCandidateBundleValidation(
+    bundleId: string
+  ): CandidateBundleValidationRecord[] {
+    return (
+      this.#db
+        .prepare(
+          `SELECT * FROM candidate_bundle_validations
+           WHERE bundle_id = ?
+           ORDER BY check_type`
+        )
+        .all(bundleId) as SqlRow[]
+    ).map((row) => this.#readCandidateBundleValidation(row));
+  }
+
+  putCandidateExport(
+    record: CandidateExportRecord
+  ): { status: "accepted" | "duplicate"; record: CandidateExportRecord } {
+    assertAuthoringId(record.exportId, "exportId");
+    assertAuthoringId(record.bundleId, "bundleId");
+    assertDigest(record.bundleDigest, "bundleDigest");
+    assertDigest(record.archiveDigest, "archiveDigest");
+    assertDigest(record.manifestDigest, "manifestDigest");
+    assertTimestamp(record.createdAt, "createdAt");
+    if (
+      !/^candidate-export:[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(
+        record.destinationRef
+      )
+    ) {
+      throw new CandidateBundleConflictError(
+        "Candidate export destination must be an opaque candidate-export reference"
+      );
+    }
+    const bundle = this.getCandidateBundle(record.bundleId);
+    if (!bundle || bundle.digest !== record.bundleDigest) {
+      throw new CandidateBundleConflictError(
+        `Candidate Bundle digest does not match: ${record.bundleId}`
+      );
+    }
+
+    return this.#db.transaction(() => {
+      const existing = this.getCandidateExport(record.exportId);
+      if (existing) {
+        if (canonicalJson(existing) !== canonicalJson(record)) {
+          throw new CandidateBundleConflictError(
+            `Candidate export is immutable: ${record.exportId}`
+          );
+        }
+        return { status: "duplicate" as const, record: existing };
+      }
+      this.#db
+        .prepare(
+          `INSERT INTO candidate_exports(
+            export_id, bundle_id, bundle_digest, archive_digest,
+            manifest_digest, destination_ref, actor, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          record.exportId,
+          record.bundleId,
+          record.bundleDigest,
+          record.archiveDigest,
+          record.manifestDigest,
+          record.destinationRef,
+          record.actor,
+          record.createdAt
+        );
+      this.#inject("authoring.export.after_insert");
+      this.#insertAudit(
+        "authoring.candidate-bundle.exported",
+        record.actor,
+        `candidate-export:${record.exportId}`,
+        {
+          bundleId: record.bundleId,
+          bundleDigest: record.bundleDigest,
+          archiveDigest: record.archiveDigest,
+          manifestDigest: record.manifestDigest,
+          destinationRef: record.destinationRef
+        }
+      );
+      this.#inject("authoring.export.after_audit");
+      return {
+        status: "accepted" as const,
+        record: this.getCandidateExport(record.exportId)!
+      };
+    }).immediate();
+  }
+
+  getCandidateExport(
+    exportId: string
+  ): CandidateExportRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM candidate_exports WHERE export_id = ?")
+      .get(exportId) as SqlRow | undefined;
+    return row ? this.#readCandidateExport(row) : undefined;
+  }
+
   saveCandidate(input: PublishArtifactInput): ArtifactRecord {
     const createdAt = now();
     const recordId = randomUUID();
@@ -675,6 +1482,20 @@ export class SqlitePersistence implements Persistence {
           .get(recordId) as SqlRow
       );
     })();
+  }
+
+  getCandidate(
+    assetType: ArtifactType,
+    assetId: string,
+    version: string
+  ): ArtifactRecord | undefined {
+    const row = this.#db
+      .prepare(
+        `SELECT * FROM artifacts
+         WHERE asset_type = ? AND asset_id = ? AND version = ? AND status = 'candidate'`
+      )
+      .get(assetType, assetId, version) as SqlRow | undefined;
+    return row ? this.#readArtifact(row) : undefined;
   }
 
   getPublished(
@@ -2646,6 +3467,208 @@ export class SqlitePersistence implements Persistence {
     return this.#getBrowserSession(input.id)!;
   }
 
+  upsertBrowserPageObservation(
+    input: BrowserPageObservationRecord
+  ): BrowserPageObservationRecord {
+    if (
+      !Number.isSafeInteger(input.tabId) ||
+      input.tabId < 0 ||
+      (input.windowId !== undefined &&
+        (!Number.isSafeInteger(input.windowId) || input.windowId < 0)) ||
+      !Number.isFinite(Date.parse(input.observedAt)) ||
+      !input.pathname.startsWith("/") ||
+      !input.pageEpoch.trim() ||
+      !input.observerCapabilityId.trim() ||
+      !Number.isSafeInteger(input.revision) ||
+      input.revision < 1
+    ) {
+      throw new Error("Browser page observation is invalid");
+    }
+    const session = this.#getBrowserSession(input.sessionId);
+    if (
+      !session ||
+      session.browserInstanceId !== input.browserInstanceId
+    ) {
+      throw new Error("Browser page observation Session does not match");
+    }
+    const parsedOrigin = new URL(input.origin);
+    if (
+      parsedOrigin.protocol !== "https:" ||
+      parsedOrigin.origin !== input.origin
+    ) {
+      throw new Error("Browser page observation Origin must be exact HTTPS");
+    }
+    if (
+      input.observationState === "ready" &&
+      !input.contentScriptReady
+    ) {
+      throw new Error(
+        "A ready browser page requires ready content"
+      );
+    }
+    if (
+      ["authenticated", "membership"].includes(input.authentication) &&
+      !input.authenticationContextRef
+    ) {
+      throw new Error(
+        "Authenticated browser pages require an authentication context"
+      );
+    }
+    const current = this.getBrowserPageObservation(input.sessionId, input.tabId);
+    if (
+      current &&
+      Date.parse(input.observedAt) < Date.parse(current.observedAt)
+    ) {
+      return current;
+    }
+    if (current && input.revision < current.revision) return current;
+    if (
+      current &&
+      input.revision === current.revision &&
+      (current.browserInstanceId !== input.browserInstanceId ||
+        current.windowId !== input.windowId ||
+        current.origin !== input.origin ||
+        current.pathname !== input.pathname ||
+        current.contentScriptReady !== input.contentScriptReady ||
+        current.authentication !== input.authentication ||
+        current.authenticationContextRef !==
+          input.authenticationContextRef ||
+        current.observationState !== input.observationState ||
+        current.pageEpoch !== input.pageEpoch ||
+        current.observerCapabilityId !== input.observerCapabilityId ||
+        current.reasonCode !== input.reasonCode)
+    ) {
+      throw new RevisionConflictError(
+        "Browser page observation changed without a new revision"
+      );
+    }
+    this.#db
+      .prepare(
+        `INSERT INTO browser_page_observations(
+           session_id, browser_instance_id, tab_id, window_id, origin, pathname,
+           content_script_ready, authentication, authentication_context_ref,
+           observation_state, page_epoch, observer_capability_id, revision,
+           observed_at, reason_code
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(session_id, tab_id) DO UPDATE SET
+           browser_instance_id = excluded.browser_instance_id,
+           window_id = excluded.window_id,
+           origin = excluded.origin,
+           pathname = excluded.pathname,
+           content_script_ready = excluded.content_script_ready,
+           authentication = excluded.authentication,
+           authentication_context_ref = excluded.authentication_context_ref,
+           observation_state = excluded.observation_state,
+           page_epoch = excluded.page_epoch,
+           observer_capability_id = excluded.observer_capability_id,
+           revision = excluded.revision,
+           observed_at = excluded.observed_at,
+           reason_code = excluded.reason_code`
+      )
+      .run(
+        input.sessionId,
+        input.browserInstanceId,
+        input.tabId,
+        input.windowId ?? null,
+        input.origin,
+        input.pathname,
+        input.contentScriptReady ? 1 : 0,
+        input.authentication,
+        input.authenticationContextRef ?? null,
+        input.observationState,
+        input.pageEpoch,
+        input.observerCapabilityId,
+        input.revision,
+        input.observedAt,
+        input.reasonCode ?? null
+      );
+    return this.getBrowserPageObservation(input.sessionId, input.tabId)!;
+  }
+
+  getBrowserPageObservation(
+    sessionId: string,
+    tabId: number
+  ): BrowserPageObservationRecord | undefined {
+    const row = this.#db
+      .prepare(
+        "SELECT * FROM browser_page_observations WHERE session_id = ? AND tab_id = ?"
+      )
+      .get(sessionId, tabId) as SqlRow | undefined;
+    return row ? this.#readBrowserPageObservation(row) : undefined;
+  }
+
+  listBrowserPageObservations(input: {
+    limit: number;
+    sessionId?: string;
+    browserInstanceId?: string;
+  }): BrowserPageObservationRecord[] {
+    this.#assertLineageLimit(input.limit);
+    return (
+      this.#db
+        .prepare(
+          `SELECT * FROM browser_page_observations
+           WHERE (? IS NULL OR session_id = ?)
+             AND (? IS NULL OR browser_instance_id = ?)
+           ORDER BY observed_at DESC, session_id, tab_id
+           LIMIT ?`
+        )
+        .all(
+          input.sessionId ?? null,
+          input.sessionId ?? null,
+          input.browserInstanceId ?? null,
+          input.browserInstanceId ?? null,
+          input.limit
+        ) as SqlRow[]
+    ).map((row) => this.#readBrowserPageObservation(row));
+  }
+
+  invalidateBrowserPageObservations(input: {
+    sessionId: string;
+    observedAt: string;
+    reasonCode: string;
+  }): number {
+    if (!Number.isFinite(Date.parse(input.observedAt))) {
+      throw new Error("Browser page invalidation time is invalid");
+    }
+    return this.#db
+      .prepare(
+        `UPDATE browser_page_observations
+         SET observation_state = 'stale',
+             authentication = 'unknown',
+             authentication_context_ref = NULL,
+             content_script_ready = 0,
+             revision = revision + 1,
+             observed_at = ?,
+             reason_code = ?
+         WHERE session_id = ? AND observation_state <> 'stale'`
+      )
+      .run(input.observedAt, input.reasonCode, input.sessionId).changes;
+  }
+
+  resetBrowserPageObservations(sessionId: string): number {
+    if (!sessionId.trim()) {
+      throw new Error("Browser Session identity is required");
+    }
+    return this.#db
+      .prepare("DELETE FROM browser_page_observations WHERE session_id = ?")
+      .run(sessionId).changes;
+  }
+
+  pruneBrowserPageObservations(input: {
+    observedBefore: string;
+  }): number {
+    if (!Number.isFinite(Date.parse(input.observedBefore))) {
+      throw new Error("Browser page observation retention time is invalid");
+    }
+    return this.#db
+      .prepare(
+        `DELETE FROM browser_page_observations
+         WHERE observed_at < ?
+           AND observation_state IN ('departed', 'stale')`
+      )
+      .run(input.observedBefore).changes;
+  }
+
   replaceBrowserCapabilities(
     sessionId: string,
     capabilities: BrowserCapabilityRecord[]
@@ -2656,8 +3679,9 @@ export class SqlitePersistence implements Persistence {
         .run(sessionId);
       const insert = this.#db.prepare(
         `INSERT INTO browser_capabilities(
-          session_id, node_id, node_version, risk_level, permissions_json
-        ) VALUES (?, ?, ?, ?, ?)`
+          session_id, node_id, node_version, risk_level, permissions_json,
+          routes_json, adapter_id, adapter_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       );
       for (const capability of capabilities) {
         insert.run(
@@ -2665,7 +3689,10 @@ export class SqlitePersistence implements Persistence {
           capability.nodeId,
           capability.nodeVersion,
           capability.riskLevel,
-          json(capability.permissions)
+          json(capability.permissions),
+          json(capability.routes ?? []),
+          capability.adapterId ?? null,
+          capability.adapterVersion ?? null
         );
       }
     })();
@@ -2683,7 +3710,16 @@ export class SqlitePersistence implements Persistence {
       nodeId: String(row.node_id),
       nodeVersion: String(row.node_version),
       riskLevel: String(row.risk_level),
-      permissions: parseJson(row.permissions_json) as string[]
+      permissions: parseJson(row.permissions_json) as string[],
+      routes: parseJson(row.routes_json) as NonNullable<
+        BrowserCapabilityRecord["routes"]
+      >,
+      ...(row.adapter_id == null
+        ? {}
+        : { adapterId: String(row.adapter_id) }),
+      ...(row.adapter_version == null
+        ? {}
+        : { adapterVersion: String(row.adapter_version) })
     }));
   }
 
@@ -3788,6 +4824,231 @@ export class SqlitePersistence implements Persistence {
     return this.#getRetentionJob(input.jobId)!;
   }
 
+  putTriggerSpec(input: {
+    spec: TriggerSpecDefinition;
+    actor: string;
+    occurredAt: string;
+  }): TriggerSpecRecord {
+    const current = this.getTriggerSpec(input.spec.id);
+    if (current && current.spec.version === input.spec.version) {
+      if (canonicalJson(current.spec) !== canonicalJson(input.spec)) {
+        throw new ArtifactConflictError(
+          `Trigger identity conflict: ${input.spec.id}@${input.spec.version}`
+        );
+      }
+      return current;
+    }
+    return this.#db.transaction(() => {
+      const revision = (current?.revision ?? 0) + 1;
+      this.#db.prepare(
+        `INSERT INTO trigger_specs(
+          trigger_id,trigger_version,revision,enabled,spec_json,
+          created_at,updated_at,created_by,updated_by
+        ) VALUES (?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(trigger_id) DO UPDATE SET
+          trigger_version=excluded.trigger_version,
+          revision=excluded.revision,
+          enabled=excluded.enabled,
+          spec_json=excluded.spec_json,
+          updated_at=excluded.updated_at,
+          updated_by=excluded.updated_by`
+      ).run(
+        input.spec.id,input.spec.version,revision,input.spec.enabled ? 1 : 0,
+        json(input.spec),current?.createdAt ?? input.occurredAt,input.occurredAt,
+        current?.createdBy ?? input.actor,input.actor
+      );
+      this.#insertAuditRecord({
+        id:this.#idFactory(),action:"trigger.spec.put",actor:input.actor,
+        target:`trigger:${input.spec.id}`,
+        detail:{ version:input.spec.version,revision,enabled:input.spec.enabled },
+        occurredAt:input.occurredAt
+      });
+      return this.getTriggerSpec(input.spec.id)!;
+    })();
+  }
+
+  setTriggerEnabled(input: {
+    id: string;
+    expectedRevision: number;
+    enabled: boolean;
+    actor: string;
+    occurredAt: string;
+  }): TriggerSpecRecord {
+    return this.#db.transaction(() => {
+      const current = this.getTriggerSpec(input.id);
+      if (!current) throw new Error(`Trigger not found: ${input.id}`);
+      if (current.revision !== input.expectedRevision) {
+        throw new RevisionConflictError("Trigger revision changed");
+      }
+      const nextSpec = { ...current.spec,enabled:input.enabled };
+      const result = this.#db.prepare(
+        `UPDATE trigger_specs SET revision=revision+1,enabled=?,spec_json=?,
+           updated_at=?,updated_by=? WHERE trigger_id=? AND revision=?`
+      ).run(
+        input.enabled ? 1 : 0,json(nextSpec),input.occurredAt,input.actor,
+        input.id,input.expectedRevision
+      );
+      if (result.changes !== 1) throw new RevisionConflictError("Trigger revision changed");
+      this.#insertAuditRecord({
+        id:this.#idFactory(),action:"trigger.spec.enable",actor:input.actor,
+        target:`trigger:${input.id}`,detail:{ enabled:input.enabled },
+        occurredAt:input.occurredAt
+      });
+      return this.getTriggerSpec(input.id)!;
+    })();
+  }
+
+  getTriggerSpec(id: string): TriggerSpecRecord | undefined {
+    const row = this.#db.prepare("SELECT * FROM trigger_specs WHERE trigger_id=?")
+      .get(id) as SqlRow | undefined;
+    return row ? this.#readTriggerSpec(row) : undefined;
+  }
+
+  listTriggerSpecs(): TriggerSpecRecord[] {
+    return (this.#db.prepare("SELECT * FROM trigger_specs ORDER BY trigger_id").all() as SqlRow[])
+      .map((row) => this.#readTriggerSpec(row));
+  }
+
+  claimTriggerOccurrence(input: TriggerRunRecord):
+    | { status:"accepted";record:TriggerRunRecord }
+    | { status:"duplicate";record:TriggerRunRecord } {
+    const result = this.#db.prepare(
+      `INSERT INTO trigger_runs(
+        trigger_run_id,trigger_id,trigger_version,occurrence_key,status,
+        workflow_run_id,fencing_token,dataset_id,dataset_version,diagnostic,created_at,updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(trigger_id,occurrence_key) DO NOTHING`
+    ).run(
+      input.triggerRunId,input.triggerId,input.triggerVersion,input.occurrenceKey,input.status,
+      input.workflowRunId ?? null,input.fencingToken ?? null,input.datasetId ?? null,input.datasetVersion ?? null,
+      input.diagnostic ?? null,input.createdAt,input.updatedAt
+    );
+    if (result.changes === 1) return { status:"accepted",record:input };
+    const existing = this.#db.prepare(
+      "SELECT * FROM trigger_runs WHERE trigger_id=? AND occurrence_key=?"
+    ).get(input.triggerId,input.occurrenceKey) as SqlRow;
+    return { status:"duplicate",record:this.#readTriggerRun(existing) };
+  }
+
+  updateTriggerRun(input: {
+    triggerRunId: string;
+    status: TriggerRunStatus;
+    updatedAt: string;
+    workflowRunId?: string;
+    fencingToken?: number;
+    diagnostic?: string;
+  }): TriggerRunRecord {
+    const result = this.#db.prepare(
+      `UPDATE trigger_runs SET status=?,updated_at=?,
+         workflow_run_id=COALESCE(?,workflow_run_id),
+         fencing_token=COALESCE(?,fencing_token),diagnostic=COALESCE(?,diagnostic)
+       WHERE trigger_run_id=?`
+    ).run(
+      input.status,input.updatedAt,input.workflowRunId ?? null,input.fencingToken ?? null,
+      input.diagnostic ?? null,input.triggerRunId
+    );
+    if (result.changes !== 1) throw new Error(`Trigger Run not found: ${input.triggerRunId}`);
+    const row = this.#db.prepare("SELECT * FROM trigger_runs WHERE trigger_run_id=?")
+      .get(input.triggerRunId) as SqlRow;
+    return this.#readTriggerRun(row);
+  }
+
+  listTriggerRuns(triggerId?: string): TriggerRunRecord[] {
+    const rows = (triggerId
+      ? this.#db.prepare(
+          "SELECT * FROM trigger_runs WHERE trigger_id=? ORDER BY created_at DESC LIMIT 200"
+        ).all(triggerId)
+      : this.#db.prepare(
+          "SELECT * FROM trigger_runs ORDER BY created_at DESC LIMIT 200"
+        ).all()) as SqlRow[];
+    return rows.map((row) => this.#readTriggerRun(row));
+  }
+
+  latestDatasetVersion(datasetId: string): { id:string;version:string;createdAt:string } | undefined {
+    const row = this.#db.prepare(
+      `SELECT dataset_id,version,created_at FROM dataset_versions
+       WHERE dataset_id=? ORDER BY created_at DESC,version DESC LIMIT 1`
+    ).get(datasetId) as SqlRow | undefined;
+    return row ? {
+      id:String(row.dataset_id),version:String(row.version),createdAt:String(row.created_at)
+    } : undefined;
+  }
+
+  acquireTriggerLease(input: {
+    concurrencyKey: string;ownerId: string;now: string;ttlSeconds: number;
+  }): BrowserControlLeaseRecord | undefined {
+    return this.#acquireControlLease(
+      "trigger_leases","concurrency_key",input.concurrencyKey,input.ownerId,input.now,input.ttlSeconds
+    );
+  }
+
+  renewTriggerLease(input: {
+    concurrencyKey:string;ownerId:string;fencingToken:number;now:string;ttlSeconds:number;
+  }): BrowserControlLeaseRecord | undefined {
+    return this.#renewControlLease(
+      "trigger_leases","concurrency_key",input.concurrencyKey,input.ownerId,
+      input.fencingToken,input.now,input.ttlSeconds
+    );
+  }
+
+  releaseTriggerLease(input: {
+    concurrencyKey:string;ownerId:string;fencingToken:number;releasedAt:string;
+  }): boolean {
+    return this.#releaseControlLease(
+      "trigger_leases","concurrency_key",input.concurrencyKey,
+      input.ownerId,input.fencingToken,input.releasedAt
+    );
+  }
+
+  acquireBrowserControlLease(input: {
+    resourceId:string;ownerId:string;now:string;ttlSeconds:number;
+  }): BrowserControlLeaseRecord | undefined {
+    return this.#acquireControlLease(
+      "browser_control_leases","resource_id",input.resourceId,input.ownerId,input.now,input.ttlSeconds
+    );
+  }
+
+  renewBrowserControlLease(input: {
+    resourceId:string;ownerId:string;fencingToken:number;now:string;ttlSeconds:number;
+  }): BrowserControlLeaseRecord | undefined {
+    if (!Number.isSafeInteger(input.ttlSeconds) || input.ttlSeconds < 5 || input.ttlSeconds > 3600) {
+      throw new Error("Control lease TTL must be between 5 and 3600 seconds");
+    }
+    const expiresAt = new Date(Date.parse(input.now) + input.ttlSeconds * 1000).toISOString();
+    const result = this.#db.prepare(
+      `UPDATE browser_control_leases SET expires_at=?
+       WHERE resource_id=? AND owner_id=? AND fencing_token=? AND expires_at>?`
+    ).run(expiresAt,input.resourceId,input.ownerId,input.fencingToken,input.now);
+    if (result.changes !== 1) return undefined;
+    const row = this.#db.prepare(
+      "SELECT * FROM browser_control_leases WHERE resource_id=?"
+    ).get(input.resourceId) as SqlRow;
+    return {
+      resourceId:String(row.resource_id),ownerId:String(row.owner_id),
+      fencingToken:Number(row.fencing_token),acquiredAt:String(row.acquired_at),
+      expiresAt:String(row.expires_at)
+    };
+  }
+
+  releaseBrowserControlLease(input: {
+    resourceId:string;ownerId:string;fencingToken:number;releasedAt:string;
+  }): boolean {
+    return this.#releaseControlLease(
+      "browser_control_leases","resource_id",input.resourceId,
+      input.ownerId,input.fencingToken,input.releasedAt
+    );
+  }
+
+  listBrowserControlLeases(nowValue: string): BrowserControlLeaseRecord[] {
+    return (this.#db.prepare(
+      "SELECT * FROM browser_control_leases WHERE expires_at>? ORDER BY resource_id"
+    ).all(nowValue) as SqlRow[]).map((row) => ({
+      resourceId:String(row.resource_id),ownerId:String(row.owner_id),
+      fencingToken:Number(row.fencing_token),acquiredAt:String(row.acquired_at),
+      expiresAt:String(row.expires_at)
+    }));
+  }
+
   listAudit(target?: string): AuditRecord[] {
     const rows = (target
       ? this.#db
@@ -3934,14 +5195,30 @@ export class SqlitePersistence implements Persistence {
     assertResourceBindingSnapshotForPlan(runId, snapshot, plan.planJson);
     for (const [slotName, binding] of Object.entries(snapshot.bindings)) {
       const session = this.#getBrowserSession(binding.sessionId);
+      const page = this.getBrowserPageObservation(
+        binding.sessionId,
+        binding.tabId
+      );
+      const normalizedAuthentication =
+        page?.authentication === "membership"
+          ? "membership"
+          : page?.authentication === "authenticated"
+            ? "authenticated"
+            : "anonymous";
       if (
         !session ||
-        session.observationRevision === undefined ||
-        session.observationRevision < 1 ||
-        session.observationState !== "available" ||
+        !page ||
+        page.revision !== binding.revision ||
+        page.browserInstanceId !== binding.browserInstanceId ||
+        page.observationState !== "ready" ||
+        page.pageEpoch !== binding.pageEpoch ||
+        page.observerCapabilityId !== binding.observerCapabilityId ||
+        page.authenticationContextRef !==
+          binding.authenticationContextRef ||
+        page.pathname !== binding.pathname ||
+        page.origin !== binding.origin ||
         session.capabilityDigest !== binding.capabilityDigest ||
-        session.observedOrigin !== binding.origin ||
-        session.observedAuthentication !== binding.authentication
+        binding.authentication !== normalizedAuthentication
       ) {
         throw new Error(
           `Resource Binding Snapshot session observation drifted for slot ${slotName}`
@@ -4146,6 +5423,100 @@ export class SqlitePersistence implements Persistence {
         json(record.detail),
         record.occurredAt
       );
+  }
+
+  #readTriggerSpec(row: SqlRow): TriggerSpecRecord {
+    return {
+      spec:parseJson(row.spec_json) as TriggerSpecDefinition,
+      revision:Number(row.revision),createdAt:String(row.created_at),
+      updatedAt:String(row.updated_at),createdBy:String(row.created_by),
+      updatedBy:String(row.updated_by)
+    };
+  }
+
+  #readTriggerRun(row: SqlRow): TriggerRunRecord {
+    return {
+      triggerRunId:String(row.trigger_run_id),triggerId:String(row.trigger_id),
+      triggerVersion:String(row.trigger_version),occurrenceKey:String(row.occurrence_key),
+      status:row.status as TriggerRunStatus,
+      ...(row.workflow_run_id == null ? {} : { workflowRunId:String(row.workflow_run_id) }),
+      ...(row.fencing_token == null ? {} : { fencingToken:Number(row.fencing_token) }),
+      ...(row.dataset_id == null ? {} : { datasetId:String(row.dataset_id) }),
+      ...(row.dataset_version == null ? {} : { datasetVersion:String(row.dataset_version) }),
+      ...(row.diagnostic == null ? {} : { diagnostic:String(row.diagnostic) }),
+      createdAt:String(row.created_at),updatedAt:String(row.updated_at)
+    };
+  }
+
+  #acquireControlLease(
+    table: "trigger_leases" | "browser_control_leases",
+    keyColumn: "concurrency_key" | "resource_id",
+    resourceId: string,
+    ownerId: string,
+    nowValue: string,
+    ttlSeconds: number
+  ): BrowserControlLeaseRecord | undefined {
+    if (!resourceId.trim() || !ownerId.trim()) throw new Error("Control lease identity is required");
+    if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 5 || ttlSeconds > 3600) {
+      throw new Error("Control lease TTL must be between 5 and 3600 seconds");
+    }
+    const expiresAt = new Date(Date.parse(nowValue) + ttlSeconds * 1000).toISOString();
+    return this.#db.transaction(() => {
+      const existing = this.#db.prepare(
+        `SELECT * FROM ${table} WHERE ${keyColumn}=?`
+      ).get(resourceId) as SqlRow | undefined;
+      if (existing && String(existing.expires_at) > nowValue) return undefined;
+      const fencingToken = existing ? Number(existing.fencing_token) + 1 : 1;
+      this.#db.prepare(
+        `INSERT INTO ${table}(${keyColumn},owner_id,fencing_token,acquired_at,expires_at)
+         VALUES (?,?,?,?,?) ON CONFLICT(${keyColumn}) DO UPDATE SET
+           owner_id=excluded.owner_id,fencing_token=excluded.fencing_token,
+           acquired_at=excluded.acquired_at,expires_at=excluded.expires_at`
+      ).run(resourceId,ownerId,fencingToken,nowValue,expiresAt);
+      return { resourceId,ownerId,fencingToken,acquiredAt:nowValue,expiresAt };
+    })();
+  }
+
+  #releaseControlLease(
+    table: "trigger_leases" | "browser_control_leases",
+    keyColumn: "concurrency_key" | "resource_id",
+    resourceId: string,
+    ownerId: string,
+    fencingToken: number,
+    releasedAt: string
+  ): boolean {
+    const result = this.#db.prepare(
+      `UPDATE ${table} SET expires_at=?
+       WHERE ${keyColumn}=? AND owner_id=? AND fencing_token=? AND expires_at>?`
+    ).run(releasedAt,resourceId,ownerId,fencingToken,releasedAt);
+    return result.changes === 1;
+  }
+
+  #renewControlLease(
+    table: "trigger_leases" | "browser_control_leases",
+    keyColumn: "concurrency_key" | "resource_id",
+    resourceId: string,
+    ownerId: string,
+    fencingToken: number,
+    nowValue: string,
+    ttlSeconds: number
+  ): BrowserControlLeaseRecord | undefined {
+    if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 5 || ttlSeconds > 3600) {
+      throw new Error("Control lease TTL must be between 5 and 3600 seconds");
+    }
+    const expiresAt = new Date(Date.parse(nowValue) + ttlSeconds * 1000).toISOString();
+    const result = this.#db.prepare(
+      `UPDATE ${table} SET expires_at=?
+       WHERE ${keyColumn}=? AND owner_id=? AND fencing_token=? AND expires_at>?`
+    ).run(expiresAt,resourceId,ownerId,fencingToken,nowValue);
+    if (result.changes !== 1) return undefined;
+    const row = this.#db.prepare(
+      `SELECT * FROM ${table} WHERE ${keyColumn}=?`
+    ).get(resourceId) as SqlRow;
+    return {
+      resourceId,ownerId:String(row.owner_id),fencingToken:Number(row.fencing_token),
+      acquiredAt:String(row.acquired_at),expiresAt:String(row.expires_at)
+    };
   }
 
   #insertDecision(record: DecisionRecordDefinition): void {
@@ -4545,6 +5916,558 @@ export class SqlitePersistence implements Persistence {
     };
   }
 
+  #readAuthoringScenario(row: SqlRow): AuthoringScenarioRecord {
+    return {
+      scenario: parseJson(
+        row.canonical_json
+      ) as AuthoringScenarioRecord["scenario"],
+      digest: String(row.scenario_digest),
+      createdAt: String(row.created_at)
+    };
+  }
+
+  #readAuthoringSession(row: SqlRow): AuthoringSessionDefinition {
+    return parseJson(row.canonical_json) as AuthoringSessionDefinition;
+  }
+
+  #readAuthoringSessionRevision(
+    row: SqlRow
+  ): AuthoringSessionRevisionRecord {
+    return {
+      sessionId: String(row.session_id),
+      revision: Number(row.revision),
+      ...(row.operation_id == null
+        ? {}
+        : { operationId: String(row.operation_id) }),
+      ...(row.operation_digest == null
+        ? {}
+        : { operationDigest: String(row.operation_digest) }),
+      session: parseJson(
+        row.canonical_json
+      ) as AuthoringSessionDefinition,
+      createdAt: String(row.created_at)
+    };
+  }
+
+  #readDesignModeGrant(row: SqlRow): DesignModeGrantRecord {
+    return {
+      grantId: String(row.grant_id),
+      authoringSessionId: String(row.authoring_session_id),
+      revision: Number(row.revision),
+      state: row.state as DesignModeGrantRecord["state"],
+      approvedBy: String(row.approved_by),
+      browserSessionId: String(row.browser_session_id),
+      profileId: String(row.profile_id),
+      tabId: Number(row.tab_id),
+      origin: String(row.origin),
+      pageEpoch: String(row.page_epoch),
+      allowedOperations: parseJson(
+        row.allowed_operations_json
+      ) as DesignModeGrantRecord["allowedOperations"],
+      issuedAt: String(row.issued_at),
+      expiresAt: String(row.expires_at),
+      updatedAt: String(row.updated_at),
+      ...(row.terminal_reason == null
+        ? {}
+        : { terminalReason: String(row.terminal_reason) })
+    };
+  }
+
+  #readCandidateBundle(row: SqlRow): CandidateBundleRecord {
+    return {
+      bundle: parseJson(
+        row.canonical_json
+      ) as CandidateBundleRecord["bundle"],
+      digest: String(row.record_digest),
+      createdAt: String(row.created_at)
+    };
+  }
+
+  #readCandidateBundleValidation(
+    row: SqlRow
+  ): CandidateBundleValidationRecord {
+    return {
+      bundleId: String(row.bundle_id),
+      checkType:
+        row.check_type as CandidateBundleValidationRecord["checkType"],
+      valid: Number(row.valid) === 1,
+      issueCount: Number(row.issue_count),
+      ...(row.report_asset_id == null
+        ? {}
+        : { reportAssetId: String(row.report_asset_id) }),
+      createdAt: String(row.created_at)
+    };
+  }
+
+  #readCandidateExport(row: SqlRow): CandidateExportRecord {
+    return {
+      exportId: String(row.export_id),
+      bundleId: String(row.bundle_id),
+      bundleDigest: String(row.bundle_digest),
+      archiveDigest: String(row.archive_digest),
+      manifestDigest: String(row.manifest_digest),
+      destinationRef: String(row.destination_ref),
+      actor: String(row.actor),
+      createdAt: String(row.created_at)
+    };
+  }
+
+  #assertAuthoringSession(session: AuthoringSessionDefinition): void {
+    assertSchema(
+      validateAuthoringSession(session),
+      validateAuthoringSession.errors,
+      "AuthoringSession"
+    );
+    assertAuthoringId(session.sessionId, "sessionId");
+    assertRevision(session.revision, "revision");
+    assertTimestamp(session.createdAt, "createdAt");
+    assertTimestamp(session.updatedAt, "updatedAt");
+  }
+
+  #assertAuthoringMutation(input: ApplyAuthoringSessionInput): void {
+    assertAuthoringId(input.sessionId, "sessionId");
+    assertAuthoringId(input.operationId, "operationId");
+    assertRevision(input.expectedRevision, "expectedRevision");
+    assertAuthoringId(input.actor, "actor");
+    this.#assertAuthoringSession(input.next);
+    if (
+      input.next.sessionId !== input.sessionId ||
+      input.next.revision !== input.expectedRevision + 1
+    ) {
+      throw new AuthoringConflictError(
+        "Authoring Session mutation identity or next revision is invalid"
+      );
+    }
+    if (
+      input.next.appliedOperationIds.filter(
+        (operationId) => operationId === input.operationId
+      ).length !== 1
+    ) {
+      throw new AuthoringConflictError(
+        "Authoring Session must record the exact operation id once"
+      );
+    }
+  }
+
+  #applyAuthoringSessionInTransaction(
+    input: ApplyAuthoringSessionInput
+  ): ApplyAuthoringSessionResult {
+    const operationDigest = digest({
+      expectedRevision: input.expectedRevision,
+      next: input.next,
+      actor: input.actor
+    });
+    const replay = this.#db
+      .prepare(
+        `SELECT * FROM authoring_session_revisions
+         WHERE session_id = ? AND operation_id = ?`
+      )
+      .get(input.sessionId, input.operationId) as SqlRow | undefined;
+    if (replay) {
+      if (String(replay.operation_digest) !== operationDigest) {
+        throw new AuthoringOperationConflictError(
+          `Authoring operation payload changed: ${input.operationId}`
+        );
+      }
+      const revision = this.#readAuthoringSessionRevision(replay);
+      return {
+        status: "duplicate",
+        current: revision.session,
+        revision
+      };
+    }
+    const current = this.getAuthoringSession(input.sessionId);
+    if (!current) {
+      throw new AuthoringConflictError(
+        `Authoring Session does not exist: ${input.sessionId}`
+      );
+    }
+    if (current.revision !== input.expectedRevision) {
+      return {
+        status: "stale",
+        actualRevision: current.revision
+      };
+    }
+    if (
+      current.createdAt !== input.next.createdAt ||
+      canonicalJson(current.scenarioRef) !==
+        canonicalJson(input.next.scenarioRef) ||
+      canonicalJson(current.actor) !== canonicalJson(input.next.actor)
+    ) {
+      throw new AuthoringConflictError(
+        "Authoring Session immutable identity fields changed"
+      );
+    }
+    if (
+      current.appliedOperationIds.some(
+        (operationId) =>
+          !input.next.appliedOperationIds.includes(operationId)
+      ) ||
+      current.designGrantRefs.some(
+        (grantId) => !input.next.designGrantRefs.includes(grantId)
+      ) ||
+      current.snapshotRefs.some(
+        (reference) =>
+          !input.next.snapshotRefs.some(
+            (candidate) =>
+              candidate.id === reference.id &&
+              candidate.digest === reference.digest
+          )
+      )
+    ) {
+      throw new AuthoringConflictError(
+        "Authoring Session durable references are append-only"
+      );
+    }
+    if (!this.#canTransitionAuthoringSession(current.state, input.next.state)) {
+      throw new AuthoringConflictError(
+        `Invalid Authoring Session transition: ${current.state} -> ${input.next.state}`
+      );
+    }
+    const canonical = authoringJson(input.next);
+    const updated = this.#db
+      .prepare(
+        `UPDATE authoring_sessions
+         SET revision = ?, state = ?, canonical_json = ?, updated_at = ?
+         WHERE session_id = ? AND revision = ?`
+      )
+      .run(
+        input.next.revision,
+        input.next.state,
+        canonical,
+        input.next.updatedAt,
+        input.sessionId,
+        input.expectedRevision
+      );
+    if (updated.changes !== 1) {
+      const latest = this.getAuthoringSession(input.sessionId);
+      return {
+        status: "stale",
+        actualRevision: latest?.revision ?? input.expectedRevision
+      };
+    }
+    this.#inject("authoring.session.apply.after_current");
+    this.#db
+      .prepare(
+        `INSERT INTO authoring_session_revisions(
+          session_id, revision, operation_id, operation_digest,
+          state, canonical_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        input.sessionId,
+        input.next.revision,
+        input.operationId,
+        operationDigest,
+        input.next.state,
+        canonical,
+        input.next.updatedAt
+      );
+    this.#inject("authoring.session.apply.after_history");
+    this.#insertAudit(
+      "authoring.session.revised",
+      input.actor,
+      `authoring-session:${input.sessionId}`,
+      {
+        operationId: input.operationId,
+        previousRevision: input.expectedRevision,
+        revision: input.next.revision,
+        state: input.next.state
+      }
+    );
+    this.#inject("authoring.session.apply.after_audit");
+    return {
+      status: "accepted",
+      current: this.getAuthoringSession(input.sessionId)!,
+      revision: this.getAuthoringSessionRevision(
+        input.sessionId,
+        input.next.revision
+      )!
+    };
+  }
+
+  #canTransitionAuthoringSession(
+    current: AuthoringSessionDefinition["state"],
+    next: AuthoringSessionDefinition["state"]
+  ): boolean {
+    if (current === next) {
+      return !["candidate", "closed", "failed"].includes(current);
+    }
+    if (
+      !["candidate", "closed", "failed"].includes(current) &&
+      next === "failed"
+    ) {
+      return true;
+    }
+    const transitions: Record<
+      AuthoringSessionDefinition["state"],
+      readonly AuthoringSessionDefinition["state"][]
+    > = {
+      intake: ["catalog"],
+      catalog: ["discovery", "assembly"],
+      discovery: ["modeling"],
+      modeling: ["assembly"],
+      assembly: ["validation"],
+      validation: ["assembly", "candidate"],
+      candidate: ["closed"],
+      closed: [],
+      failed: []
+    };
+    return transitions[current].includes(next);
+  }
+
+  #assertDesignModeGrant(grant: DesignModeGrantRecord): void {
+    assertAuthoringId(grant.grantId, "grantId");
+    assertAuthoringId(grant.authoringSessionId, "authoringSessionId");
+    assertRevision(grant.revision, "revision");
+    assertAuthoringId(grant.approvedBy, "approvedBy");
+    assertAuthoringId(grant.browserSessionId, "browserSessionId");
+    if (!grant.profileId.trim() || grant.profileId.length > 300) {
+      throw new Error("profileId must be a 1-300 character identifier");
+    }
+    if (!Number.isSafeInteger(grant.tabId) || grant.tabId < 0) {
+      throw new Error("tabId must be a non-negative safe integer");
+    }
+    assertHttpsOrigin(grant.origin, "origin");
+    if (!grant.pageEpoch.trim() || grant.pageEpoch.length > 300) {
+      throw new Error("pageEpoch must be a 1-300 character identifier");
+    }
+    assertTimestamp(grant.issuedAt, "issuedAt");
+    assertTimestamp(grant.expiresAt, "expiresAt");
+    assertTimestamp(grant.updatedAt, "updatedAt");
+    const duration =
+      Date.parse(grant.expiresAt) - Date.parse(grant.issuedAt);
+    if (duration <= 0 || duration > 15 * 60 * 1000) {
+      throw new DesignModeGrantConflictError(
+        "Design Mode Grant TTL must be positive and at most 15 minutes"
+      );
+    }
+    const operations = new Set(grant.allowedOperations);
+    if (
+      operations.size !== grant.allowedOperations.length ||
+      !operations.has("semantic_snapshot") ||
+      [...operations].some(
+        (operation) =>
+          operation !== "semantic_snapshot" &&
+          operation !== "screenshot_once"
+      )
+    ) {
+      throw new DesignModeGrantConflictError(
+        "Design Mode Grant operations are invalid"
+      );
+    }
+  }
+
+  #canTransitionDesignModeGrant(
+    current: DesignModeGrantRecord["state"],
+    next: DesignModeGrantRecord["state"]
+  ): boolean {
+    if (current === "requested") {
+      return [
+        "active",
+        "stopped",
+        "expired",
+        "revoked",
+        "invalidated"
+      ].includes(next);
+    }
+    if (current === "active") {
+      return [
+        "stopped",
+        "expired",
+        "revoked",
+        "invalidated"
+      ].includes(next);
+    }
+    return false;
+  }
+
+  #assertSnapshotOwnership(
+    authoringSessionId: string,
+    snapshot: PageSnapshotDefinition
+  ): void {
+    const grant = this.getDesignModeGrant(
+      snapshot.binding.designGrantId
+    );
+    if (
+      !grant ||
+      grant.authoringSessionId !== authoringSessionId ||
+      grant.state !== "active"
+    ) {
+      throw new DesignModeGrantConflictError(
+        "PageSnapshot requires an active Design Mode Grant"
+      );
+    }
+    if (
+      Date.parse(snapshot.capturedAt) < Date.parse(grant.issuedAt) ||
+      Date.parse(snapshot.capturedAt) >= Date.parse(grant.expiresAt)
+    ) {
+      throw new DesignModeGrantConflictError(
+        "PageSnapshot was captured outside the Design Mode Grant"
+      );
+    }
+    if (
+      grant.browserSessionId !== snapshot.binding.browserSessionId ||
+      grant.profileId !== snapshot.binding.profileId ||
+      grant.tabId !== snapshot.binding.tabId ||
+      grant.origin !== snapshot.origin ||
+      grant.pageEpoch !== snapshot.binding.pageEpoch
+    ) {
+      throw new DesignModeGrantConflictError(
+        "PageSnapshot does not match the exact Design Mode binding"
+      );
+    }
+    const evidence = this.#db
+      .prepare("SELECT * FROM evidence_transfers WHERE evidence_id = ?")
+      .get(snapshot.captureSource.evidenceId) as SqlRow | undefined;
+    if (
+      !evidence ||
+      !["acknowledged", "linked"].includes(String(evidence.state)) ||
+      String(evidence.run_id) !== snapshot.captureSource.runId ||
+      String(evidence.node_execution_id) !==
+        snapshot.captureSource.nodeExecutionId ||
+      String(evidence.session_id) !== snapshot.binding.browserSessionId ||
+      String(evidence.digest) !== snapshot.captureSource.assetRef.digest
+    ) {
+      throw new AuthoringConflictError(
+        "PageSnapshot Evidence provenance is incomplete or foreign"
+      );
+    }
+    const asset = this.#db
+      .prepare(
+        `SELECT
+           asset_id, digest, classification, retention_policy, retain_until
+         FROM asset_records
+         WHERE asset_id = ?`
+      )
+      .get(snapshot.captureSource.assetRef.id) as SqlRow | undefined;
+    if (
+      !asset ||
+      String(asset.digest) !== snapshot.captureSource.assetRef.digest
+    ) {
+      throw new AuthoringConflictError(
+        "PageSnapshot Asset provenance is incomplete or foreign"
+      );
+    }
+    if (
+      String(asset.classification) !== snapshot.classification ||
+      String(asset.retention_policy) !== "restricted_24h" ||
+      asset.retain_until == null ||
+      Date.parse(String(asset.retain_until)) >
+        Date.parse(snapshot.capturedAt) + 24 * 60 * 60 * 1000
+    ) {
+      throw new AuthoringConflictError(
+        "PageSnapshot Asset retention or classification is invalid"
+      );
+    }
+    const rawLifetime =
+      Date.parse(snapshot.rawEvidenceExpiresAt) -
+      Date.parse(snapshot.capturedAt);
+    if (rawLifetime <= 0 || rawLifetime > 24 * 60 * 60 * 1000) {
+      throw new AuthoringConflictError(
+        "PageSnapshot raw Evidence retention exceeds 24 hours"
+      );
+    }
+    if (snapshot.screenshotEvidenceRef) {
+      if (!grant.allowedOperations.includes("screenshot_once")) {
+        throw new DesignModeGrantConflictError(
+          "Screenshot capture was not approved for this Design Mode Grant"
+        );
+      }
+      const priorScreenshot = this.#db
+        .prepare(
+          `SELECT 1 FROM authoring_page_snapshots
+           WHERE design_grant_id = ?
+             AND json_type(canonical_json, '$.screenshotEvidenceRef')
+               IS NOT NULL
+           LIMIT 1`
+        )
+        .get(grant.grantId);
+      if (priorScreenshot) {
+        throw new DesignModeGrantConflictError(
+          "The one-time screenshot approval was already consumed"
+        );
+      }
+      const screenshot = this.#db
+        .prepare(
+          `SELECT * FROM evidence_transfers WHERE evidence_id = ?`
+        )
+        .get(snapshot.screenshotEvidenceRef.id) as SqlRow | undefined;
+      if (
+        !screenshot ||
+        !["acknowledged", "linked"].includes(String(screenshot.state)) ||
+        String(screenshot.session_id) !==
+          snapshot.binding.browserSessionId ||
+        String(screenshot.digest) !==
+          snapshot.screenshotEvidenceRef.digest ||
+        Number(screenshot.size) !==
+          snapshot.screenshotEvidenceRef.sizeBytes ||
+        !["restricted", "confidential"].includes(
+          String(screenshot.classification)
+        )
+      ) {
+        throw new AuthoringConflictError(
+          "Screenshot Evidence provenance is incomplete or foreign"
+        );
+      }
+    }
+  }
+
+  #assertCandidateBundleInput(
+    input: SaveCandidateBundleInput,
+    recordDigest: string
+  ): void {
+    const bundle = input.bundle;
+    if (
+      bundle.authoringSession.id !== input.sessionId ||
+      bundle.authoringSession.revision !== input.expectedRevision
+    ) {
+      throw new CandidateBundleConflictError(
+        "Candidate Bundle source revision does not match the mutation"
+      );
+    }
+    if (
+      input.next.state !== "candidate" ||
+      input.next.candidateBundleRef?.id !== bundle.metadata.id ||
+      input.next.candidateBundleRef?.digest !== recordDigest
+    ) {
+      throw new CandidateBundleConflictError(
+        "Candidate Session transition does not reference the exact bundle"
+      );
+    }
+    const expectedTypes = [
+      "contracts",
+      "permissions",
+      "replay",
+      "risk",
+      "schema"
+    ] as const;
+    const receivedTypes = input.validationResults
+      .map((item) => item.checkType)
+      .sort();
+    if (
+      receivedTypes.length !== expectedTypes.length ||
+      receivedTypes.some((item, index) => item !== expectedTypes[index])
+    ) {
+      throw new CandidateBundleConflictError(
+        "Candidate Bundle requires exactly one result for every validation check"
+      );
+    }
+    for (const validation of input.validationResults) {
+      assertTimestamp(validation.createdAt, "validation.createdAt");
+      const summary = bundle.validation[validation.checkType];
+      if (
+        validation.bundleId !== bundle.metadata.id ||
+        validation.valid !== summary.valid ||
+        validation.issueCount !== summary.issueCount
+      ) {
+        throw new CandidateBundleConflictError(
+          `Candidate validation mismatch: ${validation.checkType}`
+        );
+      }
+    }
+  }
+
   #readOutbox(row: SqlRow): OutboxMessage {
     return {
       id: String(row.id),
@@ -4625,6 +6548,38 @@ export class SqlitePersistence implements Persistence {
       ...(row.observed_at == null
         ? {}
         : { observedAt: String(row.observed_at) })
+    };
+  }
+
+  #readBrowserPageObservation(row: SqlRow): BrowserPageObservationRecord {
+    return {
+      sessionId: String(row.session_id),
+      browserInstanceId: String(row.browser_instance_id),
+      tabId: Number(row.tab_id),
+      ...(row.window_id == null ? {} : { windowId: Number(row.window_id) }),
+      origin: String(row.origin),
+      pathname: String(row.pathname),
+      contentScriptReady: Number(row.content_script_ready) === 1,
+      authentication:
+        String(row.authentication) as BrowserPageObservationRecord["authentication"],
+      ...(row.authentication_context_ref == null
+        ? {}
+        : {
+            authenticationContextRef: String(
+              row.authentication_context_ref
+            )
+          }),
+      observationState:
+        String(
+          row.observation_state
+        ) as BrowserPageObservationRecord["observationState"],
+      pageEpoch: String(row.page_epoch),
+      observerCapabilityId: String(row.observer_capability_id),
+      revision: Number(row.revision),
+      observedAt: String(row.observed_at),
+      ...(row.reason_code == null
+        ? {}
+        : { reasonCode: String(row.reason_code) })
     };
   }
 }

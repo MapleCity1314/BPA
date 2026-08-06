@@ -27,6 +27,18 @@ bpa run <workflow-id> \
   --input '{"key":"value"}'
 ```
 
+在 Windows PowerShell、批处理或多层自动化工具中，不要把含双引号的 JSON 继续嵌入
+命令字符串。`workflow-run` 支持从 UTF-8 文件读取输入，避免 PowerShell、`cmd.exe` 和
+CLI 之间发生二次转义：
+
+```powershell
+bpa workflow-run <workflow-id> `
+  --version <exact-version> `
+  --input-file C:\BPA\run\workflow-input.json
+```
+
+`--input` 与 `--input-file` 不能同时使用，输入文件上限为 64 KiB。
+
 当前 CLI 的 `run` 命令不提供资源槽位参数。需要绑定浏览器的 v1alpha3 Workflow
 应从工作台启动，或由受信 Control Client 显式提交 `resourceBindings`。
 

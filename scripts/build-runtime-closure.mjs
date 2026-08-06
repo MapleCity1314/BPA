@@ -22,9 +22,28 @@ import {
 } from "./release-gates.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
+const pinnedNodeVersion = (
+  await readFile(join(repositoryRoot, ".nvmrc"), "utf8")
+).trim();
 const outputRoot = resolve(process.argv[2] ?? "");
+const targetPlatform = process.env.BPA_TARGET_PLATFORM ?? process.platform;
+const targetArchitecture =
+  process.env.BPA_TARGET_ARCHITECTURE ?? process.arch;
+const targetNodeVersion =
+  process.env.BPA_TARGET_NODE_VERSION ?? process.versions.node;
+const targetNodeExecutable = resolve(
+  process.env.BPA_TARGET_NODE_EXECUTABLE ?? process.execPath
+);
+const targetSqliteBinary = process.env.BPA_TARGET_SQLITE_BINARY
+  ? resolve(process.env.BPA_TARGET_SQLITE_BINARY)
+  : undefined;
+const targetNativeHostExecutable =
+  process.env.BPA_TARGET_NATIVE_HOST_EXECUTABLE
+    ? resolve(process.env.BPA_TARGET_NATIVE_HOST_EXECUTABLE)
+    : undefined;
 const maximumBytes = Number(
-  process.env.BPA_RUNTIME_MAX_BYTES ?? 160 * 1024 * 1024
+  process.env.BPA_RUNTIME_MAX_BYTES ??
+    (targetPlatform === "win32" ? 256 : 160) * 1024 * 1024
 );
 
 if (
@@ -35,18 +54,44 @@ if (
 ) {
   throw new Error("Provide a dedicated runtime closure output directory");
 }
+if (process.versions.node !== pinnedNodeVersion) {
+  throw new Error(
+    `Runtime closure must be built by pinned Node.js ${pinnedNodeVersion}`
+  );
+}
+const supportedTarget =
+  (targetPlatform === "darwin" && targetArchitecture === "arm64") ||
+  (targetPlatform === "win32" && targetArchitecture === "x64");
+if (!supportedTarget) {
+  throw new Error(
+    `Runtime closure target is unsupported: ${targetPlatform}-${targetArchitecture}`
+  );
+}
+if (!/^24\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u.test(targetNodeVersion)) {
+  throw new Error(`Target Node.js version is invalid: ${targetNodeVersion}`);
+}
+if (targetNodeVersion !== pinnedNodeVersion) {
+  throw new Error(
+    `Target Node.js ${targetNodeVersion} does not match pinned ${pinnedNodeVersion}`
+  );
+}
 if (
-  process.platform !== "darwin" ||
-  process.arch !== "arm64" ||
-  process.versions.node.split(".")[0] !== "24"
+  (targetPlatform !== process.platform ||
+    targetArchitecture !== process.arch) &&
+  !targetSqliteBinary
 ) {
   throw new Error(
-    "Runtime closure must be built by the packaged Node.js 24 darwin-arm64 executable"
+    "Cross-platform closure requires BPA_TARGET_SQLITE_BINARY"
+  );
+}
+if (targetPlatform === "win32" && !targetNativeHostExecutable) {
+  throw new Error(
+    "Windows closure requires BPA_TARGET_NATIVE_HOST_EXECUTABLE"
   );
 }
 const trackedChanges = execFileSync(
   "git",
-  ["status", "--porcelain=v1", "--untracked-files=no"],
+  ["status", "--porcelain=v1", "--untracked-files=all"],
   { cwd: repositoryRoot, encoding: "utf8" }
 ).trim();
 if (trackedChanges.length > 0) {
@@ -61,7 +106,19 @@ const gitCommit = execFileSync("git", ["rev-parse", "HEAD"], {
 
 const entryPoints = {
   "bpa-core": join(repositoryRoot, "apps/local-core/src/main.ts"),
+  "bpa-core-launcher": join(
+    repositoryRoot,
+    "scripts/windows-core-launcher.mjs"
+  ),
+  "bpa-core-identity": join(
+    repositoryRoot,
+    "scripts/verify-core-process-identity.mjs"
+  ),
   bpa: join(repositoryRoot, "apps/cli/src/main.ts"),
+  "bpa-console-host": join(
+    repositoryRoot,
+    "apps/console-host/src/main.ts"
+  ),
   "bpa-native-host": join(
     repositoryRoot,
     "apps/native-host/src/main.ts"
@@ -78,6 +135,10 @@ const entryPoints = {
   "bpa-release-scan": join(
     repositoryRoot,
     "scripts/scan-release-contents.mjs"
+  ),
+  "bpa-sqlite-tool": join(
+    repositoryRoot,
+    "scripts/windows-sqlite-tool.mjs"
   )
 };
 
@@ -128,6 +189,28 @@ async function copyRuntimeDependency(name, files, from = repositoryRoot) {
   };
 }
 
+async function copyAdapterManifests() {
+  const targetNames = new Set();
+  for (const directory of await readdir(join(repositoryRoot, "adapters"), {
+    withFileTypes: true
+  })) {
+    if (!directory.isDirectory()) continue;
+    const sourceRoot = join(repositoryRoot, "adapters", directory.name);
+    for (const entry of await readdir(sourceRoot, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".adapter.yaml")) continue;
+      if (targetNames.has(entry.name)) {
+        throw new Error(`Duplicate packaged Adapter filename: ${entry.name}`);
+      }
+      targetNames.add(entry.name);
+      await copyFile(
+        join(sourceRoot, entry.name),
+        join(outputRoot, "assets/adapters", entry.name)
+      );
+    }
+  }
+  if (targetNames.size === 0) throw new Error("No Adapter manifests found");
+}
+
 async function collectFiles(directory, base = directory) {
   const files = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -160,7 +243,7 @@ await build({
   format: "esm",
   target: "node24",
   packages: "bundle",
-  external: ["better-sqlite3"],
+  external: ["better-sqlite3", "@bpa/sqlite-observability"],
   banner: {
     js: 'import { createRequire as __bpaCreateRequire } from "node:module"; const require = __bpaCreateRequire(import.meta.url);'
   },
@@ -189,10 +272,7 @@ await copyDirectory(
   join(repositoryRoot, "workflows/examples"),
   join(outputRoot, "assets/workflows")
 );
-await copyFile(
-  join(repositoryRoot, "adapters/doudian/doudian.adapter.yaml"),
-  join(outputRoot, "assets/adapters/doudian.adapter.yaml")
-);
+await copyAdapterManifests();
 await copyDirectory(
   join(repositoryRoot, "assistance-profiles/core"),
   join(outputRoot, "assets/assistance-profiles")
@@ -205,10 +285,17 @@ await copyDirectory(
 const betterSqlite = await copyRuntimeDependency("better-sqlite3", [
   "package.json",
   "LICENSE",
-  "lib",
-  "build/Release/better_sqlite3.node"
+  "lib"
 ]);
 const betterSqlitePath = await packageDirectory("better-sqlite3", repositoryRoot);
+await copyFile(
+  targetSqliteBinary ??
+    join(betterSqlitePath, "build/Release/better_sqlite3.node"),
+  join(
+    outputRoot,
+    "node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+  )
+);
 const bindings = await copyRuntimeDependency(
   "bindings",
   ["package.json", "LICENSE.md", "bindings.js"],
@@ -220,8 +307,71 @@ const fileUriToPath = await copyRuntimeDependency(
   ["package.json", "LICENSE", "index.js"],
   bindingsPath
 );
-await copyFile(process.execPath, join(outputRoot, "node/bin/node"));
-await chmod(join(outputRoot, "node/bin/node"), 0o755);
+const sqliteObservabilityRoot = join(
+  repositoryRoot,
+  "packages/sqlite-observability"
+);
+const sqliteObservabilityPackage = JSON.parse(
+  await readFile(join(sqliteObservabilityRoot, "package.json"), "utf8")
+);
+const packagedSqliteObservabilityRoot = join(
+  outputRoot,
+  "node_modules/@bpa/sqlite-observability"
+);
+await copyFile(
+  join(sqliteObservabilityRoot, "index.js"),
+  join(packagedSqliteObservabilityRoot, "index.js")
+);
+await writeFile(
+  join(packagedSqliteObservabilityRoot, "package.json"),
+  `${JSON.stringify(
+    {
+      name: sqliteObservabilityPackage.name,
+      version: sqliteObservabilityPackage.version,
+      private: true,
+      license: sqliteObservabilityPackage.license,
+      type: "module",
+      main: "index.js",
+      exports: { ".": "./index.js" }
+    },
+    null,
+    2
+  )}\n`
+);
+const sqliteObservability =
+  targetPlatform === "darwin" && targetArchitecture === "arm64"
+    ? {
+        status: "available",
+        entryPoint: "sqlite3_bpasqliteobservability_init",
+        path: "node_modules/@bpa/sqlite-observability/dist/bpa_sqlite_observability.dylib"
+      }
+    : {
+        status: "unsupported_platform",
+        target: `${targetPlatform}-${targetArchitecture}`
+      };
+if (sqliteObservability.status === "available") {
+  await copyFile(
+    join(
+      sqliteObservabilityRoot,
+      "dist/bpa_sqlite_observability.dylib"
+    ),
+    join(outputRoot, sqliteObservability.path)
+  );
+}
+const packagedNodeRelative =
+  targetPlatform === "win32" ? "node/node.exe" : "node/bin/node";
+await copyFile(
+  targetNodeExecutable,
+  join(outputRoot, packagedNodeRelative)
+);
+if (targetPlatform !== "win32") {
+  await chmod(join(outputRoot, packagedNodeRelative), 0o755);
+} else {
+  await copyFile(
+    targetNativeHostExecutable,
+    join(outputRoot, "bin/bpa-native-host.exe")
+  );
+}
 
 const rootPackage = JSON.parse(
   await readFile(join(repositoryRoot, "package.json"), "utf8")
@@ -229,10 +379,62 @@ const rootPackage = JSON.parse(
 const release = createReleaseMetadata({
   runtimeVersion: String(rootPackage.version),
   gitCommit,
-  nodeVersion: process.versions.node,
-  platform: process.platform,
-  architecture: process.arch
+  nodeVersion: targetNodeVersion,
+  platform: targetPlatform,
+  architecture: targetArchitecture
 });
+const extensionManifest = JSON.parse(
+  await readFile(join(outputRoot, "extension/manifest.json"), "utf8")
+);
+if (
+  extensionManifest.version !== release.runtimeVersion ||
+  extensionManifest.version_name !== release.identity
+) {
+  throw new Error(
+    `Browser Bridge identity mismatch: expected ${release.identity}, got ${String(
+      extensionManifest.version_name ?? extensionManifest.version
+    )}`
+  );
+}
+if (targetPlatform === "darwin") {
+  const wrapperTargets = {
+    bpa: "bpa.js",
+    "bpa-core": "bpa-core.js",
+    "bpa-native-host": "bpa-native-host.js",
+    "bpa-mcp": "bpa-mcp.js"
+  };
+  for (const [name, target] of Object.entries(wrapperTargets)) {
+    const wrapperPath = join(outputRoot, "bin", name);
+    const coreEnvironment = name === "bpa-core"
+      ? `if [[ -z "\${BPA_HOME:-}" ]]; then
+  print -u2 "BPA_HOME is required to start BPA Core."
+  exit 1
+fi
+CORE_ENV="\$BPA_HOME/core.env"
+if [[ -f "\$CORE_ENV" ]]; then
+  if [[ "$(stat -f '%Su:%Lp' "\$CORE_ENV")" != "$(id -un):600" ]]; then
+    print -u2 "BPA Core configuration owner or permissions are invalid."
+    exit 1
+  fi
+  set -a
+  source "\$CORE_ENV"
+  set +a
+fi
+`
+      : "";
+    await writeFile(
+      wrapperPath,
+      `#!/bin/zsh
+set -euo pipefail
+SCRIPT_ROOT="\${0:A:h}"
+VERSION_ROOT="\${SCRIPT_ROOT:h}"
+${coreEnvironment}export BPA_RUNTIME_ID="${release.identity}"
+exec "\$VERSION_ROOT/node/bin/node" "\$VERSION_ROOT/bin/${target}" "\$@"
+`
+    );
+    await chmod(wrapperPath, 0o755);
+  }
+}
 const migrationSource = await readFile(
   join(repositoryRoot, "packages/persistence-sqlite/src/migrations.ts"),
   "utf8"
@@ -254,7 +456,10 @@ await writeFile(
       private: true,
       type: "module",
       engines: { node: ">=24 <25" },
-      dependencies: { "better-sqlite3": betterSqlite.version },
+      dependencies: {
+        "better-sqlite3": betterSqlite.version,
+        "@bpa/sqlite-observability": sqliteObservabilityPackage.version
+      },
       bpaRelease: release
     },
     null,
@@ -285,7 +490,13 @@ await writeFile(
           name: dependency.name,
           versionInfo: dependency.version,
           licenseConcluded: dependency.license
-        }))
+        })),
+        {
+          SPDXID: "SPDXRef-Package-bpa-sqlite-observability",
+          name: sqliteObservabilityPackage.name,
+          versionInfo: sqliteObservabilityPackage.version,
+          licenseConcluded: "NOASSERTION"
+        }
       ]
     },
     null,
@@ -347,7 +558,17 @@ await writeFile(
     {
       schemaVersion: 2,
       runtimeVersion: rootPackage.version,
+      browserProtocol: "bpa.browser/2",
+      browserBridge: {
+        buildId: release.identity,
+        extensionVersion: release.runtimeVersion
+      },
       databaseSchemaVersion,
+      sqliteObservability,
+      source: {
+        gitCommit: release.gitCommit,
+        dirty: false
+      },
       release,
       gitCommit: release.gitCommit,
       nodeVersion: release.nodeVersion,

@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import {
-  compileWorkflowV1Alpha2,
+  compileWorkflowV1Alpha3,
   contentDigest,
   parseWorkflowYaml,
   type CatalogResolver
@@ -14,9 +14,11 @@ import {
   formatValidationErrors,
   validateAssistanceProfile,
   validateNode,
-  validateWorkflowV1Alpha2,
+  validateNodeV1Alpha2,
+  validateWorkflowV1Alpha3,
   type AssistanceProfileDefinition,
-  type NodeDefinition
+  type NodeDefinition,
+  type NodeDefinitionV1Alpha2
 } from "@bpa/schemas";
 import type { ArtifactRef, JsonValue } from "@bpa/workflow-ir";
 import { describe, expect, it } from "vitest";
@@ -35,10 +37,16 @@ function catalog(): CatalogResolver {
     readdirSync(new URL("nodes/core/", root))
       .filter((name) => name.endsWith(".node.yaml"))
       .map((name) => {
-        const node = loadAsset(`nodes/core/${name}`) as NodeDefinition;
-        if (!validateNode(node)) {
+        const node = loadAsset(`nodes/core/${name}`) as
+          | NodeDefinition
+          | NodeDefinitionV1Alpha2;
+        const validator =
+          node.apiVersion === "bpa/v1alpha2"
+            ? validateNodeV1Alpha2
+            : validateNode;
+        if (!validator(node)) {
           throw new Error(
-            `${name}: ${formatValidationErrors(validateNode.errors).join("; ")}`
+            `${name}: ${formatValidationErrors(validator.errors).join("; ")}`
           );
         }
         return [
@@ -118,10 +126,10 @@ function compilePriorityWorkflow() {
     "workflows/examples/doudian.priority-items-readonly-inspect.workflow.yaml"
   );
   expect(
-    validateWorkflowV1Alpha2(workflow),
-    formatValidationErrors(validateWorkflowV1Alpha2.errors).join("; ")
+    validateWorkflowV1Alpha3(workflow),
+    formatValidationErrors(validateWorkflowV1Alpha3.errors).join("; ")
   ).toBe(true);
-  return compileWorkflowV1Alpha2(workflow, catalog());
+  return compileWorkflowV1Alpha3(workflow, catalog());
 }
 
 function dependencies(): EngineDependencies {

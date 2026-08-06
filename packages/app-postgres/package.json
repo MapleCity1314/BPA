@@ -1,0 +1,15 @@
+{
+  "name": "@bpa/app-postgres",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.5"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

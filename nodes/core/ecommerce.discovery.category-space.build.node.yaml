@@ -1,0 +1,31 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: ecommerce.discovery.category-space.build
+  version: 1.0.0
+  title: 建立三平台探查类目空间
+  description: 先按消费需求、人群和场景建立研究入口，再将三平台作为探查分支；官方类目未经证据确认时保持未确认。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [intent, discovery, exclusionRules]
+  properties:
+    intent: { type: object }
+    discovery: { type: object }
+    exclusionRules: { type: array, maxItems: 50, items: { type: string } }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [schemaVersion, intentId, principle, consumerNeedSpace, platformBranches, officialCategoryStatus, exclusionRules]
+  properties:
+    schemaVersion: { const: category-space/v0.3 }
+    intentId: { type: string }
+    principle: { type: string }
+    consumerNeedSpace: { type: object }
+    platformBranches: { type: array, maxItems: 3, items: { type: object } }
+    officialCategoryStatus: { const: UNCONFIRMED }
+    exclusionRules: { type: array, items: { type: string } }
+risk: { level: R0, permissions: [] }
+execution: { timeoutDefault: 10s, idempotency: pure, cancellable: true }
+errors: [TEAM_HANDLER_INPUT_INVALID, TEAM_HANDLER_RESULT_LIMIT_EXCEEDED, TEAM_HANDLER_CANCELLED, TEAM_HANDLER_TIMEOUT]

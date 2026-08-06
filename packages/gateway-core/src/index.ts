@@ -13,10 +13,8 @@ import {
   type KeyObject
 } from "node:crypto";
 
-export const BROWSER_PROTOCOL = "bpa.browser/1" as const;
-export const BROWSER_PROTOCOL_VERSION = "1.0.0" as const;
-export const DEFAULT_BPA_EXTENSION_ID =
-  "hoobbnlkcdhbemedpfhhoicklplggmbc";
+export const BROWSER_PROTOCOL = "bpa.browser/2" as const;
+export const BROWSER_PROTOCOL_VERSION = "2.0.0" as const;
 export const BROWSER_PROTOCOL_MAX_MESSAGE_BYTES = 512 * 1024;
 export const EVIDENCE_CHUNK_BYTES = 256 * 1024;
 export const RESUME_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
@@ -123,6 +121,7 @@ export class ProtocolViolationError extends Error {
     readonly code:
       | "MESSAGE_TOO_LARGE"
       | "SCHEMA_INVALID"
+      | "PROTOCOL_UPGRADE_REQUIRED"
       | "SESSION_MISMATCH"
       | "SEQUENCE_REPLAY"
       | "MESSAGE_REPLAY",
@@ -158,6 +157,17 @@ export class ProtocolSessionGuard {
         `Message is ${encoded} bytes; maximum is ${BROWSER_PROTOCOL_MAX_MESSAGE_BYTES}`
       );
     }
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      "protocol" in value &&
+      (value as { protocol?: unknown }).protocol !== BROWSER_PROTOCOL
+    ) {
+      throw new ProtocolViolationError(
+        "PROTOCOL_UPGRADE_REQUIRED",
+        `Browser Bridge must use ${BROWSER_PROTOCOL}@${BROWSER_PROTOCOL_VERSION}`
+      );
+    }
     if (!validateBrowserProtocolMessage(value)) {
       throw new ProtocolViolationError(
         "SCHEMA_INVALID",
@@ -191,14 +201,8 @@ export class ProtocolSessionGuard {
   }
 }
 
-export function assertNativeHostOrigin(
-  origin: string,
-  allowedExtensionId: string
-): void {
-  const expected = `chrome-extension://${allowedExtensionId}/`;
-  if (origin !== expected) {
-    throw new Error(`Native host origin rejected: ${origin}`);
-  }
-}
-
+export {
+  DEFAULT_BPA_EXTENSION_ID,
+  assertNativeHostOrigin
+} from "@bpa/native-host-contract";
 export * from "./signing-key.js";

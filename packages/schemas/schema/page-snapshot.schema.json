@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/authoring/page-snapshot/v1alpha1",
+  "title": "BPA Authoring PageSnapshot v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "snapshotId",
+    "pageState",
+    "capturedAt",
+    "origin",
+    "path",
+    "binding",
+    "captureSource",
+    "classification",
+    "untrusted",
+    "redaction",
+    "semanticNodes",
+    "contentDigest",
+    "sizeBytes",
+    "rawEvidenceExpiresAt"
+  ],
+  "properties": {
+    "apiVersion": { "const": "bpa.authoring/v1alpha1" },
+    "kind": { "const": "PageSnapshot" },
+    "snapshotId": { "$ref": "#/$defs/id" },
+    "pageState": { "$ref": "#/$defs/id" },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "origin": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://[^/?#]+$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "pattern": "^/"
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "designGrantId",
+        "browserSessionId",
+        "profileId",
+        "tabId",
+        "pageEpoch"
+      ],
+      "properties": {
+        "designGrantId": { "$ref": "#/$defs/id" },
+        "browserSessionId": { "$ref": "#/$defs/id" },
+        "profileId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "tabId": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "pageEpoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      }
+    },
+    "captureSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runId",
+        "nodeExecutionId",
+        "evidenceId",
+        "assetRef"
+      ],
+      "properties": {
+        "runId": { "$ref": "#/$defs/id" },
+        "nodeExecutionId": { "$ref": "#/$defs/id" },
+        "evidenceId": { "$ref": "#/$defs/id" },
+        "assetRef": { "$ref": "#/$defs/contentRef" }
+      }
+    },
+    "classification": {
+      "enum": ["restricted", "confidential"]
+    },
+    "untrusted": { "const": true },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["applied", "policyVersion", "coverage"],
+      "properties": {
+        "applied": { "const": true },
+        "policyVersion": { "$ref": "#/$defs/semver" },
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "passwords",
+            "tokens",
+            "cookies",
+            "hiddenInputs",
+            "personalData",
+            "largeText"
+          ],
+          "properties": {
+            "passwords": { "const": true },
+            "tokens": { "const": true },
+            "cookies": { "const": true },
+            "hiddenInputs": { "const": true },
+            "personalData": { "const": true },
+            "largeText": { "const": true }
+          }
+        }
+      }
+    },
+    "semanticNodes": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": { "$ref": "#/$defs/semanticNode" }
+    },
+    "contentDigest": { "$ref": "#/$defs/digest" },
+    "sizeBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5242880
+    },
+    "screenshotEvidenceRef": { "$ref": "#/$defs/contentRef" },
+    "rawEvidenceExpiresAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "semanticNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "order", "states", "digest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "parentId": {
+          "oneOf": [
+            { "$ref": "#/$defs/id" },
+            { "type": "null" }
+          ]
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4999
+        },
+        "role": { "$ref": "#/$defs/boundedText" },
+        "accessibleName": { "$ref": "#/$defs/boundedText" },
+        "label": { "$ref": "#/$defs/boundedText" },
+        "text": { "$ref": "#/$defs/boundedText" },
+        "region": { "$ref": "#/$defs/boundedText" },
+        "stableAttributes": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^(?:data-[a-z0-9_-]+|name|href|type|aria-[a-z0-9_-]+)$"
+          },
+          "additionalProperties": { "$ref": "#/$defs/boundedText" },
+          "maxProperties": 30
+        },
+        "states": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["visible", "interactive"],
+          "properties": {
+            "visible": { "type": "boolean" },
+            "interactive": { "type": "boolean" },
+            "enabled": { "type": "boolean" },
+            "required": { "type": "boolean" },
+            "checked": { "type": "boolean" },
+            "selected": { "type": "boolean" }
+          }
+        },
+        "cssDiagnostic": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "contentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "digest", "sizeBytes"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10485760
+        }
+      }
+    },
+    "boundedText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+      "maxLength": 160
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  }
+}

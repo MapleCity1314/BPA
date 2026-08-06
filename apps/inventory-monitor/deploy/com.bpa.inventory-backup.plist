@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.bpa.inventory-backup</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/sh</string><string>/Users/yyerybz/Codex/BPA/apps/inventory-monitor/deploy/run-backup.sh</string>
+    <string>/Users/yyerybz/Library/Application Support/BPA/inventory-backup.env</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/yyerybz/Codex/BPA</string>
+  <key>ProcessType</key><string>Background</string>
+  <key>ThrottleInterval</key><integer>60</integer>
+  <key>LowPriorityIO</key><true/>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>15</integer></dict>
+  <key>StandardOutPath</key><string>/Users/yyerybz/Library/Application Support/BPA/logs/inventory-backup.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/yyerybz/Library/Application Support/BPA/logs/inventory-backup.err.log</string>
+</dict></plist>

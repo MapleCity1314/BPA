@@ -1,0 +1,81 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const collector = resolve("scripts/collect-macos-runtime-metrics.mjs");
+
+describe("runtime resource collector", () => {
+  it("copies only validated Core metrics fields into the sample", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-collector-"));
+    try {
+      const metricsPath = join(root, "core-runtime-metrics.json");
+      writeFileSync(
+        metricsPath,
+        `${JSON.stringify({
+          schema: "bpa.core-runtime-metrics/1",
+          sampledAt: "2026-08-06T12:00:00.000Z",
+          pid: 42,
+          runtimeIdentity: "0.6.0-test",
+          ignored: "must not escape",
+          sqlite: {
+            measurement: "same_connection_db_status64",
+            configuredCacheBytes: 16_384_000,
+            pageSizeBytes: 4096,
+            cacheSizeSetting: -16000,
+            cacheUsedBytes: 8192,
+            schemaUsedBytes: 1024,
+            statementUsedBytes: 2048,
+            ignored: "must not escape"
+          }
+        })}\n`
+      );
+      const sample = JSON.parse(
+        execFileSync(
+          process.execPath,
+          [collector, "--core-metrics", metricsPath, "--label", "test.none"],
+          { encoding: "utf8" }
+        )
+      );
+
+      expect(sample.coreMetrics).toEqual({
+        status: "available",
+        sampledAt: "2026-08-06T12:00:00.000Z",
+        pid: 42,
+        runtimeIdentity: "0.6.0-test",
+        sqlite: {
+          measurement: "same_connection_db_status64",
+          configuredCacheBytes: 16_384_000,
+          pageSizeBytes: 4096,
+          cacheSizeSetting: -16000,
+          cacheUsedBytes: 8192,
+          schemaUsedBytes: 1024,
+          statementUsedBytes: 2048
+        }
+      });
+      expect(JSON.stringify(sample)).not.toContain("must not escape");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks malformed metrics invalid without copying their contents", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-collector-"));
+    try {
+      const metricsPath = join(root, "core-runtime-metrics.json");
+      writeFileSync(metricsPath, "not-json secret-value\n");
+      const sample = JSON.parse(
+        execFileSync(
+          process.execPath,
+          [collector, "--core-metrics", metricsPath, "--label", "test.none"],
+          { encoding: "utf8" }
+        )
+      );
+      expect(sample.coreMetrics).toEqual({ status: "invalid" });
+      expect(JSON.stringify(sample)).not.toContain("secret-value");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

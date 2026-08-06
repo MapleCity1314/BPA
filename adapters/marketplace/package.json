@@ -1,0 +1,16 @@
+{
+  "name": "@bpa/adapter-marketplace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@bpa/schemas": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^21.1.7",
+    "jsdom": "^27.0.1"
+  }
+}

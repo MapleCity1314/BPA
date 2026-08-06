@@ -1,12 +1,13 @@
 import type { RiskSignal, TimingPolicy } from "@bpa/schemas";
 import {
   validateDoudianEditorTarget,
+  validateDoudianInventorySnapshotInput,
   validateDoudianScopeRestoreTarget
 } from "@bpa/adapter-doudian";
+import { validateMarketplaceProbeInput } from "@bpa/adapter-marketplace";
 import {
   validPageEpoch,
-  validateCapabilityRoute,
-  type ExtensionNodeId
+  validateCapabilityRoute
 } from "./capability-manifest";
 
 export interface ContentActionRequest {
@@ -32,6 +33,14 @@ export interface ContentActionResult {
 }
 
 export interface ContentActionHandlers {
+  readonly "ecommerce.marketplace.search-results.read": (
+    input: Readonly<Record<string, unknown>>,
+    request: ContentActionRequest
+  ) => Promise<ContentActionResult>;
+  readonly "browser.design.snapshot.capture": (
+    input: Readonly<Record<string, unknown>>,
+    request: ContentActionRequest
+  ) => Promise<ContentActionResult>;
   readonly "doudian.shop.context.read": (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
@@ -41,6 +50,14 @@ export interface ContentActionHandlers {
     request: ContentActionRequest
   ) => Promise<ContentActionResult>;
   readonly "doudian.product.scope.restore": (
+    input: Readonly<Record<string, unknown>>,
+    request: ContentActionRequest
+  ) => Promise<ContentActionResult>;
+  readonly "doudian.inventory.product.snapshot.read": (
+    input: Readonly<Record<string, unknown>>,
+    request: ContentActionRequest
+  ) => Promise<ContentActionResult>;
+  readonly "doudian.orders.recent.read": (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
   ) => Promise<ContentActionResult>;
@@ -176,6 +193,52 @@ function scopeRestoreIdentityMatches(
   }
 }
 
+function designCaptureInputValid(
+  input: Readonly<Record<string, unknown>>,
+  requestPageEpoch: string
+): boolean {
+  const allowed = new Set([
+    "authoringSessionId",
+    "designGrantId",
+    "pageState",
+    "profileId",
+    "pageEpoch"
+  ]);
+  return (
+    Object.keys(input).every((key) => allowed.has(key)) &&
+    ["authoringSessionId", "designGrantId", "pageState"].every(
+      (key) =>
+        typeof input[key] === "string" &&
+        /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u.test(
+          input[key] as string
+        )
+    ) &&
+    typeof input.profileId === "string" &&
+    input.profileId.length > 0 &&
+    input.profileId.length <= 300 &&
+    typeof input.pageEpoch === "string" &&
+    validPageEpoch(input.pageEpoch) &&
+    input.pageEpoch === requestPageEpoch
+  );
+}
+
+function marketplaceInputMatchesOrigin(
+  input: Readonly<Record<string, unknown>>,
+  currentUrl: URL
+): boolean {
+  try {
+    const validated = validateMarketplaceProbeInput(input);
+    const expectedOrigin = {
+      DOUYIN: "https://www.douyin.com",
+      TAOBAO: "https://s.taobao.com",
+      JD: "https://search.jd.com"
+    }[validated.platform];
+    return currentUrl.origin === expectedOrigin;
+  } catch {
+    return false;
+  }
+}
+
 export async function routeContentAction(input: {
   readonly request: ContentActionRequest;
   readonly currentUrl: string;
@@ -232,11 +295,62 @@ export async function routeContentAction(input: {
       "doudian.editor.priority-items.inspect" &&
     route.capability.nodeId !== "doudian.product.editor.open" &&
     route.capability.nodeId !== "doudian.product.scope.restore" &&
+    route.capability.nodeId !== "doudian.inventory.product.snapshot.read" &&
+    route.capability.nodeId !== "doudian.orders.recent.read" &&
+    route.capability.nodeId !== "ecommerce.marketplace.search-results.read" &&
+    route.capability.nodeId !== "browser.design.snapshot.capture" &&
     Object.keys(actionInput).length > 0
   ) {
     return failure(
       "INPUT_INVALID",
       "该只读页面动作不接受额外输入。",
+      request.pageEpoch
+    );
+  }
+  if (
+    route.capability.nodeId === "ecommerce.marketplace.search-results.read" &&
+    !marketplaceInputMatchesOrigin(actionInput, route.url)
+  ) {
+    return failure(
+      "MARKETPLACE_INPUT_INVALID",
+      "平台、关键词或数量与当前探查页不匹配。",
+      request.pageEpoch
+    );
+  }
+  if (
+    route.capability.nodeId === "doudian.inventory.product.snapshot.read"
+  ) {
+    try {
+      validateDoudianInventorySnapshotInput(actionInput);
+    } catch {
+      return failure(
+        "INVENTORY_INPUT_INVALID",
+        "库存快照目标与店铺身份无效。",
+        request.pageEpoch
+      );
+    }
+  }
+  if (route.capability.nodeId === "doudian.orders.recent.read") {
+    if (
+      Object.keys(actionInput).some((key) => !["shopId","shopName","lookbackMinutes"].includes(key)) ||
+      typeof actionInput.shopId !== "string" || !actionInput.shopId.trim() ||
+      typeof actionInput.shopName !== "string" || !actionInput.shopName.trim() ||
+      (actionInput.lookbackMinutes !== undefined && (
+        typeof actionInput.lookbackMinutes !== "number" ||
+        !Number.isSafeInteger(actionInput.lookbackMinutes) ||
+        Number(actionInput.lookbackMinutes) < 60 || Number(actionInput.lookbackMinutes) > 180
+      ))
+    ) {
+      return failure("RECENT_ORDER_INPUT_INVALID","近期订单读取目标无效。",request.pageEpoch);
+    }
+  }
+  if (
+    route.capability.nodeId === "browser.design.snapshot.capture" &&
+    !designCaptureInputValid(actionInput, request.pageEpoch)
+  ) {
+    return failure(
+      "DESIGN_CAPTURE_INPUT_INVALID",
+      "Design Mode 捕获输入与授权身份不完整。",
       request.pageEpoch
     );
   }
@@ -272,8 +386,15 @@ export async function routeContentAction(input: {
     );
   }
 
+  if (route.capability.executionTarget === "background") {
+    return failure(
+      "BACKGROUND_ORCHESTRATION_REQUIRED",
+      "该跨标签页能力只能由受信任的扩展后台编排。",
+      request.pageEpoch
+    );
+  }
   const handler = input.handlers[
-    route.capability.nodeId as ExtensionNodeId
+    route.capability.nodeId as keyof ContentActionHandlers
   ] as (
     actionInput: Readonly<Record<string, unknown>>,
     actionRequest: ContentActionRequest

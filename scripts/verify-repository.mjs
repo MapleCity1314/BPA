@@ -1,11 +1,14 @@
 import { access, readdir, readFile, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { promisify } from "node:util";
 import { parse } from "yaml";
 
 const root = resolve(import.meta.dirname, "..");
 const issues = [];
+const execFileAsync = promisify(execFile);
 
 async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
@@ -48,6 +51,27 @@ function parseSkillFrontmatter(content, path) {
 async function verifyRuntimeVersions() {
   const rootPackage = await readJson(join(root, "package.json"));
   const version = rootPackage.version;
+  const pinnedNodeVersion = (
+    await readFile(join(root, ".nvmrc"), "utf8")
+  ).trim();
+  if (!/^24\.[0-9]+\.[0-9]+$/u.test(pinnedNodeVersion)) {
+    issues.push(`.nvmrc must pin an exact Node.js 24 patch, got ${pinnedNodeVersion}`);
+  }
+  for (const workflow of [
+    ".github/workflows/ci.yml",
+    ".github/workflows/docs-pages.yml"
+  ]) {
+    await expectFileContains(
+      join(root, workflow),
+      "node-version-file: .nvmrc",
+      "CI pinned Node.js toolchain"
+    );
+  }
+  await expectFileContains(
+    join(root, "scripts/build-runtime-closure.mjs"),
+    "targetNodeVersion !== pinnedNodeVersion",
+    "Runtime closure pinned Node.js toolchain"
+  );
   const runtimePackages = [
     "apps/cli/package.json",
     "apps/extension/package.json",
@@ -92,6 +116,33 @@ async function verifyRuntimeVersions() {
     join(root, "scripts/package-macos-arm64.sh"),
     'EXPECTED_BASENAME="bpa-local-${RELEASE_IDENTITY}-macos-arm64.tar.gz"',
     "Package immutable release filename"
+  );
+  await expectFileContains(
+    join(root, "scripts/package-windows-x64.ps1"),
+    "bpa-local-$ReleaseIdentity-windows-x64.zip",
+    "Windows package immutable release filename"
+  );
+  for (const releaseScript of [
+    "scripts/package-windows-x64.sh",
+    "scripts/package-windows-x64.ps1",
+    "scripts/package-macos-arm64.sh",
+    "scripts/build-runtime-closure.mjs"
+  ]) {
+    await expectFileContains(
+      join(root, releaseScript),
+      "--untracked-files=all",
+      "Release dirty-tree gate including untracked files"
+    );
+  }
+  await expectFileContains(
+    join(root, "scripts/install-windows-x64.ps1"),
+    "Software\\Google\\Chrome\\NativeMessagingHosts\\com.bpa.browser",
+    "Windows current-user Native Host registration"
+  );
+  await expectFileContains(
+    join(root, "scripts/install-windows-x64.ps1"),
+    "runtime-manifest.json",
+    "Windows installer immutable release identity"
   );
   return version;
 }
@@ -513,10 +564,32 @@ async function verifyScripts() {
   const shellScripts = (await readdir(scriptDirectory))
     .filter((name) => name.endsWith(".sh"))
     .sort();
+  let indexedExecutablePaths;
+  if (process.platform === "win32") {
+    const { stdout } = await execFileAsync(
+      "git",
+      [
+        "ls-files",
+        "--stage",
+        "--",
+        ...shellScripts.map((filename) => `scripts/${filename}`)
+      ],
+      { cwd: root }
+    );
+    indexedExecutablePaths = new Set(
+      stdout
+        .split(/\r?\n/gu)
+        .filter((line) => line.startsWith("100755 "))
+        .map((line) => line.slice(line.indexOf("\t") + 1))
+    );
+  }
   for (const filename of shellScripts) {
     const path = join(scriptDirectory, filename);
-    const fileStat = await stat(path);
-    if ((fileStat.mode & 0o111) === 0) {
+    const executable =
+      process.platform === "win32"
+        ? indexedExecutablePaths?.has(`scripts/${filename}`)
+        : ((await stat(path)).mode & 0o111) !== 0;
+    if (!executable) {
       issues.push(`Shell script is not executable: scripts/${filename}`);
     }
   }
@@ -620,6 +693,18 @@ const assets = await verifyAssets();
 const skillCount = await verifySkills();
 const shellScriptCount = await verifyScripts();
 const sourceFileCount = await verifyDependencyBoundaries();
+try {
+  await execFileAsync(
+    process.execPath,
+    [join(root, "scripts/verify-doudian-alliance-skill.mjs"), "--source"]
+  );
+} catch (error) {
+  issues.push(
+    `Doudian alliance Skill delivery verification failed: ${
+      error instanceof Error ? error.message : String(error)
+    }`
+  );
+}
 
 if (issues.length > 0) {
   process.stderr.write(

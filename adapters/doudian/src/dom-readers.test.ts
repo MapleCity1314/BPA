@@ -69,7 +69,8 @@ const listSelectors = {
     ".ecom-g-pagination-total-text,[class*='pagination'] [class*='total']",
   current:
     ".ecom-g-pagination-item-active,[class*='pagination'] [aria-current='page']",
-  pages: "[class*='pagination'] [title],[class*='pagination'] [data-page]"
+  pages:
+    ".ecom-g-pagination-item[title],[class*='pagination-item-'][title],[class*='pagination'] [data-page]"
 } as const;
 
 const editorSelectors = {

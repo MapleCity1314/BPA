@@ -1,0 +1,1130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/browser-protocol/v2",
+  "title": "BPA Browser Protocol v2 Message",
+  "oneOf": [
+    { "$ref": "#/$defs/sessionHello" },
+    { "$ref": "#/$defs/sessionWelcome" },
+    { "$ref": "#/$defs/sessionResume" },
+    { "$ref": "#/$defs/capabilityReport" },
+    { "$ref": "#/$defs/pageObservation" },
+    { "$ref": "#/$defs/pageProbeRequest" },
+    { "$ref": "#/$defs/pageProbeResult" },
+    { "$ref": "#/$defs/command" },
+    { "$ref": "#/$defs/commandAck" },
+    { "$ref": "#/$defs/commandResult" },
+    { "$ref": "#/$defs/resultAck" },
+    { "$ref": "#/$defs/cancelRequest" },
+    { "$ref": "#/$defs/cancelAck" },
+    { "$ref": "#/$defs/cancelEffective" },
+    { "$ref": "#/$defs/heartbeat" },
+    { "$ref": "#/$defs/sessionError" },
+    { "$ref": "#/$defs/evidenceBegin" },
+    { "$ref": "#/$defs/evidenceChunk" },
+    { "$ref": "#/$defs/evidenceComplete" },
+    { "$ref": "#/$defs/evidenceAck" }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "baseProperties": {
+      "type": "object",
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 0 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "type": "string" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": { "type": "object" }
+      }
+    },
+    "envelopeRequired": {
+      "type": "array",
+      "prefixItems": [
+        { "const": "protocol" },
+        { "const": "version" },
+        { "const": "message_id" },
+        { "const": "session_id" },
+        { "const": "seq" },
+        { "const": "sent_at" },
+        { "const": "type" },
+        { "const": "trace_id" },
+        { "const": "payload" }
+      ]
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "versions",
+        "risk_level",
+        "permissions",
+        "routes"
+      ],
+      "properties": {
+        "node_id": { "$ref": "#/$defs/id" },
+        "versions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "risk_level": { "enum": ["R0", "R1", "R2", "R3", "R4"] },
+        "permissions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "routes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "origin",
+              "pathname_prefixes",
+              "observer_capability_id"
+            ],
+            "properties": {
+              "origin": { "type": "string", "format": "uri" },
+              "pathname_prefixes": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048,
+                  "pattern": "^/"
+                }
+              },
+              "observer_capability_id": { "$ref": "#/$defs/id" }
+            }
+          }
+        },
+        "adapter_id": { "$ref": "#/$defs/id" },
+        "adapter_version": { "$ref": "#/$defs/id" }
+      }
+    },
+    "tabRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["browser_instance_id", "tab_id", "origin"],
+      "properties": {
+        "browser_instance_id": { "$ref": "#/$defs/id" },
+        "tab_id": { "type": "integer", "minimum": 0 },
+        "window_id": { "type": "integer", "minimum": 0 },
+        "origin": { "type": "string", "format": "uri" }
+      }
+    },
+    "permissionGrant": {
+      "$ref": "https://bpa.local/schemas/permission/v1"
+    },
+    "coreSigningKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key_id", "algorithm", "public_key_spki_base64"],
+      "properties": {
+        "key_id": { "$ref": "#/$defs/id" },
+        "algorithm": { "const": "Ed25519" },
+        "public_key_spki_base64": {
+          "type": "string",
+          "minLength": 40,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+        }
+      }
+    },
+    "resultStatus": {
+      "enum": ["succeeded", "rejected", "failed", "timed_out", "cancelled", "uncertain"]
+    },
+    "browserFeatures": {
+      "type": "array",
+      "minItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "page_observation_v2",
+          "exact_tab_binding_v2",
+          "active_page_probe_v1"
+        ]
+      },
+      "allOf": [
+        { "contains": { "const": "page_observation_v2" } },
+        { "contains": { "const": "exact_tab_binding_v2" } },
+        { "contains": { "const": "active_page_probe_v1" } }
+      ]
+    },
+    "messageBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 0 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "type": "string" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": { "type": "object" }
+      }
+    },
+    "sessionHello": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "const": "new" },
+        "seq": { "const": 0 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "session.hello" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "browser_instance_id",
+            "extension_id",
+            "extension_version",
+            "bridge_build_id",
+            "supported_protocols",
+            "features",
+            "last_acked_command_seq"
+          ],
+          "properties": {
+            "browser_instance_id": { "$ref": "#/$defs/id" },
+            "extension_id": { "$ref": "#/$defs/id" },
+            "extension_version": { "$ref": "#/$defs/id" },
+            "bridge_build_id": { "$ref": "#/$defs/id" },
+            "supported_protocols": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "const": "bpa.browser/2" }
+            },
+            "features": { "$ref": "#/$defs/browserFeatures" },
+            "last_acked_command_seq": { "type": "integer", "minimum": 0 },
+            "resume_token": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "sessionWelcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "session.welcome" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "selected_protocol",
+            "heartbeat_ms",
+            "resume_token",
+            "resume_token_expires_at",
+            "max_message_bytes",
+            "core_signing_key"
+          ],
+          "properties": {
+            "selected_protocol": { "const": "bpa.browser/2" },
+            "heartbeat_ms": { "type": "integer", "minimum": 1000, "maximum": 120000 },
+            "resume_token": { "$ref": "#/$defs/id" },
+            "resume_token_expires_at": { "$ref": "#/$defs/timestamp" },
+            "core_signing_key": { "$ref": "#/$defs/coreSigningKey" },
+            "max_message_bytes": { "const": 524288 }
+          }
+        }
+      }
+    },
+    "sessionResume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "session.resume" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["accepted", "replay_from_command_seq"],
+          "properties": {
+            "accepted": { "type": "boolean" },
+            "replay_from_command_seq": { "type": "integer", "minimum": 0 },
+            "reason_code": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "capabilityReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "capability.report" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["capabilities", "manifest_digest", "features"],
+          "properties": {
+            "capabilities": {
+              "type": "array",
+              "maxItems": 500,
+              "items": { "$ref": "#/$defs/capability" }
+            },
+            "manifest_digest": { "$ref": "#/$defs/digest" },
+            "features": { "$ref": "#/$defs/browserFeatures" }
+          }
+        }
+      }
+    },
+    "pageObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "page.observation" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tab_ref",
+            "pathname",
+            "content_script_ready",
+            "authentication",
+            "observation_state",
+            "page_epoch",
+            "observation_revision",
+            "observer_capability_id",
+            "observed_at"
+          ],
+          "properties": {
+            "tab_ref": { "$ref": "#/$defs/tabRef" },
+            "pathname": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^/"
+            },
+            "content_script_ready": { "type": "boolean" },
+            "authentication": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["state"],
+                  "properties": {
+                    "state": { "enum": ["unknown", "anonymous"] }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["state", "context_ref"],
+                  "properties": {
+                    "state": { "enum": ["authenticated", "membership"] },
+                    "context_ref": { "$ref": "#/$defs/id" }
+                  }
+                }
+              ]
+            },
+            "observation_state": {
+              "enum": [
+                "content_script_missing",
+                "loading",
+                "probing",
+                "auth_required",
+                "challenge",
+                "ready",
+                "departed",
+                "stale"
+              ]
+            },
+            "page_epoch": { "$ref": "#/$defs/id" },
+            "observation_revision": { "type": "integer", "minimum": 1 },
+            "observer_capability_id": { "$ref": "#/$defs/id" },
+            "observed_at": { "$ref": "#/$defs/timestamp" },
+            "reason_code": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "pageProbeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "page.probe.request" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["request_id", "tab_ref", "deadline"],
+          "properties": {
+            "request_id": { "$ref": "#/$defs/id" },
+            "tab_ref": { "$ref": "#/$defs/tabRef" },
+            "deadline": { "$ref": "#/$defs/timestamp" }
+          }
+        }
+      }
+    },
+    "pageProbeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "page.probe.result" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "tab_ref",
+            "accepted",
+            "observation_revision"
+          ],
+          "properties": {
+            "request_id": { "$ref": "#/$defs/id" },
+            "tab_ref": { "$ref": "#/$defs/tabRef" },
+            "accepted": { "type": "boolean" },
+            "observation_revision": { "type": "integer", "minimum": 1 },
+            "reason_code": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "command.dispatch" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "command_seq",
+            "run_id",
+            "workflow_id",
+            "workflow_version",
+            "node_execution_id",
+            "command_id",
+            "idempotency_key",
+            "fencing_token",
+            "attempt",
+            "node",
+            "input",
+            "permission_grant",
+            "deadline",
+            "tab_ref",
+            "page_epoch",
+            "observation_revision"
+          ],
+          "properties": {
+            "command_seq": { "type": "integer", "minimum": 1 },
+            "run_id": { "$ref": "#/$defs/id" },
+            "workflow_id": { "$ref": "#/$defs/id" },
+            "workflow_version": { "$ref": "#/$defs/id" },
+            "node_execution_id": { "$ref": "#/$defs/id" },
+            "command_id": { "$ref": "#/$defs/id" },
+            "idempotency_key": { "$ref": "#/$defs/id" },
+            "fencing_token": { "type": "integer", "minimum": 1 },
+            "attempt": { "type": "integer", "minimum": 1, "maximum": 10 },
+            "node": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "version"],
+              "properties": {
+                "id": { "$ref": "#/$defs/id" },
+                "version": { "$ref": "#/$defs/id" }
+              }
+            },
+            "input": {},
+            "permission_grant": { "$ref": "#/$defs/permissionGrant" },
+            "deadline": { "$ref": "#/$defs/timestamp" },
+            "timing_policy": {
+              "$ref": "https://bpa.local/schemas/timing-policy/v1"
+            },
+            "tab_ref": { "$ref": "#/$defs/tabRef" },
+            "page_epoch": { "$ref": "#/$defs/id" },
+            "observation_revision": { "type": "integer", "minimum": 1 },
+            "authentication_context_ref": { "$ref": "#/$defs/id" },
+            "approval_token_ref": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "commandAck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "command.ack" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command_seq", "command_id", "node_execution_id", "accepted", "fencing_token"],
+          "properties": {
+            "command_seq": { "type": "integer", "minimum": 1 },
+            "command_id": { "$ref": "#/$defs/id" },
+            "node_execution_id": { "$ref": "#/$defs/id" },
+            "accepted": { "type": "boolean" },
+            "fencing_token": { "type": "integer", "minimum": 1 },
+            "reason_code": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "commandResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "command.result" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "command_seq",
+            "command_id",
+            "node_execution_id",
+            "idempotency_key",
+            "fencing_token",
+            "status"
+          ],
+          "properties": {
+            "command_seq": { "type": "integer", "minimum": 1 },
+            "command_id": { "$ref": "#/$defs/id" },
+            "node_execution_id": { "$ref": "#/$defs/id" },
+            "idempotency_key": { "$ref": "#/$defs/id" },
+            "fencing_token": { "type": "integer", "minimum": 1 },
+            "status": { "$ref": "#/$defs/resultStatus" },
+            "output": {},
+            "error": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["code", "message"],
+              "properties": {
+                "code": { "$ref": "#/$defs/id" },
+                "message": { "type": "string", "maxLength": 4000 },
+                "retryable": { "type": "boolean" }
+              }
+            },
+            "evidence_refs": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "page_epoch": { "$ref": "#/$defs/id" },
+            "risk_signals": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "$ref": "https://bpa.local/schemas/risk-signal/v1"
+              }
+            },
+            "timing_observation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["rate_limit_wait_ms"],
+              "properties": {
+                "rate_limit_wait_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 120000
+                },
+                "readiness_wait_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 120000
+                },
+                "stable_for_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "resultAck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "result.ack" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command_id", "node_execution_id", "accepted"],
+          "properties": {
+            "command_id": { "$ref": "#/$defs/id" },
+            "node_execution_id": { "$ref": "#/$defs/id" },
+            "accepted": { "type": "boolean" },
+            "reason_code": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "cancelRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "cancel.request" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command_id", "node_execution_id", "fencing_token", "reason_code"],
+          "properties": {
+            "command_id": { "$ref": "#/$defs/id" },
+            "node_execution_id": { "$ref": "#/$defs/id" },
+            "fencing_token": { "type": "integer", "minimum": 1 },
+            "reason_code": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "cancelAck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "cancel.ack" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "command_id",
+            "node_execution_id",
+            "fencing_token",
+            "acknowledged"
+          ],
+          "properties": {
+            "command_id": { "$ref": "#/$defs/id" },
+            "node_execution_id": { "$ref": "#/$defs/id" },
+            "fencing_token": { "type": "integer", "minimum": 1 },
+            "acknowledged": { "type": "boolean" },
+            "action_started": { "type": "boolean" },
+            "reason_code": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "cancelEffective": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "cancel.effective" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "command_id",
+            "node_execution_id",
+            "fencing_token",
+            "status"
+          ],
+          "properties": {
+            "command_id": { "$ref": "#/$defs/id" },
+            "node_execution_id": { "$ref": "#/$defs/id" },
+            "fencing_token": { "type": "integer", "minimum": 1 },
+            "status": { "enum": ["cancelled", "uncertain"] },
+            "safe_stop": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "heartbeat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "enum": ["heartbeat.ping", "heartbeat.pong"] },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["nonce"],
+          "properties": {
+            "nonce": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "sessionError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 0 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "session.error" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message", "fatal"],
+          "properties": {
+            "code": { "$ref": "#/$defs/id" },
+            "message": { "type": "string", "minLength": 1, "maxLength": 4000 },
+            "fatal": { "type": "boolean" },
+            "related_message_id": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "evidenceBegin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "evidence.begin" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "evidence_id",
+            "run_id",
+            "node_execution_id",
+            "kind",
+            "media_type",
+            "size",
+            "digest",
+            "chunk_size",
+            "chunk_count"
+          ],
+          "properties": {
+            "evidence_id": { "$ref": "#/$defs/id" },
+            "run_id": { "$ref": "#/$defs/id" },
+            "node_execution_id": { "$ref": "#/$defs/id" },
+            "kind": { "enum": ["dom_summary", "screenshot", "file", "verification", "error"] },
+            "media_type": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "size": { "type": "integer", "minimum": 0, "maximum": 1073741824 },
+            "digest": { "$ref": "#/$defs/digest" },
+            "chunk_size": { "const": 262144 },
+            "chunk_count": { "type": "integer", "minimum": 0, "maximum": 4096 }
+          }
+        }
+      }
+    },
+    "evidenceChunk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "evidence.chunk" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["evidence_id", "index", "data_base64", "chunk_digest"],
+          "properties": {
+            "evidence_id": { "$ref": "#/$defs/id" },
+            "index": { "type": "integer", "minimum": 0, "maximum": 4095 },
+            "data_base64": { "type": "string", "maxLength": 349528 },
+            "chunk_digest": { "$ref": "#/$defs/digest" }
+          }
+        }
+      }
+    },
+    "evidenceComplete": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "evidence.complete" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["evidence_id", "digest", "chunk_count"],
+          "properties": {
+            "evidence_id": { "$ref": "#/$defs/id" },
+            "digest": { "$ref": "#/$defs/digest" },
+            "chunk_count": { "type": "integer", "minimum": 0, "maximum": 4096 }
+          }
+        }
+      }
+    },
+    "evidenceAck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "version",
+        "message_id",
+        "session_id",
+        "seq",
+        "sent_at",
+        "type",
+        "trace_id",
+        "payload"
+      ],
+      "properties": {
+        "protocol": { "const": "bpa.browser/2" },
+        "version": { "const": "2.0.0" },
+        "message_id": { "$ref": "#/$defs/id" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "sent_at": { "$ref": "#/$defs/timestamp" },
+        "type": { "const": "evidence.ack" },
+        "trace_id": { "$ref": "#/$defs/id" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["evidence_id", "accepted"],
+          "properties": {
+            "evidence_id": { "$ref": "#/$defs/id" },
+            "accepted": { "type": "boolean" },
+            "next_chunk_index": { "type": "integer", "minimum": 0, "maximum": 4096 },
+            "reason_code": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    }
+  }
+}

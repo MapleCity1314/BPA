@@ -5,6 +5,7 @@ import type {
   InvocationResourceBinding,
   JsonValue,
   PermissionSnapshot,
+  ResourceBindingRef,
   ResourceSlotMappingSnapshot,
   RuntimeNodeSchemaContract
 } from "@bpa/workflow-ir";
@@ -87,7 +88,7 @@ export interface RuntimeProvider {
 
 export interface RuntimeBrowserSessionResolver {
   getBrowserSession(
-    sessionId: string
+    binding: ResourceBindingRef
   ): ObservedBrowserSession | undefined | Promise<ObservedBrowserSession | undefined>;
 }
 
@@ -140,7 +141,7 @@ export class ResourceValidatedRuntimeDispatcher {
         );
       }
       const session = await this.sessions.getBrowserSession(
-        resource.binding.sessionId
+        resource.binding
       );
       if (!session) {
         return rejectedResourceOutcome(
@@ -291,7 +292,7 @@ export interface EffectiveTimingPolicy {
     jitterRatio: number;
   };
   rateLimit?: {
-    scope: "domain" | "shop" | "tab";
+    scope: "domain" | "authentication_context" | "tab";
     minIntervalMs: number;
     maxQueueMs: number;
   };

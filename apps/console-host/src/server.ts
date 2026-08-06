@@ -9,6 +9,7 @@ import { extname, resolve, sep } from "node:path";
 import type {
   ControlBackend,
   CreateRunInput,
+  DesignModeGrantInput,
   StagingLeaseRequest,
   StagedDatasetImportInput,
   SubmitTaskInput
@@ -170,6 +171,58 @@ function requiredString(
   return value;
 }
 
+function parseDesignModeInput(value: unknown): DesignModeGrantInput {
+  const record = asRecord(value);
+  const binding = asRecord(record.pageBinding);
+  if (
+    Object.keys(record).some(
+      (key) =>
+        ![
+          "authoringSessionId",
+          "browserSessionId",
+          "profileId",
+          "pageBinding",
+          "screenshotApproved"
+        ].includes(key)
+    ) ||
+    Object.keys(binding).some(
+      (key) =>
+        !["version", "tabId", "origin", "pageEpoch", "issuedAt"].includes(
+          key
+        )
+    )
+  ) {
+    throw new HttpError(
+      400,
+      "INVALID_REQUEST",
+      "Design Mode 授权包含未知字段。"
+    );
+  }
+  const tabId = binding.tabId;
+  const screenshotApproved = record.screenshotApproved;
+  const version = requiredString(binding, "version", 100);
+  if (
+    !Number.isSafeInteger(tabId) ||
+    typeof screenshotApproved !== "boolean" ||
+    version !== "bpa.design-page-binding/1"
+  ) {
+    throw new HttpError(400, "INVALID_REQUEST", "Design Mode 授权字段无效。");
+  }
+  return {
+    authoringSessionId: requiredString(record, "authoringSessionId", 200),
+    browserSessionId: requiredString(record, "browserSessionId", 200),
+    profileId: requiredString(record, "profileId", 300),
+    screenshotApproved,
+    pageBinding: {
+      version: "bpa.design-page-binding/1",
+      tabId: tabId as number,
+      origin: requiredString(binding, "origin", 2048),
+      pageEpoch: requiredString(binding, "pageEpoch", 200),
+      issuedAt: requiredString(binding, "issuedAt", 100)
+    }
+  };
+}
+
 function parseRunInput(value: unknown): CreateRunInput {
   const record = asRecord(value);
   const inputs = asRecord(record.inputs);
@@ -179,12 +232,25 @@ function parseRunInput(value: unknown): CreateRunInput {
       throw new HttpError(400, "INVALID_REQUEST", "工作流输入字段无效。");
     }
   }
-  const resourceBindings: Record<string, string> = {};
+  const resourceBindings: CreateRunInput["resourceBindings"] = {};
   for (const [key, binding] of Object.entries(bindings)) {
-    if (typeof binding !== "string" || !binding) {
+    const candidate = asRecord(binding);
+    if (
+      typeof candidate.sessionId !== "string" ||
+      !candidate.sessionId ||
+      typeof candidate.browserInstanceId !== "string" ||
+      !candidate.browserInstanceId ||
+      !Number.isSafeInteger(candidate.tabId) ||
+      !Number.isSafeInteger(candidate.observationRevision)
+    ) {
       throw new HttpError(400, "INVALID_REQUEST", "浏览器资源绑定无效。");
     }
-    resourceBindings[key] = binding;
+    resourceBindings[key] = {
+      sessionId: candidate.sessionId,
+      browserInstanceId: candidate.browserInstanceId,
+      tabId: candidate.tabId as number,
+      observationRevision: candidate.observationRevision as number
+    };
   }
   return {
     workflowId: requiredString(record, "workflowId"),
@@ -437,6 +503,48 @@ export async function startConsoleHost(
         if (request.method === "GET" && path === "/api/workflows") {
           getSession(request);
           writeJson(response, 200, await options.backend.listWorkflows());
+          return;
+        }
+        if (
+          request.method === "POST" &&
+          path === "/api/authoring/design-mode/grants"
+        ) {
+          requireMutationSession(request);
+          writeJson(
+            response,
+            201,
+            await options.backend.startDesignMode(
+              parseDesignModeInput(await readJson(request))
+            )
+          );
+          return;
+        }
+        const designStopMatch =
+          /^\/api\/authoring\/design-mode\/grants\/([^/]+)\/stop$/.exec(
+            path
+          );
+        if (request.method === "POST" && designStopMatch) {
+          requireMutationSession(request);
+          const input = asRecord(await readJson(request));
+          const expectedRevision = input.expectedRevision;
+          if (
+            !Number.isSafeInteger(expectedRevision) ||
+            (expectedRevision as number) < 0
+          ) {
+            throw new HttpError(
+              400,
+              "INVALID_REQUEST",
+              "Design Mode revision 无效。"
+            );
+          }
+          writeJson(
+            response,
+            200,
+            await options.backend.stopDesignMode(
+              decodeURIComponent(designStopMatch[1]!),
+              expectedRevision as number
+            )
+          );
           return;
         }
         if (request.method === "POST" && path === "/api/runs") {

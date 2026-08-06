@@ -766,12 +766,16 @@ function timingPolicyIssues(
         )
       );
     }
-    if (!["domain", "shop", "tab"].includes(timing.rateLimit.scope)) {
+    if (
+      !["domain", "authentication_context", "tab"].includes(
+        timing.rateLimit.scope
+      )
+    ) {
       issues.push(
         issue(
           "INVALID_VALUE",
           `${path}/rateLimit/scope`,
-          "rate-limit scope must be domain, shop or tab"
+          "rate-limit scope must be domain, authentication_context or tab"
         )
       );
     }

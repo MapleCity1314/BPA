@@ -1,0 +1,4 @@
+interface:
+  display_name: "抖店联盟清退巡检"
+  short_description: "一键安装并每天逐店检查精选联盟清退商品、留档和提醒运营"
+  default_prompt: "使用 $doudian-alliance-retired-monitor 在这台运营 Windows 电脑上一键安装并验收抖店精选联盟多店铺清退巡检，然后指导我保存每天北京时间 13:00、开启 WorkBuddy 推送的自动化任务。"

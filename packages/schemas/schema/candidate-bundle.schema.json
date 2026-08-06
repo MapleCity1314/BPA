@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bpa.local/schemas/authoring/candidate-bundle/v1alpha1",
+  "title": "BPA Authoring CandidateBundle v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "status",
+    "scenarioRef",
+    "authoringSession",
+    "artifacts",
+    "files",
+    "dependencyClosure",
+    "capabilityGaps",
+    "validation",
+    "riskReport",
+    "executionPolicy",
+    "createdAt"
+  ],
+  "properties": {
+    "apiVersion": { "const": "bpa.authoring/v1alpha1" },
+    "kind": { "const": "CandidateBundle" },
+    "metadata": { "$ref": "#/$defs/metadata" },
+    "status": { "const": "candidate" },
+    "scenarioRef": { "$ref": "#/$defs/versionedRef" },
+    "authoringSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "id", "version", "digest", "status"],
+        "properties": {
+          "kind": {
+            "enum": [
+              "workflow",
+              "node",
+              "page_model",
+              "element_contract",
+              "adapter_patch",
+              "replay_fixture",
+              "test_manifest",
+              "validation_report",
+              "risk_report"
+            ]
+          },
+          "id": { "$ref": "#/$defs/id" },
+          "version": { "$ref": "#/$defs/semver" },
+          "digest": { "$ref": "#/$defs/digest" },
+          "status": { "enum": ["candidate", "published"] }
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "mediaType",
+          "digest",
+          "sizeBytes",
+          "sourceAssetRef"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "pattern": "^(?:adapters|nodes|workflows|tests)/(?!\\.\\.(?:/|$))(?!.*\\/\\.\\.(?:/|$))(?!.*//)[A-Za-z0-9_@.-]+(?:/[A-Za-z0-9_@.-]+)*$"
+          },
+          "mediaType": {
+            "enum": [
+              "application/json",
+              "application/yaml",
+              "text/typescript",
+              "text/markdown"
+            ]
+          },
+          "digest": { "$ref": "#/$defs/digest" },
+          "sizeBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 26214400
+          },
+          "sourceAssetRef": { "$ref": "#/$defs/contentRef" }
+        }
+      }
+    },
+    "dependencyClosure": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": { "$ref": "#/$defs/assetRef" }
+    },
+    "capabilityGaps": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["gapId", "capabilityId", "status"],
+        "properties": {
+          "gapId": { "$ref": "#/$defs/id" },
+          "capabilityId": { "$ref": "#/$defs/id" },
+          "status": { "enum": ["open", "resolved"] }
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "contracts",
+        "replay",
+        "permissions",
+        "risk"
+      ],
+      "properties": {
+        "schema": { "$ref": "#/$defs/check" },
+        "contracts": { "$ref": "#/$defs/check" },
+        "replay": { "$ref": "#/$defs/check" },
+        "permissions": { "$ref": "#/$defs/check" },
+        "risk": { "$ref": "#/$defs/check" }
+      }
+    },
+    "riskReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ceiling",
+        "effective",
+        "permissions",
+        "manualReviewPoints"
+      ],
+      "properties": {
+        "ceiling": { "$ref": "#/$defs/risk" },
+        "effective": { "$ref": "#/$defs/risk" },
+        "permissions": {
+          "type": "array",
+          "maxItems": 500,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+        },
+        "manualReviewPoints": {
+          "type": "array",
+          "maxItems": 200,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      }
+    },
+    "executionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["autoExecute", "autoPublish", "autoApplySource"],
+      "properties": {
+        "autoExecute": { "const": false },
+        "autoPublish": { "const": false },
+        "autoApplySource": { "const": false }
+      }
+    },
+    "createdAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "title"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/semver" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 4000 }
+      }
+    },
+    "versionedRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/semver" },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "contentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "digest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "assetRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assetType", "id", "version", "digest", "status"],
+      "properties": {
+        "assetType": {
+          "enum": [
+            "node",
+            "workflow",
+            "adapter",
+            "policy",
+            "assistance_profile",
+            "dataset_profile",
+            "page_model",
+            "element_contract"
+          ]
+        },
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/semver" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "status": { "enum": ["candidate", "published"] }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["valid", "issueCount"],
+      "properties": {
+        "valid": { "type": "boolean" },
+        "issueCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        }
+      }
+    },
+    "risk": { "enum": ["R0", "R1", "R2", "R3", "R4"] },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+      "maxLength": 160
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  }
+}

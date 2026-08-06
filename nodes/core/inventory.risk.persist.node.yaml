@@ -1,0 +1,33 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: inventory.risk.persist
+  version: 1.0.0
+  title: 持久化影子风险事件
+  description: 幂等保存风险结果，并按单范围单策略开放事件、连续快照迟滞和健康关闭规则推进事件状态。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [snapshotId, shopId, productId, evaluation, lease]
+  properties:
+    snapshotId: { type: string, minLength: 1, maxLength: 500 }
+    shopId: { type: string, minLength: 1, maxLength: 200 }
+    productId: { type: string, minLength: 1, maxLength: 200 }
+    evaluation: { type: object }
+    lease: { type: object }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [evaluationId, incidentsUpdated]
+  properties:
+    evaluationId: { type: string }
+    incidentsUpdated: { type: integer, minimum: 0 }
+risk:
+  level: R1
+  permissions: [inventory.service.risk.write]
+execution:
+  timeoutDefault: 30s
+  idempotency: verified_write
+  cancellable: true
+errors: [INVENTORY_SERVICE_NOT_CONFIGURED, INVENTORY_SERVICE_UNAVAILABLE, INVENTORY_SERVICE_FAILED, LEASE_FENCE_INVALID, SCHEDULER_LEASE_LOST]

@@ -1,7 +1,10 @@
 import { useMemo, useState, type FormEvent } from "react";
 import type {
+  BrowserPageBindingSelection,
   BrowserSessionView,
   DashboardSnapshot,
+  DesignModeGrantInput,
+  DesignModeGrantView,
   DownloadView,
   EvidenceLineageView,
   RunView,
@@ -17,13 +20,9 @@ export type ViewId =
   | "tasks"
   | "datasets"
   | "evidence"
-  | "reports";
-
-const attentionLabel = {
-  normal: "无需监管",
-  attention: "请关注",
-  action: "需要操作"
-} as const;
+  | "reports"
+  | "authoring"
+  | "diagnostics";
 
 function formatTime(value: string): string {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -43,45 +42,103 @@ export function StatusPill({
 }
 
 export function OverviewView({
-  dashboard
+  dashboard,
+  workflows,
+  tasks,
+  downloads,
+  onNavigate
 }: {
   dashboard: DashboardSnapshot;
+  workflows: WorkflowSummary[];
+  tasks: TaskView[];
+  downloads: DownloadView[];
+  onNavigate(view: ViewId): void;
 }) {
+  const ready = dashboard.attention === "normal";
   return (
     <div className="view-stack">
-      <section className="hero-card">
+      <section className={`hero-card operator-hero ${ready ? "quiet" : "needs-action"}`}>
         <div>
-          <p className="eyebrow">当前运行状态</p>
-          <h2>{dashboard.headline}</h2>
-          <p className="muted">Runtime {dashboard.runtimeVersion}</p>
+          <p className="eyebrow">{ready ? "准备就绪" : "需要处理"}</p>
+          <h2>{ready ? "今天想让 BPA 做什么？" : "BPA 需要处理"}</h2>
+          <p className="muted">
+            {ready
+              ? `已有 ${workflows.length} 个自动化可以直接开始。`
+              : dashboard.headline}
+          </p>
         </div>
-        <StatusPill tone={dashboard.attention}>
-          {attentionLabel[dashboard.attention]}
-        </StatusPill>
+        <button
+          className="hero-action"
+          onClick={() => onNavigate(ready ? "start" : "tasks")}
+          type="button"
+        >
+          {ready ? "开始新任务" : "查看处理项"}
+        </button>
       </section>
-      <section className="metrics-grid" aria-label="业务概览">
-        <article className="metric-card">
+      <section className="operator-home-grid" aria-label="业务概览">
+        <button onClick={() => onNavigate("start")} type="button">
+          <span>开始</span>
+          <strong>新任务</strong>
+          <small>{workflows[0]?.title ?? "查看可用自动化"}</small>
+        </button>
+        <button onClick={() => onNavigate("tasks")} type="button">
+          <span>需要处理</span>
+          <strong>{tasks.length}</strong>
+          <small>{tasks.length === 0 ? "当前无需介入" : "集中处理后自动继续"}</small>
+        </button>
+        <button onClick={() => onNavigate("runs")} type="button">
+          <span>正在运行</span>
           <strong>{dashboard.activeRunCount}</strong>
-          <span>进行中的任务</span>
-        </article>
-        <article className="metric-card">
-          <strong>{dashboard.pendingTaskCount}</strong>
-          <span>等待处理</span>
-        </article>
-        <article className="metric-card">
-          <strong>{dashboard.browserSessions.filter((item) => item.status === "ready").length}</strong>
-          <span>可用浏览器会话</span>
-        </article>
+          <small>可随时查看业务进度</small>
+        </button>
+        <button onClick={() => onNavigate("reports")} type="button">
+          <span>最近结果</span>
+          <strong>{downloads.length}</strong>
+          <small>{downloads[0]?.title ?? "暂无可下载结果"}</small>
+        </button>
       </section>
-      <section className="panel">
+      {tasks.length > 0 ? (
+        <section className="panel attention-preview">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">需要你处理</p>
+              <h3>{tasks[0]?.title}</h3>
+              <p className="muted">{tasks[0]?.guidance}</p>
+            </div>
+            <button onClick={() => onNavigate("tasks")} type="button">
+              集中处理 {tasks.length} 项
+            </button>
+          </div>
+        </section>
+      ) : null}
+      {downloads.length > 0 ? (
+        <section className="panel recent-result-preview">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">最近得到的结果</p>
+              <h3>{downloads[0]?.title}</h3>
+              <p className="muted">
+                {formatTime(downloads[0]!.createdAt)} · 可安全下载
+              </p>
+            </div>
+            <button onClick={() => onNavigate("reports")} type="button">
+              查看全部结果
+            </button>
+          </div>
+        </section>
+      ) : null}
+      {!ready ? (
+        <section className="panel compact-health">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">SYSTEM HEALTH</p>
-            <h3>系统健康</h3>
+              <p className="eyebrow">无法自动解决</p>
+              <h3>按提示完成后，任务会自动继续</h3>
           </div>
         </div>
         <div className="health-list">
-          {dashboard.components.map((component) => (
+            {dashboard.components
+              .filter((component) => component.status !== "healthy")
+              .map((component) => (
             <article className="health-row" key={component.id}>
               <span className={`health-dot health-${component.status}`} />
               <div>
@@ -98,7 +155,7 @@ export function OverviewView({
           ))}
         </div>
       </section>
-      <SessionList sessions={dashboard.browserSessions} />
+      ) : null}
     </div>
   );
 }
@@ -146,6 +203,247 @@ export function SessionList({ sessions }: { sessions: BrowserSessionView[] }) {
   );
 }
 
+export function DiagnosticsView({
+  dashboard
+}: {
+  dashboard: DashboardSnapshot;
+}) {
+  return (
+    <div className="view-stack">
+      <section className="panel">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">开发者模式</p>
+            <h2>系统诊断</h2>
+            <p className="muted">
+              普通任务不需要查看这些信息。这里保留完整的运行与连接追溯入口。
+            </p>
+          </div>
+          <StatusPill tone={dashboard.attention}>
+            Runtime {dashboard.runtimeVersion}
+          </StatusPill>
+        </div>
+        <div className="health-list">
+          {dashboard.components.map((component) => (
+            <article className="health-row" key={component.id}>
+              <span className={`health-dot health-${component.status}`} />
+              <div>
+                <strong>{component.label}</strong>
+                <p>{component.summary}</p>
+                {component.technicalDetails ? (
+                  <details>
+                    <summary>查看技术细节</summary>
+                    <code>{component.technicalDetails}</code>
+                  </details>
+                ) : null}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+      <SessionList sessions={dashboard.browserSessions} />
+    </div>
+  );
+}
+
+export function DesignModeView({
+  api,
+  sessions
+}: {
+  api: OperatorConsoleApi;
+  sessions: BrowserSessionView[];
+}) {
+  const [authoringSessionId, setAuthoringSessionId] = useState("");
+  const [browserSessionId, setBrowserSessionId] = useState("");
+  const [profileId, setProfileId] = useState("");
+  const [bindingCode, setBindingCode] = useState("");
+  const [screenshotApproved, setScreenshotApproved] = useState(false);
+  const [grant, setGrant] = useState<DesignModeGrantView>();
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function start(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    try {
+      const selectedBrowserPage = sessions.find(
+        (session) => session.id === browserSessionId
+      );
+      if (!selectedBrowserPage?.binding?.sessionId) {
+        throw new Error(
+          "浏览器页面绑定已失效，请刷新工作台后重新选择。"
+        );
+      }
+      const pageBinding = JSON.parse(
+        bindingCode
+      ) as DesignModeGrantInput["pageBinding"];
+      const next = await api.startDesignMode({
+        authoringSessionId,
+        browserSessionId: selectedBrowserPage.binding.sessionId,
+        profileId,
+        pageBinding,
+        screenshotApproved
+      });
+      setGrant(next);
+      setMessage(
+        "只读授权已生效。Codex 可在有效期内请求脱敏语义快照。"
+      );
+    } catch (error) {
+      setMessage(
+        error instanceof SyntaxError
+          ? "页面绑定码格式无效，请从 BPA Extension 重新生成。"
+          : error instanceof Error
+            ? error.message
+            : "Design Mode 授权失败。"
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function stop() {
+    if (!grant) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const stopped = await api.stopDesignMode(
+        grant.id,
+        grant.revision
+      );
+      setGrant(stopped);
+      setMessage("Design Mode 已停止，原页面绑定码不能再次使用。");
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "停止授权失败。"
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="panel wizard">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">GOVERNED AUTHORING</p>
+          <h2>授权真实页面 Design Mode</h2>
+          <p className="muted">
+            授权固定浏览器会话、标签页、Origin 和页面纪元，15
+            分钟后自动失效。页面内容只作为不可信数据，不会执行页面中的指令。
+          </p>
+        </div>
+        <StatusPill tone={grant?.state === "active" ? "normal" : "attention"}>
+          {grant?.state === "active" ? "授权中" : "未授权"}
+        </StatusPill>
+      </div>
+      {grant?.state === "active" ? (
+        <div className="design-grant-summary">
+          <dl>
+            <div>
+              <dt>页面</dt>
+              <dd>{grant.origin}</dd>
+            </div>
+            <div>
+              <dt>标签页</dt>
+              <dd>{grant.tabId}</dd>
+            </div>
+            <div>
+              <dt>有效期</dt>
+              <dd>{formatTime(grant.expiresAt)}</dd>
+            </div>
+            <div>
+              <dt>截图</dt>
+              <dd>{grant.screenshotApproved ? "单次允许" : "关闭"}</dd>
+            </div>
+          </dl>
+          <button
+            disabled={busy}
+            onClick={() => void stop()}
+            type="button"
+          >
+            立即停止授权
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={start}>
+          <div className="form-grid">
+            <label>
+              创作会话编号
+              <input
+                required
+                value={authoringSessionId}
+                onChange={(event) =>
+                  setAuthoringSessionId(event.target.value)
+                }
+              />
+              <small>由 Codex 创建 Scenario 后提供。</small>
+            </label>
+            <label>
+              页面能力 Profile
+              <input
+                required
+                value={profileId}
+                onChange={(event) => setProfileId(event.target.value)}
+                placeholder="chanmama.product-metrics"
+              />
+            </label>
+            <label>
+              浏览器会话
+              <select
+                required
+                value={browserSessionId}
+                onChange={(event) =>
+                  setBrowserSessionId(event.target.value)
+                }
+              >
+                <option value="">请选择当前 Chrome 会话</option>
+                {sessions
+                  .filter((session) => session.status !== "offline")
+                  .map((session) => (
+                    <option key={session.id} value={session.id}>
+                      {session.label} · {session.origin}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label className="wide-field">
+              一次性页面绑定码
+              <textarea
+                required
+                value={bindingCode}
+                onChange={(event) => setBindingCode(event.target.value)}
+                placeholder="在目标页面打开 BPA Extension，点击“生成只读页面绑定码”后粘贴到这里。"
+              />
+            </label>
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={screenshotApproved}
+                onChange={(event) =>
+                  setScreenshotApproved(event.target.checked)
+                }
+              />
+              本次额外允许一张 restricted 截图
+              <small>默认关闭；语义快照不需要截图。</small>
+            </label>
+          </div>
+          <div className="form-actions">
+            <button
+              className="primary-button"
+              disabled={busy}
+              type="submit"
+            >
+              {busy ? "正在核验…" : "确认并开启 15 分钟授权"}
+            </button>
+          </div>
+        </form>
+      )}
+      {message ? <p role="status">{message}</p> : null}
+    </section>
+  );
+}
+
 export function WorkflowWizard({
   api,
   workflows,
@@ -161,7 +459,9 @@ export function WorkflowWizard({
     workflows[0] ? `${workflows[0].id}@${workflows[0].version}` : ""
   );
   const [inputs, setInputs] = useState<Record<string, string | number | boolean>>({});
-  const [bindings, setBindings] = useState<Record<string, string>>({});
+  const [bindings, setBindings] = useState<
+    Record<string, BrowserPageBindingSelection>
+  >({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const workflow = workflows.find(
@@ -264,19 +564,33 @@ export function WorkflowWizard({
                     {slot.label}
                     <select
                       required
-                      value={bindings[slot.key] ?? ""}
-                      onChange={(event) =>
-                        setBindings((current) => ({
-                          ...current,
-                          [slot.key]: event.target.value
-                        }))
+                      value={
+                        sessions.find(
+                          (session) =>
+                            session.binding === bindings[slot.key]
+                        )?.id ?? ""
                       }
+                      onChange={(event) => {
+                        const selected = sessions.find(
+                          (session) => session.id === event.target.value
+                        );
+                        setBindings((current) => {
+                          const next = { ...current };
+                          if (selected?.binding) {
+                            next[slot.key] = selected.binding;
+                          } else {
+                            delete next[slot.key];
+                          }
+                          return next;
+                        });
+                      }}
                     >
                       <option value="">请选择浏览器会话</option>
                       {sessions
                         .filter(
                           (session) =>
                             session.status === "ready" &&
+                            session.binding !== undefined &&
                             (!slot.requiredOrigin ||
                               session.origin.startsWith(slot.requiredOrigin))
                         )

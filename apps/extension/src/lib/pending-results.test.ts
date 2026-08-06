@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  interruptedCommandResult,
   normalizePendingResultForReplay,
   type PendingResult
 } from "./pending-results.js";
@@ -29,5 +30,26 @@ describe("pending result replay migration", () => {
         }
       }).payload.page_epoch
     ).toBe("replay-7:command-1");
+  });
+
+  it("turns an interrupted accepted command into a non-retryable uncertain result", () => {
+    expect(
+      interruptedCommandResult({
+        commandId: "command-2",
+        commandSeq: 8,
+        nodeExecutionId: "node-execution-2",
+        idempotencyKey: "idempotency-2",
+        fencingToken: 3,
+        traceId: "trace-2",
+        pageEpoch: "tab-42:epoch",
+        startedAt: "2026-08-02T10:00:00.000Z"
+      }).payload
+    ).toMatchObject({
+      status: "uncertain",
+      error: {
+        code: "BROWSER_COMMAND_INTERRUPTED",
+        retryable: false
+      }
+    });
   });
 });

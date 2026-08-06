@@ -99,7 +99,7 @@ describe("control protocol envelopes", () => {
     ).toThrow(/valid JSON/);
   });
 
-  it("accepts a valid frame at exactly 512 KiB", () => {
+  it("accepts a valid frame at exactly 1 MiB", () => {
     const payload = `${JSON.stringify({
       value: "x".repeat(CONTROL_MAX_MESSAGE_BYTES - 13)
     })}\n`;
@@ -108,7 +108,7 @@ describe("control protocol envelopes", () => {
     expect(decodeControlEnvelope(bytes)).toMatchObject({
       value: expect.any(String)
     });
-    expect(CONTROL_MAX_MESSAGE_BYTES).toBe(512 * 1024);
+    expect(CONTROL_MAX_MESSAGE_BYTES).toBe(1024 * 1024);
   });
 });
 

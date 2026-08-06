@@ -1,6 +1,6 @@
 import type {
-  BPABrowserProtocolV1Message
-} from "./generated/browser_protocol_v1.js";
+  BPABrowserProtocolV2Message
+} from "./generated/browser_protocol_v2.js";
 import type { BPANodeDefinition } from "./generated/node.js";
 import type {
   BPANodeDefinitionV1Alpha2
@@ -51,9 +51,22 @@ import type {
 import type {
   BPAPageModelV1Alpha1
 } from "./generated/page_model.js";
+import type {
+  BPAAuthoringScenarioSpecV1Alpha1
+} from "./generated/scenario_spec.js";
+import type {
+  BPAAuthoringSessionV1Alpha1
+} from "./generated/authoring_session.js";
+import type {
+  BPAAuthoringPageSnapshotV1Alpha1
+} from "./generated/page_snapshot.js";
+import type {
+  BPAAuthoringCandidateBundleV1Alpha1
+} from "./generated/candidate_bundle.js";
+import type { BPATriggerSpecV1Alpha1 } from "./generated/trigger_spec.js";
 
 export type {
-  BPABrowserProtocolV1Message,
+  BPABrowserProtocolV2Message,
   BPAAdapterManifestV1Alpha1,
   BPAAssistanceProfileV1Alpha1,
   BPAAssistanceTaskV1Alpha1,
@@ -64,9 +77,14 @@ export type {
   BPANodeDefinition,
   BPANodeDefinitionV1Alpha2,
   BPAPageModelV1Alpha1,
+  BPAAuthoringScenarioSpecV1Alpha1,
+  BPAAuthoringSessionV1Alpha1,
+  BPAAuthoringPageSnapshotV1Alpha1,
+  BPAAuthoringCandidateBundleV1Alpha1,
   BPASourceRecordV1Alpha1,
   BPAAssetRecordV1Alpha1,
   BPAEvidenceLinkV1Alpha1,
+  BPATriggerSpecV1Alpha1,
   BPASignedPermissionGrant,
   BPAWorkflow,
   BPAWorkflowV1Alpha2,
@@ -88,7 +106,7 @@ export type NodeDefinitionV1Alpha2 = BPANodeDefinitionV1Alpha2;
 export type SourceRecordDefinition = BPASourceRecordV1Alpha1;
 export type AssetRecordDefinition = BPAAssetRecordV1Alpha1;
 export type EvidenceLinkDefinition = BPAEvidenceLinkV1Alpha1;
-export type BrowserProtocolMessage = BPABrowserProtocolV1Message;
+export type BrowserProtocolMessage = BPABrowserProtocolV2Message;
 export type AssistanceTaskDefinition = BPAAssistanceTaskV1Alpha1;
 export type AdapterManifestDefinition = BPAAdapterManifestV1Alpha1;
 export type AssistanceProfileDefinition = BPAAssistanceProfileV1Alpha1;
@@ -98,6 +116,11 @@ export type DatasetVersionDefinition = BPADatasetVersionV1Alpha1;
 export type DecisionRecordDefinition = BPADecisionRecordV1Alpha1;
 export type ElementContractDefinition = BPAElementContractV1Alpha1;
 export type PageModelDefinition = BPAPageModelV1Alpha1;
+export type ScenarioSpecDefinition = BPAAuthoringScenarioSpecV1Alpha1;
+export type AuthoringSessionDefinition = BPAAuthoringSessionV1Alpha1;
+export type PageSnapshotDefinition = BPAAuthoringPageSnapshotV1Alpha1;
+export type CandidateBundleDefinition = BPAAuthoringCandidateBundleV1Alpha1;
+export type TriggerSpecDefinition = BPATriggerSpecV1Alpha1;
 export type SignedPermissionGrant = BPASignedPermissionGrant;
 export type RiskLevel = BPAWorkflow["spec"]["riskLevel"];
 export type TimingPolicy = BPATimingPolicyV1;

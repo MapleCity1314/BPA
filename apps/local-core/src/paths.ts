@@ -1,8 +1,13 @@
-import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  resolveDefaultBpaHome,
+  resolveDefaultBpaLogRoot,
+  resolveLocalIpcEndpoint
+} from "@bpa/platform-runtime";
 
 export interface BpaPaths {
   root: string;
+  run: string;
   data: string;
   logs: string;
   socket: string;
@@ -10,22 +15,30 @@ export interface BpaPaths {
   database: string;
   signingKey: string;
   lock: string;
+  resourceMetrics: string;
 }
 
 export function resolveBpaPaths(
-  root =
-    process.env.BPA_HOME ??
-    join(homedir(), "Library", "Application Support", "BPA")
+  root = resolveDefaultBpaHome(
+    process.env.BPA_HOME ? { bpaHome: process.env.BPA_HOME } : {}
+  ),
+  platform: NodeJS.Platform = process.platform
 ): BpaPaths {
   const data = join(root, "data");
+  const run = join(root, "run");
   return {
     root,
+    run,
     data,
-    logs: join(homedir(), "Library", "Logs", "BPA"),
-    socket: join(root, "run", "core.sock"),
-    transferSocket: join(root, "run", "staging.sock"),
+    logs: resolveDefaultBpaLogRoot({
+      bpaHome: root,
+      platform
+    }),
+    socket: resolveLocalIpcEndpoint(root, "core", platform),
+    transferSocket: resolveLocalIpcEndpoint(root, "staging", platform),
     database: join(data, "bpa.sqlite"),
     signingKey: join(data, "core-signing-key.pem"),
-    lock: join(root, "run", "core.lock")
+    lock: join(run, "core.lock"),
+    resourceMetrics: join(run, "runtime-resource-metrics.json")
   };
 }

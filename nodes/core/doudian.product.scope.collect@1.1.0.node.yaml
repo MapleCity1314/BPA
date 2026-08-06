@@ -1,4 +1,4 @@
-apiVersion: bpa/v1alpha1
+apiVersion: bpa/v1alpha2
 kind: Node
 metadata:
   id: doudian.product.scope.collect
@@ -138,6 +138,13 @@ risk:
     - browser.tabs.read
   domains:
     - https://fxg.jinritemai.com
+resources:
+  browser:
+    kind: browser
+    capabilities: [browser.dom.read, browser.tabs.read]
+    allowedOrigins: [https://fxg.jinritemai.com]
+    authentication: authenticated
+    purpose: 在冻结的商品列表标签页完整采集商品范围
 execution:
   timeoutDefault: 10m
   idempotency: repeatable_read

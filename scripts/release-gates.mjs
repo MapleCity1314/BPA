@@ -7,7 +7,7 @@ const NODE_VERSION_PATTERN =
   /^24\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
 const GIT_COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const RELEASE_IDENTITY_PATTERN =
-  /^v(?<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-rc\.(?<commit>[a-f0-9]{12})$/u;
+  /^v(?<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-rc\.(?<commit>[a-f0-9]{12})\.node(?<node>24\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$/u;
 
 const SENSITIVE_PATTERNS = [
   {
@@ -71,13 +71,16 @@ export function createReleaseMetadata(input) {
     NODE_VERSION_PATTERN,
     "Node.js version"
   );
-  if (input.platform !== "darwin" || input.architecture !== "arm64") {
+  const supported =
+    (input.platform === "darwin" && input.architecture === "arm64") ||
+    (input.platform === "win32" && input.architecture === "x64");
+  if (!supported) {
     throw new Error(
-      `Release platform must be darwin-arm64, received ${input.platform}-${input.architecture}`
+      `Release platform must be darwin-arm64 or win32-x64, received ${input.platform}-${input.architecture}`
     );
   }
   return {
-    identity: `v${runtimeVersion}-rc.${gitCommit.slice(0, 12)}`,
+    identity: `v${runtimeVersion}-rc.${gitCommit.slice(0, 12)}.node${nodeVersion}`,
     channel: "rc",
     runtimeVersion,
     gitCommit,
@@ -102,7 +105,8 @@ export function validateReleaseMetadata(candidate) {
   if (
     !identity?.groups ||
     identity.groups.version !== candidate.runtimeVersion ||
-    identity.groups.commit !== candidate.gitCommit.slice(0, 12)
+    identity.groups.commit !== candidate.gitCommit.slice(0, 12) ||
+    identity.groups.node !== candidate.nodeVersion
   ) {
     throw new Error("Release identity is malformed");
   }
@@ -111,7 +115,9 @@ export function validateReleaseMetadata(candidate) {
 
 export function expectedArchiveBasename(release) {
   const exact = validateReleaseMetadata(release);
-  return `bpa-local-${exact.identity}-macos-${exact.architecture}.tar.gz`;
+  return exact.platform === "darwin"
+    ? `bpa-local-${exact.identity}-macos-${exact.architecture}.tar.gz`
+    : `bpa-local-${exact.identity}-windows-${exact.architecture}.zip`;
 }
 
 export function assertArchiveBasename(name, release) {

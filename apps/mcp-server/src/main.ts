@@ -25,13 +25,13 @@ import { assertMcpControlMethodAllowed } from "./policy.js";
 
 const server = new McpServer({
   name: "bpa-local",
-  version: "0.3.0"
+  version: "0.6.0"
 });
 const socket =
   process.env.BPA_CONTROL_SOCKET ?? resolveControlSocketPath();
 const control = new ControlClient(
   new UnixSocketControlTransport(socket, {
-    runtime: { name: "bpa-mcp", version: "0.3.0" },
+    runtime: { name: "bpa-mcp", version: "0.6.0" },
     features: ["evidence_refs", "resource_bindings", "staging_leases"]
   }),
   { timeoutMs: 10_000 }
@@ -561,6 +561,431 @@ server.registerTool(
         expectedRevision: expected_revision,
         candidateId: candidate_id,
         actor: { type: "ai", id: "codex:mcp" }
+      })
+    )
+);
+
+server.registerTool(
+  "authoring_session_create",
+  {
+    title: "Create BPA Authoring Session",
+    description:
+      "Validate a ScenarioSpec and create a durable CAS Authoring Session. This creates no executable or published asset.",
+    inputSchema: {
+      session_id: z.string(),
+      scenario: z.record(z.unknown())
+    }
+  },
+  async ({ session_id, scenario }) =>
+    result(
+      await core("authoring.session.create", {
+        sessionId: session_id,
+        scenario,
+        actor: { type: "ai", id: "codex:mcp" },
+        occurredAt: new Date().toISOString()
+      })
+    )
+);
+
+server.registerTool(
+  "authoring_session_get",
+  {
+    title: "Get BPA Authoring Session",
+    description:
+      "Read the current CAS revision, Catalog selections, capability gaps, Design Grants and Candidate references.",
+    inputSchema: { session_id: z.string() }
+  },
+  async ({ session_id }) =>
+    result(
+      await core("authoring.session.get", { sessionId: session_id })
+    )
+);
+
+server.registerTool(
+  "authoring_session_apply",
+  {
+    title: "Apply Authoring Session operation",
+    description:
+      "Apply one allowlisted, operation-idempotent CAS transition or capability-gap edit. Page text cannot add operation types.",
+    inputSchema: {
+      session_id: z.string(),
+      expected_revision: z.number().int().nonnegative(),
+      operation: z.record(z.unknown())
+    }
+  },
+  async ({ session_id, expected_revision, operation }) =>
+    result(
+      await core("authoring.session.apply", {
+        sessionId: session_id,
+        expectedRevision: expected_revision,
+        operation,
+        actor: "codex:mcp",
+        occurredAt: new Date().toISOString()
+      })
+    )
+);
+
+server.registerTool(
+  "design_mode_start",
+  {
+    title: "Use an operator-approved Design Mode Grant",
+    description:
+      "Verify that the exact Grant created in the local Operator Console is active. MCP cannot approve or broaden the Grant.",
+    inputSchema: { grant_id: z.string() }
+  },
+  async ({ grant_id }) => {
+    const grant = await core<Record<string, unknown>>(
+      "authoring.design-mode.get",
+      { grantId: grant_id }
+    );
+    if (grant.state !== "active") {
+      return result({
+        status: "authorization_required",
+        grantId: grant_id,
+        state: grant.state,
+        next:
+          "Open BPA Console → 创作授权 and approve the exact target page."
+      });
+    }
+    return result({
+      status: "active",
+      grant: {
+        grantId: grant.grantId,
+        authoringSessionId: grant.authoringSessionId,
+        browserSessionId: grant.browserSessionId,
+        profileId: grant.profileId,
+        origin: grant.origin,
+        tabId: grant.tabId,
+        pageEpoch: grant.pageEpoch,
+        allowedOperations: grant.allowedOperations,
+        expiresAt: grant.expiresAt,
+        revision: grant.revision
+      }
+    });
+  }
+);
+
+server.registerTool(
+  "design_snapshot_capture",
+  {
+    title: "Capture or finalize a governed semantic snapshot",
+    description:
+      "Without run_id, start the exact published capture Node under an active Design Grant and frozen Browser Session. With run_id, finalize its trusted Evidence as a PageSnapshot.",
+    inputSchema: {
+      authoring_session_id: z.string(),
+      expected_revision: z.number().int().nonnegative(),
+      grant_id: z.string(),
+      profile_id: z.string(),
+      page_state: z.string(),
+      browser_session_id: z.string(),
+      run_id: z.string().optional(),
+      snapshot_id: z.string().optional(),
+      operation_id: z.string().optional()
+    }
+  },
+  async ({
+    authoring_session_id,
+    expected_revision,
+    grant_id,
+    profile_id,
+    page_state,
+    browser_session_id,
+    run_id,
+    snapshot_id,
+    operation_id
+  }) => {
+    if (run_id) {
+      if (!snapshot_id || !operation_id) {
+        return result({
+          status: "rejected",
+          errors: [
+            "snapshot_id and operation_id are required when finalizing run_id"
+          ]
+        });
+      }
+      return result(
+        await core("authoring.snapshot.complete", {
+          sessionId: authoring_session_id,
+          expectedRevision: expected_revision,
+          operationId: operation_id,
+          actor: "codex:mcp",
+          occurredAt: new Date().toISOString(),
+          runId: run_id,
+          snapshotId: snapshot_id
+        })
+      );
+    }
+    const grant = await core<Record<string, unknown>>(
+      "authoring.design-mode.get",
+      { grantId: grant_id }
+    );
+    if (
+      grant.state !== "active" ||
+      grant.authoringSessionId !== authoring_session_id ||
+      grant.profileId !== profile_id ||
+      grant.browserSessionId !== browser_session_id
+    ) {
+      return result({
+        status: "authorization_required",
+        reason:
+          "The active Grant does not match the requested session, profile, or Browser Session."
+      });
+    }
+    const captureInput = {
+      authoringSessionId: authoring_session_id,
+      designGrantId: grant_id,
+      profileId: profile_id,
+      pageState: page_state,
+      pageEpoch: grant.pageEpoch
+    };
+    const preview = await core<{
+      previewDigest: string;
+      requiresConfirmation: boolean;
+      resourceSlots: Record<string, unknown>;
+    }>("run.node.preview", {
+      nodeId: "browser.design.snapshot.capture",
+      nodeVersion: "1.0.0",
+      input: captureInput
+    });
+    if (preview.requiresConfirmation) {
+      return result({
+        status: "rejected",
+        reason:
+          "The built-in Design capture Node unexpectedly requires R1 confirmation."
+      });
+    }
+    const observations = await core<Array<Record<string, unknown>>>(
+      "browser.page-observation.list",
+      {
+        sessionId: browser_session_id,
+        limit: 200
+      }
+    );
+    const pageObservation = observations.find(
+      (observation) =>
+        observation.sessionId === browser_session_id &&
+        observation.tabId === grant.tabId &&
+        observation.origin === grant.origin &&
+        observation.pageEpoch === grant.pageEpoch &&
+        observation.observationState === "ready" &&
+        observation.contentScriptReady === true &&
+        typeof observation.observedAt === "string" &&
+        Date.now() - Date.parse(observation.observedAt) <= 30_000
+    );
+    if (
+      !pageObservation ||
+      typeof pageObservation.browserInstanceId !== "string" ||
+      typeof pageObservation.tabId !== "number" ||
+      typeof pageObservation.revision !== "number"
+    ) {
+      return result({
+        status: "authorization_required",
+        reason:
+          "BROWSER_OBSERVATION_STALE: the authorized page is no longer available at the frozen tab binding."
+      });
+    }
+    const run = await core("run.node.create", {
+      nodeId: "browser.design.snapshot.capture",
+      nodeVersion: "1.0.0",
+      input: captureInput,
+      expectedPreviewDigest: preview.previewDigest,
+      confirmed: false,
+      resourceBindings: {
+        design_page: {
+          sessionId: browser_session_id,
+          browserInstanceId: pageObservation.browserInstanceId,
+          tabId: pageObservation.tabId,
+          observationRevision: pageObservation.revision
+        }
+      },
+      actor: "codex:mcp"
+    });
+    return result({
+      status: "capture_started",
+      preview,
+      run,
+      next:
+        "Wait for the Run to succeed, then call design_snapshot_capture again with run_id, snapshot_id and operation_id."
+    });
+  }
+);
+
+server.registerTool(
+  "design_snapshot_query",
+  {
+    title: "Query bounded semantic snapshot nodes",
+    description:
+      "Return snapshot metadata and at most 200 untrusted semantic nodes. Use role/text filters instead of loading the entire page.",
+    inputSchema: {
+      snapshot_id: z.string(),
+      offset: z.number().int().nonnegative().default(0),
+      limit: z.number().int().min(1).max(200).default(100),
+      role: z.string().optional(),
+      text: z.string().optional()
+    }
+  },
+  async ({ snapshot_id, offset, limit, role, text }) =>
+    result(
+      await core("authoring.snapshot.query", {
+        snapshotId: snapshot_id,
+        offset,
+        limit,
+        ...(role ? { role } : {}),
+        ...(text ? { text } : {})
+      })
+    )
+);
+
+server.registerTool(
+  "design_mode_stop",
+  {
+    title: "Stop Design Mode",
+    description:
+      "Stop an active operator-approved Grant. Stopped Grants and page-binding codes cannot be reused.",
+    inputSchema: {
+      grant_id: z.string(),
+      expected_revision: z.number().int().nonnegative(),
+      reason: z.string().default("authoring_capture_complete")
+    }
+  },
+  async ({ grant_id, expected_revision, reason }) =>
+    result(
+      await core("authoring.design-mode.stop", {
+        grantId: grant_id,
+        expectedRevision: expected_revision,
+        actor: "codex:mcp",
+        occurredAt: new Date().toISOString(),
+        reason
+      })
+    )
+);
+
+server.registerTool(
+  "page_candidate_validate",
+  {
+    title: "Validate PageModel and ElementContract Candidate",
+    description:
+      "Validate a candidate against the exact governed PageSnapshots attached to one Authoring Session. CSS-only or single-state contracts are rejected.",
+    inputSchema: {
+      authoring_session_id: z.string(),
+      expected_revision: z.number().int().nonnegative(),
+      candidate: z.record(z.unknown())
+    }
+  },
+  async ({
+    authoring_session_id,
+    expected_revision,
+    candidate
+  }) =>
+    result(
+      await core("authoring.page-candidate.validate", {
+        sessionId: authoring_session_id,
+        expectedRevision: expected_revision,
+        candidate
+      })
+    )
+);
+
+server.registerTool(
+  "page_candidate_gen",
+  {
+    title: "Save PageModel and ElementContract Candidate",
+    description:
+      "Validate and save page assets as Registry Candidates only. Generated Handler code is never executed and no asset is published.",
+    inputSchema: {
+      authoring_session_id: z.string(),
+      expected_revision: z.number().int().nonnegative(),
+      candidate: z.record(z.unknown())
+    }
+  },
+  async ({
+    authoring_session_id,
+    expected_revision,
+    candidate
+  }) =>
+    result(
+      await core("authoring.page-candidate.save", {
+        sessionId: authoring_session_id,
+        expectedRevision: expected_revision,
+        actor: "codex:mcp",
+        candidate
+      })
+    )
+);
+
+server.registerTool(
+  "candidate_bundle_validate",
+  {
+    title: "Validate immutable Candidate Bundle",
+    description:
+      "Check Schema, exact Scenario and Session revision, R0/R1 ceiling, Registry closure and CAS-backed file metadata before saving.",
+    inputSchema: {
+      authoring_session_id: z.string(),
+      expected_revision: z.number().int().nonnegative(),
+      bundle: z.record(z.unknown())
+    }
+  },
+  async ({
+    authoring_session_id,
+    expected_revision,
+    bundle
+  }) =>
+    result(
+      await core("authoring.candidate-bundle.validate", {
+        sessionId: authoring_session_id,
+        expectedRevision: expected_revision,
+        bundle
+      })
+    )
+);
+
+server.registerTool(
+  "candidate_bundle_save",
+  {
+    title: "Save immutable Candidate Bundle",
+    description:
+      "Save a fully valid Candidate Bundle and CAS-transition the Authoring Session to candidate. This never applies source, executes code or publishes assets.",
+    inputSchema: {
+      authoring_session_id: z.string(),
+      expected_revision: z.number().int().nonnegative(),
+      operation_id: z.string(),
+      bundle: z.record(z.unknown())
+    }
+  },
+  async ({
+    authoring_session_id,
+    expected_revision,
+    operation_id,
+    bundle
+  }) =>
+    result(
+      await core("authoring.candidate-bundle.save", {
+        sessionId: authoring_session_id,
+        expectedRevision: expected_revision,
+        operationId: operation_id,
+        actor: "codex:mcp",
+        occurredAt: new Date().toISOString(),
+        bundle
+      })
+    )
+);
+
+server.registerTool(
+  "candidate_bundle_export",
+  {
+    title: "Export checksummed Candidate Bundle",
+    description:
+      "Export an already-saved Candidate Bundle to the Core-owned exports directory as a deterministic tar. The archive is not applied to the repository and publishes nothing.",
+    inputSchema: {
+      candidate_id: z.string()
+    }
+  },
+  async ({ candidate_id }) =>
+    result(
+      await core("authoring.candidate-bundle.export", {
+        bundleId: candidate_id,
+        actor: "codex:mcp",
+        occurredAt: new Date().toISOString()
       })
     )
 );

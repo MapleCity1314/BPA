@@ -1,0 +1,50 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: inventory.channel-consumption.estimate
+  version: 1.0.0
+  title: 估算渠道商品消耗份额
+  description: 从三天渠道库存负向变化估算消费份额；库存增加视为补配边界，覆盖率或订单一致性不足时返回 unknown。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [asOf, points]
+  properties:
+    asOf: { type: string, format: date-time }
+    points:
+      type: array
+      maxItems: 20000
+      items:
+        type: object
+        additionalProperties: false
+        required: [at, channelGoodsId, stock]
+        properties:
+          at: { type: string, format: date-time }
+          channelGoodsId: { type: string, pattern: "^[0-9]{5,30}$" }
+          stock: { type: number, minimum: 0 }
+    observedSkuDemand: { type: number, minimum: 0 }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [status, observedHours, completeness, shares, diagnostics]
+  properties:
+    status: { enum: [ready, unknown] }
+    observedHours: { type: number, minimum: 0 }
+    completeness: { type: number, minimum: 0, maximum: 1 }
+    consistencyRatio: { type: number, minimum: 0, maximum: 1 }
+    shares:
+      type: object
+      additionalProperties: { type: number, minimum: 0, maximum: 1 }
+    diagnostics:
+      type: array
+      maxItems: 100
+      items: { type: string, maxLength: 1000 }
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 10s
+  idempotency: pure
+  cancellable: true
+errors: [TEAM_HANDLER_INPUT_INVALID, TEAM_HANDLER_RESULT_LIMIT_EXCEEDED, TEAM_HANDLER_CANCELLED, TEAM_HANDLER_TIMEOUT]

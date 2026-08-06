@@ -1,0 +1,78 @@
+{
+  "apiVersion": "bpa.authoring/v1alpha1",
+  "kind": "ScenarioSpec",
+  "metadata": {
+    "id": "chanmama.product.metrics.observe",
+    "version": "0.1.0",
+    "title": "读取蝉妈妈商品指标",
+    "description": "从用户已登录的蝉妈妈商品详情页读取只读指标候选。"
+  },
+  "businessGoal": "读取商品 ID、标题、来源 URL、观察时间、昨日与近 30 日指标，同时保留区间、估算属性和会员不可见状态。",
+  "platform": {
+    "id": "chanmama",
+    "origins": ["https://www.chanmama.com"]
+  },
+  "riskCeiling": "R1",
+  "inputs": [
+    {
+      "name": "product_url",
+      "type": "string:uri",
+      "required": true,
+      "description": "用户已打开并授权的商品详情 URL。"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "product_metrics",
+      "type": "chanmama.product-metrics/v1",
+      "required": true,
+      "description": "带时间窗、估算属性和可用性状态的原始指标。"
+    }
+  ],
+  "resourceRequirements": [
+    {
+      "slot": "metrics_source",
+      "purpose": "读取当前蝉妈妈商品详情页的公开或会员可见指标",
+      "origin": "https://www.chanmama.com",
+      "authentication": "authenticated"
+    }
+  ],
+  "successCriteria": [
+    "商品 ID、标题、来源 URL 和观察时间可追溯",
+    "昨日与近 30 日指标保留原始区间和估算属性",
+    "会员不可见字段输出 UNAVAILABLE_MEMBERSHIP"
+  ],
+  "failurePolicy": {
+    "failure": "fail",
+    "timeout": "request_assistance",
+    "cancelled": "cancel",
+    "uncertain": "stop_uncertain"
+  },
+  "evidencePolicy": {
+    "classification": "restricted",
+    "rawRetentionHours": 24,
+    "screenshotDefault": false
+  },
+  "acceptanceTests": [
+    {
+      "id": "metrics_visible",
+      "scenario": "success",
+      "input": {
+        "fixture": "product-detail-with-metrics"
+      },
+      "expected": {
+        "availability": "AVAILABLE"
+      }
+    },
+    {
+      "id": "membership_hidden",
+      "scenario": "business_failure",
+      "input": {
+        "fixture": "product-detail-membership-hidden"
+      },
+      "expected": {
+        "availability": "UNAVAILABLE_MEMBERSHIP"
+      }
+    }
+  ]
+}

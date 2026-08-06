@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.bpa.inventory-chrome</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing</string>
+    <string>--user-data-dir=/Users/yyerybz/Library/Application Support/BPA/chrome-inventory-profile</string>
+    <string>--remote-debugging-port=17660</string>
+    <string>--remote-debugging-address=127.0.0.1</string>
+    <string>--no-first-run</string>
+    <string>--no-default-browser-check</string>
+    <string>--disable-session-crashed-bubble</string>
+    <string>--restore-last-session</string>
+    <string>--disable-background-timer-throttling</string>
+    <string>--disable-backgrounding-occluded-windows</string>
+    <string>--disable-renderer-backgrounding</string>
+    <string>--disable-extensions-except=/Users/yyerybz/Library/Application Support/BPA/extension</string>
+    <string>--load-extension=/Users/yyerybz/Library/Application Support/BPA/extension</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/yyerybz/Library/Application Support/BPA/logs/inventory-chrome.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/yyerybz/Library/Application Support/BPA/logs/inventory-chrome.err.log</string>
+</dict>
+</plist>

@@ -1,6 +1,6 @@
 {
   "name": "@bpa/console-host",
-  "version": "0.4.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@bpa/control-client": "workspace:*",
-    "@bpa/operator-console-contracts": "workspace:*"
+    "@bpa/operator-console-contracts": "workspace:*",
+    "@bpa/platform-runtime": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

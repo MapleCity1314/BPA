@@ -1,0 +1,20 @@
+{
+  "name": "@bpa/sqlite-observability",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test.mjs",
+    "check": "pnpm build && pnpm test"
+  },
+  "dependencies": {
+    "better-sqlite3": "12.10.0"
+  }
+}

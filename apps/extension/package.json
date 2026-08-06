@@ -1,6 +1,6 @@
 {
   "name": "@bpa/extension",
-  "version": "0.3.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,9 +11,14 @@
   },
   "dependencies": {
     "@bpa/adapter-doudian": "workspace:*",
+    "@bpa/adapter-marketplace": "workspace:*",
     "@bpa/browser-bridge": "workspace:*",
     "@bpa/node-runtime": "workspace:*",
     "@bpa/schemas": "workspace:*",
     "wxt": "0.21.1"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^21.1.7",
+    "jsdom": "^27.0.1"
   }
 }

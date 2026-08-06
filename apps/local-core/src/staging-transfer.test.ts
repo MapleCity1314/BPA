@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
+import { resolveLocalIpcEndpoint } from "@bpa/platform-runtime";
 import {
   LocalStagingTransferServer,
   StagingTransferService
@@ -134,7 +135,9 @@ describe("local staging transfer", () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const service = new StagingTransferService(persistence, directory);
     const server = new LocalStagingTransferServer(
-      join(directory, "staging.sock"),
+      process.platform === "win32"
+        ? resolveLocalIpcEndpoint(directory, "staging", "win32")
+        : join(directory, "staging.sock"),
       service
     );
     await server.start();

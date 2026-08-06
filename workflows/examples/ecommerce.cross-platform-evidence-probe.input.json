@@ -1,0 +1,28 @@
+{
+  "intent": {
+    "intentId": "intent-prepackaged-jianbing-20260802",
+    "platform": "抖音电商、淘宝、京东",
+    "seedQuery": "预包装煎饼",
+    "researchGoal": "发现可比较商品、可追溯表现原文和远程主图候选",
+    "workingBoundary": {
+      "productForm": "独立预包装、开袋即食或简单加热即食的煎饼",
+      "targetPeople": ["早餐人群", "家庭囤货人群", "便捷食品消费者"],
+      "usageScenes": ["早餐", "家庭囤货", "办公室简餐"],
+      "confidence": "MEDIUM"
+    }
+  },
+  "poolId": "pool-prepackaged-jianbing-20260802",
+  "packId": "pack-prepackaged-jianbing-20260802",
+  "sourceRunId": "run-prepackaged-jianbing-smoke-20260802",
+  "observedAt": "2026-08-02T18:00:00+08:00",
+  "comparisonRules": {
+    "coreTerms": ["煎饼", "软煎饼", "杂粮煎饼"],
+    "packagingTerms": ["预包装", "独立包装", "开袋即食", "即食", "小包装"],
+    "excludeTerms": ["煎饼机", "制作机", "煎饼粉", "包装袋", "教程"]
+  },
+  "exclusionRules": [
+    "排除设备、原料、教程和包装耗材",
+    "只因标题包含煎饼但交付形态不同的商品不进入直接竞品层"
+  ],
+  "maxItems": 20
+}

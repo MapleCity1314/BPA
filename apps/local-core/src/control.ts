@@ -31,8 +31,14 @@ import {
   type ControlRequestEnvelope,
   type ControlResponseEnvelope
 } from "@bpa/control-protocol";
+import { isWindowsNamedPipe } from "@bpa/platform-runtime";
 import { LocalWorkflowEngine } from "./compatibility/local-workflow-engine.js";
-import type { ArtifactType, Persistence } from "@bpa/persistence";
+import type {
+  ArtifactType,
+  Persistence,
+  RunRecord,
+  TriggerSpecDefinition
+} from "@bpa/persistence";
 import {
   BuiltinRuntimeProvider,
   RuntimeProviderRegistry
@@ -49,14 +55,19 @@ import {
   validateNode,
   validateNodeV1Alpha2,
   validatePageModel,
+  validateTriggerSpec,
   validateWorkflow,
   validateWorkflowV1Alpha3,
   type NodeDefinition,
   type NodeDefinitionV1Alpha2,
   type AdapterManifestDefinition,
   type AssistanceProfileDefinition,
+  type AuthoringSessionDefinition,
+  type CandidateBundleDefinition,
   type ElementContractDefinition,
   type PageModelDefinition,
+  type PageSnapshotDefinition,
+  type ScenarioSpecDefinition,
   type DeterministicResultValidatorPolicyDefinition,
   type WorkflowDefinition,
   type WorkflowDefinitionV1Alpha2,
@@ -64,12 +75,16 @@ import {
 } from "@bpa/schemas";
 import {
   validateElementContractDefinition,
-  validatePageModel as validatePageModelDefinition
+  validatePageModel as validatePageModelDefinition,
+  type PageAssetCandidate
 } from "@bpa/page-model";
 import type { LocalBrowserGateway } from "./browser-gateway.js";
 import { Ir2WorkflowRuntime } from "./ir2-workflow-runtime.js";
 import { PersistenceTaskQueue } from "./persistence-task-queue.js";
-import { LocalAuthoringService } from "./authoring-service.js";
+import {
+  LocalAuthoringService,
+  type AuthoringSessionOperation
+} from "./authoring-service.js";
 import { PackagingDatasetService } from "./dataset-service.js";
 import { DatasetRuntimeProvider } from "./dataset-runtime-provider.js";
 import { PACKAGING_DATASET_PROFILE } from "@bpa/packaging-dataset";
@@ -84,6 +99,8 @@ import {
   StagingTransferService,
   type StagingLeaseRequest
 } from "./staging-transfer.js";
+import { LocalCandidateArchiveService } from "./candidate-archive-service.js";
+import { TriggerRuntime } from "./trigger-runtime.js";
 
 export const CONTROL_MAX_MESSAGE_BYTES = 512 * 1024;
 
@@ -107,7 +124,9 @@ export class LocalCoreService {
   readonly ir2Runtime: Ir2WorkflowRuntime;
   readonly assistance: AssistanceTaskService;
   readonly authoring: LocalAuthoringService;
+  readonly candidateArchives: LocalCandidateArchiveService | undefined;
   readonly datasets: PackagingDatasetService;
+  readonly triggers: TriggerRuntime;
   readonly #resourceBindings: RuntimeResourceBindingService;
   readonly #trustedEvidence: TrustedEvidenceQueryService;
 
@@ -115,10 +134,30 @@ export class LocalCoreService {
     readonly persistence: Persistence,
     readonly browserGateway?: LocalBrowserGateway,
     runtimeProviders?: RuntimeProviderRegistry,
-    readonly stagingTransfers?: StagingTransferService
+    readonly stagingTransfers?: StagingTransferService,
+    candidateArchiveDataDirectory?: string,
+    readonly runtimeMaintenancePath?: string
   ) {
     this.engine = new LocalWorkflowEngine(persistence);
     this.datasets = new PackagingDatasetService(persistence);
+    this.triggers = new TriggerRuntime(
+      persistence,
+      (trigger,input) => {
+        this.#assertRuntimeAvailable();
+        const resolved = this.#resolveWorkflowResources(
+          trigger.spec.workflow.id,
+          trigger.spec.workflow.version,
+          trigger.spec.browserInstanceId
+        ) as { resourceBindings?: unknown };
+        return this.#createRun(
+          trigger.spec.workflow.id,
+          trigger.spec.workflow.version,
+          input,
+          resolved.resourceBindings ?? {},
+          `trigger:${trigger.spec.id}`
+        ) as RunRecord;
+      }
+    );
     this.#resourceBindings = new RuntimeResourceBindingService(persistence);
     this.#trustedEvidence = new TrustedEvidenceQueryService(persistence);
     const providers = runtimeProviders ?? new RuntimeProviderRegistry();
@@ -150,7 +189,11 @@ export class LocalCoreService {
           cwd: existsSync(packagedWorker)
             ? resolve(import.meta.dirname, "..")
             : resolve(import.meta.dirname, "../../.."),
-          env: {}
+          env: {
+            ...(process.env.BPA_INVENTORY_SOCKET
+              ? { BPA_INVENTORY_SOCKET: process.env.BPA_INVENTORY_SOCKET }
+              : {})
+          }
         },
         expectedCodeDigest: TEAM_WORKER_CODE_DIGEST,
         expectedHandlerRefs: TEAM_WORKER_HANDLER_REFS
@@ -160,8 +203,8 @@ export class LocalCoreService {
       resolveResourceBindingSnapshot: (runId) =>
         persistence.getRunResourceBindingSnapshot(runId),
       browserSessions: {
-        getBrowserSession: (sessionId) =>
-          this.#resourceBindings.resolveBrowserSession(sessionId)
+        getBrowserSession: (binding) =>
+          this.#resourceBindings.resolveBrowserBinding(binding)
       }
     });
     const assistanceValidator: AssistanceResultValidator = {
@@ -217,7 +260,24 @@ export class LocalCoreService {
         return published?.digest === profile.digest;
       }
     });
-    this.authoring = new LocalAuthoringService(persistence);
+    const candidateArchives = candidateArchiveDataDirectory
+      ? new LocalCandidateArchiveService(
+          persistence,
+          candidateArchiveDataDirectory
+        )
+      : undefined;
+    this.candidateArchives = candidateArchives;
+    this.authoring = new LocalAuthoringService(
+      persistence,
+      candidateArchives
+        ? (storageRef) =>
+            candidateArchives.readAsset(storageRef)
+        : undefined,
+      candidateArchives
+        ? (input) =>
+            candidateArchives.storeCandidateFile(input)
+        : undefined
+    );
   }
 
   handle(request: ControlRequest): ControlResponse {
@@ -415,7 +475,7 @@ export class LocalCoreService {
         return {
           status: "ok",
           persistence: this.persistence.health(),
-          protocol: "bpa.browser/1",
+          protocol: "bpa.browser/2",
           browser: this.browserGateway?.status() ?? {
             connected: false,
             ready: false
@@ -535,6 +595,133 @@ export class LocalCoreService {
           candidateId: String(params.candidateId),
           now: new Date().toISOString()
         });
+      case "authoring.session.create":
+        return this.authoring.createSession({
+          sessionId: String(params.sessionId),
+          scenario: params.scenario as ScenarioSpecDefinition,
+          actor: params.actor as AuthoringSessionDefinition["actor"],
+          now: String(params.occurredAt ?? new Date().toISOString())
+        });
+      case "authoring.session.get":
+        return this.authoring.getSession(String(params.sessionId));
+      case "authoring.session.apply":
+        return this.authoring.applySession({
+          sessionId: String(params.sessionId),
+          expectedRevision: Number(params.expectedRevision),
+          operation: params.operation as AuthoringSessionOperation,
+          actor: String(params.actor),
+          occurredAt: String(params.occurredAt)
+        });
+      case "authoring.design-mode.request":
+        return this.authoring.requestDesignMode({
+          grantId: String(params.grantId),
+          authoringSessionId: String(params.authoringSessionId),
+          approvedBy: String(params.approvedBy),
+          browserSessionId: String(params.browserSessionId),
+          profileId: String(params.profileId),
+          tabId: Number(params.tabId),
+          origin: String(params.origin),
+          pageEpoch: String(params.pageEpoch),
+          screenshotApproved: params.screenshotApproved === true,
+          issuedAt: String(params.issuedAt),
+          expiresAt: String(params.expiresAt)
+        });
+      case "authoring.design-mode.get":
+        return this.authoring.getDesignMode(String(params.grantId));
+      case "authoring.design-mode.activate":
+        return this.authoring.activateDesignMode({
+          grantId: String(params.grantId),
+          expectedRevision: Number(params.expectedRevision),
+          actor: String(params.actor),
+          occurredAt: String(params.occurredAt)
+        });
+      case "authoring.design-mode.stop":
+        return this.authoring.stopDesignMode({
+          grantId: String(params.grantId),
+          expectedRevision: Number(params.expectedRevision),
+          actor: String(params.actor),
+          occurredAt: String(params.occurredAt),
+          ...(params.reason === undefined
+            ? {}
+            : { reason: String(params.reason) })
+        });
+      case "authoring.snapshot.attach":
+        return this.authoring.attachSnapshot({
+          sessionId: String(params.sessionId),
+          expectedRevision: Number(params.expectedRevision),
+          operationId: String(params.operationId),
+          actor: String(params.actor),
+          occurredAt: String(params.occurredAt),
+          snapshot: params.snapshot as PageSnapshotDefinition
+        });
+      case "authoring.snapshot.complete":
+        return this.authoring.completeSnapshot({
+          sessionId: String(params.sessionId),
+          expectedRevision: Number(params.expectedRevision),
+          operationId: String(params.operationId),
+          actor: String(params.actor),
+          occurredAt: String(params.occurredAt),
+          runId: String(params.runId),
+          snapshotId: String(params.snapshotId)
+        });
+      case "authoring.snapshot.query":
+        return this.authoring.querySnapshot({
+          snapshotId: String(params.snapshotId),
+          ...(params.offset === undefined
+            ? {}
+            : { offset: Number(params.offset) }),
+          ...(params.limit === undefined
+            ? {}
+            : { limit: Number(params.limit) }),
+          ...(params.role === undefined
+            ? {}
+            : { role: String(params.role) }),
+          ...(params.text === undefined
+            ? {}
+            : { text: String(params.text) })
+        });
+      case "authoring.page-candidate.validate":
+        return this.authoring.validatePageCandidate({
+          sessionId: String(params.sessionId),
+          expectedRevision: Number(params.expectedRevision),
+          candidate: params.candidate as PageAssetCandidate
+        });
+      case "authoring.page-candidate.save":
+        return this.authoring.savePageCandidate({
+          sessionId: String(params.sessionId),
+          expectedRevision: Number(params.expectedRevision),
+          actor: String(params.actor),
+          candidate: params.candidate as PageAssetCandidate
+        });
+      case "authoring.candidate-bundle.validate":
+        return this.authoring.validateCandidateBundle({
+          sessionId: String(params.sessionId),
+          expectedRevision: Number(params.expectedRevision),
+          bundle: params.bundle as CandidateBundleDefinition
+        });
+      case "authoring.candidate-bundle.save":
+        return this.authoring.saveCandidateBundle({
+          sessionId: String(params.sessionId),
+          expectedRevision: Number(params.expectedRevision),
+          operationId: String(params.operationId),
+          actor: String(params.actor),
+          occurredAt: String(params.occurredAt),
+          bundle: params.bundle as CandidateBundleDefinition
+        });
+      case "authoring.candidate-bundle.get":
+        return this.authoring.getCandidateBundle(String(params.bundleId));
+      case "authoring.candidate-bundle.inspect":
+        return this.#candidateArchives().inspect(
+          String(params.bundleId)
+        );
+      case "authoring.candidate-bundle.export":
+        return this.#candidateArchives().export({
+          bundleId: String(params.bundleId),
+          actor: String(params.actor),
+          occurredAt: String(
+            params.occurredAt ?? new Date().toISOString()
+          )
+        });
       case "dataset.inspect":
         return this.datasets.get(String(params.id), String(params.version));
       case "dataset.read":
@@ -552,13 +739,124 @@ export class LocalCoreService {
         return this.persistence.listAudit(
           params.target == null ? undefined : String(params.target)
         );
+      case "trigger.put": {
+        if (!validateTriggerSpec(params.spec)) {
+          throw new Error(
+            `TriggerSpec is invalid: ${formatValidationErrors(validateTriggerSpec.errors).join("; ")}`
+          );
+        }
+        const spec = params.spec as TriggerSpecDefinition;
+        if (!this.persistence.getPublished("workflow",spec.workflow.id,spec.workflow.version)) {
+          throw new Error(
+            `Published workflow not found: ${spec.workflow.id}@${spec.workflow.version}`
+          );
+        }
+        return this.persistence.putTriggerSpec({
+          spec,actor:String(params.actor || userInfo().username),
+          occurredAt:new Date().toISOString()
+        });
+      }
+      case "trigger.list":
+        return this.persistence.listTriggerSpecs();
+      case "trigger.runs":
+        return this.persistence.listTriggerRuns(
+          params.triggerId === undefined ? undefined : String(params.triggerId)
+        );
+      case "trigger.enable":
+        return this.persistence.setTriggerEnabled({
+          id:String(params.id),expectedRevision:Number(params.expectedRevision),
+          enabled:params.enabled === true,
+          actor:String(params.actor || userInfo().username),
+          occurredAt:new Date().toISOString()
+        });
+      case "trigger.fire": {
+        const trigger = this.persistence.getTriggerSpec(String(params.id));
+        if (!trigger) throw new Error(`Trigger not found: ${String(params.id)}`);
+        if (!trigger.spec.enabled) throw new Error("TRIGGER_DISABLED");
+        if (trigger.spec.kind !== "manual") {
+          throw new Error("Only Manual Triggers accept an explicit fire request");
+        }
+        const requestKey = String(params.requestKey ?? "").trim();
+        if (!requestKey) throw new Error("Manual Trigger requires requestKey");
+        return this.triggers.fire({ trigger,occurrenceKey:`manual:${requestKey}` });
+      }
+      case "browser.control-lease.acquire":
+        return this.persistence.acquireBrowserControlLease({
+          resourceId:String(params.resourceId),ownerId:String(params.ownerId),
+          now:new Date().toISOString(),ttlSeconds:Number(params.ttlSeconds ?? 120)
+        });
+      case "browser.control-lease.renew":
+        return this.persistence.renewBrowserControlLease({
+          resourceId:String(params.resourceId),ownerId:String(params.ownerId),
+          fencingToken:Number(params.fencingToken),now:new Date().toISOString(),
+          ttlSeconds:Number(params.ttlSeconds ?? 120)
+        });
+      case "browser.control-lease.release":
+        return {
+          released:this.persistence.releaseBrowserControlLease({
+            resourceId:String(params.resourceId),ownerId:String(params.ownerId),
+            fencingToken:Number(params.fencingToken),releasedAt:new Date().toISOString()
+          })
+        };
+      case "browser.control-lease.list":
+        return this.persistence.listBrowserControlLeases(new Date().toISOString());
       case "browser.session.list":
         return this.persistence.listBrowserSessions({
           limit: Math.min(
             200,
             Math.max(1, Number(params.limit) || 100)
           )
-        }).records;
+        }).records.map((session) => ({
+          ...session,
+          capabilities: this.persistence
+            .listBrowserCapabilities(session.id)
+            .map((capability) => ({
+              nodeId: capability.nodeId,
+              nodeVersion: capability.nodeVersion,
+              permissions: capability.permissions
+            }))
+        }));
+      case "browser.page-observation.list":
+        {
+          const pages = this.persistence.listBrowserPageObservations({
+            limit: Math.min(200, Math.max(1, Number(params.limit) || 200)),
+            ...(params.sessionId === undefined
+              ? {}
+              : { sessionId: String(params.sessionId) }),
+            ...(params.browserInstanceId === undefined
+              ? {}
+              : { browserInstanceId: String(params.browserInstanceId) })
+          });
+          if (params.includeDisconnected === true) return pages;
+          return pages.filter((page) => {
+            const session = this.persistence.getBrowserSession(page.sessionId);
+            return session !== undefined && !session.disconnectedAt;
+          });
+        }
+      case "browser.page-observation.probe":
+        if (!this.browserGateway) {
+          throw new Error("BROWSER_BRIDGE_DISCONNECTED");
+        }
+        return this.browserGateway.requestPageProbe({
+          sessionId: String(params.sessionId),
+          browserInstanceId: String(params.browserInstanceId),
+          tabId: Number(params.tabId),
+          ...(params.windowId === undefined
+            ? {}
+            : { windowId: Number(params.windowId) }),
+          origin: String(params.origin),
+          ...(params.timeoutMs === undefined
+            ? {}
+            : { timeoutMs: Number(params.timeoutMs) })
+        });
+      case "browser.resource-binding.resolve":
+        return this.#resolveWorkflowResources(
+          String(params.workflowId),
+          String(params.workflowVersion),
+          params.browserInstanceId === undefined
+            ? undefined
+            : String(params.browserInstanceId)
+        );
       case "staging.lease.create":
         if (!this.stagingTransfers) {
           throw new Error("Staging transfer service is unavailable");
@@ -592,6 +890,7 @@ export class LocalCoreService {
           String(params.actor || userInfo().username)
         );
       case "run.create":
+        this.#assertRuntimeAvailable();
         return this.#createRun(
           String(params.workflowId),
           String(params.workflowVersion),
@@ -606,13 +905,15 @@ export class LocalCoreService {
           params.input ?? {}
         );
       case "run.node.create":
+        this.#assertRuntimeAvailable();
         return this.#createSingleNodeRun({
           nodeId: String(params.nodeId),
           nodeVersion: String(params.nodeVersion),
           input: params.input ?? {},
           expectedPreviewDigest: String(params.expectedPreviewDigest),
           confirmed: params.confirmed === true,
-          actor: String(params.actor || userInfo().username)
+          actor: String(params.actor || userInfo().username),
+          resourceBindings: params.resourceBindings
         });
       case "run.inspect": {
         const runId = String(params.runId);
@@ -623,6 +924,7 @@ export class LocalCoreService {
       case "run.events":
         return this.persistence.listEvents(String(params.runId));
       case "run.human.complete":
+        this.#assertRuntimeAvailable();
         return this.#completeHumanStep(
           String(params.nodeExecutionId),
           params.approved === true,
@@ -630,6 +932,7 @@ export class LocalCoreService {
         );
       case "run.cancel":
         {
+          this.#assertRuntimeAvailable();
           const runId = String(params.runId);
           const actor = String(params.actor || userInfo().username);
           if (
@@ -648,6 +951,15 @@ export class LocalCoreService {
       default:
         throw new Error(`Unknown control method: ${method}`);
     }
+  }
+
+  #candidateArchives(): LocalCandidateArchiveService {
+    if (!this.candidateArchives) {
+      throw new Error(
+        "Candidate archive service is unavailable in this Core process"
+      );
+    }
+    return this.candidateArchives;
   }
 
   #validateAsset(assetType: string, content: unknown): unknown {
@@ -1119,6 +1431,49 @@ export class LocalCoreService {
     return run;
   }
 
+  #assertRuntimeAvailable(): void {
+    if (
+      this.runtimeMaintenancePath &&
+      existsSync(this.runtimeMaintenancePath)
+    ) {
+      throw new Error("BPA_RUNTIME_MAINTENANCE");
+    }
+  }
+
+  #resolveWorkflowResources(
+    workflowId: string,
+    workflowVersion: string,
+    browserInstanceId?: string
+  ): unknown {
+    const artifact = this.persistence.getPublished(
+      "workflow",
+      workflowId,
+      workflowVersion
+    );
+    if (!artifact) {
+      throw new Error(
+        `Published workflow not found: ${workflowId}@${workflowVersion}`
+      );
+    }
+    if (
+      artifact.content === null ||
+      typeof artifact.content !== "object" ||
+      !["bpa/v1alpha2", "bpa/v1alpha3"].includes(
+        String((artifact.content as { apiVersion?: unknown }).apiVersion)
+      )
+    ) {
+      throw new Error("BROWSER_RESOURCE_RESOLUTION_REQUIRES_IR2");
+    }
+    const plan = compileCanonicalWorkflow(
+      artifact.content,
+      this.#ir2Catalog()
+    );
+    return this.#resourceBindings.resolveForPlan(
+      plan,
+      browserInstanceId
+    );
+  }
+
   #singleNodePlan(
     nodeId: string,
     nodeVersion: string,
@@ -1147,15 +1502,6 @@ export class LocalCoreService {
         "SingleNodeRun is limited to R0/R1; use a published Workflow with the formal approval path for R2+"
       );
     }
-    if (
-      node.apiVersion === "bpa/v1alpha2" &&
-      node.resources &&
-      Object.keys(node.resources).length > 0
-    ) {
-      throw new Error(
-        "SingleNodeRun cannot invent Browser Resource Bindings; use a published v1alpha3 Workflow"
-      );
-    }
     const safeInput = JSON.parse(JSON.stringify(input)) as JsonValue;
     const validateInput = compileDataValidator(node.inputSchema);
     if (!validateInput(safeInput)) {
@@ -1173,8 +1519,21 @@ export class LocalCoreService {
       },
       input: safeInput
     }).slice("sha256:".length, "sha256:".length + 32);
-    const workflow: WorkflowDefinitionV1Alpha2 = {
-      apiVersion: "bpa/v1alpha2",
+    const resourceSlots =
+      node.apiVersion === "bpa/v1alpha2" && node.resources
+        ? Object.fromEntries(
+            Object.entries(node.resources).map(
+              ([name, requirement]) => [
+                name,
+                structuredClone(requirement)
+              ]
+            )
+          )
+        : undefined;
+    const workflow:
+      | WorkflowDefinitionV1Alpha2
+      | WorkflowDefinitionV1Alpha3 = {
+      apiVersion: resourceSlots ? "bpa/v1alpha3" : "bpa/v1alpha2",
       kind: "Workflow",
       metadata: {
         id: `single-node.${identityDigest}`,
@@ -1191,6 +1550,7 @@ export class LocalCoreService {
         // terminals, so the bounded wrapper contains more than its two authored
         // steps even though only one Node invocation can occur.
         limits: { maxDepth: 1, maxStepExecutions: 8 },
+        ...(resourceSlots ? { resourceSlots } : {}),
         root: {
           kind: "sequence",
           steps: [
@@ -1199,6 +1559,16 @@ export class LocalCoreService {
               kind: "call",
               use: `${node.metadata.id}@${node.metadata.version}`,
               with: "${input}",
+              ...(resourceSlots
+                ? {
+                    resourceMappings: Object.fromEntries(
+                      Object.keys(resourceSlots).map((name) => [
+                        name,
+                        name
+                      ])
+                    )
+                  }
+                : {}),
               retry: { maxAttempts: 1 }
             },
             {
@@ -1239,6 +1609,7 @@ export class LocalCoreService {
       riskLevel: prepared.node.risk.level,
       permissions: [...prepared.node.risk.permissions],
       domains: [...(prepared.node.risk.domains ?? [])],
+      resourceSlots: prepared.plan.resourceSlots ?? {},
       artifactClosure: prepared.plan.artifactClosure,
       riskSnapshot: prepared.plan.riskSnapshot,
       previewDigest: prepared.previewDigest,
@@ -1253,6 +1624,7 @@ export class LocalCoreService {
     expectedPreviewDigest: string;
     confirmed: boolean;
     actor: string;
+    resourceBindings: unknown;
   }): unknown {
     const prepared = this.#singleNodePlan(
       input.nodeId,
@@ -1267,14 +1639,27 @@ export class LocalCoreService {
     if (prepared.node.risk.level === "R1" && !input.confirmed) {
       throw new Error("R1 SingleNodeRun requires explicit human confirmation");
     }
-    return this.ir2Runtime.start(prepared.plan, prepared.input, {
-      mode: "single_node",
-      actor: input.actor,
-      nodeId: prepared.node.metadata.id,
-      nodeVersion: prepared.node.metadata.version,
-      previewDigest: prepared.previewDigest,
-      confirmed: input.confirmed
-    });
+    const bindResources = this.#resourceBindings.prepare(
+      prepared.plan,
+      input.resourceBindings,
+      input.actor
+    );
+    return this.ir2Runtime.start(
+      prepared.plan,
+      prepared.input,
+      {
+        mode: "single_node",
+        actor: input.actor,
+        nodeId: prepared.node.metadata.id,
+        nodeVersion: prepared.node.metadata.version,
+        previewDigest: prepared.previewDigest,
+        confirmed: input.confirmed,
+        resourceSlots: Object.keys(
+          prepared.plan.resourceSlots ?? {}
+        ).sort()
+      },
+      bindResources
+    );
   }
 
   #completeHumanStep(
@@ -1529,6 +1914,27 @@ function controlV1Error(
   };
 }
 
+function writeControlV1Response(
+  socket: Socket,
+  requestId: string,
+  response: ControlResponseEnvelope
+): void {
+  try {
+    socket.write(Buffer.from(encodeControlEnvelope(response)));
+  } catch (error) {
+    if (socket.destroyed) return;
+    const message =
+      error instanceof Error && /maximum size/iu.test(error.message)
+        ? "Control response exceeds the negotiated maximum size"
+        : "Control response encoding failed";
+    socket.write(
+      Buffer.from(
+        encodeControlEnvelope(controlV1Error(requestId, "INTERNAL", message))
+      )
+    );
+  }
+}
+
 function mapLegacyErrorCode(response: ControlResponse): ControlErrorCode {
   const code = response.error?.code;
   if (code && CONTROL_V1_ERROR_CODES.has(code as ControlErrorCode)) {
@@ -1551,7 +1957,9 @@ export class LocalControlServer {
 
   async start(): Promise<void> {
     if (this.#server) throw new Error("Control server already started");
-    rmSync(this.socketPath, { force: true });
+    if (!isWindowsNamedPipe(this.socketPath)) {
+      rmSync(this.socketPath, { force: true });
+    }
     const server = createServer((socket) => {
       let nativeConnectionId: string | undefined;
       let negotiatedControl:
@@ -1589,7 +1997,7 @@ export class LocalControlServer {
               const hello = parseControlHelloRequest(message);
               const response = negotiateControlHello(hello, {
                 supportedApplicationProtocols: [CONTROL_PROTOCOL_VERSION],
-                runtime: { name: "bpa-core", version: "0.3.0" },
+                runtime: { name: "bpa-core", version: "0.6.0" },
                 maxFrameBytes: CONTROL_V1_MAX_MESSAGE_BYTES,
                 features: [
                   "control_error_isolation",
@@ -1684,19 +2092,34 @@ export class LocalControlServer {
                     version: "bpa.control/1",
                     kind: "result",
                     requestId: request.requestId,
-                    result: legacyResponse.result
+                    result: legacyResponse.result ?? null
                   }
                 : controlV1Error(
                     request.requestId,
                     mapLegacyErrorCode(legacyResponse),
                     legacyResponse.error?.message ?? "Core request failed"
                   );
-              socket.write(Buffer.from(encodeControlEnvelope(response)));
+              writeControlV1Response(socket, request.requestId, response);
+            })
+            .catch(() => {
+              if (socket.destroyed) return;
+              writeControlV1Response(
+                socket,
+                request.requestId,
+                controlV1Error(
+                  request.requestId,
+                  "INTERNAL",
+                  "Control request failed"
+                )
+              );
             });
           return;
         }
         if (nativeConnectionId) {
-          this.service.browserGateway?.handle(message);
+          this.service.browserGateway?.handle(
+            message,
+            nativeConnectionId
+          );
           return;
         }
         const request = message as Partial<ControlRequest>;
@@ -1716,6 +2139,8 @@ export class LocalControlServer {
           );
           return;
         }
+        const legacyRequestId = request.id;
+        const legacyMethod = request.method;
         if (request.method === "native.attach") {
           if (!this.service.browserGateway) {
             socket.write(
@@ -1759,12 +2184,39 @@ export class LocalControlServer {
         }
         void this.service
           .handleAsync({
-              id: request.id,
-              method: request.method,
+              id: legacyRequestId,
+              method: legacyMethod,
               ...(request.params ? { params: request.params } : {})
             })
           .then((response) => {
-            if (!socket.destroyed) socket.write(encodeFrame(response));
+            if (socket.destroyed) return;
+            try {
+              socket.write(encodeFrame(response));
+            } catch {
+              socket.write(
+                encodeFrame({
+                  id: legacyRequestId,
+                  ok: false,
+                  error: {
+                    code: "INTERNAL",
+                    message: "Control response exceeds the maximum size"
+                  }
+                } satisfies ControlResponse)
+              );
+            }
+          })
+          .catch(() => {
+            if (socket.destroyed) return;
+            socket.write(
+              encodeFrame({
+                id: legacyRequestId,
+                ok: false,
+                error: {
+                  code: "INTERNAL",
+                  message: "Control request failed"
+                }
+              } satisfies ControlResponse)
+            );
           });
       });
       socket.once("close", () => {
@@ -1778,9 +2230,11 @@ export class LocalControlServer {
       server.once("error", reject);
       server.listen(this.socketPath, () => resolve());
     });
-    await import("node:fs/promises").then(({ chmod }) =>
-      chmod(this.socketPath, 0o600)
-    );
+    if (!isWindowsNamedPipe(this.socketPath)) {
+      await import("node:fs/promises").then(({ chmod }) =>
+        chmod(this.socketPath, 0o600)
+      );
+    }
   }
 
   async stop(): Promise<void> {
@@ -1790,7 +2244,9 @@ export class LocalControlServer {
       server.close((error) => (error ? reject(error) : resolve()))
     );
     this.#server = undefined;
-    rmSync(this.socketPath, { force: true });
+    if (!isWindowsNamedPipe(this.socketPath)) {
+      rmSync(this.socketPath, { force: true });
+    }
   }
 }
 

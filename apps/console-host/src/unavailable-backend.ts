@@ -1,6 +1,7 @@
 import type {
   ControlBackend,
   CreateRunInput,
+  DesignModeGrantInput,
   StagingLeaseRequest,
   StagedDatasetImportInput,
   SubmitTaskInput
@@ -15,7 +16,7 @@ export class UnavailableControlBackend implements ControlBackend {
     return {
       attention: "action" as const,
       headline: "BPA Core 尚未连接",
-      runtimeVersion: "0.4.0",
+      runtimeVersion: "0.6.0",
       components: [
         {
           id: "core",
@@ -76,6 +77,17 @@ export class UnavailableControlBackend implements ControlBackend {
   }
 
   async getDownload(_downloadId: string) {
+    return unavailable();
+  }
+
+  async startDesignMode(_input: DesignModeGrantInput) {
+    return unavailable();
+  }
+
+  async stopDesignMode(
+    _grantId: string,
+    _expectedRevision: number
+  ) {
     return unavailable();
   }
 }

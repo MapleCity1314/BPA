@@ -1,4 +1,4 @@
-apiVersion: bpa/v1alpha1
+apiVersion: bpa/v1alpha2
 kind: Node
 metadata:
   id: doudian.product.scope.restore
@@ -106,6 +106,13 @@ risk:
     - browser.tabs.navigate
   domains:
     - https://fxg.jinritemai.com
+resources:
+  browser:
+    kind: browser
+    capabilities: [browser.dom.read, browser.tabs.read, browser.tabs.navigate]
+    allowedOrigins: [https://fxg.jinritemai.com]
+    authentication: authenticated
+    purpose: 在同一冻结标签页恢复采集前的商品列表范围
 execution:
   timeoutDefault: 30s
   idempotency: repeatable_read

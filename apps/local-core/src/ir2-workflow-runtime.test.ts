@@ -207,8 +207,12 @@ function resourceBindingSnapshot(runId: string): ResourceBindingSnapshot {
         revision: 1,
         slotName: "metrics_source",
         sessionId: "session-1",
+        browserInstanceId: "browser-1",
+        tabId: 42,
         capabilityDigest: digest("6"),
         origin: "https://www.chanmama.com",
+        pathname: "/metrics",
+        pageEpoch: "tab-42:1:test",
         authentication: "authenticated",
         frozenAt: 900,
         approvedBy: "user:test"
@@ -400,9 +404,14 @@ describe("Local Core IR2 runtime", () => {
       browserSessions: {
         getBrowserSession: () => ({
           sessionId: "session-1",
+          browserInstanceId: "browser-1",
+          tabId: 42,
+          observationRevision: 1,
           capabilityDigest: digest("6"),
           capabilities: ["browser.dom.read"],
           origin: "https://www.chanmama.com",
+          pathname: "/metrics",
+          pageEpoch: "tab-42:1:test",
           authentication: "authenticated",
           state: "available"
         })
@@ -526,9 +535,14 @@ describe("Local Core IR2 runtime", () => {
         browserSessions: {
           getBrowserSession: () => ({
             sessionId,
+            browserInstanceId: "browser-1",
+            tabId: 42,
+            observationRevision: 1,
             capabilityDigest,
             capabilities,
             origin: "https://www.chanmama.com",
+            pathname: "/metrics",
+            pageEpoch: "tab-42:1:test",
             authentication: "authenticated",
             state: "available"
           })

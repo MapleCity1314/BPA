@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "auditRegistry": "https://registry.npmjs.org",
+  "minimumBlockedSeverity": "high",
+  "allowedLicenses": [
+    "0BSD",
+    "Apache-2.0",
+    "BSD",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BlueOak-1.0.0",
+    "CC-BY-4.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Python-2.0",
+    "(BSD-2-Clause OR MIT OR Apache-2.0)",
+    "(BSD-3-Clause OR GPL-2.0)",
+    "(MIT AND Zlib)",
+    "(MIT OR CC0-1.0)",
+    "(MIT OR GPL-3.0-or-later)",
+    "(MIT OR WTFPL)"
+  ],
+  "licenseExceptions": [
+    {
+      "license": "LGPL-3.0-or-later",
+      "packages": ["@img/sharp-libvips-darwin-arm64"],
+      "owner": "BPA release engineering",
+      "expiresOn": "2026-08-31",
+      "reason": "Dynamically loaded build-time image dependency; preserve notices and replace or complete distribution review before expiry."
+    },
+    {
+      "license": "Apache-2.0 AND LGPL-3.0-or-later",
+      "packages": ["@img/sharp-win32-x64"],
+      "owner": "BPA release engineering",
+      "expiresOn": "2026-08-31",
+      "reason": "Windows Sharp native image dependency; preserve notices and complete the same distribution review as the Darwin libvips package before expiry."
+    }
+  ],
+  "vulnerabilityExceptions": [
+    {
+      "advisory": "GHSA-w7jw-789q-3m8p",
+      "module": "shell-quote",
+      "allowedPathPrefix": "apps__extension>wxt>web-ext-run>",
+      "owner": "BPA release engineering",
+      "expiresOn": "2026-08-31",
+      "reason": "Firefox development runner is not invoked by the Chrome production build and is absent from Runtime and unpacked extension artifacts."
+    },
+    {
+      "advisory": "GHSA-ph9p-34f9-6g65",
+      "module": "tmp",
+      "allowedPathPrefix": "apps__extension>wxt>web-ext-run>",
+      "owner": "BPA release engineering",
+      "expiresOn": "2026-08-31",
+      "reason": "Firefox development runner is not invoked by the Chrome production build and is absent from Runtime and unpacked extension artifacts."
+    },
+    {
+      "advisory": "GHSA-xcpc-8h2w-3j85",
+      "module": "adm-zip",
+      "allowedPathPrefix": "apps__extension>wxt>web-ext-run>",
+      "owner": "BPA release engineering",
+      "expiresOn": "2026-08-31",
+      "reason": "Firefox development runner is not invoked by the Chrome production build and is absent from Runtime and unpacked extension artifacts."
+    },
+    {
+      "advisory": "GHSA-395f-4hp3-45gv",
+      "module": "shell-quote",
+      "allowedPathPrefix": "apps__extension>wxt>web-ext-run>",
+      "owner": "BPA release engineering",
+      "expiresOn": "2026-08-31",
+      "reason": "Firefox development runner is not invoked by the Chrome production build and is absent from Runtime and unpacked extension artifacts."
+    },
+    {
+      "advisory": "GHSA-mh99-v99m-4gvg",
+      "module": "brace-expansion",
+      "allowedPathPrefix": "apps__extension>wxt>web-ext-run>",
+      "owner": "BPA release engineering",
+      "expiresOn": "2026-08-31",
+      "reason": "Firefox development runner is not invoked by the Chrome production build and is absent from Runtime and unpacked extension artifacts."
+    }
+  ]
+}

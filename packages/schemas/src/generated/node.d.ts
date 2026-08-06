@@ -67,7 +67,7 @@ export interface BPATimingPolicyV1 {
     jitterRatio: number;
   };
   rateLimit?: {
-    scope: "domain" | "shop" | "tab";
+    scope: "domain" | "authentication_context" | "tab";
     minIntervalMs: number;
     maxQueueMs: number;
   };

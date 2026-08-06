@@ -5,8 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./browser-protocol-v1.schema.json": "./schema/browser-protocol-v1.schema.json",
-    "./browser-protocol-v1.validator": "./src/generated/browser_protocol_v1.validator.ts",
+    "./browser-protocol-v2.schema.json": "./schema/browser-protocol-v2.schema.json",
+    "./browser-protocol-v2.validator": "./src/generated/browser_protocol_v2.validator.ts",
     "./workflow-v1alpha2.schema.json": "./schema/workflow-v1alpha2.schema.json",
     "./workflow-v1alpha3.schema.json": "./schema/workflow-v1alpha3.schema.json",
     "./node-v1alpha2.schema.json": "./schema/node-v1alpha2.schema.json",
@@ -21,6 +21,7 @@
     "./decision-record.schema.json": "./schema/decision-record.schema.json",
     "./element-contract.schema.json": "./schema/element-contract.schema.json",
     "./page-model.schema.json": "./schema/page-model.schema.json",
-    "./permission.schema.json": "./schema/permission.schema.json"
+    "./permission.schema.json": "./schema/permission.schema.json",
+    "./trigger-spec.schema.json": "./schema/trigger-spec.schema.json"
   }
 }

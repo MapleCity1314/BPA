@@ -1,5 +1,7 @@
 import {
   collectDoudianProductScope,
+  collectDoudianProductInventorySnapshot,
+  collectDoudianRecentOrders,
   detectDoudianRiskSignals,
   inspectDoudianPriorityItems,
   legacyDoudianScopeCollectionResult,
@@ -8,6 +10,10 @@ import {
   validateDoudianScopeRestoreTarget,
   verifyDoudianEditorOpen
 } from "@bpa/adapter-doudian";
+import {
+  collectMarketplaceSearchResults,
+  detectMarketplaceRiskSignals
+} from "@bpa/adapter-marketplace";
 import {
   AdaptiveReadinessGate,
   firstBlockingRiskSignal
@@ -20,6 +26,12 @@ import {
   type ContentActionHandlers,
   type ContentActionRequest
 } from "../lib/content-action-router";
+import { captureSemanticSnapshot } from "../lib/semantic-snapshot";
+import {
+  executeAllianceRetiredStage,
+  type AllianceRetiredStageRequest
+} from "../lib/alliance-retired-content";
+import { probeObservedPage } from "../lib/page-observer-registry";
 
 function waitForPageChange(maxWaitMs: number): Promise<void> {
   return new Promise((resolve) => {
@@ -122,6 +134,38 @@ async function readShopContextWhenReady(
 }
 
 const handlers: ContentActionHandlers = {
+  async "ecommerce.marketplace.search-results.read"(input) {
+    const startedAt = Date.now();
+    const riskSignals = detectMarketplaceRiskSignals(document, location.href);
+    if (firstBlockingRiskSignal(riskSignals)) {
+      throw new ContentActionRiskError(riskSignals);
+    }
+    const output = collectMarketplaceSearchResults(document, input);
+    return {
+      output: { ...output },
+      riskSignals,
+      timingObservation: {
+        readiness_wait_ms: Date.now() - startedAt,
+        stable_for_ms: 0
+      }
+    };
+  },
+  async "browser.design.snapshot.capture"(input) {
+    const snapshot = await captureSemanticSnapshot(document, {
+      pageState: String(input.pageState)
+    });
+    return {
+      output: {
+        apiVersion: "bpa.authoring/v1alpha1",
+        kind: "SemanticSnapshotCapture",
+        authoringSessionId: String(input.authoringSessionId),
+        designGrantId: String(input.designGrantId),
+        profileId: String(input.profileId),
+        ...snapshot
+      }
+    };
+  },
+
   async "doudian.shop.context.read"(_input, request) {
     const ready = await readShopContextWhenReady(
       request.timingPolicy,
@@ -206,6 +250,58 @@ const handlers: ContentActionHandlers = {
     };
   },
 
+  async "doudian.inventory.product.snapshot.read"(input, request) {
+    const startedAt = Date.now();
+    const ready = await readShopContextWhenReady(
+      request.timingPolicy,
+      request.deadline
+    );
+    const requestedShop = input.shop as { id?: unknown; name?: unknown };
+    if (
+      requestedShop?.id !== ready.context.shop.id ||
+      requestedShop?.name !== ready.context.shop.name
+    ) {
+      throw new Error("SHOP_IDENTITY_MISMATCH");
+    }
+    const output = await collectDoudianProductInventorySnapshot(
+      document,
+      input,
+      {
+        deadline: request.deadline!,
+        ...(request.timingPolicy?.readiness?.pollIntervalMs === undefined
+          ? {}
+          : { waitMs: request.timingPolicy.readiness.pollIntervalMs })
+      }
+    );
+    const riskSignals = detectDoudianRiskSignals(document, location.href);
+    if (firstBlockingRiskSignal(riskSignals)) {
+      throw new ContentActionRiskError(riskSignals);
+    }
+    return {
+      output: { ...output },
+      riskSignals,
+      timingObservation: {
+        readiness_wait_ms: Date.now() - startedAt,
+        stable_for_ms: request.timingPolicy?.readiness?.stableForMs ?? 250
+      }
+    };
+  },
+
+  async "doudian.orders.recent.read"(input,request) {
+    const output = await collectDoudianRecentOrders(document,{
+      shopId:String(input.shopId),shopName:String(input.shopName),
+      ...(input.lookbackMinutes === undefined ? {} : { lookbackMinutes:Number(input.lookbackMinutes) })
+    },{
+      deadline:Date.parse(request.deadline!),
+      ...(request.timingPolicy?.readiness?.pollIntervalMs === undefined
+        ? {}
+        : { waitMs:request.timingPolicy.readiness.pollIntervalMs })
+    });
+    const riskSignals = detectDoudianRiskSignals(document,location.href);
+    if (firstBlockingRiskSignal(riskSignals)) throw new ContentActionRiskError(riskSignals);
+    return { output,riskSignals };
+  },
+
   async "doudian.product.editor.open"(input, request) {
     const startedAt = Date.now();
     const riskSignals = detectDoudianRiskSignals(document, location.href);
@@ -269,19 +365,122 @@ const handlers: ContentActionHandlers = {
 export default defineContentScript({
   matches: [
     "https://fxg.jinritemai.com/ffa/g/list*",
-    "https://fxg.jinritemai.com/ffa/g/create*"
+    "https://fxg.jinritemai.com/ffa/g/create*",
+    "https://fxg.jinritemai.com/ffa/morder/order/*",
+    "https://buyin.jinritemai.com/dashboard*",
+    "https://www.chanmama.com/*",
+    "https://www.douyin.com/search*",
+    "https://s.taobao.com/search*",
+    "https://search.jd.com/Search*"
   ],
   main() {
+    const announceReady = (): void => {
+      void browser.runtime.sendMessage({
+        type: "bpa.content.ready",
+        href: location.href,
+        observedAt: new Date().toISOString()
+      });
+    };
+    announceReady();
+    const notifyRouteChange = (): void => queueMicrotask(announceReady);
+    addEventListener("popstate", notifyRouteChange);
+    addEventListener("hashchange", notifyRouteChange);
+    const originalPushState = history.pushState.bind(history);
+    history.pushState = (data, unused, url) => {
+      originalPushState(data, unused, url);
+      notifyRouteChange();
+    };
+    const originalReplaceState = history.replaceState.bind(history);
+    history.replaceState = (data, unused, url) => {
+      originalReplaceState(data, unused, url);
+      notifyRouteChange();
+    };
+    let observationTimer: ReturnType<typeof setTimeout> | undefined;
+    const observationChanges =
+      document.documentElement && typeof MutationObserver !== "undefined"
+        ? new MutationObserver(() => {
+            if (observationTimer) clearTimeout(observationTimer);
+            observationTimer = setTimeout(announceReady, 500);
+          })
+        : undefined;
+    observationChanges?.observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true
+    });
     browser.runtime.onMessage.addListener(
       (
-        request: ContentActionRequest,
+        request: ContentActionRequest & {
+          type: string;
+          pageEpoch?: string;
+        },
         _sender,
         sendResponse
       ) => {
+        if (request.type === "bpa.content.probe") {
+          void probeObservedPage(document, location.href)
+            .then((result) =>
+              sendResponse({
+                pageEpoch: request.pageEpoch,
+                observerCapabilityId: result.observerCapabilityId,
+                authentication: result.authentication,
+                observationState: result.observationState,
+                ...(result.reasonCode
+                  ? { reasonCode: result.reasonCode }
+                  : {})
+              })
+            )
+            .catch((error) =>
+              sendResponse({
+                pageEpoch: request.pageEpoch,
+                observerCapabilityId: "unknown.page",
+                authentication: { state: "unknown" },
+                observationState: "stale",
+                reasonCode:
+                  error instanceof Error
+                    ? error.message
+                    : "PAGE_OBSERVER_FAILED"
+              })
+            );
+          return true;
+        }
         if (request.type === "bpa.risk.preflight") {
           sendResponse({
-            riskSignals: detectDoudianRiskSignals(document, location.href)
+            riskSignals: [
+              "https://www.douyin.com",
+              "https://s.taobao.com",
+              "https://search.jd.com"
+            ].includes(location.origin)
+              ? detectMarketplaceRiskSignals(document, location.href)
+              : detectDoudianRiskSignals(document, location.href)
           });
+          return true;
+        }
+        if (request.type === "bpa.doudian.alliance.stage") {
+          void executeAllianceRetiredStage(
+            (
+              request as ContentActionRequest & {
+                request: AllianceRetiredStageRequest;
+              }
+            ).request
+          )
+            .then((result) => sendResponse({ ok: true, result }))
+            .catch((error) =>
+              sendResponse({
+                ok: false,
+                error: {
+                  code:
+                    error instanceof Error
+                      ? error.message
+                      : "ALLIANCE_STAGE_FAILED",
+                  message:
+                    error instanceof Error
+                      ? error.message
+                      : String(error)
+                }
+              })
+            );
           return true;
         }
         if (request.type !== "bpa.execute") return undefined;

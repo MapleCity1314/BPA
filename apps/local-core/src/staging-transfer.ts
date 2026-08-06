@@ -3,6 +3,7 @@ import { chmodSync, rmSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { LocalAssetStore } from "@bpa/asset-store-local";
 import { defaultRetention, MAX_OBJECT_BYTES } from "@bpa/asset-core";
+import { isWindowsNamedPipe } from "@bpa/platform-runtime";
 import type { Persistence } from "@bpa/persistence";
 
 const METADATA_LIMIT_BYTES = 64 * 1024;
@@ -275,7 +276,9 @@ export class LocalStagingTransferServer {
 
   async start(): Promise<void> {
     if (this.#server) throw new Error("Staging transfer server already started");
-    rmSync(this.socketPath, { force: true });
+    if (!isWindowsNamedPipe(this.socketPath)) {
+      rmSync(this.socketPath, { force: true });
+    }
     const server = createServer((socket) => this.#accept(socket));
     server.on("error", () => undefined);
     await new Promise<void>((resolve, reject) => {
@@ -285,7 +288,9 @@ export class LocalStagingTransferServer {
         resolve();
       });
     });
-    chmodSync(this.socketPath, 0o600);
+    if (!isWindowsNamedPipe(this.socketPath)) {
+      chmodSync(this.socketPath, 0o600);
+    }
     this.#server = server;
   }
 
@@ -295,7 +300,9 @@ export class LocalStagingTransferServer {
     if (server) {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
-    rmSync(this.socketPath, { force: true });
+    if (!isWindowsNamedPipe(this.socketPath)) {
+      rmSync(this.socketPath, { force: true });
+    }
   }
 
   #accept(socket: Socket): void {

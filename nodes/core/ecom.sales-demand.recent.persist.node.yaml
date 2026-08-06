@@ -1,0 +1,32 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: ecom.sales-demand.recent.persist
+  version: 1.0.0
+  title: 持久化近期订单热事实
+  description: 通过受限库存服务保存浏览器读取的订单需求白名单字段，刷新 2 小时近期订单质量水位。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [snapshot,lease]
+  properties:
+    snapshot: { type: object }
+    lease: { type: object }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [datasetId,dataVersion,inserted,updated]
+  properties:
+    datasetId: { type: string }
+    dataVersion: { type: string }
+    inserted: { type: integer,minimum: 0 }
+    updated: { type: integer,minimum: 0 }
+risk:
+  level: R1
+  permissions: [inventory.service.sales-demand.write]
+execution:
+  timeoutDefault: 30s
+  idempotency: verified_write
+  cancellable: true
+errors: [INVENTORY_SERVICE_NOT_CONFIGURED,INVENTORY_SERVICE_UNAVAILABLE,INVENTORY_SERVICE_FAILED,LEASE_FENCE_INVALID,SCHEDULER_LEASE_LOST]

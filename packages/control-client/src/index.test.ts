@@ -12,15 +12,21 @@ import {
   parseControlHelloRequest,
   parseControlRequest
 } from "@bpa/control-protocol";
+import { resolveLocalIpcEndpoint } from "@bpa/platform-runtime";
 import {
   ControlClient,
   ControlClientError,
+  resolveControlEndpoint,
   resolveControlSocketPath,
   UnixSocketControlTransport,
   type ControlTransport
 } from "./index.js";
 
 const cleanup: Array<() => Promise<void>> = [];
+const controlEndpoint = (root: string) =>
+  process.platform === "win32"
+    ? resolveLocalIpcEndpoint(root, "core", "win32")
+    : join(root, "control.sock");
 afterEach(async () => {
   while (cleanup.length > 0) await cleanup.pop()!();
 });
@@ -200,9 +206,15 @@ describe("injectable ControlClient", () => {
   });
 
   it("resolves the standard control socket independently of Local Core", () => {
-    expect(resolveControlSocketPath("/tmp/bpa-test")).toBe(
+    expect(resolveControlEndpoint("/tmp/bpa-test", "darwin")).toBe(
       "/tmp/bpa-test/run/core.sock"
     );
+    expect(resolveControlSocketPath("/tmp/bpa-test")).toBe(
+      resolveControlEndpoint("/tmp/bpa-test", process.platform)
+    );
+    expect(
+      resolveControlEndpoint("C:\\BPA", "win32")
+    ).toMatch(/^\\\\\.\\pipe\\bpa-[a-f0-9]{16}-core$/u);
     expect(
       () =>
         new ControlClient(
@@ -213,10 +225,10 @@ describe("injectable ControlClient", () => {
   });
 });
 
-describe("Unix socket control transport", () => {
+describe("local IPC control transport", () => {
   it("exchanges one newline-delimited versioned envelope", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-control-client-"));
-    const socketPath = join(directory, "control.sock");
+    const socketPath = controlEndpoint(directory);
     const server = createServer((socket) => {
       let buffered = Buffer.alloc(0);
       let negotiated = false;
@@ -277,7 +289,7 @@ describe("Unix socket control transport", () => {
 
   it("rejects malformed socket data and a missing socket", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-control-malformed-"));
-    const socketPath = join(directory, "control.sock");
+    const socketPath = controlEndpoint(directory);
     const server = createServer((socket) => {
       socket.end(Buffer.from("not-json\n"));
     });
@@ -300,7 +312,9 @@ describe("Unix socket control transport", () => {
     });
 
     const missing = new ControlClient(
-      new UnixSocketControlTransport(join(directory, "missing.sock")),
+      new UnixSocketControlTransport(
+        controlEndpoint(join(directory, "missing"))
+      ),
       { requestId: () => "missing-socket" }
     );
     await expect(missing.request("doctor")).rejects.toMatchObject({
@@ -320,7 +334,7 @@ describe("Unix socket control transport", () => {
       const directory = await mkdtemp(
         join(tmpdir(), `bpa-control-${suffix}-`)
       );
-      const socketPath = join(directory, "control.sock");
+      const socketPath = controlEndpoint(directory);
       const server = createServer(respond);
       await new Promise<void>((resolve, reject) => {
         server.once("error", reject);
@@ -340,7 +354,7 @@ describe("Unix socket control transport", () => {
 
   it("honors an externally aborted Unix transport request", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-control-abort-"));
-    const socketPath = join(directory, "control.sock");
+    const socketPath = controlEndpoint(directory);
     const server = createServer(() => undefined);
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);

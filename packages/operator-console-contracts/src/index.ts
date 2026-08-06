@@ -1,6 +1,15 @@
 export type AttentionLevel = "normal" | "attention" | "action";
 export type HealthStatus = "healthy" | "degraded" | "unavailable";
 
+export interface ConsoleLaunchHandle {
+  readonly launchUrl: string;
+  close(): Promise<void>;
+}
+
+export interface ConsoleLaunchService {
+  launch(): Promise<ConsoleLaunchHandle>;
+}
+
 export interface HealthComponent {
   id: string;
   label: string;
@@ -17,6 +26,14 @@ export interface BrowserSessionView {
   role?: string;
   authenticated: boolean;
   lastSeenAt: string;
+  binding?: BrowserPageBindingSelection;
+}
+
+export interface BrowserPageBindingSelection {
+  sessionId: string;
+  browserInstanceId: string;
+  tabId: number;
+  observationRevision: number;
 }
 
 export interface DashboardSnapshot {
@@ -55,7 +72,7 @@ export interface CreateRunInput {
   workflowId: string;
   workflowVersion: string;
   inputs: Record<string, string | number | boolean>;
-  resourceBindings: Record<string, string>;
+  resourceBindings: Record<string, BrowserPageBindingSelection>;
 }
 
 export interface CreateRunResult {
@@ -181,6 +198,34 @@ export interface DownloadPayload {
   body: Uint8Array;
 }
 
+export interface DesignModeGrantInput {
+  authoringSessionId: string;
+  browserSessionId: string;
+  profileId: string;
+  pageBinding: {
+    version: "bpa.design-page-binding/1";
+    tabId: number;
+    origin: string;
+    pageEpoch: string;
+    issuedAt: string;
+  };
+  screenshotApproved: boolean;
+}
+
+export interface DesignModeGrantView {
+  id: string;
+  authoringSessionId: string;
+  browserSessionId: string;
+  profileId: string;
+  state: "active" | "stopped";
+  origin: string;
+  tabId: number;
+  pageEpoch: string;
+  expiresAt: string;
+  screenshotApproved: boolean;
+  revision: number;
+}
+
 export interface ControlBackend {
   getDashboard(): Promise<DashboardSnapshot>;
   listWorkflows(): Promise<WorkflowSummary[]>;
@@ -200,4 +245,11 @@ export interface ControlBackend {
   getEvidenceLineage(runId: string): Promise<EvidenceLineageView>;
   listDownloads(runId?: string): Promise<DownloadView[]>;
   getDownload(downloadId: string): Promise<DownloadPayload>;
+  startDesignMode(
+    input: DesignModeGrantInput
+  ): Promise<DesignModeGrantView>;
+  stopDesignMode(
+    grantId: string,
+    expectedRevision: number
+  ): Promise<DesignModeGrantView>;
 }

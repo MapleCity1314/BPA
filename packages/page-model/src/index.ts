@@ -1,5 +1,6 @@
 import type {
   ElementContractDefinition,
+  PageSnapshotDefinition,
   PageModelDefinition
 } from "@bpa/schemas";
 
@@ -97,6 +98,30 @@ export interface PageAssetPublication {
   approvedBy: string;
   approvedAt: string;
 }
+
+export type DeclarativeReadResult =
+  | {
+      status: "succeeded";
+      candidateIndex: number;
+      strategy: Exclude<
+        LocatorCandidate["strategy"],
+        "css-diagnostic" | "relative-anchor"
+      >;
+      nodeIds: string[];
+      value:
+        | string
+        | boolean
+        | null
+        | Array<string | boolean | null>;
+    }
+  | {
+      status: "failed";
+      code:
+        | "DECLARATIVE_LOCATOR_UNSTABLE"
+        | "DECLARATIVE_PROJECTION_EMPTY"
+        | "DECLARATIVE_COMPLEX_LOCATOR_REQUIRED";
+      message: string;
+    };
 
 export interface ModelValidationIssue {
   code:
@@ -840,6 +865,120 @@ export function validatePageAssetCandidate(
     }
   }
   return issues;
+}
+
+/**
+ * Deterministic replay/runtime primitive for generated simple reads. It never
+ * evaluates CSS, XPath or page code. Relative anchors remain reviewed Adapter
+ * work because they require a multi-contract resolution graph.
+ */
+export function evaluateDeclarativeRead(input: {
+  contract: ElementContract;
+  snapshot: Pick<
+    PageSnapshotDefinition,
+    "origin" | "path" | "pageState" | "semanticNodes"
+  >;
+  projection: Extract<
+    PageCapabilityImplementation,
+    { kind: "declarative-read" }
+  >["projection"];
+}): DeclarativeReadResult {
+  if (
+    !input.contract.scope.origins.includes(input.snapshot.origin) ||
+    !pathMatches(input.contract.scope.pathPattern, input.snapshot.path) ||
+    input.contract.scope.pageState !== input.snapshot.pageState
+  ) {
+    return {
+      status: "failed",
+      code: "DECLARATIVE_LOCATOR_UNSTABLE",
+      message: "Snapshot is outside the exact ElementContract scope."
+    };
+  }
+  let complexOnly = true;
+  for (const [candidateIndex, candidate] of input.contract.candidates.entries()) {
+    if (
+      candidate.strategy === "css-diagnostic" ||
+      candidate.strategy === "relative-anchor"
+    ) {
+      continue;
+    }
+    complexOnly = false;
+    const nodes = input.snapshot.semanticNodes.filter((node) => {
+      switch (candidate.strategy) {
+        case "business-id":
+          return Object.entries(node.stableAttributes ?? {}).some(
+            ([name, value]) =>
+              ["data-id", "data-key", "data-row-key"].includes(name) &&
+              value === candidate.value
+          );
+        case "role-name":
+          return (
+            node.role === candidate.role &&
+            node.accessibleName === candidate.name
+          );
+        case "label":
+          return node.label === candidate.label;
+        case "attribute":
+          return (
+            node.stableAttributes?.[candidate.name] === candidate.value
+          );
+      }
+    });
+    if (
+      nodes.length < input.contract.expectedCount.minimum ||
+      nodes.length > input.contract.expectedCount.maximum
+    ) {
+      continue;
+    }
+    const values = nodes.map((node): string | boolean | null => {
+      if (input.projection.kind === "presence") return true;
+      if (input.projection.kind === "attribute") {
+        return node.stableAttributes?.[input.projection.name] ?? null;
+      }
+      return (
+        node.text ??
+        node.accessibleName ??
+        node.label ??
+        null
+      );
+    });
+    if (
+      input.projection.kind !== "presence" &&
+      values.some((value) => value === null)
+    ) {
+      return {
+        status: "failed",
+        code: "DECLARATIVE_PROJECTION_EMPTY",
+        message:
+          "The stable semantic locator matched, but the requested projection is absent."
+      };
+    }
+    return {
+      status: "succeeded",
+      candidateIndex,
+      strategy: candidate.strategy,
+      nodeIds: nodes.map((node) => node.id),
+      value:
+        input.projection.kind === "presence" && nodes.length === 0
+          ? false
+          : values.length === 1
+            ? values[0]!
+            : values
+    };
+  }
+  return complexOnly
+    ? {
+        status: "failed",
+        code: "DECLARATIVE_COMPLEX_LOCATOR_REQUIRED",
+        message:
+          "The contract requires a reviewed relative-anchor Adapter Handler."
+      }
+    : {
+        status: "failed",
+        code: "DECLARATIVE_LOCATOR_UNSTABLE",
+        message:
+          "No stable semantic locator stayed inside the expected count."
+      };
 }
 
 export function publishPageAssetCandidate(input: {

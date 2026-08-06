@@ -1,5 +1,5 @@
 export const publicSchemas = [
-  ["browser-protocol-v1.schema.json", "Browser Protocol v1", "v1"],
+  ["browser-protocol-v2.schema.json", "Browser Protocol v2", "v2"],
   ["permission.schema.json", "Signed Permission Grant", "v1"],
   ["timing-policy.schema.json", "Timing Policy", "v1"],
   ["risk-signal.schema.json", "Risk Signal", "v1"],
@@ -21,7 +21,7 @@ export const publicSchemas = [
 ];
 
 export const publicExamples = [
-  "browser-protocol-v1.messages.json",
+  "browser-protocol-v2.messages.json",
   "control-hello-v1.example.json"
 ];
 

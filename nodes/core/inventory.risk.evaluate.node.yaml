@@ -1,0 +1,58 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: inventory.risk.evaluate
+  version: 1.0.0
+  title: 评估影子库存风险
+  description: 按 P90 的 2/6 小时 SKU 与渠道覆盖、6/24 小时未占用缓冲规则产生可追溯影子风险；数据过期时只返回 unknown。
+runtime: engine_team
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [evaluatedAt, envelope, forecasts, channelEstimates, demandQuality]
+  properties:
+    evaluatedAt: { type: string, format: date-time }
+    envelope: { type: object }
+    forecasts:
+      type: object
+      additionalProperties: { type: object }
+    channelEstimates:
+      type: object
+      additionalProperties: { type: object }
+    demandQuality: { type: object }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [policyVersion, evaluatedAt, severity, findings, diagnostics]
+  properties:
+    policyVersion: { const: inventory-balanced-shadow/1.0.0 }
+    evaluatedAt: { type: string, format: date-time }
+    severity: { enum: [normal, warning, critical, unknown] }
+    findings:
+      type: array
+      maxItems: 5000
+      items:
+        type: object
+        additionalProperties: false
+        required: [scope, kind, severity, legacyBelow200, reason]
+        properties:
+          scope: { type: object }
+          kind: { enum: [sku, channel, reserve, data_quality] }
+          severity: { enum: [normal, warning, critical, unknown] }
+          availableStock: { type: number, minimum: 0 }
+          requiredP90: { type: number, minimum: 0 }
+          horizonHours: { enum: [2, 6, 24] }
+          legacyBelow200: { type: boolean }
+          reason: { type: string, minLength: 1, maxLength: 2000 }
+    diagnostics:
+      type: array
+      maxItems: 100
+      items: { type: string, maxLength: 1000 }
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 10s
+  idempotency: pure
+  cancellable: true
+errors: [TEAM_HANDLER_INPUT_INVALID, TEAM_HANDLER_RESULT_LIMIT_EXCEEDED, TEAM_HANDLER_CANCELLED, TEAM_HANDLER_TIMEOUT]
