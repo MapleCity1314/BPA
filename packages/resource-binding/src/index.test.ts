@@ -128,6 +128,35 @@ describe("Resource Binding state", () => {
       revokeResourceBinding(revoked.record, "AGAIN", clock)
     ).toThrow(InvalidResourceBindingTransitionError);
   });
+
+  it("accepts an anonymous page when authentication is optional", () => {
+    const clock = createClock();
+    const optionalRequirement = {
+      ...requirement,
+      authentication: "optional" as const
+    };
+    const requested = requestResourceBinding(
+      {
+        bindingId: "binding-optional",
+        runId: "run-optional",
+        slotName: "metrics_source",
+        requirement: optionalRequirement
+      },
+      clock
+    );
+    const { authenticationContextRef: _authContext,...anonymousBinding } = binding;
+    expect(() =>
+      validateResourceBinding(
+        requested.record,
+        {
+          ...anonymousBinding,
+          bindingId: "binding-optional",
+          authentication: "anonymous"
+        },
+        clock
+      )
+    ).not.toThrow();
+  });
 });
 
 describe("invocation Resource Binding validation", () => {
@@ -170,6 +199,25 @@ describe("invocation Resource Binding validation", () => {
       [field]: value
     });
     expect(issues.map((issue) => issue.code)).toContain(code);
+  });
+
+  it("does not require authentication for an optional resource", () => {
+    const { authenticationContextRef: _bindingContext,...anonymousBinding } = binding;
+    const { authenticationContextRef: _sessionContext,...anonymousSession } = session;
+    const optionalResource: InvocationResourceBinding = {
+      ...resource,
+      requirement: { ...requirement, authentication: "optional" },
+      binding: {
+        ...anonymousBinding,
+        authentication: "anonymous"
+      }
+    };
+    expect(
+      validateInvocationResourceBinding(optionalResource, {
+        ...anonymousSession,
+        authentication: "anonymous"
+      })
+    ).toEqual([]);
   });
 });
 
@@ -231,5 +279,35 @@ describe("Run Resource Binding Snapshot", () => {
         plan
       )
     ).toThrow("requirement drifted");
+  });
+
+  it("accepts an anonymous frozen binding for an optional slot", () => {
+    const optionalRequirement = {
+      ...requirement,
+      authentication: "optional" as const
+    };
+    const {
+      authenticationContextRef: _authenticationContext,
+      ...anonymousBinding
+    } = snapshot.bindings.metrics_source;
+    expect(() =>
+      assertResourceBindingSnapshotForPlan(
+        "run-1",
+        {
+          ...snapshot,
+          resourceSlots: { metrics_source: optionalRequirement },
+          bindings: {
+            metrics_source: {
+              ...anonymousBinding,
+              authentication: "anonymous"
+            }
+          }
+        },
+        {
+          ...plan,
+          resourceSlots: { metrics_source: optionalRequirement }
+        }
+      )
+    ).not.toThrow();
   });
 });

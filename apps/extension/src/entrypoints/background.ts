@@ -54,13 +54,20 @@ import {
 } from "../lib/content-script-recovery";
 import {
   shouldForgetTrackedObservation,
+  shouldForceNewPageEpoch,
+  shouldPreserveTrackedAuthentication,
   shouldReusePageEpoch
 } from "../lib/page-observation-lifecycle";
 import { matchesFrozenPageBinding } from "../lib/frozen-page-binding";
+import {
+  ManagedTabLifecycle,
+  parseManagedTabObservations
+} from "../lib/managed-tab-lifecycle";
 
 const NATIVE_HOST = "com.bpa.browser";
 const PROTOCOL = BROWSER_PROTOCOL;
 const VERSION = "2.0.0";
+const MANAGED_TABS_STORAGE_KEY = "bpaManagedCommandTabs";
 
 interface SessionState {
   sessionId?: string;
@@ -76,6 +83,7 @@ export default defineBackground(() => {
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   const activeCommands = new Set<string>();
   const activeTabCommands = new Map<number, string>();
+  const managedTabs = new ManagedTabLifecycle();
   const cancelledCommands = new Set<string>();
   const pacingReservations = new Map<string, number>();
   const observedTabs = new Map<
@@ -99,7 +107,46 @@ export default defineBackground(() => {
     get: (key) => browser.storage.local.get(key),
     set: (value) => browser.storage.local.set(value)
   });
-  const startupRecovery = recoverInterruptedCommands();
+  let managedTabsPersistence: Promise<void> = Promise.resolve();
+  const persistManagedTabs = async (): Promise<void> => {
+    const snapshot = managedTabs.snapshot();
+    managedTabsPersistence = managedTabsPersistence
+      .catch(() => undefined)
+      .then(() =>
+        browser.storage.local.set({
+          [MANAGED_TABS_STORAGE_KEY]: snapshot
+        })
+      );
+    await managedTabsPersistence;
+  };
+
+  const recoverManagedTabs = async (): Promise<void> => {
+    const stored = await browser.storage.local.get(MANAGED_TABS_STORAGE_KEY);
+    const records = parseManagedTabObservations(
+      stored[MANAGED_TABS_STORAGE_KEY]
+    );
+    const retained = [];
+    for (const record of records) {
+      const tab = await browser.tabs.get(record.tabId).catch(() => undefined);
+      if (!tab) continue;
+      const closed = await browser.tabs
+        .remove(record.tabId)
+        .then(() => true)
+        .catch(() => false);
+      if (!closed) {
+        retained.push(record);
+        managedTabs.restore(record);
+      }
+    }
+    await browser.storage.local.set({
+      [MANAGED_TABS_STORAGE_KEY]: retained
+    });
+  };
+
+  const startupRecovery = Promise.all([
+    recoverInterruptedCommands(),
+    recoverManagedTabs()
+  ]);
 
   const waitForTabReady = async (
     tabId: number,
@@ -230,6 +277,16 @@ export default defineBackground(() => {
       reasonCode: input.reasonCode
     });
     const tracked = observedTabs.get(input.tabId);
+    const preserveTrackedAuthentication = shouldPreserveTrackedAuthentication(
+      input.observationState,
+      input.authentication.state
+    );
+    const trackedAuthenticationState = preserveTrackedAuthentication
+      ? tracked?.authenticationState
+      : input.authentication.state;
+    const trackedAuthenticationContextRef = preserveTrackedAuthentication
+      ? tracked?.authenticationContextRef
+      : input.authentication.contextRef;
     const revision =
       tracked?.lastObservationSignature === signature
         ? tracked.revision
@@ -242,10 +299,12 @@ export default defineBackground(() => {
       lastObservationSignature: signature,
       contentScriptReady: input.contentScriptReady,
       observationState: input.observationState,
-      authenticationState: input.authentication.state,
-      ...(input.authentication.contextRef === undefined
+      ...(trackedAuthenticationState === undefined
         ? {}
-        : { authenticationContextRef: input.authentication.contextRef }),
+        : { authenticationState: trackedAuthenticationState }),
+      ...(trackedAuthenticationContextRef === undefined
+        ? {}
+        : { authenticationContextRef: trackedAuthenticationContextRef }),
       ...(input.windowId === undefined ? {} : { windowId: input.windowId })
     });
     if (!port || !session.sessionId) return;
@@ -756,11 +815,20 @@ export default defineBackground(() => {
     );
     activeCommands.add(String(payload.command_id));
     activeTabCommands.set(executingTabId, commandId);
-    const releaseCommand = (): void => {
+    const releaseCommand = async (): Promise<void> => {
       activeCommands.delete(commandId);
       if (activeTabCommands.get(executingTabId) === commandId) {
         activeTabCommands.delete(executingTabId);
       }
+      const childTabIds = managedTabs.finish(commandId);
+      for (const childTabId of childTabIds) {
+        const closed = await browser.tabs
+          .remove(childTabId)
+          .then(() => true)
+          .catch(() => false);
+        if (closed) managedTabs.forget(childTabId);
+      }
+      await persistManagedTabs();
     };
     const sendCancelled = (): void => {
       send(
@@ -839,7 +907,7 @@ export default defineBackground(() => {
       }
       if (cancelledCommands.delete(commandId)) {
         await removePendingCommandStart(commandId);
-        releaseCommand();
+        await releaseCommand();
         sendCancelled();
         return;
       }
@@ -983,6 +1051,10 @@ export default defineBackground(() => {
           ]
         };
       } else {
+        // Limit ownership to the actual adapter execution window. Pacing,
+        // preflight, and navigation waits must not claim a tab opened by a
+        // human or another RPA that happens to share the source page.
+        managedTabs.start(commandId, executingTabId);
         const registeredResponse = await executeRegisteredAdapterNode(
           payload.node.id,
           nodeInput,
@@ -1088,7 +1160,7 @@ export default defineBackground(() => {
       };
     }
     if (cancelledCommands.delete(commandId)) {
-      releaseCommand();
+      await releaseCommand();
       sendCancelled();
       return;
     }
@@ -1184,7 +1256,7 @@ export default defineBackground(() => {
       await removePendingCommandStart(commandId);
       await sendEvidenceUpload(evidenceUpload);
     } finally {
-      releaseCommand();
+      await releaseCommand();
     }
     if (adapterResponse.ok) {
       await assistancePanel.remove(String(payload.node_execution_id));
@@ -1558,7 +1630,12 @@ export default defineBackground(() => {
   });
   browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (changeInfo.status === "loading") {
-      void probeTab(tabId, { forceNewEpoch: true });
+      void probeTab(tabId, {
+        forceNewEpoch: shouldForceNewPageEpoch(
+          observedTabs.get(tabId),
+          changeInfo
+        )
+      });
     } else if (changeInfo.status === "complete" || changeInfo.url) {
       void probeTab(tabId);
     }
@@ -1566,7 +1643,21 @@ export default defineBackground(() => {
   browser.tabs.onActivated.addListener(({ tabId }) => {
     void probeTab(tabId);
   });
+  browser.tabs.onCreated.addListener((tab) => {
+    if (!managedTabs.observeCreated(tab)) return;
+    void persistManagedTabs();
+  });
+  browser.webNavigation.onCreatedNavigationTarget.addListener((details) => {
+    if (
+      !managedTabs.observeAttributed(details.tabId, details.sourceTabId)
+    ) {
+      return;
+    }
+    void persistManagedTabs();
+  });
   browser.tabs.onRemoved.addListener((tabId) => {
+    managedTabs.forget(tabId);
+    void persistManagedTabs();
     contentScriptRecovery.forget(tabId);
     void invalidateTrackedTab(tabId, "TAB_CLOSED");
   });

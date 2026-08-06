@@ -19,3 +19,29 @@ export function shouldReusePageEpoch(
 export function shouldForgetTrackedObservation(reasonCode: string): boolean {
   return reasonCode === "TAB_CLOSED";
 }
+
+export interface TabUpdateObservationChange {
+  readonly status?: string;
+  readonly url?: string;
+}
+
+export function shouldForceNewPageEpoch(
+  current: TrackedPageEpoch | undefined,
+  change: TabUpdateObservationChange
+): boolean {
+  return (
+    change.status === "loading" &&
+    typeof change.url === "string" &&
+    current?.url !== change.url
+  );
+}
+
+export function shouldPreserveTrackedAuthentication(
+  observationState: string,
+  authenticationState: string
+): boolean {
+  return (
+    authenticationState === "unknown" &&
+    (observationState === "loading" || observationState === "probing")
+  );
+}

@@ -266,6 +266,7 @@ describe("Operator Console", () => {
       browserSessions: [
         {
           ...dashboard.browserSessions[0]!,
+          id: "chrome-profile-1:7:3",
           status: "attention",
           origin: "等待选择业务来源",
           authenticated: false
@@ -285,7 +286,7 @@ describe("Operator Console", () => {
     );
     await user.selectOptions(
       screen.getByLabelText(/浏览器会话/),
-      "session-1"
+      "chrome-profile-1:7:3"
     );
     const pageBinding = {
       version: "bpa.design-page-binding/1",

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   shouldForgetTrackedObservation,
+  shouldForceNewPageEpoch,
+  shouldPreserveTrackedAuthentication,
   shouldReusePageEpoch
 } from "./page-observation-lifecycle";
 
@@ -38,5 +40,42 @@ describe("page observation lifecycle", () => {
       false
     );
     expect(shouldForgetTrackedObservation("TAB_CLOSED")).toBe(true);
+  });
+
+  it("keeps the epoch for same-url reloads while rotating it for navigation", () => {
+    expect(shouldForceNewPageEpoch(ready, { status: "loading" })).toBe(false);
+    expect(
+      shouldForceNewPageEpoch(ready, {
+        status: "loading",
+        url: ready.url
+      })
+    ).toBe(false);
+    expect(
+      shouldForceNewPageEpoch(ready, {
+        status: "loading",
+        url: "https://fxg.jinritemai.com/ffa/g/create"
+      })
+    ).toBe(true);
+    expect(
+      shouldForceNewPageEpoch(ready, {
+        status: "complete",
+        url: "https://fxg.jinritemai.com/ffa/g/list"
+      })
+    ).toBe(false);
+  });
+
+  it("preserves verified authentication only through transient loading", () => {
+    expect(shouldPreserveTrackedAuthentication("loading", "unknown")).toBe(
+      true
+    );
+    expect(shouldPreserveTrackedAuthentication("probing", "unknown")).toBe(
+      true
+    );
+    expect(shouldPreserveTrackedAuthentication("ready", "authenticated")).toBe(
+      false
+    );
+    expect(shouldPreserveTrackedAuthentication("auth_required", "unknown")).toBe(
+      false
+    );
   });
 });

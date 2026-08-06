@@ -36,7 +36,8 @@ export function matchesFrozenPageBinding(
     (frozen.windowId === undefined || live.windowId === frozen.windowId) &&
     origin === frozen.origin &&
     live.pageEpoch === frozen.pageEpoch &&
-    live.revision === frozen.observationRevision &&
+    Number.isSafeInteger(live.revision) &&
+    live.revision! >= frozen.observationRevision &&
     live.authenticationContextRef === frozen.authenticationContextRef &&
     live.contentScriptReady === true &&
     live.observationState === "ready"

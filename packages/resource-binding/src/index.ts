@@ -166,8 +166,10 @@ export function validateResourceBinding(
     throw new Error("Candidate origin is outside the requested resource");
   }
   if (
-    AUTHENTICATION_RANK[candidate.authentication] <
-    AUTHENTICATION_RANK[record.requirement.authentication]
+    !authenticationSatisfies(
+      candidate.authentication,
+      record.requirement.authentication
+    )
   ) {
     throw new Error(
       "Candidate authentication does not satisfy the requested resource"
@@ -329,6 +331,16 @@ const AUTHENTICATION_RANK = {
   membership: 3
 } as const;
 
+function authenticationSatisfies(
+  actual: keyof typeof AUTHENTICATION_RANK,
+  required: keyof typeof AUTHENTICATION_RANK
+): boolean {
+  return (
+    required === "optional" ||
+    AUTHENTICATION_RANK[actual] >= AUTHENTICATION_RANK[required]
+  );
+}
+
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value) ?? "null";
@@ -407,8 +419,10 @@ export function assertResourceBindingSnapshotForPlan(
       );
     }
     if (
-      AUTHENTICATION_RANK[binding.authentication] <
-      AUTHENTICATION_RANK[requirement.authentication]
+      !authenticationSatisfies(
+        binding.authentication,
+        requirement.authentication
+      )
     ) {
       throw new Error(
         `Resource Binding Snapshot authentication is insufficient for ${slotName}`
@@ -527,8 +541,10 @@ export function validateInvocationResourceBinding(
     });
   }
   if (
-    AUTHENTICATION_RANK[session.authentication] <
-    AUTHENTICATION_RANK[resource.requirement.authentication]
+    !authenticationSatisfies(
+      session.authentication,
+      resource.requirement.authentication
+    )
   ) {
     issues.push({
       code: "AUTHENTICATION_INSUFFICIENT",

@@ -87,6 +87,17 @@ interface BrowserConnection {
   cancelRequests: Set<string>;
 }
 
+export function observationCoversFrozenRevision(
+  currentRevision: number,
+  frozenRevision: number
+): boolean {
+  return (
+    Number.isSafeInteger(currentRevision) &&
+    Number.isSafeInteger(frozenRevision) &&
+    currentRevision >= frozenRevision
+  );
+}
+
 function compareExtensionVersions(left: string, right: string): number {
   const leftParts = left.split(".").map((part) => Number(part));
   const rightParts = right.split(".").map((part) => Number(part));
@@ -1439,7 +1450,10 @@ export class LocalBrowserGateway implements RuntimeProvider {
         page.browserInstanceId === payload.tab_ref.browser_instance_id &&
         page.origin === payload.tab_ref.origin &&
         page.pageEpoch === payload.page_epoch &&
-        page.revision === payload.observation_revision &&
+        observationCoversFrozenRevision(
+          page.revision,
+          Number(payload.observation_revision)
+        ) &&
         page.authenticationContextRef ===
           (payload as { authentication_context_ref?: unknown })
             .authentication_context_ref
@@ -1474,7 +1488,10 @@ export class LocalBrowserGateway implements RuntimeProvider {
       page.browserInstanceId !== payload.tab_ref.browser_instance_id ||
       page.origin !== payload.tab_ref.origin ||
       page.pageEpoch !== payload.page_epoch ||
-      page.revision !== payload.observation_revision ||
+      !observationCoversFrozenRevision(
+        page.revision,
+        Number(payload.observation_revision)
+      ) ||
       page.authenticationContextRef !==
         payload.authentication_context_ref ||
       Date.now() - Date.parse(page.observedAt) <= 30_000

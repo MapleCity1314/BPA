@@ -24,12 +24,13 @@ const live = {
 };
 
 describe("frozen page binding", () => {
-  it("accepts only the exact ready observation", () => {
+  it("accepts ready observations at or after the frozen revision", () => {
     expect(matchesFrozenPageBinding(frozen, live)).toBe(true);
+    expect(matchesFrozenPageBinding(frozen, { ...live,revision:10 })).toBe(true);
   });
 
   it.each([
-    ["revision", { revision: 10 }],
+    ["revision rollback", { revision: 8 }],
     ["authentication context", { authenticationContextRef: "auth-context-b" }],
     ["page epoch", { pageEpoch: "tab-42:new" }],
     ["content script", { contentScriptReady: false }],

@@ -267,12 +267,20 @@ export function DesignModeView({
     setBusy(true);
     setMessage("");
     try {
+      const selectedBrowserPage = sessions.find(
+        (session) => session.id === browserSessionId
+      );
+      if (!selectedBrowserPage?.binding?.sessionId) {
+        throw new Error(
+          "浏览器页面绑定已失效，请刷新工作台后重新选择。"
+        );
+      }
       const pageBinding = JSON.parse(
         bindingCode
       ) as DesignModeGrantInput["pageBinding"];
       const next = await api.startDesignMode({
         authoringSessionId,
-        browserSessionId,
+        browserSessionId: selectedBrowserPage.binding.sessionId,
         profileId,
         pageBinding,
         screenshotApproved

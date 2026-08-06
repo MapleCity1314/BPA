@@ -13,7 +13,10 @@ import {
   type SignedPermissionGrant
 } from "@bpa/gateway-core";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
-import { LocalBrowserGateway } from "./browser-gateway.js";
+import {
+  LocalBrowserGateway,
+  observationCoversFrozenRevision
+} from "./browser-gateway.js";
 import { BrowserEvidenceReceiver } from "./browser-evidence.js";
 import { LocalCoreService } from "./control.js";
 
@@ -24,6 +27,12 @@ function fixture(path: string): unknown {
 }
 
 describe("local browser gateway", () => {
+  it("accepts monotonic observation heartbeats for the same frozen page",() => {
+    expect(observationCoversFrozenRevision(1,1)).toBe(true);
+    expect(observationCoversFrozenRevision(2,1)).toBe(true);
+    expect(observationCoversFrozenRevision(1,2)).toBe(false);
+  });
+
   it("rejects a Bridge build that does not match the installed Runtime", () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");
