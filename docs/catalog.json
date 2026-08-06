@@ -138,6 +138,17 @@
       "public": false
     },
     {
+      "id": "repo.operations.github-main-protection",
+      "source": "docs/operations/github-main-protection.md",
+      "title": "GitHub `main` 交付保护",
+      "summary": "主线 Pull Request、跨平台 required checks、管理员约束和 GitHub Actions 基础设施故障处理。",
+      "authority": "operations",
+      "implementation": "active",
+      "audience": ["operator", "developer", "ai"],
+      "since": "0.7.0",
+      "public": false
+    },
+    {
       "id": "repo.operations.shadow-run",
       "source": "docs/operations/shadow-run-comparison.md",
       "title": "Shadow-run 只读迁移比较器",

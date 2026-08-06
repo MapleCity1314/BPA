@@ -12,6 +12,9 @@
 - Git 基线：PR #2 与 PR #3 均已在全部发布门禁通过后合并到 `main`，merge commit 分别为
   `5e091af7fbb0` 与 `58bfc108238f`。阶段 0 的结构收敛、Workflow `rejected` 终态保真、
   资源观测加固和 Windows 文件锁重试均已进入主线。
+- GitHub `main` 已启用管理员同样受约束的 Branch Protection：必须走 Pull Request、
+  与主线同步、解决 review conversation，并通过 macOS、Windows、性能、双架构发布、
+  可复现性和 WorkBuddy 交付共 10 个 required checks；禁止 force-push 和删除主线。
 - 验证基线：固定 Node `24.18.0` 下 PR #3 候选 `pnpm verify` 通过，126 个测试文件、
   775 项测试全绿，文档 Catalog 80 条有效，Astro 0 诊断。GitHub 的 macOS/Linux、Windows、
   性能、双架构发布、Windows 可复现性、WorkBuddy 发布及 Windows 安装验证全部通过。
