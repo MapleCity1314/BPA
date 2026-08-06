@@ -23,7 +23,8 @@ import type {
   EvidenceLinkDefinition,
   WorkflowDefinition,
   WorkflowDefinitionV1Alpha2,
-  WorkflowDefinitionV1Alpha3
+  WorkflowDefinitionV1Alpha3,
+  TriggerSpecDefinition
 } from "./types.js";
 
 export * from "./types.js";
@@ -78,6 +79,7 @@ export const riskSignalSchema = loadSchema("risk-signal.schema.json");
 export const browserProtocolV2Schema = loadSchema(
   "browser-protocol-v2.schema.json"
 );
+export const triggerSpecSchema = loadSchema("trigger-spec.schema.json");
 
 interface AjvLike {
   compile<T = unknown>(schema: object): ValidateFunction<T>;
@@ -165,6 +167,9 @@ export const validateRiskSignal = ajv.compile(riskSignalSchema);
 export const validateBrowserProtocolMessage = ajv.compile(
   browserProtocolV2Schema
 ) as ValidateFunction<BrowserProtocolMessage>;
+export const validateTriggerSpec = ajv.compile(
+  triggerSpecSchema
+) as ValidateFunction<TriggerSpecDefinition>;
 
 export function validateJsonSchemaDefinition(
   schema: Record<string, unknown>

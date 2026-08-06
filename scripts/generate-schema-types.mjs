@@ -34,6 +34,7 @@ const schemas = [
   "evidence.schema.json",
   "timing-policy.schema.json",
   "risk-signal.schema.json",
+  "trigger-spec.schema.json",
   "browser-protocol-v2.schema.json"
 ];
 const check = process.argv.includes("--check");

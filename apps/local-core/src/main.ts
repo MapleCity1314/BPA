@@ -61,9 +61,15 @@ const server = new LocalControlServer(
   service
 );
 let drainingIr2 = false;
+let triggerTick = 0;
 const gatewayTimer = setInterval(() => {
   try {
     browserGateway.tick();
+    triggerTick += 1;
+    if (triggerTick >= 2) {
+      triggerTick = 0;
+      service.triggers.tick();
+    }
     if (!drainingIr2) {
       drainingIr2 = true;
       void service.ir2Runtime

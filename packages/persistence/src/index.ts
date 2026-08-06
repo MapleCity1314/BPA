@@ -10,6 +10,7 @@ import type {
   ScenarioSpecDefinition,
   SourceRecordDefinition
 } from "@bpa/schemas";
+import type { TriggerSpecDefinition } from "@bpa/schemas";
 import type {
   BlobRecord,
   StagingLeaseRecord
@@ -38,6 +39,7 @@ export type {
   ScenarioSpecDefinition,
   SourceRecordDefinition
 } from "@bpa/schemas";
+export type { TriggerSpecDefinition } from "@bpa/schemas";
 export type { BlobRecord, StagingLeaseRecord } from "@bpa/asset-core";
 export type {
   EvidenceChunkRecord,
@@ -723,6 +725,123 @@ export interface AuditRecord {
   occurredAt: string;
 }
 
+export type TriggerRunStatus =
+  | "due"
+  | "lease_acquired"
+  | "run_created"
+  | "running"
+  | "complete"
+  | "partial"
+  | "blocked"
+  | "degraded"
+  | "failed"
+  | "skipped";
+
+export interface TriggerSpecRecord {
+  spec: TriggerSpecDefinition;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  updatedBy: string;
+}
+
+export interface TriggerRunRecord {
+  triggerRunId: string;
+  triggerId: string;
+  triggerVersion: string;
+  occurrenceKey: string;
+  status: TriggerRunStatus;
+  workflowRunId?: string;
+  fencingToken?: number;
+  datasetId?: string;
+  datasetVersion?: string;
+  diagnostic?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BrowserControlLeaseRecord {
+  resourceId: string;
+  ownerId: string;
+  fencingToken: number;
+  acquiredAt: string;
+  expiresAt: string;
+}
+
+export interface TriggerStore {
+  putTriggerSpec(input: {
+    spec: TriggerSpecDefinition;
+    actor: string;
+    occurredAt: string;
+  }): TriggerSpecRecord;
+  setTriggerEnabled(input: {
+    id: string;
+    expectedRevision: number;
+    enabled: boolean;
+    actor: string;
+    occurredAt: string;
+  }): TriggerSpecRecord;
+  getTriggerSpec(id: string): TriggerSpecRecord | undefined;
+  listTriggerSpecs(): TriggerSpecRecord[];
+  claimTriggerOccurrence(input: TriggerRunRecord):
+    | { status: "accepted"; record: TriggerRunRecord }
+    | { status: "duplicate"; record: TriggerRunRecord };
+  updateTriggerRun(input: {
+    triggerRunId: string;
+    status: TriggerRunStatus;
+    updatedAt: string;
+    workflowRunId?: string;
+    fencingToken?: number;
+    diagnostic?: string;
+  }): TriggerRunRecord;
+  listTriggerRuns(triggerId?: string): TriggerRunRecord[];
+  latestDatasetVersion(datasetId: string): {
+    id: string;
+    version: string;
+    createdAt: string;
+  } | undefined;
+  acquireTriggerLease(input: {
+    concurrencyKey: string;
+    ownerId: string;
+    now: string;
+    ttlSeconds: number;
+  }): BrowserControlLeaseRecord | undefined;
+  renewTriggerLease(input: {
+    concurrencyKey: string;
+    ownerId: string;
+    fencingToken: number;
+    now: string;
+    ttlSeconds: number;
+  }): BrowserControlLeaseRecord | undefined;
+  releaseTriggerLease(input: {
+    concurrencyKey: string;
+    ownerId: string;
+    fencingToken: number;
+    releasedAt: string;
+  }): boolean;
+  acquireBrowserControlLease(input: {
+    resourceId: string;
+    ownerId: string;
+    now: string;
+    ttlSeconds: number;
+  }): BrowserControlLeaseRecord | undefined;
+  renewBrowserControlLease(input: {
+    resourceId: string;
+    ownerId: string;
+    fencingToken: number;
+    now: string;
+    ttlSeconds: number;
+  }): BrowserControlLeaseRecord | undefined;
+  releaseBrowserControlLease(input: {
+    resourceId: string;
+    ownerId: string;
+    fencingToken: number;
+    releasedAt: string;
+  }): boolean;
+  listBrowserControlLeases(now: string): BrowserControlLeaseRecord[];
+}
+
 export interface WorkflowDraftRecord {
   draftId: string;
   revision: number;
@@ -1139,7 +1258,8 @@ export interface Persistence
     TrustedLineageStore,
     ExportStore,
     BrowserObservationStore,
-    GatewayCommandStore {
+    GatewayCommandStore,
+    TriggerStore {
   health(): {
     adapter: string;
     schemaVersion: number;

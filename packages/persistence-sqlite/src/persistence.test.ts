@@ -1646,7 +1646,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(11);
+      expect(store.health().schemaVersion).toBe(12);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1677,6 +1677,10 @@ describe("append-only migrations", () => {
 
       const legacy = new Database(databasePath);
       legacy.exec(`
+        DROP TABLE browser_control_leases;
+        DROP TABLE trigger_leases;
+        DROP TABLE trigger_runs;
+        DROP TABLE trigger_specs;
         DROP TABLE candidate_exports;
         DROP TABLE candidate_bundle_validations;
         DROP TABLE candidate_bundle_items;
@@ -1748,12 +1752,12 @@ describe("append-only migrations", () => {
         ALTER TABLE browser_capabilities DROP COLUMN routes_json;
         DROP INDEX workflow_runs_active_updated;
         DELETE FROM schema_migrations
-        WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11);
+        WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(11);
+      expect(upgraded.health().schemaVersion).toBe(12);
       expect(upgraded.getAssistanceTask(task.task.taskId)).toEqual(task);
       expect(
         upgraded.getAssistanceRequestResult("not-recorded")
@@ -1778,7 +1782,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(11);
+      expect(store.health().schemaVersion).toBe(12);
       expect(store.getAssistanceRequestResult("not-recorded")).toBeUndefined();
       store.close();
     } finally {
@@ -1800,7 +1804,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(11);
+      expect(store.health().schemaVersion).toBe(12);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1815,6 +1819,10 @@ describe("append-only migrations", () => {
       seeded.close();
       const legacy = new Database(databasePath);
       legacy.exec(`
+        DROP TABLE browser_control_leases;
+        DROP TABLE trigger_leases;
+        DROP TABLE trigger_runs;
+        DROP TABLE trigger_specs;
         DROP TABLE candidate_exports;
         DROP TABLE candidate_bundle_validations;
         DROP TABLE candidate_bundle_items;
@@ -1881,12 +1889,12 @@ describe("append-only migrations", () => {
         ALTER TABLE browser_capabilities DROP COLUMN routes_json;
         DROP INDEX workflow_runs_active_updated;
         DELETE FROM schema_migrations
-        WHERE version IN (6, 7, 8, 9, 10, 11);
+        WHERE version IN (6, 7, 8, 9, 10, 11, 12);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(11);
+      expect(upgraded.health().schemaVersion).toBe(12);
       expect(
         upgraded.createWorkflowDraft({
           draftId: "v5-upgraded-draft",
@@ -1927,7 +1935,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(11);
+      expect(store.health().schemaVersion).toBe(12);
       expect(store.getWorkflowDraft("not-created")).toBeUndefined();
       store.close();
     } finally {
@@ -1940,7 +1948,7 @@ describe("append-only migrations", () => {
     const databasePath = join(directory, "bpa.sqlite3");
     try {
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(11);
+      expect(store.health().schemaVersion).toBe(12);
       store.close();
       const raw = new Database(databasePath);
       raw

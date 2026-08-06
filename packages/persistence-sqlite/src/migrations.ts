@@ -1193,5 +1193,61 @@ export const migrations: Migration[] = [
         ON workflow_runs(status, updated_at)
         WHERE status NOT IN ('succeeded', 'failed', 'cancelled', 'uncertain');
     `
+  },
+  {
+    version: 12,
+    sql: `
+      CREATE TABLE trigger_specs (
+        trigger_id TEXT PRIMARY KEY,
+        trigger_version TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+        spec_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        updated_by TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE trigger_runs (
+        trigger_run_id TEXT PRIMARY KEY,
+        trigger_id TEXT NOT NULL REFERENCES trigger_specs(trigger_id) ON DELETE RESTRICT,
+        trigger_version TEXT NOT NULL,
+        occurrence_key TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (
+          'due', 'lease_acquired', 'run_created', 'running', 'complete',
+          'partial', 'blocked', 'degraded', 'failed', 'skipped'
+        )),
+        workflow_run_id TEXT REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        fencing_token INTEGER CHECK (fencing_token IS NULL OR fencing_token >= 1),
+        dataset_id TEXT,
+        dataset_version TEXT,
+        diagnostic TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(trigger_id, occurrence_key)
+      ) STRICT;
+      CREATE INDEX trigger_runs_recent
+        ON trigger_runs(trigger_id, created_at DESC);
+
+      CREATE TABLE trigger_leases (
+        concurrency_key TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        fencing_token INTEGER NOT NULL CHECK (fencing_token >= 1),
+        acquired_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX trigger_leases_expiry ON trigger_leases(expires_at);
+
+      CREATE TABLE browser_control_leases (
+        resource_id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        fencing_token INTEGER NOT NULL CHECK (fencing_token >= 1),
+        acquired_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX browser_control_leases_expiry
+        ON browser_control_leases(expires_at);
+    `
   }
 ];

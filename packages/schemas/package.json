@@ -21,6 +21,7 @@
     "./decision-record.schema.json": "./schema/decision-record.schema.json",
     "./element-contract.schema.json": "./schema/element-contract.schema.json",
     "./page-model.schema.json": "./schema/page-model.schema.json",
-    "./permission.schema.json": "./schema/permission.schema.json"
+    "./permission.schema.json": "./schema/permission.schema.json",
+    "./trigger-spec.schema.json": "./schema/trigger-spec.schema.json"
   }
 }

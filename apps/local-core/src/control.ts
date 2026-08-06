@@ -33,7 +33,12 @@ import {
 } from "@bpa/control-protocol";
 import { isWindowsNamedPipe } from "@bpa/platform-runtime";
 import { LocalWorkflowEngine } from "./compatibility/local-workflow-engine.js";
-import type { ArtifactType, Persistence } from "@bpa/persistence";
+import type {
+  ArtifactType,
+  Persistence,
+  RunRecord,
+  TriggerSpecDefinition
+} from "@bpa/persistence";
 import {
   BuiltinRuntimeProvider,
   RuntimeProviderRegistry
@@ -50,6 +55,7 @@ import {
   validateNode,
   validateNodeV1Alpha2,
   validatePageModel,
+  validateTriggerSpec,
   validateWorkflow,
   validateWorkflowV1Alpha3,
   type NodeDefinition,
@@ -94,6 +100,7 @@ import {
   type StagingLeaseRequest
 } from "./staging-transfer.js";
 import { LocalCandidateArchiveService } from "./candidate-archive-service.js";
+import { TriggerRuntime } from "./trigger-runtime.js";
 
 export const CONTROL_MAX_MESSAGE_BYTES = 512 * 1024;
 
@@ -119,6 +126,7 @@ export class LocalCoreService {
   readonly authoring: LocalAuthoringService;
   readonly candidateArchives: LocalCandidateArchiveService | undefined;
   readonly datasets: PackagingDatasetService;
+  readonly triggers: TriggerRuntime;
   readonly #resourceBindings: RuntimeResourceBindingService;
   readonly #trustedEvidence: TrustedEvidenceQueryService;
 
@@ -132,6 +140,24 @@ export class LocalCoreService {
   ) {
     this.engine = new LocalWorkflowEngine(persistence);
     this.datasets = new PackagingDatasetService(persistence);
+    this.triggers = new TriggerRuntime(
+      persistence,
+      (trigger,input) => {
+        this.#assertRuntimeAvailable();
+        const resolved = this.#resolveWorkflowResources(
+          trigger.spec.workflow.id,
+          trigger.spec.workflow.version,
+          trigger.spec.browserInstanceId
+        ) as { resourceBindings?: unknown };
+        return this.#createRun(
+          trigger.spec.workflow.id,
+          trigger.spec.workflow.version,
+          input,
+          resolved.resourceBindings ?? {},
+          `trigger:${trigger.spec.id}`
+        ) as RunRecord;
+      }
+    );
     this.#resourceBindings = new RuntimeResourceBindingService(persistence);
     this.#trustedEvidence = new TrustedEvidenceQueryService(persistence);
     const providers = runtimeProviders ?? new RuntimeProviderRegistry();
@@ -713,6 +739,67 @@ export class LocalCoreService {
         return this.persistence.listAudit(
           params.target == null ? undefined : String(params.target)
         );
+      case "trigger.put": {
+        if (!validateTriggerSpec(params.spec)) {
+          throw new Error(
+            `TriggerSpec is invalid: ${formatValidationErrors(validateTriggerSpec.errors).join("; ")}`
+          );
+        }
+        const spec = params.spec as TriggerSpecDefinition;
+        if (!this.persistence.getPublished("workflow",spec.workflow.id,spec.workflow.version)) {
+          throw new Error(
+            `Published workflow not found: ${spec.workflow.id}@${spec.workflow.version}`
+          );
+        }
+        return this.persistence.putTriggerSpec({
+          spec,actor:String(params.actor || userInfo().username),
+          occurredAt:new Date().toISOString()
+        });
+      }
+      case "trigger.list":
+        return this.persistence.listTriggerSpecs();
+      case "trigger.runs":
+        return this.persistence.listTriggerRuns(
+          params.triggerId === undefined ? undefined : String(params.triggerId)
+        );
+      case "trigger.enable":
+        return this.persistence.setTriggerEnabled({
+          id:String(params.id),expectedRevision:Number(params.expectedRevision),
+          enabled:params.enabled === true,
+          actor:String(params.actor || userInfo().username),
+          occurredAt:new Date().toISOString()
+        });
+      case "trigger.fire": {
+        const trigger = this.persistence.getTriggerSpec(String(params.id));
+        if (!trigger) throw new Error(`Trigger not found: ${String(params.id)}`);
+        if (!trigger.spec.enabled) throw new Error("TRIGGER_DISABLED");
+        if (trigger.spec.kind !== "manual") {
+          throw new Error("Only Manual Triggers accept an explicit fire request");
+        }
+        const requestKey = String(params.requestKey ?? "").trim();
+        if (!requestKey) throw new Error("Manual Trigger requires requestKey");
+        return this.triggers.fire({ trigger,occurrenceKey:`manual:${requestKey}` });
+      }
+      case "browser.control-lease.acquire":
+        return this.persistence.acquireBrowserControlLease({
+          resourceId:String(params.resourceId),ownerId:String(params.ownerId),
+          now:new Date().toISOString(),ttlSeconds:Number(params.ttlSeconds ?? 120)
+        });
+      case "browser.control-lease.renew":
+        return this.persistence.renewBrowserControlLease({
+          resourceId:String(params.resourceId),ownerId:String(params.ownerId),
+          fencingToken:Number(params.fencingToken),now:new Date().toISOString(),
+          ttlSeconds:Number(params.ttlSeconds ?? 120)
+        });
+      case "browser.control-lease.release":
+        return {
+          released:this.persistence.releaseBrowserControlLease({
+            resourceId:String(params.resourceId),ownerId:String(params.ownerId),
+            fencingToken:Number(params.fencingToken),releasedAt:new Date().toISOString()
+          })
+        };
+      case "browser.control-lease.list":
+        return this.persistence.listBrowserControlLeases(new Date().toISOString());
       case "browser.session.list":
         return this.persistence.listBrowserSessions({
           limit: Math.min(
@@ -1827,6 +1914,27 @@ function controlV1Error(
   };
 }
 
+function writeControlV1Response(
+  socket: Socket,
+  requestId: string,
+  response: ControlResponseEnvelope
+): void {
+  try {
+    socket.write(Buffer.from(encodeControlEnvelope(response)));
+  } catch (error) {
+    if (socket.destroyed) return;
+    const message =
+      error instanceof Error && /maximum size/iu.test(error.message)
+        ? "Control response exceeds the negotiated maximum size"
+        : "Control response encoding failed";
+    socket.write(
+      Buffer.from(
+        encodeControlEnvelope(controlV1Error(requestId, "INTERNAL", message))
+      )
+    );
+  }
+}
+
 function mapLegacyErrorCode(response: ControlResponse): ControlErrorCode {
   const code = response.error?.code;
   if (code && CONTROL_V1_ERROR_CODES.has(code as ControlErrorCode)) {
@@ -1991,7 +2099,19 @@ export class LocalControlServer {
                     mapLegacyErrorCode(legacyResponse),
                     legacyResponse.error?.message ?? "Core request failed"
                   );
-              socket.write(Buffer.from(encodeControlEnvelope(response)));
+              writeControlV1Response(socket, request.requestId, response);
+            })
+            .catch(() => {
+              if (socket.destroyed) return;
+              writeControlV1Response(
+                socket,
+                request.requestId,
+                controlV1Error(
+                  request.requestId,
+                  "INTERNAL",
+                  "Control request failed"
+                )
+              );
             });
           return;
         }
@@ -2019,6 +2139,8 @@ export class LocalControlServer {
           );
           return;
         }
+        const legacyRequestId = request.id;
+        const legacyMethod = request.method;
         if (request.method === "native.attach") {
           if (!this.service.browserGateway) {
             socket.write(
@@ -2062,12 +2184,39 @@ export class LocalControlServer {
         }
         void this.service
           .handleAsync({
-              id: request.id,
-              method: request.method,
+              id: legacyRequestId,
+              method: legacyMethod,
               ...(request.params ? { params: request.params } : {})
             })
           .then((response) => {
-            if (!socket.destroyed) socket.write(encodeFrame(response));
+            if (socket.destroyed) return;
+            try {
+              socket.write(encodeFrame(response));
+            } catch {
+              socket.write(
+                encodeFrame({
+                  id: legacyRequestId,
+                  ok: false,
+                  error: {
+                    code: "INTERNAL",
+                    message: "Control response exceeds the maximum size"
+                  }
+                } satisfies ControlResponse)
+              );
+            }
+          })
+          .catch(() => {
+            if (socket.destroyed) return;
+            socket.write(
+              encodeFrame({
+                id: legacyRequestId,
+                ok: false,
+                error: {
+                  code: "INTERNAL",
+                  message: "Control request failed"
+                }
+              } satisfies ControlResponse)
+            );
           });
       });
       socket.once("close", () => {

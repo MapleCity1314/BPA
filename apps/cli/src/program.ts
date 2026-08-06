@@ -160,6 +160,52 @@ export function createCliProgram(options: CliProgramOptions): Command {
       );
     });
 
+  const trigger = program
+    .command("trigger")
+    .description("manage deterministic Manual, Schedule and Dataset Triggers");
+
+  trigger
+    .command("put")
+    .argument("<path>", "TriggerSpec JSON or YAML")
+    .requiredOption("--yes", "confirm audited Trigger configuration")
+    .action(async (path) => {
+      output(await client.request("trigger.put",{
+        spec:await readAsset(path),actor
+      }));
+    });
+
+  trigger
+    .command("list")
+    .action(async () => output(await client.request("trigger.list")));
+
+  trigger
+    .command("runs")
+    .option("--id <trigger-id>", "filter by Trigger ID")
+    .action(async (commandOptions) => output(await client.request(
+      "trigger.runs",
+      commandOptions.id ? { triggerId:commandOptions.id as string } : {}
+    )));
+
+  trigger
+    .command("enable")
+    .argument("<id>", "Trigger ID")
+    .requiredOption("--revision <revision>", "expected revision", integerOption)
+    .option("--disable", "disable instead of enable", false)
+    .action(async (id,commandOptions) => output(await client.request(
+      "trigger.enable",{
+        id,expectedRevision:commandOptions.revision as number,
+        enabled:commandOptions.disable !== true,actor
+      }
+    )));
+
+  trigger
+    .command("fire")
+    .argument("<id>", "Manual Trigger ID")
+    .requiredOption("--request-key <key>", "caller-owned idempotency key")
+    .action(async (id,commandOptions) => output(await client.request(
+      "trigger.fire",{ id,requestKey:commandOptions.requestKey as string,actor }
+    )));
+
   const dataset = program
     .command("dataset")
     .description("import and inspect immutable datasets");

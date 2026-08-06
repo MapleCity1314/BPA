@@ -195,6 +195,22 @@ describe("dataset CLI control mapping", () => {
   });
 });
 
+describe("Trigger CLI control mapping",() => {
+  it("fires a Manual Trigger with a caller idempotency key",async () => {
+    const { client,program } = fixture();
+    await program.parseAsync([
+      "node","bpa","trigger","fire","inventory.manual",
+      "--request-key","operator-20260805-1"
+    ]);
+    expect(client.calls).toEqual([{
+      method:"trigger.fire",
+      params:{
+        id:"inventory.manual",requestKey:"operator-20260805-1",actor:"cli-user"
+      }
+    }]);
+  });
+});
+
 describe("single Node CLI control mapping", () => {
   it("previews an exact Node without starting it", async () => {
     const { client, program } = fixture();

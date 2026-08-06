@@ -31,6 +31,7 @@ import {
   type AssistanceTaskListFilter,
   type AuditRecord,
   type BrowserCapabilityRecord,
+  type BrowserControlLeaseRecord,
   type BrowserPageObservationRecord,
   type BrowserSessionObservationState,
   type BrowserSessionRecord,
@@ -78,6 +79,10 @@ import {
   type SourceRecordDefinition,
   type StagingLeaseRecord,
   type StepInstanceRecord,
+  type TriggerRunRecord,
+  type TriggerRunStatus,
+  type TriggerSpecDefinition,
+  type TriggerSpecRecord,
   type SubmitAssistanceAndWakeInput,
   type TransitionDesignModeGrantInput,
   type WorkflowCandidateRecord,
@@ -4767,6 +4772,231 @@ export class SqlitePersistence implements Persistence {
     return this.#getRetentionJob(input.jobId)!;
   }
 
+  putTriggerSpec(input: {
+    spec: TriggerSpecDefinition;
+    actor: string;
+    occurredAt: string;
+  }): TriggerSpecRecord {
+    const current = this.getTriggerSpec(input.spec.id);
+    if (current && current.spec.version === input.spec.version) {
+      if (canonicalJson(current.spec) !== canonicalJson(input.spec)) {
+        throw new ArtifactConflictError(
+          `Trigger identity conflict: ${input.spec.id}@${input.spec.version}`
+        );
+      }
+      return current;
+    }
+    return this.#db.transaction(() => {
+      const revision = (current?.revision ?? 0) + 1;
+      this.#db.prepare(
+        `INSERT INTO trigger_specs(
+          trigger_id,trigger_version,revision,enabled,spec_json,
+          created_at,updated_at,created_by,updated_by
+        ) VALUES (?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(trigger_id) DO UPDATE SET
+          trigger_version=excluded.trigger_version,
+          revision=excluded.revision,
+          enabled=excluded.enabled,
+          spec_json=excluded.spec_json,
+          updated_at=excluded.updated_at,
+          updated_by=excluded.updated_by`
+      ).run(
+        input.spec.id,input.spec.version,revision,input.spec.enabled ? 1 : 0,
+        json(input.spec),current?.createdAt ?? input.occurredAt,input.occurredAt,
+        current?.createdBy ?? input.actor,input.actor
+      );
+      this.#insertAuditRecord({
+        id:this.#idFactory(),action:"trigger.spec.put",actor:input.actor,
+        target:`trigger:${input.spec.id}`,
+        detail:{ version:input.spec.version,revision,enabled:input.spec.enabled },
+        occurredAt:input.occurredAt
+      });
+      return this.getTriggerSpec(input.spec.id)!;
+    })();
+  }
+
+  setTriggerEnabled(input: {
+    id: string;
+    expectedRevision: number;
+    enabled: boolean;
+    actor: string;
+    occurredAt: string;
+  }): TriggerSpecRecord {
+    return this.#db.transaction(() => {
+      const current = this.getTriggerSpec(input.id);
+      if (!current) throw new Error(`Trigger not found: ${input.id}`);
+      if (current.revision !== input.expectedRevision) {
+        throw new RevisionConflictError("Trigger revision changed");
+      }
+      const nextSpec = { ...current.spec,enabled:input.enabled };
+      const result = this.#db.prepare(
+        `UPDATE trigger_specs SET revision=revision+1,enabled=?,spec_json=?,
+           updated_at=?,updated_by=? WHERE trigger_id=? AND revision=?`
+      ).run(
+        input.enabled ? 1 : 0,json(nextSpec),input.occurredAt,input.actor,
+        input.id,input.expectedRevision
+      );
+      if (result.changes !== 1) throw new RevisionConflictError("Trigger revision changed");
+      this.#insertAuditRecord({
+        id:this.#idFactory(),action:"trigger.spec.enable",actor:input.actor,
+        target:`trigger:${input.id}`,detail:{ enabled:input.enabled },
+        occurredAt:input.occurredAt
+      });
+      return this.getTriggerSpec(input.id)!;
+    })();
+  }
+
+  getTriggerSpec(id: string): TriggerSpecRecord | undefined {
+    const row = this.#db.prepare("SELECT * FROM trigger_specs WHERE trigger_id=?")
+      .get(id) as SqlRow | undefined;
+    return row ? this.#readTriggerSpec(row) : undefined;
+  }
+
+  listTriggerSpecs(): TriggerSpecRecord[] {
+    return (this.#db.prepare("SELECT * FROM trigger_specs ORDER BY trigger_id").all() as SqlRow[])
+      .map((row) => this.#readTriggerSpec(row));
+  }
+
+  claimTriggerOccurrence(input: TriggerRunRecord):
+    | { status:"accepted";record:TriggerRunRecord }
+    | { status:"duplicate";record:TriggerRunRecord } {
+    const result = this.#db.prepare(
+      `INSERT INTO trigger_runs(
+        trigger_run_id,trigger_id,trigger_version,occurrence_key,status,
+        workflow_run_id,fencing_token,dataset_id,dataset_version,diagnostic,created_at,updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(trigger_id,occurrence_key) DO NOTHING`
+    ).run(
+      input.triggerRunId,input.triggerId,input.triggerVersion,input.occurrenceKey,input.status,
+      input.workflowRunId ?? null,input.fencingToken ?? null,input.datasetId ?? null,input.datasetVersion ?? null,
+      input.diagnostic ?? null,input.createdAt,input.updatedAt
+    );
+    if (result.changes === 1) return { status:"accepted",record:input };
+    const existing = this.#db.prepare(
+      "SELECT * FROM trigger_runs WHERE trigger_id=? AND occurrence_key=?"
+    ).get(input.triggerId,input.occurrenceKey) as SqlRow;
+    return { status:"duplicate",record:this.#readTriggerRun(existing) };
+  }
+
+  updateTriggerRun(input: {
+    triggerRunId: string;
+    status: TriggerRunStatus;
+    updatedAt: string;
+    workflowRunId?: string;
+    fencingToken?: number;
+    diagnostic?: string;
+  }): TriggerRunRecord {
+    const result = this.#db.prepare(
+      `UPDATE trigger_runs SET status=?,updated_at=?,
+         workflow_run_id=COALESCE(?,workflow_run_id),
+         fencing_token=COALESCE(?,fencing_token),diagnostic=COALESCE(?,diagnostic)
+       WHERE trigger_run_id=?`
+    ).run(
+      input.status,input.updatedAt,input.workflowRunId ?? null,input.fencingToken ?? null,
+      input.diagnostic ?? null,input.triggerRunId
+    );
+    if (result.changes !== 1) throw new Error(`Trigger Run not found: ${input.triggerRunId}`);
+    const row = this.#db.prepare("SELECT * FROM trigger_runs WHERE trigger_run_id=?")
+      .get(input.triggerRunId) as SqlRow;
+    return this.#readTriggerRun(row);
+  }
+
+  listTriggerRuns(triggerId?: string): TriggerRunRecord[] {
+    const rows = (triggerId
+      ? this.#db.prepare(
+          "SELECT * FROM trigger_runs WHERE trigger_id=? ORDER BY created_at DESC LIMIT 200"
+        ).all(triggerId)
+      : this.#db.prepare(
+          "SELECT * FROM trigger_runs ORDER BY created_at DESC LIMIT 200"
+        ).all()) as SqlRow[];
+    return rows.map((row) => this.#readTriggerRun(row));
+  }
+
+  latestDatasetVersion(datasetId: string): { id:string;version:string;createdAt:string } | undefined {
+    const row = this.#db.prepare(
+      `SELECT dataset_id,version,created_at FROM dataset_versions
+       WHERE dataset_id=? ORDER BY created_at DESC,version DESC LIMIT 1`
+    ).get(datasetId) as SqlRow | undefined;
+    return row ? {
+      id:String(row.dataset_id),version:String(row.version),createdAt:String(row.created_at)
+    } : undefined;
+  }
+
+  acquireTriggerLease(input: {
+    concurrencyKey: string;ownerId: string;now: string;ttlSeconds: number;
+  }): BrowserControlLeaseRecord | undefined {
+    return this.#acquireControlLease(
+      "trigger_leases","concurrency_key",input.concurrencyKey,input.ownerId,input.now,input.ttlSeconds
+    );
+  }
+
+  renewTriggerLease(input: {
+    concurrencyKey:string;ownerId:string;fencingToken:number;now:string;ttlSeconds:number;
+  }): BrowserControlLeaseRecord | undefined {
+    return this.#renewControlLease(
+      "trigger_leases","concurrency_key",input.concurrencyKey,input.ownerId,
+      input.fencingToken,input.now,input.ttlSeconds
+    );
+  }
+
+  releaseTriggerLease(input: {
+    concurrencyKey:string;ownerId:string;fencingToken:number;releasedAt:string;
+  }): boolean {
+    return this.#releaseControlLease(
+      "trigger_leases","concurrency_key",input.concurrencyKey,
+      input.ownerId,input.fencingToken,input.releasedAt
+    );
+  }
+
+  acquireBrowserControlLease(input: {
+    resourceId:string;ownerId:string;now:string;ttlSeconds:number;
+  }): BrowserControlLeaseRecord | undefined {
+    return this.#acquireControlLease(
+      "browser_control_leases","resource_id",input.resourceId,input.ownerId,input.now,input.ttlSeconds
+    );
+  }
+
+  renewBrowserControlLease(input: {
+    resourceId:string;ownerId:string;fencingToken:number;now:string;ttlSeconds:number;
+  }): BrowserControlLeaseRecord | undefined {
+    if (!Number.isSafeInteger(input.ttlSeconds) || input.ttlSeconds < 5 || input.ttlSeconds > 3600) {
+      throw new Error("Control lease TTL must be between 5 and 3600 seconds");
+    }
+    const expiresAt = new Date(Date.parse(input.now) + input.ttlSeconds * 1000).toISOString();
+    const result = this.#db.prepare(
+      `UPDATE browser_control_leases SET expires_at=?
+       WHERE resource_id=? AND owner_id=? AND fencing_token=? AND expires_at>?`
+    ).run(expiresAt,input.resourceId,input.ownerId,input.fencingToken,input.now);
+    if (result.changes !== 1) return undefined;
+    const row = this.#db.prepare(
+      "SELECT * FROM browser_control_leases WHERE resource_id=?"
+    ).get(input.resourceId) as SqlRow;
+    return {
+      resourceId:String(row.resource_id),ownerId:String(row.owner_id),
+      fencingToken:Number(row.fencing_token),acquiredAt:String(row.acquired_at),
+      expiresAt:String(row.expires_at)
+    };
+  }
+
+  releaseBrowserControlLease(input: {
+    resourceId:string;ownerId:string;fencingToken:number;releasedAt:string;
+  }): boolean {
+    return this.#releaseControlLease(
+      "browser_control_leases","resource_id",input.resourceId,
+      input.ownerId,input.fencingToken,input.releasedAt
+    );
+  }
+
+  listBrowserControlLeases(nowValue: string): BrowserControlLeaseRecord[] {
+    return (this.#db.prepare(
+      "SELECT * FROM browser_control_leases WHERE expires_at>? ORDER BY resource_id"
+    ).all(nowValue) as SqlRow[]).map((row) => ({
+      resourceId:String(row.resource_id),ownerId:String(row.owner_id),
+      fencingToken:Number(row.fencing_token),acquiredAt:String(row.acquired_at),
+      expiresAt:String(row.expires_at)
+    }));
+  }
+
   listAudit(target?: string): AuditRecord[] {
     const rows = (target
       ? this.#db
@@ -5141,6 +5371,100 @@ export class SqlitePersistence implements Persistence {
         json(record.detail),
         record.occurredAt
       );
+  }
+
+  #readTriggerSpec(row: SqlRow): TriggerSpecRecord {
+    return {
+      spec:parseJson(row.spec_json) as TriggerSpecDefinition,
+      revision:Number(row.revision),createdAt:String(row.created_at),
+      updatedAt:String(row.updated_at),createdBy:String(row.created_by),
+      updatedBy:String(row.updated_by)
+    };
+  }
+
+  #readTriggerRun(row: SqlRow): TriggerRunRecord {
+    return {
+      triggerRunId:String(row.trigger_run_id),triggerId:String(row.trigger_id),
+      triggerVersion:String(row.trigger_version),occurrenceKey:String(row.occurrence_key),
+      status:row.status as TriggerRunStatus,
+      ...(row.workflow_run_id == null ? {} : { workflowRunId:String(row.workflow_run_id) }),
+      ...(row.fencing_token == null ? {} : { fencingToken:Number(row.fencing_token) }),
+      ...(row.dataset_id == null ? {} : { datasetId:String(row.dataset_id) }),
+      ...(row.dataset_version == null ? {} : { datasetVersion:String(row.dataset_version) }),
+      ...(row.diagnostic == null ? {} : { diagnostic:String(row.diagnostic) }),
+      createdAt:String(row.created_at),updatedAt:String(row.updated_at)
+    };
+  }
+
+  #acquireControlLease(
+    table: "trigger_leases" | "browser_control_leases",
+    keyColumn: "concurrency_key" | "resource_id",
+    resourceId: string,
+    ownerId: string,
+    nowValue: string,
+    ttlSeconds: number
+  ): BrowserControlLeaseRecord | undefined {
+    if (!resourceId.trim() || !ownerId.trim()) throw new Error("Control lease identity is required");
+    if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 5 || ttlSeconds > 3600) {
+      throw new Error("Control lease TTL must be between 5 and 3600 seconds");
+    }
+    const expiresAt = new Date(Date.parse(nowValue) + ttlSeconds * 1000).toISOString();
+    return this.#db.transaction(() => {
+      const existing = this.#db.prepare(
+        `SELECT * FROM ${table} WHERE ${keyColumn}=?`
+      ).get(resourceId) as SqlRow | undefined;
+      if (existing && String(existing.expires_at) > nowValue) return undefined;
+      const fencingToken = existing ? Number(existing.fencing_token) + 1 : 1;
+      this.#db.prepare(
+        `INSERT INTO ${table}(${keyColumn},owner_id,fencing_token,acquired_at,expires_at)
+         VALUES (?,?,?,?,?) ON CONFLICT(${keyColumn}) DO UPDATE SET
+           owner_id=excluded.owner_id,fencing_token=excluded.fencing_token,
+           acquired_at=excluded.acquired_at,expires_at=excluded.expires_at`
+      ).run(resourceId,ownerId,fencingToken,nowValue,expiresAt);
+      return { resourceId,ownerId,fencingToken,acquiredAt:nowValue,expiresAt };
+    })();
+  }
+
+  #releaseControlLease(
+    table: "trigger_leases" | "browser_control_leases",
+    keyColumn: "concurrency_key" | "resource_id",
+    resourceId: string,
+    ownerId: string,
+    fencingToken: number,
+    releasedAt: string
+  ): boolean {
+    const result = this.#db.prepare(
+      `UPDATE ${table} SET expires_at=?
+       WHERE ${keyColumn}=? AND owner_id=? AND fencing_token=? AND expires_at>?`
+    ).run(releasedAt,resourceId,ownerId,fencingToken,releasedAt);
+    return result.changes === 1;
+  }
+
+  #renewControlLease(
+    table: "trigger_leases" | "browser_control_leases",
+    keyColumn: "concurrency_key" | "resource_id",
+    resourceId: string,
+    ownerId: string,
+    fencingToken: number,
+    nowValue: string,
+    ttlSeconds: number
+  ): BrowserControlLeaseRecord | undefined {
+    if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 5 || ttlSeconds > 3600) {
+      throw new Error("Control lease TTL must be between 5 and 3600 seconds");
+    }
+    const expiresAt = new Date(Date.parse(nowValue) + ttlSeconds * 1000).toISOString();
+    const result = this.#db.prepare(
+      `UPDATE ${table} SET expires_at=?
+       WHERE ${keyColumn}=? AND owner_id=? AND fencing_token=? AND expires_at>?`
+    ).run(expiresAt,resourceId,ownerId,fencingToken,nowValue);
+    if (result.changes !== 1) return undefined;
+    const row = this.#db.prepare(
+      `SELECT * FROM ${table} WHERE ${keyColumn}=?`
+    ).get(resourceId) as SqlRow;
+    return {
+      resourceId,ownerId:String(row.owner_id),fencingToken:Number(row.fencing_token),
+      acquiredAt:String(row.acquired_at),expiresAt:String(row.expires_at)
+    };
   }
 
   #insertDecision(record: DecisionRecordDefinition): void {

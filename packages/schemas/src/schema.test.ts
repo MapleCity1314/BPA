@@ -20,9 +20,48 @@ import {
   validateScenarioSpec,
   validateSourceRecord,
   validateTimingPolicy,
+  validateTriggerSpec,
   validateWorkflowV1Alpha2,
   validateWorkflowV1Alpha3
 } from "./index.js";
+
+describe("TriggerSpec schema",() => {
+  const base = {
+    apiVersion:"bpa.trigger/v1alpha1",
+    id:"inventory.refresh.manual",
+    version:"1.0.0",
+    appId:"inventory-monitor",
+    kind:"manual",
+    workflow:{ id:"inventory.refresh",version:"1.0.0" },
+    enabled:true,
+    inputSchemaVersion:"inventory.refresh-input/1",
+    input:{ shopId:"10461048" },
+    concurrencyKey:"inventory:10461048",
+    idempotencyPolicy:"request_key",
+    retryPolicy:"none"
+  };
+
+  it("accepts Manual, Schedule and Dataset Triggers",() => {
+    expect(validateTriggerSpec(base)).toBe(true);
+    expect(validateTriggerSpec({
+      ...base,id:"inventory.refresh.schedule",kind:"schedule",
+      idempotencyPolicy:"occurrence",missedRunPolicy:"run_once",
+      schedule:{ intervalSeconds:1800,timezone:"Asia/Shanghai" }
+    })).toBe(true);
+    expect(validateTriggerSpec({
+      ...base,id:"inventory.risk.dataset",kind:"dataset",
+      idempotencyPolicy:"dataset_version",dataset:{ id:"inventory-snapshot:10461048" }
+    })).toBe(true);
+  });
+
+  it("rejects incomplete or overly frequent schedules",() => {
+    expect(validateTriggerSpec({ ...base,kind:"schedule" })).toBe(false);
+    expect(validateTriggerSpec({
+      ...base,kind:"schedule",missedRunPolicy:"skip",
+      schedule:{ intervalSeconds:10 }
+    })).toBe(false);
+  });
+});
 
 const examples = JSON.parse(
   readFileSync(
