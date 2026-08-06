@@ -20,3 +20,9 @@ coverage/
 runtime/
 artifacts/
 bundle/
+target/
+packages/inventory-kernel/index.js
+packages/inventory-kernel/index.d.ts
+packages/inventory-kernel/*.node
+.VSCodeCounter/
+*.tsbuildinfo

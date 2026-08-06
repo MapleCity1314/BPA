@@ -1,0 +1,21 @@
+[package]
+name = "bpa-inventory-kernel"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = "3.12.0"
+napi-derive = "3.6.2"
+
+[build-dependencies]
+napi-build = "2.4.0"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = "symbols"
