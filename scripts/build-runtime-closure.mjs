@@ -405,13 +405,30 @@ if (targetPlatform === "darwin") {
   };
   for (const [name, target] of Object.entries(wrapperTargets)) {
     const wrapperPath = join(outputRoot, "bin", name);
+    const coreEnvironment = name === "bpa-core"
+      ? `if [[ -z "\${BPA_HOME:-}" ]]; then
+  print -u2 "BPA_HOME is required to start BPA Core."
+  exit 1
+fi
+CORE_ENV="\$BPA_HOME/core.env"
+if [[ -f "\$CORE_ENV" ]]; then
+  if [[ "$(stat -f '%Su:%Lp' "\$CORE_ENV")" != "$(id -un):600" ]]; then
+    print -u2 "BPA Core configuration owner or permissions are invalid."
+    exit 1
+  fi
+  set -a
+  source "\$CORE_ENV"
+  set +a
+fi
+`
+      : "";
     await writeFile(
       wrapperPath,
       `#!/bin/zsh
 set -euo pipefail
 SCRIPT_ROOT="\${0:A:h}"
 VERSION_ROOT="\${SCRIPT_ROOT:h}"
-export BPA_RUNTIME_ID="${release.identity}"
+${coreEnvironment}export BPA_RUNTIME_ID="${release.identity}"
 exec "\$VERSION_ROOT/node/bin/node" "\$VERSION_ROOT/bin/${target}" "\$@"
 `
     );

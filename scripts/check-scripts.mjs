@@ -168,6 +168,8 @@ for (const required of [
 for (const required of [
   "AGENT_BACKUP=",
   "HOST_MANIFEST_BACKUP=",
+  "runtime-install.lock",
+  "runtime-maintenance.lock",
   'cp "$AGENT_BACKUP" "$LAUNCH_AGENT"',
   'cp "$HOST_MANIFEST_BACKUP" "$HOST_MANIFEST"'
 ]) {
@@ -178,6 +180,8 @@ for (const required of [
 for (const required of [
   'export BPA_RUNTIME_ID="${release.identity}"',
   'VERSION_ROOT="\\${SCRIPT_ROOT:h}"',
+  'CORE_ENV="\\$BPA_HOME/core.env"',
+  "BPA Core configuration owner or permissions are invalid.",
   "await chmod(wrapperPath, 0o755)"
 ]) {
   if (!closureBuilder.includes(required)) {

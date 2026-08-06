@@ -21,6 +21,8 @@ LOG_ROOT="$USER_HOME/Library/Logs/BPA"
 LAUNCH_AGENT="$USER_HOME/Library/LaunchAgents/com.bpa.core.plist"
 HOST_ROOT="$USER_HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 HOST_MANIFEST="$HOST_ROOT/com.bpa.browser.json"
+INSTALL_LOCK="$BPA_ROOT/run/runtime-install.lock"
+MAINTENANCE_LOCK="$BPA_ROOT/run/runtime-maintenance.lock"
 EXTENSION_ID="hoobbnlkcdhbemedpfhhoicklplggmbc"
 PACKAGED_RUNTIME="$PROJECT_ROOT/runtime"
 BUNDLED_NODE="${BPA_BUNDLED_NODE:-$PACKAGED_RUNTIME/node/bin/node}"
@@ -69,7 +71,7 @@ if [[ -e "$VERSION_ROOT" ]]; then
 fi
 
 mkdir -p \
-  "$RUNTIME_ROOT" "$DATA_ROOT" "$BACKUP_ROOT" "$LOG_ROOT" \
+  "$RUNTIME_ROOT" "$DATA_ROOT" "$BPA_ROOT/run" "$BACKUP_ROOT" "$LOG_ROOT" \
   "${LAUNCH_AGENT:h}" "$HOST_ROOT"
 chmod 700 "$BPA_ROOT" "$DATA_ROOT" "$BACKUP_ROOT" "$LOG_ROOT"
 STAGING_ROOT="$(mktemp -d "$BPA_ROOT/.install.XXXXXX")"
@@ -87,6 +89,8 @@ RUNTIME_SWITCHED=false
 EXTENSION_SWITCHED=false
 AGENT_SWITCHED=false
 HOST_MANIFEST_SWITCHED=false
+INSTALL_LOCK_ACQUIRED=false
+MAINTENANCE_LOCK_ACQUIRED=false
 ORIGINAL_AGENT_EXISTED=false
 ORIGINAL_HOST_MANIFEST_EXISTED=false
 OLD_CURRENT=""
@@ -173,6 +177,8 @@ rollback_install() {
   [[ -d "$EXTENSION_STAGE" ]] && rm -rf "$EXTENSION_STAGE"
   [[ -f "$AGENT_BACKUP" ]] && rm "$AGENT_BACKUP"
   [[ -f "$HOST_MANIFEST_BACKUP" ]] && rm "$HOST_MANIFEST_BACKUP"
+  $MAINTENANCE_LOCK_ACQUIRED && rmdir "$MAINTENANCE_LOCK"
+  $INSTALL_LOCK_ACQUIRED && rmdir "$INSTALL_LOCK"
   if $INSTALL_MOVED && [[ -d "$VERSION_ROOT" ]]; then
     rm -rf "$VERSION_ROOT"
   fi
@@ -182,6 +188,17 @@ rollback_install() {
   exit $exit_code
 }
 trap rollback_install EXIT
+
+if ! mkdir "$INSTALL_LOCK" 2>/dev/null; then
+  print -u2 "Another BPA Runtime installation is active."
+  exit 1
+fi
+INSTALL_LOCK_ACQUIRED=true
+if ! mkdir "$MAINTENANCE_LOCK" 2>/dev/null; then
+  print -u2 "BPA Runtime maintenance is already active."
+  exit 1
+fi
+MAINTENANCE_LOCK_ACQUIRED=true
 
 rsync -a "$PACKAGED_RUNTIME/" "$STAGING_ROOT/"
 "$STAGING_ROOT/node/bin/node" \
@@ -343,6 +360,8 @@ rm "$HEALTH_RESULT"
 [[ -d "$EXTENSION_BACKUP" ]] && rm -rf "$EXTENSION_BACKUP"
 [[ -f "$AGENT_BACKUP" ]] && rm "$AGENT_BACKUP"
 [[ -f "$HOST_MANIFEST_BACKUP" ]] && rm "$HOST_MANIFEST_BACKUP"
+$MAINTENANCE_LOCK_ACQUIRED && rmdir "$MAINTENANCE_LOCK"
+$INSTALL_LOCK_ACQUIRED && rmdir "$INSTALL_LOCK"
 trap - EXIT
 
 print "BPA $VERSION installed from a verified production closure."

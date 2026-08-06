@@ -89,9 +89,12 @@ socket、CLI、Team Worker 与 Extension E2E；这证明交付物包含该能力
 切换完成后开启新采样窗口。macOS launcher 已改为闭包构建期生成并纳入 manifest，
 固定写入 release identity；installer 在停止旧 Core 前核对 lock PID、可执行文件、
 entrypoint 与 live command，启动新 Core 后再次核对精确 release，并为首次切换备份和
-恢复原 launchd plist 与 Native Host manifest。生产切换仍被 maintenance fencing、
-正式 `core.env` 归位和 source-to-closure 故障注入 E2E 阻断。阶段 0 保持未完成，不得
-把隔离测试或旧窗口写成生产 page cache 曲线。
+恢复原 launchd plist 与 Native Host manifest。installer 还会原子持有 install 与
+maintenance 目录锁；受哈希的 Core launcher 只加载固定 `$BPA_HOME/core.env`，并要求
+当前用户所有且权限为 `0600`，加载后再次覆盖可信 release identity。生产切换仍被
+maintenance 后的生产 readiness 复核、库存 scheduler 暂停/恢复和 source-to-closure
+故障注入 E2E 阻断。阶段 0 保持未完成，不得把隔离测试或旧窗口写成生产 page cache
+曲线。
 
 库存生产侧新增只读 readiness 判定器，统一核对 host/PostgreSQL 时钟、launchd PID、
 原子状态文件、全表 running schedule/collection、有效 PostgreSQL 与 Browser Control
