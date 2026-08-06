@@ -18,12 +18,14 @@ import {
   type ScopeRiskSignal,
   type ScopeVirtualView
 } from "./scope-collector.js";
+import { prepareDoudianProductList } from "./product-list-guard.js";
 
 const PAGE_CONTROLS =
-  "[class*='pagination'] [title],[class*='pagination'] [data-page]";
+  ".ecom-g-pagination-item[title],[class*='pagination-item-'][title],[class*='pagination'] [data-page]";
 const PRODUCT_ROWS = "tr[data-row-key]";
 const DEFAULT_WAIT_MS = 120;
 const MAX_VIRTUAL_VIEWS = 200;
+const MAX_STAGNANT_PRODUCT_VIEWS = 5;
 const DOUDIAN_ORIGIN = "https://fxg.jinritemai.com";
 const PRODUCT_LIST_PATH = "/ffa/g/list";
 
@@ -233,10 +235,10 @@ function scrollTarget(doc: Document): HTMLElement | undefined {
   let current = firstRow?.parentElement;
   for (let depth = 0; current && depth < 8; depth += 1) {
     const candidate = current as HTMLElement;
-    if (
-      Number(candidate.scrollHeight) >
-      Math.max(Number(candidate.clientHeight), 0) + 1
-    ) {
+    const clientHeight = Math.max(Number(candidate.clientHeight), 0);
+    const scrollRange = Number(candidate.scrollHeight) - clientHeight;
+    const meaningfulScrollRange = Math.max(32, clientHeight * 0.02);
+    if (scrollRange > meaningfulScrollRange) {
       return candidate;
     }
     current = current.parentElement;
@@ -265,6 +267,13 @@ function pageControl(doc: Document, page: number): HTMLElement | undefined {
     | undefined;
 }
 
+function productIdSignature(observation: ScopeDomObservation): string {
+  return observation.view.products
+    .map((product) => product.id)
+    .sort()
+    .join(":");
+}
+
 async function moveToPage(input: {
   readonly doc: Document;
   readonly page: number;
@@ -280,9 +289,13 @@ async function moveToPage(input: {
     shopName: input.shopName
   });
   if (current.page === input.page) return true;
+  const previousProducts = productIdSignature(current);
   const control = pageControl(input.doc, input.page);
   if (!control || typeof control.click !== "function") return false;
   control.click();
+  setReadOnlyScroll(scrollTarget(input.doc), 0);
+  let stableSignature: string | undefined;
+  let stableSamples = 0;
   for (let attempt = 0; attempt < 40; attempt += 1) {
     assertBeforeDeadline(input.deadline, input.now);
     await input.wait(input.waitMs);
@@ -290,7 +303,16 @@ async function moveToPage(input: {
       shopId: input.shopId,
       shopName: input.shopName
     });
-    if (observed.page === input.page) return true;
+    if (observed.page !== input.page) continue;
+    const signature = productIdSignature(observed);
+    if (!signature || signature === previousProducts) continue;
+    if (signature === stableSignature) {
+      stableSamples += 1;
+    } else {
+      stableSignature = signature;
+      stableSamples = 1;
+    }
+    if (stableSamples >= 2) return true;
   }
   return false;
 }
@@ -313,6 +335,9 @@ async function collectVirtualViews(input: {
   const originalTop = Number(target?.scrollTop ?? 0);
   const views: ScopeVirtualView[] = [];
   const signatures = new Set<string>();
+  const seenProductIds = new Set<string>();
+  let stagnantProductViews = 0;
+  let previousObservedTop: number | undefined;
   let latest = readDoudianScopeDom(input.doc, {
     shopId: input.shopId,
     shopName: input.shopName,
@@ -334,16 +359,38 @@ async function collectVirtualViews(input: {
         latest.view.scrollTop,
         ...latest.view.products.map((product) => product.id)
       ].join(":");
-      if (!signatures.has(signature)) {
+      const newView = !signatures.has(signature);
+      if (newView) {
         signatures.add(signature);
         views.push(latest.view);
       }
+      let discoveredProduct = false;
+      for (const product of latest.view.products) {
+        if (!seenProductIds.has(product.id)) discoveredProduct = true;
+        seenProductIds.add(product.id);
+      }
+      stagnantProductViews = discoveredProduct
+        ? 0
+        : stagnantProductViews + 1;
       const maxTop = Math.max(
         0,
         Number(target?.scrollHeight ?? 0) -
           Number(target?.clientHeight ?? 0)
       );
       const currentTop = Number(target?.scrollTop ?? 0);
+      if (
+        previousObservedTop !== undefined &&
+        currentTop <= previousObservedTop &&
+        !newView
+      ) {
+        break;
+      }
+      // Doudian's virtual table can keep extending the document scroll range
+      // even after every product on the current page has already been seen.
+      // Stop on product-ID stagnation instead of consuming the full command
+      // deadline on harmless new scroll positions.
+      if (stagnantProductViews >= MAX_STAGNANT_PRODUCT_VIEWS) break;
+      previousObservedTop = currentTop;
       if (!target || currentTop >= maxTop) break;
       const step = Math.max(
         1,
@@ -352,6 +399,10 @@ async function collectVirtualViews(input: {
       const nextTop = Math.min(maxTop, currentTop + step);
       if (nextTop <= currentTop) break;
       setReadOnlyScroll(target, nextTop);
+      // Some table wrappers report a tiny scrollHeight delta even though
+      // overflow is not scrollable. Avoid spending all 200 virtual-view
+      // attempts retrying a position the DOM rejected synchronously.
+      if (Number(target.scrollTop ?? 0) <= currentTop) break;
     }
   } finally {
     setReadOnlyScroll(target, originalTop);
@@ -375,6 +426,8 @@ export async function collectDoudianProductScope(
   const now = options.now ?? (() => Date.now());
   const wait = options.wait ?? defaultWait;
   const waitMs = options.waitMs ?? DEFAULT_WAIT_MS;
+  assertBeforeDeadline(options.deadline, now);
+  await prepareDoudianProductList(doc, wait, waitMs);
   assertBeforeDeadline(options.deadline, now);
   const initial = readDoudianScopeDom(doc, {
     shopId: options.shop.id,
@@ -443,11 +496,14 @@ export async function collectDoudianProductScope(
           waitMs
         });
         latest = collected.latest;
-        contextChanged ||= collected.contextChanged;
+        contextChanged ||=
+          collected.contextChanged ||
+          latest.page !== page ||
+          latest.totalPages !== first.totalPages;
         riskSignals.push(...latest.riskSignals);
         pages.push({
-          page: latest.page,
-          totalPages: latest.totalPages,
+          page,
+          totalPages: first.totalPages,
           views: collected.views
         });
       }
@@ -465,11 +521,28 @@ export async function collectDoudianProductScope(
         riskSignals
       });
       result = reconcileProductScope({ initialLocation, rounds });
-      if (
-        result.status === "blocked" ||
-        (result.status === "complete" && rounds.length >= 2)
-      ) {
-        break;
+      if (result.status === "blocked") break;
+      if (result.status === "complete") {
+        // A complete round has already reconciled every page and product ID
+        // against stable top/bottom totals. Pause briefly and verify the
+        // frozen scope once more; only pay for another full scan when the
+        // shop, filters, tab, totals, or platform risk state actually changed.
+        await wait(Math.max(500, waitMs * 2));
+        const settled = readDoudianScopeDom(doc, {
+          shopId: options.shop.id,
+          shopName: options.shop.name
+        });
+        const settledTotal = settled.bottomTotal ?? settled.topTotal;
+        const blockingRisk = settled.riskSignals.some(
+          (signal) => signal.severity === "blocking"
+        );
+        if (
+          settled.fingerprint.digest === first.fingerprint.digest &&
+          settledTotal === result.expectedCount &&
+          !blockingRisk
+        ) {
+          break;
+        }
       }
     }
   } finally {

@@ -10,7 +10,7 @@ function fixture() {
     <table id="products">
       <thead><tr><th>商品信息</th><th>总库存</th></tr></thead>
       <tbody><tr data-row-key="3784577039315632428">
-        <td><a href="/ffa/g/create?product_id=3784577039315632428">东北粘豆包</a></td>
+        <td><a href="/ffa/g/create?product_id=3784577039315632428">东北粘豆包</a> <a>查看渠道品(3)</a></td>
         <td>297732 <button title="编辑库存">编辑</button></td>
       </tr></tbody>
     </table>
@@ -25,12 +25,111 @@ function fixture() {
         </tbody>
       </table>
     </div>
-    <div role="tooltip">渠道品ID：3604190173526530 剩余库存：498 渠道品ID：3604688830109698 剩余库存：4955</div>
+    <div role="tooltip">
+      <div>渠道品ID</div><div>占用库存</div>
+      <div class="detailRow-a"><div>3604190173526530</div><div>498</div></div>
+      <div class="detailRow-b"><div>3604688830109698</div><div>4955</div></div>
+    </div>
+    <div role="tooltip" class="optimus_fems-popover-hidden">
+      渠道品ID：9999999999999999 剩余库存：1
+    </div>
   </body>`, { url: "https://fxg.jinritemai.com/ffa/g/list" });
+  const dialog = dom.window.document.querySelector<HTMLElement>(
+    "[role='dialog']"
+  )!;
+  dialog.querySelector<HTMLElement>("button[aria-label='关闭']")!
+    .addEventListener("click", () => dialog.remove());
   return dom.window.document;
 }
 
 describe("doudian inventory snapshot", () => {
+  it("reads the current stock API used by the production inventory drawer", async () => {
+    const doc = fixture();
+    const fetch = async (input: string | URL, init?: RequestInit): Promise<Response> => {
+      const url = new URL(String(input));
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      expect(body.product_id).toBe("3784577039315632428");
+      if (url.pathname === "/stock/manage/get_product_info") {
+        return Response.json({
+          code: 0,
+          data: {
+            product_id: "3784577039315632428",
+            total_stock_num: 297732
+          }
+        });
+      }
+      expect(body.source).toBe("pc");
+      return Response.json({
+        code: 0,
+        data: {
+          sku_detail_list: [
+            {
+              sku_id: "3601928624551938",
+              sku_code: "2024103109",
+              total_stock_num: 99600,
+              total_occupied_stock_num: 5453,
+              occupy_items: [
+                {
+                  stock_occupy_type: "channel",
+                  channel_id: "3604190173526530",
+                  occupy_stock_num: 498
+                },
+                {
+                  stock_occupy_type: "channel",
+                  channel_id: "3604688830109698",
+                  occupy_stock_num: 4955
+                }
+              ]
+            },
+            {
+              sku_id: "3601928624552194",
+              sku_code: "2024110403",
+              total_stock_num: 99872,
+              total_occupied_stock_num: 0,
+              occupy_items: null
+            },
+            {
+              sku_id: "3601928624552450",
+              sku_code: "2024111318",
+              total_stock_num: 98260,
+              total_occupied_stock_num: 0,
+              occupy_items: null
+            }
+          ]
+        }
+      });
+    };
+    Object.defineProperty(doc.defaultView, "fetch", {
+      configurable: true,
+      value: fetch
+    });
+    const result = await collectDoudianProductInventorySnapshot(
+      doc,
+      {
+        shop: { id: "shop-1", name: "榆园儿食品专营店" },
+        product: { id: "3784577039315632428", title: "东北粘豆包" }
+      },
+      {
+        deadline: "2026-08-02T13:00:00Z",
+        now: () => Date.parse("2026-08-02T12:00:00Z")
+      }
+    );
+    expect(result.product.totalStock).toBe(297732);
+    expect(result.formMutations).toBe(0);
+    expect(result.skus[0]).toEqual({
+      platformSkuId: "3601928624551938",
+      merchantCode: "2024103109",
+      currentStock: 99600,
+      occupiedStock: 5453,
+      unoccupiedStock: 94147,
+      channels: [
+        { channelGoodsId: "3604190173526530", stock: 498 },
+        { channelGoodsId: "3604688830109698", stock: 4955 }
+      ]
+    });
+    expect(result.diagnostics).toContain("SNAPSHOT_SOURCE:DOUDIAN_STOCK_API");
+  });
+
   it("reads SKU and channel stock without changing inventory forms", async () => {
     const result = await collectDoudianProductInventorySnapshot(
       fixture(),
@@ -57,6 +156,51 @@ describe("doudian inventory snapshot", () => {
         { channelGoodsId: "3604688830109698", stock: 4955 }
       ]
     });
+    expect(result.diagnostics).toContain(
+      "CHANNEL_LINK_COUNT_DIFF:linked=3:observed=2"
+    );
+  });
+
+  it("resets a retained channel scroller and collects virtualized rows to the bottom", async () => {
+    const doc = fixture();
+    const tooltip = doc.querySelector("[role='tooltip']")!;
+    tooltip.innerHTML = `
+      <div>渠道品ID</div><div>占用库存</div>
+      <div class="detailBody-test">
+        <div class="detailRow-top"><div>3604190173526530</div><div>498</div></div>
+      </div>`;
+    const scroller = tooltip.querySelector("[class*='detailBody']") as HTMLElement;
+    let scrollTop = 220;
+    Object.defineProperties(scroller, {
+      clientHeight: { value: 220 },
+      scrollHeight: { value: 440 },
+      scrollTop: {
+        get: () => scrollTop,
+        set: (value: number) => { scrollTop = Number(value); }
+      }
+    });
+    scroller.addEventListener("scroll", () => {
+      scroller.innerHTML = scrollTop === 0
+        ? '<div class="detailRow-top"><div>3604190173526530</div><div>498</div></div>'
+        : '<div class="detailRow-bottom"><div>3604688830109698</div><div>4955</div></div>';
+    });
+    const result = await collectDoudianProductInventorySnapshot(
+      doc,
+      {
+        shop: { id: "shop-1", name: "榆园儿食品专营店" },
+        product: { id: "3784577039315632428", title: "东北粘豆包" }
+      },
+      {
+        deadline: "2026-08-02T13:00:00Z",
+        now: () => Date.parse("2026-08-02T12:00:00Z"),
+        wait: async () => undefined
+      }
+    );
+    expect(result.skus[0]?.channels).toEqual([
+      { channelGoodsId: "3604190173526530", stock: 498 },
+      { channelGoodsId: "3604688830109698", stock: 4955 }
+    ]);
+    expect(scrollTop).toBe(0);
   });
 
   it("rejects unexpected fields and non-numeric product identities", () => {
@@ -66,17 +210,23 @@ describe("doudian inventory snapshot", () => {
     })).toThrow("INVENTORY_INPUT_INVALID");
   });
 
-  it("fails closed when channel totals do not match occupied stock", async () => {
+  it("keeps channel stock with a diagnostic when channels share an occupied pool", async () => {
     const doc = fixture();
     doc.querySelector("[role='tooltip']")!.textContent = "渠道品ID：3604190173526530 剩余库存：1";
-    await expect(collectDoudianProductInventorySnapshot(
+    const result = await collectDoudianProductInventorySnapshot(
       doc,
       {
         shop: { id: "shop-1", name: "榆园儿食品专营店" },
         product: { id: "3784577039315632428", title: "东北粘豆包" }
       },
       { deadline: "2026-08-02T13:00:00Z", now: () => Date.parse("2026-08-02T12:00:00Z"), wait: async () => undefined }
-    )).rejects.toThrow("CHANNEL_STOCK_TOTAL_MISMATCH");
+    );
+    expect(result.skus[0]?.channels).toEqual([
+      { channelGoodsId: "3604190173526530", stock: 1 }
+    ]);
+    expect(result.diagnostics).toContain(
+      "CHANNEL_STOCK_TOTAL_DIFF:3601928624551938:occupied=5453:channels=1"
+    );
   });
 
   it("fails closed when the drawer exposes another SKU page", async () => {

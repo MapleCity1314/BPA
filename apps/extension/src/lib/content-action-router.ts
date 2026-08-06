@@ -332,9 +332,14 @@ export async function routeContentAction(input: {
   }
   if (route.capability.nodeId === "doudian.orders.recent.read") {
     if (
-      Object.keys(actionInput).some((key) => key !== "shopId" && key !== "shopName") ||
+      Object.keys(actionInput).some((key) => !["shopId","shopName","lookbackMinutes"].includes(key)) ||
       typeof actionInput.shopId !== "string" || !actionInput.shopId.trim() ||
-      typeof actionInput.shopName !== "string" || !actionInput.shopName.trim()
+      typeof actionInput.shopName !== "string" || !actionInput.shopName.trim() ||
+      (actionInput.lookbackMinutes !== undefined && (
+        typeof actionInput.lookbackMinutes !== "number" ||
+        !Number.isSafeInteger(actionInput.lookbackMinutes) ||
+        Number(actionInput.lookbackMinutes) < 60 || Number(actionInput.lookbackMinutes) > 180
+      ))
     ) {
       return failure("RECENT_ORDER_INPUT_INVALID","近期订单读取目标无效。",request.pageEpoch);
     }

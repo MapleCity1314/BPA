@@ -4,7 +4,7 @@ metadata:
   id: doudian.inventory.product.snapshot.read
   version: 1.0.0
   title: 读取抖店商品 SKU 与渠道库存快照
-  description: 在商品管理页只读打开指定商品的库存抽屉，读取 SKU 当前、占用、未占用及渠道商品库存，并在总量不一致时失败关闭。
+  description: 在商品管理页只读打开指定商品的库存抽屉，读取 SKU 当前、占用、未占用及渠道商品库存，并保留渠道共享库存池的口径差异诊断。
 runtime: browser
 inputSchema:
   type: object
@@ -109,7 +109,6 @@ errors:
   - INVENTORY_SKU_ROWS_EMPTY
   - INVENTORY_SKU_LIST_INCOMPLETE
   - CHANNEL_STOCK_UNAVAILABLE
-  - CHANNEL_STOCK_TOTAL_MISMATCH
   - SKU_STOCK_TOTAL_MISMATCH
   - PRODUCT_STOCK_TOTAL_MISMATCH
   - CAPTCHA_REQUIRED

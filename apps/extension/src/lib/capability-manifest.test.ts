@@ -131,8 +131,13 @@ describe("extension capability manifest", () => {
     },
     {
       nodeId: "doudian.orders.recent.read",
-      nodeVersion: "1.0.0",
-      currentUrl: "https://fxg.jinritemai.com/ffa/morder/order/list"
+      nodeVersion: "1.2.0",
+      currentUrl: "https://fxg.jinritemai.com/ffa/morder/order/list",
+      grantedPermissions: [
+        "browser.dom.read",
+        "browser.dom.write",
+        "browser.tabs.read"
+      ]
     },
     {
       nodeId: "doudian.product.editor.open",

@@ -23,7 +23,7 @@ const LIST_SELECTORS = {
   currentPage:
     ".ecom-g-pagination-item-active,[class*='pagination'] [aria-current='page']",
   pageItems:
-    "[class*='pagination'] [title],[class*='pagination'] [data-page]"
+    ".ecom-g-pagination-item[title],[class*='pagination-item-'][title],[class*='pagination'] [data-page]"
 } as const;
 
 const EDITOR_SELECTORS = {

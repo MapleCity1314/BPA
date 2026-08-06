@@ -1,11 +1,11 @@
 import {
   collectDoudianProductScope,
   collectDoudianProductInventorySnapshot,
+  collectDoudianRecentOrders,
   detectDoudianRiskSignals,
   inspectDoudianPriorityItems,
   legacyDoudianScopeCollectionResult,
   readDoudianShopContext,
-  readDoudianRecentOrders,
   restoreDoudianProductScope,
   validateDoudianScopeRestoreTarget,
   verifyDoudianEditorOpen
@@ -287,9 +287,15 @@ const handlers: ContentActionHandlers = {
     };
   },
 
-  async "doudian.orders.recent.read"(input) {
-    const output = readDoudianRecentOrders(document,{
-      shopId:String(input.shopId),shopName:String(input.shopName)
+  async "doudian.orders.recent.read"(input,request) {
+    const output = await collectDoudianRecentOrders(document,{
+      shopId:String(input.shopId),shopName:String(input.shopName),
+      ...(input.lookbackMinutes === undefined ? {} : { lookbackMinutes:Number(input.lookbackMinutes) })
+    },{
+      deadline:Date.parse(request.deadline!),
+      ...(request.timingPolicy?.readiness?.pollIntervalMs === undefined
+        ? {}
+        : { waitMs:request.timingPolicy.readiness.pollIntervalMs })
     });
     const riskSignals = detectDoudianRiskSignals(document,location.href);
     if (firstBlockingRiskSignal(riskSignals)) throw new ContentActionRiskError(riskSignals);

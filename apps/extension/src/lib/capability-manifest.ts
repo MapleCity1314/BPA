@@ -171,9 +171,9 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   },
   {
     nodeId: "doudian.orders.recent.read",
-    versions: ["1.0.0"],
-    riskLevel: "R0",
-    permissions: READ_ONLY_PERMISSIONS,
+    versions: ["1.0.0","1.1.0","1.2.0"],
+    riskLevel: "R1",
+    permissions: ["browser.dom.read","browser.dom.write","browser.tabs.read"],
     routes: [{
       origin: DOUDIAN_ORIGIN,
       pathnamePrefixes: ["/ffa/morder/order"],
