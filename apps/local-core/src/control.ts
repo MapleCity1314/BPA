@@ -2092,7 +2092,7 @@ export class LocalControlServer {
                     version: "bpa.control/1",
                     kind: "result",
                     requestId: request.requestId,
-                    result: legacyResponse.result
+                    result: legacyResponse.result ?? null
                   }
                 : controlV1Error(
                     request.requestId,

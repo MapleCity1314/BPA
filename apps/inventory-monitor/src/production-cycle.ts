@@ -188,7 +188,7 @@ const renewals = setInterval(() => {
         leaseKey:appLeaseKey,holderId,fencingToken:appFencingToken,
         ttlSeconds:PRODUCTION_CYCLE_LEASE_TTL_SECONDS
       }),
-      core.request<ProductionCycleBrowserLease|undefined>("browser.control-lease.renew",{
+      core.request<ProductionCycleBrowserLease|null>("browser.control-lease.renew",{
         resourceId:browserResourceId,ownerId:holderId,
         fencingToken:browserLease!.fencingToken,ttlSeconds:180
       })

@@ -13,7 +13,7 @@ const lease:ProductionCycleBrowserLease = {
   expiresAt:"2026-08-06T00:03:00.000Z"
 };
 
-function fixture(result:ProductionCycleBrowserLease|undefined|Error) {
+function fixture(result:ProductionCycleBrowserLease|null|Error) {
   const request = vi.fn(async () => {
     if (result instanceof Error) throw result;
     return result;
@@ -43,7 +43,7 @@ describe("production cycle lease handoff",() => {
   });
 
   it("releases the app lease when browser control is busy",async () => {
-    const value = fixture(undefined);
+    const value = fixture(null);
     await expect(acquireBrowserLeaseOrReleaseAppLease(value.input))
       .rejects.toThrow("BROWSER_CONTROL_LEASE_BUSY");
     expect(value.releaseLease).toHaveBeenCalledOnce();
@@ -97,7 +97,7 @@ describe("production cycle lease handoff",() => {
   it("stops immediately when browser ownership is explicitly lost",() => {
     const result = evaluateProductionCycleRenewal({
       appResult:{ status:"fulfilled",value:true },
-      browserResult:{ status:"fulfilled",value:undefined },
+      browserResult:{ status:"fulfilled",value:null },
       currentBrowserLease:lease,
       appLeaseExpiresAtMs:Date.parse("2026-08-06T00:05:00.000Z"),
       nowMs:Date.parse("2026-08-06T00:01:00.000Z"),

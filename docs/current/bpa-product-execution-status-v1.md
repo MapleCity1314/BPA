@@ -13,9 +13,10 @@
   保持打开；当前精确提交以 `git rev-parse HEAD` 和 GitHub PR 为准，不在状态文档内
   复制一个会随提交立刻过期的哈希。该分支尚未合并或明确放弃，因此阶段 0 的 Git
   收敛门禁仍未完成。
-- 验证基线：固定 Node `24.18.0` 下 `pnpm verify` 通过，macOS、Windows、性能与发布
-  闭包 CI 全绿。本轮完整门禁为 125 个测试文件、764 项测试全绿，文档 Catalog 80 条
-  有效，Astro 0 诊断。
+- 验证基线：固定 Node `24.18.0` 下当前候选 `pnpm verify` 通过。本轮完整门禁为 125 个
+  测试文件、765 项测试全绿，文档 Catalog 80 条有效，Astro 0 诊断。前一 GitHub
+  提交的 macOS、性能和发布闭包已通过；Windows 因把 POSIX `0600` 断言直接用于
+  Windows 文件 mode 而失败，当前候选已按平台语义修正，等待新一轮 CI 复核。
 - 生产原则：库存公司业务不中断；任何运行中进程、状态、schedule 或有效 lease 存在
   时，只观察，不重启、不叠加触发。
 - Rust 判定：暂不切换生产 Core，保留实现、测试和候选架构；完成阶段 0 数据采集后
@@ -27,7 +28,7 @@
 
 | 阶段 | 状态 | 当前最重要缺口 | 退出证据 |
 | --- | --- | --- | --- |
-| 0 稳住上阵 | **进行中** | PR 尚未收敛；24 小时资源曲线、SQLite page cache 实测和 Core 7 天稳定性仍缺失 | Git 分支二选一、`pnpm check`、三类资源曲线、Core 7 天稳定 |
+| 0 稳住上阵 | **进行中** | 库存生产暴露 Core 热轮询全表扫描；PR 尚未收敛，24 小时资源曲线、SQLite page cache 实测和 Core 7 天稳定性仍缺失 | 库存周期恢复、Git 分支二选一、`pnpm check`、三类资源曲线、Core 7 天稳定 |
 | 1 无人值守 | 未开始 | 登录失效恢复、失败推送、统一控制台、固定 Trigger 覆盖 | 无 SSH 认证恢复、100% 失败推送、AI 触发占比持续降至零 |
 | 2 造流程易用 | 未开始 | Web 校正界面、截图/元素候选回传、非技术用户验收 | 非技术同事独立完成真实流程发布 |
 | 3 通用能力 | 未开始 | HTTP Request、File Write、JSON Transform、导出、自愈 | 不写 Adapter 覆盖主要通用需求 |
@@ -147,6 +148,24 @@ TriggerSpec 快照，并把 Workflow 的 `rejected` / `uncertain` 压缩成较�
 版本血缘、终态保真、人工 actor 审计和策略执行，再迁移库存编排；不得用一个仅调用
 旧脚本的壳 Node 伪装成产品 Workflow。
 
+2026-08-06 20:59 的生产只读复核发现最新周期失败于
+`BROWSER_CONTROL_LEASE_RENEW_UNCONFIRMED`：当时有效 Browser Control Lease、运行中
+schedule 和 collection 均为 0，但该周期只完成 1/13 店。该店已经持久化了可用库存，
+因此这是“部分库存事实 + 控制面失败”，不是“没有数据”。诊断同时记录订单浏览器请求
+超过 120 秒、租约续期请求超过 30 秒，以及租约过期后的 malformed response。
+
+根因已在本地代码和生产只读数据间闭合。生产 Core SQLite 主库约 1.53 GB，其中
+`engine_outbox` 约 408 MB、共 48,347 行，待确认行为 0；但 Core 每 500 ms 执行的热
+轮询没有条件索引，查询计划仍为全表扫描并使用临时排序树。单线程 Core 因此会在库存
+浏览器操作期间失去响应，先导致业务请求超时，再导致控制租约错过续期窗口。另一个
+协议缺陷会把 SQLite 返回的 `undefined` 经过 JSON 序列化后删除 `result` 字段，从而
+把明确的租约丢失误报为 malformed envelope。
+
+当前修复候选增加 Schema v13 的三个热路径部分索引，并把跨控制协议的“无租约”明确
+编码为 `null`。查询计划测试、控制协议 E2E、租约 fail-closed 测试和固定 Node 24
+typecheck 已通过；生产尚未部署该候选。修复部署前继续只读观察，不手工补触发、不重启
+Core，也不把新的失败周期覆盖为成功。
+
 剩余验收：连续稳定窗口、固定 Trigger、统一控制台、登录失效恢复，以及业务能力迁入
 正式 Node / Workflow 后的无中断切换。
 
@@ -173,10 +192,10 @@ TriggerSpec 快照，并把 Workflow 的 `rejected` / `uncertain` 压缩成较�
 
 1. ~~将当前工作区按规范、协议/Trigger、库存生产、Rust Kernel 分组并分别验证提交。~~
 2. ~~为当前 JSONL 增加确定性分析器，且把 SQLite 文件大小与 page cache 证据分开。~~
-3. 等待并分析 Node、Chrome 24 小时采样结果；SQLite 同连接遥测已接入生产前隔离
+3. 完成 Core 热轮询索引与控制租约空结果协议修复的正式门禁，并在没有运行中
+   schedule、collection 或有效 lease 的维护窗口内完成首次 source-to-closure 切换。
+4. 等待并分析 Node、Chrome 24 小时采样结果；SQLite 同连接遥测已接入生产前隔离
    Core，待安全切换后重启包含 page cache 的新采样窗口。
-4. 复用已有 macOS 预编译 Core 闭包，在隔离 `BPA_HOME` 验证后制定生产切换门禁；
-   当前采样期间不替代生产 `tsx`。
 5. 启动 Core 7 天稳定性窗口并记录重启、RSS 趋势与运行事件。
 6. 修复 Trigger 版本钉死与终态保真，再进入阶段 1 的登录恢复、告警和统一控制台。
 7. 依次完成清退商品、库存监控、爆款图片证据流的正式产品回归。

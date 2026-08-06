@@ -1249,5 +1249,21 @@ export const migrations: Migration[] = [
       CREATE INDEX browser_control_leases_expiry
         ON browser_control_leases(expires_at);
     `
+  },
+  {
+    version: 13,
+    sql: `
+      CREATE INDEX engine_outbox_pending_created
+        ON engine_outbox(created_at, id)
+        WHERE acknowledged_at IS NULL;
+
+      CREATE INDEX gateway_commands_active_sequence
+        ON gateway_commands(command_seq)
+        WHERE state != 'terminal';
+
+      CREATE INDEX gateway_commands_terminal_result_sequence
+        ON gateway_commands(command_seq, node_execution_id)
+        WHERE state = 'terminal' AND result_json IS NOT NULL;
+    `
   }
 ];

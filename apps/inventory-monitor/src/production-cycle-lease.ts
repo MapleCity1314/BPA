@@ -9,7 +9,7 @@ interface BrowserLeaseClient {
   request(
     method:string,
     input:Record<string,unknown>
-  ):Promise<ProductionCycleBrowserLease|undefined>;
+  ):Promise<ProductionCycleBrowserLease|null>;
 }
 
 interface AppLeaseRepository {
@@ -34,7 +34,7 @@ function renewalError(result:PromiseSettledResult<unknown>):string|undefined {
 
 export function evaluateProductionCycleRenewal(input:{
   appResult:PromiseSettledResult<boolean>;
-  browserResult:PromiseSettledResult<ProductionCycleBrowserLease|undefined>;
+  browserResult:PromiseSettledResult<ProductionCycleBrowserLease|null>;
   currentBrowserLease:ProductionCycleBrowserLease;
   appLeaseExpiresAtMs:number;
   nowMs:number;

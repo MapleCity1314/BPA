@@ -158,7 +158,7 @@ describe("local control socket", () => {
       sendControlRequest(socketPath, "doctor")
     ).resolves.toMatchObject({
       status: "ok",
-      persistence: { adapter: "sqlite", schemaVersion: 12 }
+      persistence: { adapter: "sqlite", schemaVersion: 13 }
     });
   });
 
@@ -193,6 +193,43 @@ describe("local control socket", () => {
     });
     await expect(sendControlRequest(socketPath, "doctor")).resolves.toMatchObject({
       status: "ok"
+    });
+    await expect(
+      sendV1(socketPath, {
+        version: "bpa.control/1",
+        kind: "request",
+        requestId: "lease-acquire-1",
+        method: "browser.control-lease.acquire",
+        deadline: new Date(Date.now() + 10_000).toISOString(),
+        params: {
+          resourceId: "browser-instance:test",
+          ownerId: "owner-1",
+          ttlSeconds: 120
+        }
+      })
+    ).resolves.toMatchObject({
+      kind: "result",
+      requestId: "lease-acquire-1",
+      result: { fencingToken: 1 }
+    });
+    await expect(
+      sendV1(socketPath, {
+        version: "bpa.control/1",
+        kind: "request",
+        requestId: "lease-acquire-busy",
+        method: "browser.control-lease.acquire",
+        deadline: new Date(Date.now() + 10_000).toISOString(),
+        params: {
+          resourceId: "browser-instance:test",
+          ownerId: "owner-2",
+          ttlSeconds: 120
+        }
+      })
+    ).resolves.toEqual({
+      version: "bpa.control/1",
+      kind: "result",
+      requestId: "lease-acquire-busy",
+      result: null
     });
   });
 

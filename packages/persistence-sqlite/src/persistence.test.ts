@@ -1632,6 +1632,57 @@ describe("dataset and decision persistence", () => {
 });
 
 describe("append-only migrations", () => {
+  it("indexes the Core hot polling queries", () => {
+    const directory = mkdtempSync(join(tmpdir(), "bpa-hot-poll-indexes-"));
+    const databasePath = join(directory, "bpa.sqlite3");
+    try {
+      const store = new SqlitePersistence({ path: databasePath });
+      store.close();
+      const raw = new Database(databasePath, { readonly: true });
+      const queryPlan = (sql: string, ...params: unknown[]) =>
+        raw
+          .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+          .all(...params)
+          .map((row) => String((row as { detail: unknown }).detail))
+          .join("\n");
+
+      expect(
+        queryPlan(
+          `SELECT * FROM engine_outbox
+           WHERE acknowledged_at IS NULL AND created_at <= ?
+           ORDER BY created_at, id`,
+          timestamp
+        )
+      ).toContain("engine_outbox_pending_created");
+      expect(
+        queryPlan(
+          `SELECT * FROM gateway_commands
+           WHERE state != 'terminal' AND command_seq > ?
+           ORDER BY command_seq`,
+          0
+        )
+      ).toContain("gateway_commands_active_sequence");
+      expect(
+        queryPlan(
+          `SELECT gateway_commands.*
+           FROM gateway_commands
+           INNER JOIN node_executions
+             ON node_executions.id = gateway_commands.node_execution_id
+           WHERE gateway_commands.state = 'terminal'
+             AND gateway_commands.result_json IS NOT NULL
+             AND node_executions.status NOT IN (
+               'succeeded', 'rejected', 'failed', 'timed_out',
+               'cancelled', 'uncertain'
+             )
+           ORDER BY gateway_commands.command_seq`
+        )
+      ).toContain("gateway_commands_terminal_result_sequence");
+      raw.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("recovers cleanly when migration v3 is interrupted", () => {
     const directory = mkdtempSync(join(tmpdir(), "bpa-migration-crash-"));
     const databasePath = join(directory, "bpa.sqlite3");
@@ -1646,7 +1697,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(12);
+      expect(store.health().schemaVersion).toBe(13);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1751,13 +1802,16 @@ describe("append-only migrations", () => {
         ALTER TABLE browser_capabilities DROP COLUMN adapter_id;
         ALTER TABLE browser_capabilities DROP COLUMN routes_json;
         DROP INDEX workflow_runs_active_updated;
+        DROP INDEX engine_outbox_pending_created;
+        DROP INDEX gateway_commands_active_sequence;
+        DROP INDEX gateway_commands_terminal_result_sequence;
         DELETE FROM schema_migrations
-        WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12);
+        WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12, 13);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(12);
+      expect(upgraded.health().schemaVersion).toBe(13);
       expect(upgraded.getAssistanceTask(task.task.taskId)).toEqual(task);
       expect(
         upgraded.getAssistanceRequestResult("not-recorded")
@@ -1782,7 +1836,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(12);
+      expect(store.health().schemaVersion).toBe(13);
       expect(store.getAssistanceRequestResult("not-recorded")).toBeUndefined();
       store.close();
     } finally {
@@ -1804,7 +1858,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(12);
+      expect(store.health().schemaVersion).toBe(13);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1888,13 +1942,16 @@ describe("append-only migrations", () => {
         ALTER TABLE browser_capabilities DROP COLUMN adapter_id;
         ALTER TABLE browser_capabilities DROP COLUMN routes_json;
         DROP INDEX workflow_runs_active_updated;
+        DROP INDEX engine_outbox_pending_created;
+        DROP INDEX gateway_commands_active_sequence;
+        DROP INDEX gateway_commands_terminal_result_sequence;
         DELETE FROM schema_migrations
-        WHERE version IN (6, 7, 8, 9, 10, 11, 12);
+        WHERE version IN (6, 7, 8, 9, 10, 11, 12, 13);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(12);
+      expect(upgraded.health().schemaVersion).toBe(13);
       expect(
         upgraded.createWorkflowDraft({
           draftId: "v5-upgraded-draft",
@@ -1935,7 +1992,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(12);
+      expect(store.health().schemaVersion).toBe(13);
       expect(store.getWorkflowDraft("not-created")).toBeUndefined();
       store.close();
     } finally {
@@ -1948,7 +2005,7 @@ describe("append-only migrations", () => {
     const databasePath = join(directory, "bpa.sqlite3");
     try {
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(12);
+      expect(store.health().schemaVersion).toBe(13);
       store.close();
       const raw = new Database(databasePath);
       raw
