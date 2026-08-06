@@ -59,6 +59,17 @@
       "public": false
     },
     {
+      "id": "repo.current-state-product-execution-1",
+      "source": "docs/current/bpa-product-execution-status-v1.md",
+      "title": "BPA 长期产品执行状态 v1",
+      "summary": "按阶段跟踪产品形态、Rust 准入、Codex 过渡角色、Git 提交和三条最终业务验收链路。",
+      "authority": "current-state",
+      "implementation": "partial",
+      "audience": ["operator", "developer", "integrator", "ai"],
+      "since": "0.7.0",
+      "public": false
+    },
+    {
       "id": "repo.normative.platform",
       "source": "docs/normative/BPA通用技术方案-v1.0.md",
       "title": "BPA 通用技术方案 v1.0",
@@ -68,6 +79,29 @@
       "audience": ["developer", "integrator", "ai"],
       "since": "0.1.0",
       "supersedes": ["repo.archive.architecture-0.1"],
+      "public": false
+    },
+    {
+      "id": "repo.normative.product-form-1",
+      "source": "docs/normative/bpa-product-form-v1.md",
+      "title": "BPA 产品形态定义 v1",
+      "summary": "BPA 的产品形态、交付分层、平台优先级、不做清单，以及公司业务与产品层之间的边界规则。",
+      "authority": "normative",
+      "implementation": "active",
+      "audience": ["operator", "developer", "integrator", "ai"],
+      "since": "0.7.0",
+      "supersedes": ["repo.plan.companion-realtime-authoring-0.1"],
+      "public": false
+    },
+    {
+      "id": "repo.normative.roadmap-1",
+      "source": "docs/normative/bpa-roadmap-v1.md",
+      "title": "BPA 路线与阶段 v1",
+      "summary": "五个阶段的排序依据、待查项、验收判定、冻结清单与阶段间硬约束。",
+      "authority": "normative",
+      "implementation": "active",
+      "audience": ["operator", "developer", "integrator", "ai"],
+      "since": "0.7.0",
       "public": false
     },
     {
@@ -126,6 +160,28 @@
       "public": false
     },
     {
+      "id": "repo.operations.inventory-production-v2",
+      "source": "docs/operations/inventory-production-v2.md",
+      "title": "库存生产链路 V2 运行说明",
+      "summary": "多店库存生产入口、组件状态、控制租约、部分成功、恢复和诊断安全边界。",
+      "authority": "operations",
+      "implementation": "active",
+      "audience": ["operator", "developer", "ai"],
+      "since": "0.6.0",
+      "public": false
+    },
+    {
+      "id": "repo.operations.inventory-workflow-handover-2026-08-06",
+      "source": "docs/operations/inventory-workflow-handover-2026-08-06.md",
+      "title": "抖店库存预测工作流交接文档",
+      "summary": "迁移后的代码目录、生产拓扑、数据事实、当前故障、备份、验证证据和安全接手顺序。",
+      "authority": "operations",
+      "implementation": "active",
+      "audience": ["operator", "developer", "ai"],
+      "since": "0.6.0",
+      "public": false
+    },
+    {
       "id": "repo.plan.authoring-0.4",
       "source": "docs/plans/basic-scenarios-and-ai-authoring-v0.4.md",
       "title": "BPA 基础场景、工程闭环与 AI 创作设计 v0.4",
@@ -137,13 +193,46 @@
       "public": false
     },
     {
-      "id": "repo.plan.low-burden-operator-0.6",
-      "source": "docs/plans/low-burden-operator-workspace-v0.6.md",
-      "title": "BPA 0.6：低负担业务工作台",
-      "summary": "减负优先、治理下沉、异常聚合、结果先行的产品与架构计划。",
+      "id": "repo.plan.companion-realtime-authoring-0.1",
+      "source": "docs/plans/bpa-companion-realtime-authoring-v0.1.md",
+      "title": "BPA Companion：Codex + MCP + Hook 实时协作 v0.1",
+      "summary": "以 Codex App Server 为实时主通道、MCP 为语义动作、Hooks 为生命周期检查点的 Extension 改造计划。",
+      "authority": "plan",
+      "implementation": "deprecated",
+      "audience": ["operator", "developer", "ai"],
+      "since": "0.7.0",
+      "public": false
+    },
+    {
+      "id": "repo.plan.rust-core-runtime-architecture-performance-0.1",
+      "source": "docs/plans/bpa-rust-core-runtime-architecture-performance-v0.1.md",
+      "title": "BPA Rust Core Runtime：架构、性能与工程规范 v0.1",
+      "summary": "定义通过准入门禁后可启用的 Rust Core Daemon 候选架构、性能治理、迁移顺序与安全交付。",
+      "authority": "plan",
+      "implementation": "planned",
+      "audience": ["operator", "developer", "integrator", "ai"],
+      "since": "0.7.0",
+      "public": false
+    },
+    {
+      "id": "repo.plan.deterministic-workflow-triggering-0.1",
+      "source": "docs/plans/deterministic-workflow-triggering-v0.1.md",
+      "title": "BPA 确定性触发与自动运行设计 v0.1",
+      "summary": "定义无 AI 生产触发、TriggerSpec、运行状态机以及 Trigger、Runtime、Node 和 AI 的职责边界。",
       "authority": "plan",
       "implementation": "partial",
-      "audience": ["operator", "developer", "ai"],
+      "audience": ["operator", "developer", "integrator", "ai"],
+      "since": "0.6.0",
+      "public": false
+    },
+    {
+      "id": "repo.plan.bpa-app-decoupling-guidelines-0.1",
+      "source": "docs/plans/bpa-app-decoupling-guidelines-v0.1.md",
+      "title": "BPA App 解耦设计准则 v0.1",
+      "summary": "定义 BPA 平台与 App、控制面与数据面、浏览器、存储、UI、AI 和通知之间的解耦边界。",
+      "authority": "plan",
+      "implementation": "planned",
+      "audience": ["developer", "integrator", "ai"],
       "since": "0.6.0",
       "public": false
     },
@@ -156,6 +245,39 @@
       "implementation": "active",
       "audience": ["developer", "ai"],
       "since": "0.1.0",
+      "public": false
+    },
+    {
+      "id": "repo.research.doudian-inventory-workflow-stability-0.1",
+      "source": "docs/research/抖店库存浏览器工作流稳定性复盘-v0.1.md",
+      "title": "抖店库存浏览器工作流稳定性复盘 v0.1",
+      "summary": "抖店库存采集在调度、浏览器控制、批次语义、恢复、诊断和多店铺推广方面的问题登记与稳定化建议。",
+      "authority": "research",
+      "implementation": "partial",
+      "audience": ["operator", "developer", "ai"],
+      "since": "0.6.0",
+      "public": false
+    },
+    {
+      "id": "repo.research.operator-console-page-binding-0.1",
+      "source": "docs/research/BPA工作台与页面绑定复盘-v0.1.md",
+      "title": "BPA 工作台与页面绑定复盘 v0.1",
+      "summary": "复盘 Operator Console、Design Mode 和 Authoring 安全负担，明确 Page Binding、浏览器控制权、节点权限与高影响确认的分层方案。",
+      "authority": "research",
+      "implementation": "partial",
+      "audience": ["operator", "developer", "ai"],
+      "since": "0.6.0",
+      "public": false
+    },
+    {
+      "id": "repo.research.doudian-inventory-production-decisions-0.1",
+      "source": "docs/research/抖店库存生产链路问题与决策记录-v0.1.md",
+      "title": "抖店库存生产链路问题与决策记录 v0.1",
+      "summary": "记录多店铺库存生产链路的运行事实、分层诊断、已接受决策、完成状态和后续验收重点。",
+      "authority": "research",
+      "implementation": "partial",
+      "audience": ["operator", "developer", "ai"],
+      "since": "0.6.0",
       "public": false
     },
     {
@@ -290,6 +412,17 @@
       "implementation": "partial",
       "audience": ["developer", "integrator", "ai"],
       "since": "0.5.0",
+      "public": false
+    },
+    {
+      "id": "repo.adr.0008",
+      "source": "docs/adr/0008-app-supervision-data-pipeline-browser-runtime-boundary.md",
+      "title": "ADR 0008：BPA App 的监督、数据链路与浏览器运行时边界",
+      "summary": "明确单一调度控制面、版本化数据事实、浏览器控制租约、部分成功语义和业务 App 与开发者控制台的边界。",
+      "authority": "architecture",
+      "implementation": "partial",
+      "audience": ["operator", "developer", "integrator", "ai"],
+      "since": "0.6.0",
       "public": false
     },
     {
