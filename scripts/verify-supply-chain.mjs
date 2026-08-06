@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
@@ -44,7 +45,89 @@ async function runPnpm(args, allowFailure = false) {
   }
 }
 
-const licenses = JSON.parse(await runPnpm(["licenses", "list", "--json"]));
+function normalizeLicense(value) {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (
+    value &&
+    typeof value === "object" &&
+    typeof value.type === "string" &&
+    value.type.trim()
+  ) {
+    return value.type.trim();
+  }
+  return undefined;
+}
+
+function mergeInstalledOptionalLicenses(licenses, projects) {
+  const knownIdentities = new Set(
+    Object.values(licenses).flatMap((packages) =>
+      packages.flatMap((entry) =>
+        (entry.versions ?? []).map((version) => `${entry.name}@${version}`)
+      )
+    )
+  );
+  const installedPackages = new Map();
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      for (const entry of value) visit(entry);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const name = typeof value.from === "string" ? value.from : undefined;
+    const version = typeof value.version === "string" ? value.version : undefined;
+    const path = typeof value.path === "string" ? value.path : "";
+    if (
+      name &&
+      version &&
+      /(?:^|[\\/])node_modules(?:[\\/]|$)/u.test(path) &&
+      existsSync(path)
+    ) {
+      const identity = `${name}@${version}`;
+      const license = normalizeLicense(value.license);
+      const current = installedPackages.get(identity);
+      if (!current || (!current.license && license)) {
+        installedPackages.set(identity, { name, version, path, license });
+      }
+    }
+    for (const dependencyGroup of [
+      value.dependencies,
+      value.devDependencies,
+      value.optionalDependencies
+    ]) {
+      if (!dependencyGroup || typeof dependencyGroup !== "object") continue;
+      for (const dependency of Object.values(dependencyGroup)) visit(dependency);
+    }
+  };
+  visit(projects);
+
+  for (const [identity, installed] of installedPackages) {
+    if (knownIdentities.has(identity)) continue;
+    if (!installed.license) {
+      throw new Error(`Installed dependency ${identity} has no declared license`);
+    }
+    const packages = licenses[installed.license] ?? [];
+    packages.push({
+      name: installed.name,
+      versions: [installed.version],
+      paths: [installed.path],
+      license: installed.license
+    });
+    licenses[installed.license] = packages;
+    knownIdentities.add(identity);
+  }
+  return knownIdentities.size;
+}
+
+const licenses = JSON.parse(
+  await runPnpm(["licenses", "list", "--json", "--no-optional"])
+);
+const installedProjects = JSON.parse(
+  await runPnpm(["--recursive", "list", "--json", "--long", "--depth", "Infinity"])
+);
+const dependencyIdentityCount = mergeInstalledOptionalLicenses(
+  licenses,
+  installedProjects
+);
 const allowedLicenses = new Set(policy.allowedLicenses);
 for (const [license, packages] of Object.entries(licenses)) {
   if (allowedLicenses.has(license)) continue;
@@ -98,6 +181,7 @@ for (const advisory of Object.values(audit.advisories ?? {})) {
 
 const vulnerabilitySummary = audit.metadata?.vulnerabilities ?? {};
 process.stdout.write(
-  `Verified ${Object.keys(licenses).length} license expressions and dependency audit ` +
+  `Verified ${Object.keys(licenses).length} license expressions across ` +
+    `${dependencyIdentityCount} dependency identities and dependency audit ` +
     `(${vulnerabilitySummary.critical ?? 0} critical, ${vulnerabilitySummary.high ?? 0} high; reviewed exceptions are current).\n`
 );
