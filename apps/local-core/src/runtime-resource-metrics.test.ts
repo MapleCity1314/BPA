@@ -2,6 +2,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync
@@ -73,11 +74,38 @@ describe("Core runtime resource metrics", () => {
     try {
       const path = join(root, "core-runtime-metrics.json");
       writeFileSync(path, "previous\n", { mode: 0o600 });
-      mkdirSync(`${path}.42.tmp`);
+      const collision = `${path}.42.collision.tmp`;
+      mkdirSync(collision);
       expect(() =>
-        writeRuntimeResourceMetrics(path, metrics, { processId: 42 })
+        writeRuntimeResourceMetrics(path, metrics, {
+          processId: 42,
+          temporaryIdFactory: () => "collision"
+        })
       ).toThrow();
       expect(readFileSync(path, "utf8")).toBe("previous\n");
+      expect(statSync(collision).isDirectory()).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("removes an exclusive temporary file after a serialization failure", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-metrics-cleanup-"));
+    try {
+      const path = join(root, "core-runtime-metrics.json");
+      writeFileSync(path, "previous\n", { mode: 0o600 });
+      expect(() =>
+        writeRuntimeResourceMetrics(
+          path,
+          { ...metrics, cacheUsedBytes: 1n as unknown as number },
+          {
+            processId: 42,
+            temporaryIdFactory: () => "serialization-failure"
+          }
+        )
+      ).toThrow(/BigInt/u);
+      expect(readFileSync(path, "utf8")).toBe("previous\n");
+      expect(readdirSync(root)).toEqual(["core-runtime-metrics.json"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
