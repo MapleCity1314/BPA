@@ -6,6 +6,11 @@ export {
   evaluateDiscoveryEvidence,
   mergeMarketplaceProbes
 } from "./discovery.js";
+export {
+  verifyEcommerceEvidenceClosure,
+  type EcommerceEvidenceClosureReport,
+  type VerifiedReferenceAsset
+} from "./closure.js";
 type JsonObject = EcommerceEvidenceObject;
 
 const DEFAULT_EXCLUSIONS = [
