@@ -31,8 +31,9 @@ description: 在运营 Windows 电脑的 WorkBuddy 中一键安装、恢复或�
 2. 在抖店商品管理页完成登录、验证码或平台风控确认。
 3. 多个合格 Browser Instance 同时存在时，由运营确认要使用的 Chrome 实例。
 
-不得请求 Cookie、密码或验证码。安装器返回 `ready` 时已经执行过一次只读 smoke test；
-只有 `smokeTest.dailyPath` 存在才算部署完成。长期配置只保存稳定的 Browser Instance ID，
+不得请求 Cookie、密码或验证码。安装器返回 `ready` 时已经执行过一次只读 smoke test，
+并重新读取日记录核对最后一次 Run、完整扫描状态和店铺计数；只有
+`smokeTest.dailyPath` 存在且 `acceptance.recordVerified=true` 才算部署完成。长期配置只保存稳定的 Browser Instance ID，
 每次定时运行都会重新解析当前合格的 Session 和抖店标签页。
 `smoke_test_failed` 即使已经写入日记录也不代表安装成功，必须按错误码恢复后重新验收。
 
