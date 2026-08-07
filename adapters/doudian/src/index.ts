@@ -8,6 +8,7 @@ export * from "./alliance-retired.js";
 export * from "./shop-context.js";
 export * from "./inventory-snapshot.js";
 export * from "./recent-orders.js";
+export * from "./experience-score.js";
 
 export const DOUDIAN_ADAPTER_ID = "doudian";
 export const DOUDIAN_ADAPTER_VERSION = "1.1.0";

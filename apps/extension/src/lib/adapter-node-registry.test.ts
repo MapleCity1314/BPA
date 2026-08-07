@@ -11,11 +11,20 @@ const driver = vi.hoisted(() => ({
   cleanupShopTabs: vi.fn()
 }));
 
+const experienceDriver = vi.hoisted(() => ({
+  discoverShopContext: vi.fn(),
+  collectShop: vi.fn()
+}));
+
 vi.mock("./alliance-retired-background.js", () => ({
   AllianceRetiredDriverError: class AllianceRetiredDriverError extends Error {
     readonly riskSignals = [];
   },
   createAllianceRetiredBrowserDriver: () => driver
+}));
+
+vi.mock("./experience-score-background.js", () => ({
+  createExperienceScoreBrowserDriver: () => experienceDriver
 }));
 
 const context = {
@@ -30,6 +39,38 @@ describe("Adapter Node registry", () => {
     driver.openPromotion.mockResolvedValue(undefined);
     driver.openRetiredProducts.mockResolvedValue(undefined);
     driver.cleanupShopTabs.mockResolvedValue(undefined);
+    experienceDriver.collectShop.mockReset();
+    experienceDriver.discoverShopContext.mockReset();
+  });
+
+  it("aggregates complete, no-score and failed experience shop outcomes", async () => {
+    const result = await executeRegisteredAdapterNode(
+      "doudian.experience.daily.aggregate",
+      {
+        foreachOutcome: {
+          total: 3,
+          succeeded: {
+            count: 2,
+            items: [
+              { output: { status: "complete", shop: { id: "1" } } },
+              { output: { status: "no_score", shop: { id: "2" } } }
+            ]
+          },
+          failed: { count: 1, items: [{ itemKey: "id:3" }] },
+          unresolved: { count: 0, items: [] }
+        }
+      },
+      context
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      output: {
+        status: "partial",
+        discoveredCount: 3,
+        persistedCount: 2,
+        failedCount: 1
+      }
+    });
   });
 
   it("returns undefined for an unregistered Node without platform branching", async () => {

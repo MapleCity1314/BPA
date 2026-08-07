@@ -4,6 +4,7 @@ import {
   AllianceRetiredDriverError,
   createAllianceRetiredBrowserDriver
 } from "./alliance-retired-background";
+import { createExperienceScoreBrowserDriver } from "./experience-score-background";
 
 export interface AdapterNodeResponse {
   readonly ok: boolean;
@@ -292,10 +293,127 @@ const aggregateAllianceScan: AdapterNodeHandler = async (input) => {
   };
 };
 
+const discoverExperienceShops: AdapterNodeHandler = async (input, context) => {
+  const maxShops = Number(input.maxShops ?? 100);
+  if (!Number.isSafeInteger(maxShops) || maxShops < 1 || maxShops > 100) {
+    return errorResponse(new Error("DOUDIAN_EXPERIENCE_MAX_SHOPS_INVALID"));
+  }
+  const driver = createExperienceScoreBrowserDriver({
+    sourceTabId: context.sourceTabId,
+    deadline: context.deadline,
+    ...(context.isCancelled ? { isCancelled: context.isCancelled } : {})
+  });
+  try {
+    const discovery = await driver.discoverShopContext();
+    if (discovery.shops.length < 1) throw new Error("SHOP_LIST_EMPTY");
+    if (discovery.shops.length > maxShops) throw new Error("SHOP_LIMIT_EXCEEDED");
+    const shops = discovery.shops.map(shopOutput);
+    const sourceMatches = discovery.shops.filter(
+      (shop) => normalize(shop.name) === normalize(discovery.currentShopName)
+    );
+    if (sourceMatches.length !== 1) {
+      throw new Error(
+        sourceMatches.length === 0
+          ? "SHOP_IDENTITY_UNCONFIRMED"
+          : "SHOP_IDENTITY_AMBIGUOUS"
+      );
+    }
+    return {
+      ok: true,
+      output: {
+        status: "complete",
+        shops,
+        sourceShop: shopOutput(sourceMatches[0]!),
+        discoveredCount: shops.length,
+        collectableCount: discovery.shops.filter(
+          (shop) => shop.status === "active"
+        ).length,
+        observedAt: new Date().toISOString(),
+        diagnostics: []
+      }
+    };
+  } catch (error) {
+    return errorResponse(error);
+  }
+};
+
+const readExperienceShop: AdapterNodeHandler = async (input, context) => {
+  const shop = allianceShop(input.shop, "EXPERIENCE_SHOP");
+  const sourceShop = allianceShop(input.sourceShop, "EXPERIENCE_SOURCE_SHOP");
+  if (shop.status !== "active") {
+    return {
+      ok: true,
+      output: {
+        shop: shopOutput(shop),
+        status: "skipped",
+        diagnostics: ["SHOP_NOT_ACTIVE"]
+      }
+    };
+  }
+  const driver = createExperienceScoreBrowserDriver({
+    sourceTabId: context.sourceTabId,
+    deadline: context.deadline,
+    ...(context.isCancelled ? { isCancelled: context.isCancelled } : {})
+  });
+  try {
+    const snapshot = await driver.collectShop(shop, sourceShop);
+    return { ok: true, output: { ...snapshot } };
+  } catch (error) {
+    return errorResponse(error);
+  }
+};
+
+const aggregateExperienceDaily: AdapterNodeHandler = async (input) => {
+  const outcome = input.foreachOutcome as
+    | {
+        total?: number;
+        succeeded?: { count?: number; items?: Array<{ output?: unknown }> };
+        failed?: { count?: number; items?: unknown[] };
+        unresolved?: { count?: number; items?: unknown[] };
+      }
+    | undefined;
+  if (!outcome?.succeeded || !outcome.failed || !outcome.unresolved) {
+    return errorResponse(new Error("DOUDIAN_EXPERIENCE_OUTCOME_INVALID"));
+  }
+  const snapshots = (outcome.succeeded.items ?? []).flatMap((item) =>
+    item.output && typeof item.output === "object" ? [item.output] : []
+  ) as Array<Record<string, unknown>>;
+  const persisted = snapshots.filter(
+    (snapshot) => snapshot.status === "complete" || snapshot.status === "no_score"
+  );
+  const skipped = snapshots.filter((snapshot) => snapshot.status === "skipped");
+  const failedCount =
+    Number(outcome.failed.count ?? 0) + Number(outcome.unresolved.count ?? 0);
+  const total = Number(outcome.total ?? 0);
+  return {
+    ok: true,
+    output: {
+      status:
+        failedCount === 0 && persisted.length + skipped.length === total
+          ? "complete"
+          : persisted.length > 0
+            ? "partial"
+            : "failed",
+      businessDate: shanghaiBusinessDate(new Date()),
+      observedAt: new Date().toISOString(),
+      discoveredCount: total,
+      attemptedCount: total - skipped.length,
+      persistedCount: persisted.length,
+      failedCount,
+      skippedCount: skipped.length,
+      snapshots: persisted,
+      foreachOutcome: outcome
+    }
+  };
+};
+
 const handlers = new Map<string, AdapterNodeHandler>([
   ["doudian.alliance.shops.discover", discoverAllianceShops],
   ["doudian.alliance.shop.retired-products.scan", scanAllianceShop],
-  ["doudian.alliance.retired-products.aggregate", aggregateAllianceScan]
+  ["doudian.alliance.retired-products.aggregate", aggregateAllianceScan],
+  ["doudian.experience.shops.discover", discoverExperienceShops],
+  ["doudian.experience.shop.snapshot.read", readExperienceShop],
+  ["doudian.experience.daily.aggregate", aggregateExperienceDaily]
 ]);
 
 export async function executeRegisteredAdapterNode(
