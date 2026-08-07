@@ -14,6 +14,7 @@ function usage() {
     "  --output <path>                   Write the JSON analysis instead of stdout",
     "  --expected-interval-seconds <n>   Expected sampling interval, default 60",
     "  --minimum-duration-hours <n>      Required conclusion window, default 24",
+    "  --require-complete                Exit non-zero unless the resource gate is complete",
     "  --help                            Show this help"
   ].join("\n");
 }
@@ -35,6 +36,10 @@ function parseArguments(argv) {
     const argument = argv[index];
     if (argument === "--help") {
       options.help = true;
+      continue;
+    }
+    if (argument === "--require-complete") {
+      options.requireComplete = true;
       continue;
     }
     const value = argv[index + 1];
@@ -356,6 +361,13 @@ function analyze(samples, options) {
   );
   const coreIdentityStable =
     coreIdentity.pidStable && coreIdentity.runtimeIdentityStable;
+  const chromeProfile = chromeSummary(samples);
+  const chromeProfileComplete = chromeProfile.missingSamples === 0;
+  const nodeAndChromeMeasurable =
+    windowComplete &&
+    continuityComplete &&
+    coreIdentity.pidStable &&
+    chromeProfileComplete;
   const sqlite = sqliteSummary(samples, options.expectedIntervalSeconds);
   const sqlitePageCacheMeasurable =
     windowComplete &&
@@ -379,12 +391,11 @@ function analyze(samples, options) {
       continuityComplete,
       corePidStable: coreIdentity.pidStable,
       coreRuntimeIdentityStable: coreIdentity.runtimeIdentityStable,
-      nodeAndChromeMeasurable:
-        windowComplete && continuityComplete && coreIdentity.pidStable,
+      chromeProfileComplete,
+      nodeAndChromeMeasurable,
       sqlitePageCacheMeasurable,
       phaseZeroResourceMeasurementComplete:
-        windowComplete &&
-        continuityComplete &&
+        nodeAndChromeMeasurable &&
         coreIdentityStable &&
         sqlitePageCacheMeasurable,
       blockers: [
@@ -400,6 +411,7 @@ function analyze(samples, options) {
         coreIdentity.runtimeIdentities.length > 1
           ? ["core_runtime_identity_changed"]
           : []),
+        ...(!chromeProfileComplete ? ["chrome_profile_samples_missing"] : []),
         ...(sqlite.pageCache.status !== "measured"
           ? ["sqlite_page_cache_not_measured"]
           : [])
@@ -412,7 +424,7 @@ function analyze(samples, options) {
         processSummary(samples, (sample) => sample.services[label] ?? null)
       ])
     ),
-    chromeProfile: chromeSummary(samples),
+    chromeProfile,
     sqlite
   };
 }
@@ -424,9 +436,19 @@ async function main() {
     return;
   }
   const samples = parseSamples(await readFile(options.input, "utf8"));
-  const result = `${JSON.stringify(analyze(samples, options), null, 2)}\n`;
+  const analysis = analyze(samples, options);
+  const result = `${JSON.stringify(analysis, null, 2)}\n`;
   if (options.output) await writeFile(options.output, result, { mode: 0o600 });
   else process.stdout.write(result);
+  if (
+    options.requireComplete &&
+    !analysis.conclusionGate.phaseZeroResourceMeasurementComplete
+  ) {
+    process.stderr.write(
+      `Resource measurement gate is incomplete: ${analysis.conclusionGate.blockers.join(", ")}\n`
+    );
+    process.exitCode = 2;
+  }
 }
 
 await main().catch((error) => {

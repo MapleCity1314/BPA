@@ -196,6 +196,7 @@ describe("runtime resource analysis", () => {
       continuityComplete: true,
       corePidStable: true,
       coreRuntimeIdentityStable: true,
+      chromeProfileComplete: true,
       nodeAndChromeMeasurable: true,
       sqlitePageCacheMeasurable: true,
       phaseZeroResourceMeasurementComplete: true,
@@ -209,6 +210,73 @@ describe("runtime resource analysis", () => {
       runtimeIdentities: ["0.6.0-test"],
       runtimeIdentityExpected: true,
       runtimeIdentityStable: true
+    });
+  });
+
+  it("fails closed when Chrome profile samples are missing", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-analysis-"));
+    const input = join(root, "samples.jsonl");
+    const first = sample("2026-08-05T00:00:00.000Z", 10, 100, 4096);
+    const last = sample("2026-08-06T00:00:00.000Z", 10, 120, 8192);
+    first.chromeProfile = null;
+    last.chromeProfile = null;
+    writeFileSync(
+      input,
+      `${JSON.stringify(first)}\n${JSON.stringify(last)}\n`
+    );
+
+    const result = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          script,
+          "--input",
+          input,
+          "--expected-interval-seconds",
+          "43200"
+        ],
+        { encoding: "utf8" }
+      )
+    );
+
+    expect(result.chromeProfile).toMatchObject({
+      availableSamples: 0,
+      missingSamples: 2,
+      rssKiB: null
+    });
+    expect(result.conclusionGate).toMatchObject({
+      chromeProfileComplete: false,
+      nodeAndChromeMeasurable: false,
+      phaseZeroResourceMeasurementComplete: false
+    });
+    expect(result.conclusionGate.blockers).toEqual([
+      "chrome_profile_samples_missing"
+    ]);
+  });
+
+  it("can enforce the conclusion gate with a non-zero exit status", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-analysis-"));
+    const input = join(root, "samples.jsonl");
+    writeFileSync(
+      input,
+      `${JSON.stringify(
+        sample("2026-08-05T00:00:00.000Z", 10, 100, 4096)
+      )}\n${JSON.stringify(
+        sample("2026-08-05T12:00:00.000Z", 10, 120, 8192)
+      )}\n`
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [script, "--input", input, "--require-complete"],
+      { encoding: "utf8" }
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("minimum_duration_not_reached");
+    expect(JSON.parse(result.stdout).conclusionGate).toMatchObject({
+      windowComplete: false,
+      phaseZeroResourceMeasurementComplete: false
     });
   });
 
