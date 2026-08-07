@@ -45,8 +45,9 @@ $result | ConvertTo-Json -Depth 8
    - `smoke_test_failed`：打开 `dailyPath` 查看失败记录，按 `errorCode` 和
      `requiredHumanActions` 恢复后重新执行；不得当作安装成功。
    - `install_failed`：原样报告 `errorCode` 和 `message`，停止操作并交给 BPA 开发修复；禁止现场打补丁或绕过校验。
-   - `ready`：确认 `smokeTest.dailyPath` 存在，不重复执行 smoke test。
-4. 首次只读验收必须已经写入 `smokeTest.dailyPath`。随后给出 WorkBuddy 自动化配置：
+   - `ready`：确认 `smokeTest.dailyPath` 存在、`acceptance.recordVerified=true`、
+     `scannedShopCount=discoveredShopCount` 且 `failedShopCount=0`，不重复执行 smoke test。
+4. 首次只读验收必须已经写入并复核 `smokeTest.dailyPath`。随后给出 WorkBuddy 自动化配置：
    - 名称：`抖店精选联盟清退商品日巡检`
    - 工作空间：安装器返回的 `recordsDir`
    - 技能：`抖店联盟清退巡检`

@@ -184,6 +184,21 @@ test("keeps WorkBuddy Windows installation progress machine-readable", async () 
     /if \(-not \$SmokeSucceeded\)[\s\S]*?exit 0[\s\S]*?\$DeploymentFiles/u
   );
   assert.match(
+    workBuddyInstaller,
+    /Test-Path -LiteralPath \$Smoke\.record\.dailyPath -PathType Leaf/u
+  );
+  assert.match(
+    workBuddyInstaller,
+    /\$PersistedAttempts = @\(\$PersistedSmoke\.attempts\)/u
+  );
+  assert.match(
+    workBuddyInstaller,
+    /\$ScannedShopCount -ne \$DiscoveredShopCount/u
+  );
+  assert.match(workBuddyInstaller, /\$FailedShopCount -ne 0/u);
+  assert.match(workBuddyInstaller, /LIVE_ACCEPTANCE_RECORD_INVALID/u);
+  assert.match(workBuddyInstaller, /recordVerified = \$true/u);
+  assert.match(
     localCoreMain,
     /process\.stdout\.write\("BPA migrations completed successfully/u
   );

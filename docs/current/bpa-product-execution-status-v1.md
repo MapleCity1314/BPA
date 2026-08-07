@@ -184,6 +184,12 @@ metrics 可用，Core、Chrome 和库存 Monitor PID 均未变化，Runtime iden
 - 已有 Doudian Alliance Adapter、Extension 执行端与 fixture 测试；
 - 安装/CI 证据存在，但登录态真实页面完整 E2E 尚不能据此判定完成。
 
+2026-08-07 的交付候选进一步收紧 `ready`：安装器必须重新读取 smoke test 写入的
+日记录，核对最后一次 Run、完整扫描状态、已发现/已扫描店铺数相等且失败店铺为 0，
+才返回 `acceptance.recordVerified=true`。该门禁消除了“命令返回成功但落盘记录或
+店铺覆盖不完整”被误报成部署完成的可能；它仍不替代运营 Windows 电脑上的登录态
+真实页面 E2E。
+
 剩余验收：真实登录页逐店完整扫描、分页、店铺恢复、失败语义、证据链和告警回归。
 
 ### 5.2 库存监控工作流

@@ -964,6 +964,53 @@ $SmokeSucceeded =
   $Smoke.attempt.runStatus -eq "succeeded" -and
   @("complete_empty", "complete_with_items") -contains `
     $Smoke.attempt.output.scan.status
+if ($SmokeSucceeded) {
+  try {
+    if (-not (Test-Path -LiteralPath $Smoke.record.dailyPath -PathType Leaf)) {
+      throw "DAILY_STATUS_RECORD_MISSING"
+    }
+    $PersistedSmoke = Get-Content `
+      -LiteralPath $Smoke.record.dailyPath `
+      -Raw | ConvertFrom-Json
+    $PersistedAttempts = @($PersistedSmoke.attempts)
+    if (
+      $PersistedSmoke.schemaVersion -ne 1 -or
+      $PersistedSmoke.businessDate -ne $Smoke.workbuddy.businessDate -or
+      $PersistedSmoke.latestStatus -ne $Smoke.workbuddy.status -or
+      $PersistedAttempts.Count -eq 0
+    ) {
+      throw "DAILY_STATUS_RECORD_INVALID"
+    }
+    $PersistedAttempt = $PersistedAttempts | Select-Object -Last 1
+    if (
+      $PersistedAttempt.runId -ne $Smoke.attempt.runId -or
+      $PersistedAttempt.runStatus -ne "succeeded" -or
+      $PersistedAttempt.status -ne $Smoke.workbuddy.status -or
+      -not (@("complete_empty", "complete_with_items") -contains `
+        $PersistedAttempt.output.scan.status)
+    ) {
+      throw "DAILY_STATUS_RECORD_RUN_MISMATCH"
+    }
+    $DiscoveredShopCount = [int]$PersistedAttempt.output.scan.discoveredShopCount
+    $ScannedShopCount = [int]$PersistedAttempt.output.scan.scannedShopCount
+    $FailedShopCount = [int]$PersistedAttempt.output.scan.failedShopCount
+    if (
+      $DiscoveredShopCount -lt 1 -or
+      $ScannedShopCount -ne $DiscoveredShopCount -or
+      $FailedShopCount -ne 0
+    ) {
+      throw "DAILY_STATUS_RECORD_INCOMPLETE_SHOPS"
+    }
+  } catch {
+    $SmokeSucceeded = $false
+    if (-not $Smoke.attempt.error) {
+      $Smoke.attempt.error = @{
+        code = "LIVE_ACCEPTANCE_RECORD_INVALID"
+        message = $_.Exception.Message
+      }
+    }
+  }
+}
 if (-not $SmokeSucceeded) {
   $SmokeErrorCode = [string]$Smoke.attempt.error.code
   if (-not $SmokeErrorCode) {
@@ -1038,6 +1085,14 @@ Write-JsonResult @{
   smokeTest = @{
     status = $Smoke.workbuddy.status
     dailyPath = $Smoke.record.dailyPath
+  }
+  acceptance = @{
+    businessDate = $PersistedSmoke.businessDate
+    runId = $PersistedAttempt.runId
+    discoveredShopCount = $DiscoveredShopCount
+    scannedShopCount = $ScannedShopCount
+    failedShopCount = $FailedShopCount
+    recordVerified = $true
   }
   configurationPath = $ConfigurationFinal
   runnerPath = $RunnerFinal
