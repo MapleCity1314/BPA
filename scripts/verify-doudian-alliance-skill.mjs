@@ -105,7 +105,8 @@ async function verifyWorkBuddyBoundaries(root) {
     "不读取、对比或分析 Runtime 内部 JavaScript、PowerShell、Workflow 或扩展 bundle",
     "不创建 `.mjs`、`.js`、`.ps1` 补丁",
     "不得继续猜测或检查脚本逻辑",
-    "只有安装器自身返回 `ready` 才能宣告完成"
+    "只有安装器自身返回 `ready` 才能宣告完成",
+    "`acceptance.recordVerified=true`"
   ]) {
     if (!installPrompt.includes(requiredInstruction)) {
       throw new Error(
