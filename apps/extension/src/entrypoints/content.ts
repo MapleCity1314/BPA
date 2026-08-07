@@ -31,6 +31,10 @@ import {
   executeAllianceRetiredStage,
   type AllianceRetiredStageRequest
 } from "../lib/alliance-retired-content";
+import {
+  executeExperienceScoreStage,
+  type ExperienceScoreStageRequest
+} from "../lib/experience-score-content";
 import { probeObservedPage } from "../lib/page-observer-registry";
 
 function waitForPageChange(maxWaitMs: number): Promise<void> {
@@ -367,6 +371,7 @@ export default defineContentScript({
     "https://fxg.jinritemai.com/ffa/g/list*",
     "https://fxg.jinritemai.com/ffa/g/create*",
     "https://fxg.jinritemai.com/ffa/morder/order/*",
+    "https://fxg.jinritemai.com/ffa/eco/experience-score*",
     "https://buyin.jinritemai.com/dashboard*",
     "https://www.chanmama.com/*",
     "https://www.douyin.com/search*",
@@ -481,6 +486,31 @@ export default defineContentScript({
                 }
               })
             );
+          return true;
+        }
+        if (request.type === "bpa.doudian.experience.stage") {
+          try {
+            const result = executeExperienceScoreStage(
+              (
+                request as ContentActionRequest & {
+                  request: ExperienceScoreStageRequest;
+                }
+              ).request
+            );
+            sendResponse({ ok: true, result });
+          } catch (error) {
+            sendResponse({
+              ok: false,
+              error: {
+                code:
+                  error instanceof Error
+                    ? error.message
+                    : "EXPERIENCE_STAGE_FAILED",
+                message:
+                  error instanceof Error ? error.message : String(error)
+              }
+            });
+          }
           return true;
         }
         if (request.type !== "bpa.execute") return undefined;

@@ -36,7 +36,7 @@ describe("extension capability manifest", () => {
       "exact_tab_binding_v2",
       "active_page_probe_v1"
     ]);
-    expect(report.capabilities).toHaveLength(12);
+    expect(report.capabilities).toHaveLength(15);
     expect(report.capabilities).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -59,6 +59,20 @@ describe("extension capability manifest", () => {
               observer_capability_id: "buyin.page"
             }
           ])
+        }),
+        expect.objectContaining({
+          node_id: "doudian.experience.shop.snapshot.read",
+          adapter_id: "doudian-experience",
+          routes: [
+            {
+              origin: "https://fxg.jinritemai.com",
+              pathname_prefixes: [
+                "/ffa/g/list",
+                "/ffa/eco/experience-score"
+              ],
+              observer_capability_id: "doudian.page"
+            }
+          ]
         })
       ])
     );
@@ -160,6 +174,17 @@ describe("extension capability manifest", () => {
       nodeId: "doudian.alliance.shop.retired-products.scan",
       nodeVersion: "1.0.0",
       currentUrl: "https://fxg.jinritemai.com/ffa/g/list",
+      grantedPermissions: [
+        "browser.dom.read",
+        "browser.dom.write",
+        "browser.tabs.read",
+        "browser.tabs.navigate"
+      ]
+    },
+    {
+      nodeId: "doudian.experience.shop.snapshot.read",
+      nodeVersion: "1.0.0",
+      currentUrl: "https://fxg.jinritemai.com/ffa/eco/experience-score",
       grantedPermissions: [
         "browser.dom.read",
         "browser.dom.write",

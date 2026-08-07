@@ -124,7 +124,12 @@ const observers: readonly PageObserver[] = [
     capabilityId: "doudian.page",
     supports: (url) =>
       url.origin === "https://fxg.jinritemai.com" &&
-      ["/ffa/g/list", "/ffa/g/create", "/ffa/morder/order"].some(
+      [
+        "/ffa/g/list",
+        "/ffa/g/create",
+        "/ffa/morder/order",
+        "/ffa/eco/experience-score"
+      ].some(
         (prefix) => url.pathname.startsWith(prefix)
       ),
     async probe(document, url) {

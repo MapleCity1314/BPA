@@ -28,6 +28,9 @@ export type ExtensionNodeId =
   | "doudian.alliance.shops.discover"
   | "doudian.alliance.shop.retired-products.scan"
   | "doudian.alliance.retired-products.aggregate"
+  | "doudian.experience.shops.discover"
+  | "doudian.experience.shop.snapshot.read"
+  | "doudian.experience.daily.aggregate"
   | "ecommerce.marketplace.search-results.read";
 
 export interface ExtensionCapability {
@@ -41,7 +44,7 @@ export interface ExtensionCapability {
     readonly observerCapabilityId: string;
   }[];
   readonly adapter?: {
-    readonly id: "doudian" | "doudian-inventory" | "doudian-alliance" | "marketplace-search";
+    readonly id: "doudian" | "doudian-inventory" | "doudian-alliance" | "doudian-experience" | "marketplace-search";
     readonly version: string;
   };
   readonly executionTarget?: "background";
@@ -273,6 +276,61 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
     ],
     adapter: { id: "doudian-alliance", version: "1.0.0" },
     executionTarget: "background"
+  },
+  {
+    nodeId: "doudian.experience.shops.discover",
+    versions: ["1.0.0"],
+    riskLevel: "R1",
+    permissions: [
+      "browser.dom.read",
+      "browser.dom.write",
+      "browser.tabs.read",
+      "browser.tabs.navigate"
+    ],
+    routes: [
+      {
+        origin: DOUDIAN_ORIGIN,
+        pathnamePrefixes: ["/ffa/g/list"],
+        observerCapabilityId: "doudian.page"
+      }
+    ],
+    adapter: { id: "doudian-experience", version: "1.0.0" },
+    executionTarget: "background"
+  },
+  {
+    nodeId: "doudian.experience.shop.snapshot.read",
+    versions: ["1.0.0"],
+    riskLevel: "R1",
+    permissions: [
+      "browser.dom.read",
+      "browser.dom.write",
+      "browser.tabs.read",
+      "browser.tabs.navigate"
+    ],
+    routes: [
+      {
+        origin: DOUDIAN_ORIGIN,
+        pathnamePrefixes: ["/ffa/g/list", "/ffa/eco/experience-score"],
+        observerCapabilityId: "doudian.page"
+      }
+    ],
+    adapter: { id: "doudian-experience", version: "1.0.0" },
+    executionTarget: "background"
+  },
+  {
+    nodeId: "doudian.experience.daily.aggregate",
+    versions: ["1.0.0"],
+    riskLevel: "R0",
+    permissions: READ_ONLY_PERMISSIONS,
+    routes: [
+      {
+        origin: DOUDIAN_ORIGIN,
+        pathnamePrefixes: ["/ffa/g/list"],
+        observerCapabilityId: "doudian.page"
+      }
+    ],
+    adapter: { id: "doudian-experience", version: "1.0.0" },
+    executionTarget: "background"
   }
 ];
 
@@ -287,7 +345,7 @@ export interface ExtensionCapabilityReport {
       pathname_prefixes: string[];
       observer_capability_id: string;
     }>;
-    adapter_id?: "doudian" | "doudian-inventory" | "doudian-alliance" | "marketplace-search";
+    adapter_id?: "doudian" | "doudian-inventory" | "doudian-alliance" | "doudian-experience" | "marketplace-search";
     adapter_version?: string;
   }>;
   manifest_digest: `sha256:${string}`;

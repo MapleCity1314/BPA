@@ -248,6 +248,17 @@
       "public": false
     },
     {
+      "id": "repo.plan.doudian-experience-score-workflow-takeover-0.1",
+      "source": "docs/plans/doudian-experience-score-workflow-takeover-v0.1.md",
+      "title": "BPA 抖店体验分采集工作流接管计划 v0.1",
+      "summary": "定义抖店体验分从独立 Playwright/CDP 脚本迁入 BPA Adapter、Node、Workflow、Trigger、证据、控制台和飞书投递的分阶段计划。",
+      "authority": "plan",
+      "implementation": "partial",
+      "audience": ["operator", "developer", "integrator", "ai"],
+      "since": "0.7.0",
+      "public": false
+    },
+    {
       "id": "repo.research.priority-items",
       "source": "docs/research/重点项检查插件抽象复盘-v0.1.md",
       "title": "重点项检查插件抽象复盘 v0.1",

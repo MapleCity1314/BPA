@@ -1,0 +1,142 @@
+apiVersion: bpa/v1alpha3
+kind: Workflow
+metadata:
+  id: doudian.experience-score.daily
+  version: 1.0.0
+  title: 抖店每日多店体验分采集
+  description: 复用一个已登录 Mac Chrome 标签页，逐店读取体验分并通过 Step 检查点保留已完成事实；不包含调度和外部投递。
+spec:
+  riskLevel: R1
+  inputSchema:
+    type: object
+    additionalProperties: false
+    required: [maxShops]
+    properties:
+      maxShops: { type: integer, minimum: 1, maximum: 100, default: 100 }
+  outputSchema:
+    type: object
+    additionalProperties: false
+    required: [status, daily]
+    properties:
+      status: { enum: [complete, partial, failed] }
+      daily: { type: object }
+  limits:
+    maxDepth: 3
+    maxStepExecutions: 1000
+  resourceSlots:
+    doudian_account_browser:
+      kind: browser
+      capabilities: [browser.dom.read, browser.dom.write, browser.tabs.read, browser.tabs.navigate]
+      allowedOrigins: [https://fxg.jinritemai.com]
+      authentication: authenticated
+      purpose: 绑定公司主账号唯一 Mac Chrome 实例和确切商品列表标签页；同一时刻只运行一条抖店浏览器工作流
+  root:
+    kind: sequence
+    steps:
+      - key: discover_shops
+        kind: call
+        use: doudian.experience.shops.discover@1.0.0
+        with:
+          maxShops: ${input.maxShops}
+        timeout: 2m
+        resourceMappings: { browser: doudian_account_browser }
+        retry:
+          maxAttempts: 2
+          backoff: 2s
+          retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED]
+        handlers:
+          failure:
+            kind: sequence
+            steps:
+              - key: discovery_failed
+                kind: terminal
+                status: uncertain
+                error: { code: DOUDIAN_EXPERIENCE_DISCOVERY_INCOMPLETE, message: 店铺范围未得到证明，禁止生成正常体验分结论。 }
+          rejected:
+            kind: sequence
+            steps:
+              - key: discovery_blocked
+                kind: terminal
+                status: rejected
+                error: { code: DOUDIAN_EXPERIENCE_DISCOVERY_BLOCKED, message: 登录、验证码或风控阻断了店铺发现。 }
+      - key: collect_shops
+        kind: foreach
+        items: ${steps.discover_shops.output.shops}
+        itemName: shop
+        indexName: shop_index
+        itemKey: ${item.key}
+        maxItems: 100
+        maxDuration: 75m
+        onItemError: stop
+        body:
+          kind: sequence
+          steps:
+            - key: read_snapshot
+              kind: call
+              use: doudian.experience.shop.snapshot.read@1.0.0
+              with:
+                shop: ${item}
+                sourceShop: ${steps.discover_shops.output.sourceShop}
+              timeout: 4m
+              resourceMappings: { browser: doudian_account_browser }
+              retry:
+                maxAttempts: 2
+                backoff: 2s
+                retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED, EXPERIENCE_PAGE_TIMEOUT]
+              handlers:
+                failure:
+                  kind: sequence
+                  steps:
+                    - key: shop_failed
+                      kind: terminal
+                      status: failed
+                      error: { code: DOUDIAN_EXPERIENCE_SHOP_FAILED, message: 当前店铺没有形成完整体验分快照。 }
+                rejected:
+                  kind: sequence
+                  steps:
+                    - key: shop_blocked
+                      kind: terminal
+                      status: rejected
+                      error: { code: DOUDIAN_EXPERIENCE_SHOP_BLOCKED, message: 阻断信号使剩余店铺不可安全继续。 }
+                timeout:
+                  kind: sequence
+                  steps:
+                    - key: shop_timeout
+                      kind: terminal
+                      status: failed
+                      error: { code: DOUDIAN_EXPERIENCE_SHOP_TIMEOUT, message: 当前店铺超时，保留此前已完成检查点。 }
+      - key: aggregate_daily
+        kind: call
+        use: doudian.experience.daily.aggregate@1.0.0
+        with:
+          foreachOutcome: ${steps.collect_shops.output}
+        timeout: 10s
+        resourceMappings: { browser: doudian_account_browser }
+      - key: completion_gate
+        kind: decision
+        condition:
+          kind: compare
+          operator: equals
+          left:
+            kind: binding
+            binding: ${steps.aggregate_daily.output.status}
+          right: { kind: literal, value: complete }
+        then:
+          kind: sequence
+          steps:
+            - key: complete
+              kind: terminal
+              status: succeeded
+              output:
+                status: complete
+                daily: ${steps.aggregate_daily.output}
+        else:
+          kind: sequence
+          steps:
+            - key: incomplete
+              kind: terminal
+              status: uncertain
+              output:
+                status: ${steps.aggregate_daily.output.status}
+                daily: ${steps.aggregate_daily.output}
+              error: { code: DOUDIAN_EXPERIENCE_DAILY_INCOMPLETE, message: 至少一个店铺没有形成完整检查点，禁止报告为全量成功。 }
