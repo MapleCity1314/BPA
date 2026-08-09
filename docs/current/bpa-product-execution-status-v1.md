@@ -8,8 +8,8 @@
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- Git 基线：截至 2026-08-09，PR #2–#20 均已在 required checks 通过后进入 `main`；
-  最新基线为 PR #20 merge commit `3a4187af4abe`。阶段 0 结构收敛、资源观测、清退商品
+- Git 基线：截至 2026-08-09，PR #2–#24 均已在 required checks 通过后进入 `main`；
+  最新基线为 PR #24 merge commit `e4db9f0829829dde6955cc2f3212a34ad5c84d60`。阶段 0 结构收敛、资源观测、清退商品
   Mac 目标约束、爆款图片来源闭包校验和体验分候选均已进入主线。
 - GitHub `main` 已启用管理员同样受约束的 Branch Protection：必须走 Pull Request、
   与主线同步、解决 review conversation，并通过 macOS、Windows、性能、双架构发布、
@@ -29,6 +29,14 @@
 服务端拒绝除会话交换以外的业务写请求，前端隐藏自动化启动、任务处理、恢复、数据导入
 与创作入口；Host 仍严格绑定 loopback，因此这只是本地安全边界，不是已完成远程部署。
 仓库只能证实清退商品这一条 Windows 专属业务交付，用户所指第二条工作流入口待确认。
+
+2026-08-09 的仓库只读审计已把“常驻 Core + 单共享 Chrome”收敛为灰度候选，而非提前
+改写 normative 结论。当前资产证明库存 Chrome 使用一个 KeepAlive Profile，不是每任务
+新建 Chrome；Team Worker 首次调用后单例复用；但 legacy inventory production-cycle 仍会
+按步骤启动短命 Node/tsx 子进程，Native Host/Team Worker 退出所有权、Extension 重连、
+标签页硬上限和常驻 Map 清理仍有工程缺口。现有 24 小时采样也不含这些子进程、标签页、
+V8 heap、event-loop lag 与 Gateway 容量指标。本机当前没有 BPA launchd/进程，因此这只是
+仓库形态审计，不能当作公司 Mac 当前进程事实。灰度候选、预算与停止线见阶段 1 计划。
 
 ## 2. 阶段状态板
 
@@ -314,7 +322,7 @@ Trigger Run，Workflow 只接收其已冻结业务输入。候选同时用同一
 终态与租约释放，并把普通单店失败改为 `collect` 后聚合为 `uncertain + partial`；登录、
 验证码和风控的 `rejected` 仍立即终止。该测试不启动 Chrome，不等于真实登录页 E2E。
 
-当前 Schema v22 候选把体验分的“已持久化”从聚合文案改成可审计事实：每店页面读取后，
+Schema v22 已随 PR #24 把体验分的“已持久化”从聚合文案改成可审计事实：每店页面读取后，
 由 Core 内 `experience-data` Provider 立即写入 Run 级不可变 Operational Fact；业务日固定
 来自 TriggerOccurrence 的计划时间，人工 Run 则固定来自 Run 创建时间。`no_score` 是成功
 事实，停用店铺是正常跳过，普通店铺失败在已有事实时形成 `partial + uncertain`。完整与
@@ -329,7 +337,7 @@ Trigger Run，Workflow 只接收其已冻结业务输入。候选同时用同一
 DatasetVersion 目前以内嵌 schema/normalization 形成整体摘要，不生成伪造的
 dataset_profile closure ref；正式版本化 dataset_profile 的发布与闭包解析仍是部署前门禁。
 
-这一层当前只有代码、fixture、故障注入和本机离线 E2E 证据；完整仓库门禁、GitHub 合并、
+这一层已随 PR #24 通过本机完整门禁、对抗审查和 GitHub 10 项 required checks 进入主线；
 真实登录页逐店验证、公司 Mac 灰度与生产 Dataset 仍待确认。质量感知的
 `latest complete/latest attempt` 视图尚未实现，因此不得把该 Dataset 接入 Dataset Trigger，
 也不得在 Console 中称其为“最新体验分”。正式 `dataset_profile` 资产及其覆盖 record
