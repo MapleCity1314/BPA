@@ -15,6 +15,7 @@ import { projectTerminalRunAttention } from "@bpa/attention-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { resolveLocalIpcEndpoint } from "@bpa/platform-runtime";
+import { createTerminalAttentionDelivery } from "./attention-delivery.js";
 import {
   LocalControlServer,
   LocalCoreService,
@@ -144,24 +145,30 @@ describe("local control socket", () => {
       },
       occurredAt: "2026-08-09T06:01:00.000Z"
     };
+    const attentionItem = projectTerminalRunAttention({
+      id: run.id,
+      workflowId: run.workflowId,
+      workflowVersion: run.workflowVersion,
+      status: "rejected",
+      currentNodeKey: "collect",
+      updatedAt: terminalEvent.occurredAt,
+      events: [terminalEvent]
+    });
     persistence.commitRunTransition({
       runId: run.id,
       expectedRevision: run.revision,
       nextStatus: "rejected",
       currentNodeKey: "collect",
       attention: {
-        item: projectTerminalRunAttention({
-          id: run.id,
-          workflowId: run.workflowId,
-          workflowVersion: run.workflowVersion,
-          status: "rejected",
-          currentNodeKey: "collect",
-          updatedAt: terminalEvent.occurredAt,
-          events: [terminalEvent]
-        }),
+        item: attentionItem,
         state: "open",
         revision: 0
       },
+      attentionDelivery: createTerminalAttentionDelivery({
+        attention: attentionItem,
+        workflowId: run.workflowId,
+        workflowVersion: run.workflowVersion
+      }),
       event: terminalEvent
     });
 
@@ -181,7 +188,9 @@ describe("local control socket", () => {
           kind: "blocking",
           attemptedActions: [],
           state: "open",
-          revision: 0
+          revision: 0,
+          deliveryState: "pending",
+          deliveryAttempt: 0
         }
       ]
     });
@@ -262,7 +271,7 @@ describe("local control socket", () => {
       sendControlRequest(socketPath, "doctor")
     ).resolves.toMatchObject({
       status: "ok",
-      persistence: { adapter: "sqlite", schemaVersion: 16 }
+      persistence: { adapter: "sqlite", schemaVersion: 17 }
     });
   });
 

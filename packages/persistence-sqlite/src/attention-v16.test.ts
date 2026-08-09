@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type {
+  AttentionDeliveryRecord,
   AttentionRecord,
   ExecutionEventRecord,
   RunRecord
@@ -61,13 +63,36 @@ function attention(): AttentionRecord {
   };
 }
 
+function delivery(): AttentionDeliveryRecord {
+  const payload = {
+    attentionId: attention().item.id,
+    runId: "run-attention"
+  };
+  return {
+    id: "delivery:attention:run-terminal:run-attention:operator-notification",
+    attentionId: attention().item.id,
+    channel: "operator-notification",
+    idempotencyKey:
+      "attention:run-terminal:run-attention:operator-notification",
+    requestDigest: `sha256:${createHash("sha256")
+      .update(JSON.stringify(payload))
+      .digest("hex")}`,
+    payload,
+    state: "pending",
+    revision: 0,
+    attempt: 0,
+    createdAt: terminalAt,
+    updatedAt: terminalAt
+  };
+}
+
 function seed(store: SqlitePersistence): RunRecord {
   const value = run();
   return store.createRun({ run: value, event: event(1, "RUN_CREATED") });
 }
 
-describe("durable Attention schema v16", () => {
-  it("rolls a terminal transition back when its Attention fact is missing", () => {
+describe("durable Attention delivery schema v17", () => {
+  it("rolls a terminal transition back when its Attention delivery is missing", () => {
     const store = new SqlitePersistence({ path: ":memory:" });
     const value = seed(store);
 
@@ -78,13 +103,41 @@ describe("durable Attention schema v16", () => {
         nextStatus: "rejected",
         event: event(2, "RUN_REJECTED")
       })
-    ).toThrow(/requires one new open Attention/u);
+    ).toThrow(/requires one new Attention delivery pair/u);
     expect(store.getRun(value.id)).toMatchObject({
       status: "running",
       revision: 0
     });
     expect(store.listEvents(value.id)).toHaveLength(1);
     expect(store.listAttention({ states: ["open"], limit: 20 })).toEqual([]);
+    expect(store.listAttentionDeliveries({ limit: 20 })).toEqual([]);
+    store.close();
+  });
+
+  it("rolls the terminal pair back when the immutable request digest differs", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    const value = seed(store);
+
+    expect(() =>
+      store.commitRunTransition({
+        runId: value.id,
+        expectedRevision: value.revision,
+        nextStatus: "failed",
+        attention: attention(),
+        attentionDelivery: {
+          ...delivery(),
+          requestDigest:
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        event: event(2, "RUN_FAILED")
+      })
+    ).toThrow(/request digest does not match payload/u);
+    expect(store.getRun(value.id)).toMatchObject({
+      status: "running",
+      revision: 0
+    });
+    expect(store.listAttention({ limit: 20 })).toEqual([]);
+    expect(store.listAttentionDeliveries({ limit: 20 })).toEqual([]);
     store.close();
   });
 
@@ -99,6 +152,7 @@ describe("durable Attention schema v16", () => {
         expectedRevision: value.revision,
         nextStatus: "uncertain",
         attention: attention(),
+        attentionDelivery: delivery(),
         event: event(2, "RUN_UNCERTAIN")
       });
       first.close();
@@ -106,6 +160,9 @@ describe("durable Attention schema v16", () => {
       const second = new SqlitePersistence({ path });
       expect(second.listAttention({ states: ["open"], limit: 20 })).toEqual([
         attention()
+      ]);
+      expect(second.listAttentionDeliveries({ limit: 20 })).toEqual([
+        delivery()
       ]);
       expect(
         second.acknowledgeAttention({
@@ -149,9 +206,124 @@ describe("durable Attention schema v16", () => {
         revision: 1,
         acknowledgedBy: "operator:test"
       });
+      expect(third.getAttentionDelivery(delivery().id)).toEqual(delivery());
       third.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it("claims once and records a delivered provider acknowledgement", () => {
+    const store = new SqlitePersistence({
+      path: ":memory:",
+      idFactory: () => "audit-delivered"
+    });
+    const value = seed(store);
+    store.commitRunTransition({
+      runId: value.id,
+      expectedRevision: value.revision,
+      nextStatus: "failed",
+      attention: attention(),
+      attentionDelivery: delivery(),
+      event: event(2, "RUN_FAILED")
+    });
+
+    const claimed = store.claimNextAttentionDelivery({
+      leaseId: "lease-1",
+      leaseOwner: "worker-1",
+      claimedAt: "2026-08-09T06:02:00.000Z",
+      leaseExpiresAt: "2026-08-09T06:03:00.000Z"
+    });
+    expect(claimed).toMatchObject({
+      state: "delivering",
+      revision: 1,
+      attempt: 1,
+      leaseId: "lease-1"
+    });
+    expect(
+      store.claimNextAttentionDelivery({
+        leaseId: "lease-2",
+        leaseOwner: "worker-2",
+        claimedAt: "2026-08-09T06:02:10.000Z",
+        leaseExpiresAt: "2026-08-09T06:03:10.000Z"
+      })
+    ).toBeUndefined();
+
+    expect(
+      store.completeAttentionDelivery({
+        id: delivery().id,
+        expectedRevision: claimed!.revision,
+        leaseId: "lease-1",
+        outcome: "delivered",
+        providerReceiptId: "provider-request-1",
+        completedAt: "2026-08-09T06:02:30.000Z"
+      })
+    ).toMatchObject({
+      state: "delivered",
+      revision: 2,
+      attempt: 1,
+      providerReceiptId: "provider-request-1"
+    });
+    expect(() =>
+      store.completeAttentionDelivery({
+        id: delivery().id,
+        expectedRevision: claimed!.revision,
+        leaseId: "lease-1",
+        outcome: "delivered",
+        completedAt: "2026-08-09T06:02:31.000Z"
+      })
+    ).toThrow(RevisionConflictError);
+    expect(store.listAudit(`attention-delivery:${delivery().id}`)).toEqual([
+      expect.objectContaining({
+        action: "attention.delivery.completed",
+        actor: "delivery:worker-1",
+        detail: expect.objectContaining({ outcome: "delivered", attempt: 1 })
+      })
+    ]);
+    store.close();
+  });
+
+  it("expires an ambiguous in-flight delivery to uncertain without retry", () => {
+    const store = new SqlitePersistence({
+      path: ":memory:",
+      idFactory: () => "audit-expired"
+    });
+    const value = seed(store);
+    store.commitRunTransition({
+      runId: value.id,
+      expectedRevision: value.revision,
+      nextStatus: "uncertain",
+      attention: attention(),
+      attentionDelivery: delivery(),
+      event: event(2, "RUN_UNCERTAIN")
+    });
+    store.claimNextAttentionDelivery({
+      leaseId: "lease-expired",
+      leaseOwner: "worker-crashed",
+      claimedAt: "2026-08-09T06:02:00.000Z",
+      leaseExpiresAt: "2026-08-09T06:03:00.000Z"
+    });
+
+    expect(
+      store.expireAttentionDeliveryLeases({
+        now: "2026-08-09T06:03:01.000Z"
+      })
+    ).toBe(1);
+    expect(store.getAttentionDelivery(delivery().id)).toMatchObject({
+      state: "uncertain",
+      revision: 2,
+      attempt: 1,
+      lastErrorCode: "DELIVERY_LEASE_EXPIRED",
+      completedAt: "2026-08-09T06:03:01.000Z"
+    });
+    expect(
+      store.claimNextAttentionDelivery({
+        leaseId: "lease-retry",
+        leaseOwner: "worker-2",
+        claimedAt: "2026-08-09T06:04:00.000Z",
+        leaseExpiresAt: "2026-08-09T06:05:00.000Z"
+      })
+    ).toBeUndefined();
+    store.close();
   });
 });

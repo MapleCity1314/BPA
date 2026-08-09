@@ -1363,5 +1363,60 @@ export const migrations: Migration[] = [
         ON attention_records(created_at, attention_id)
         WHERE state = 'open';
     `
+  },
+  {
+    version: 17,
+    sql: `
+      CREATE TABLE attention_deliveries (
+        delivery_id TEXT PRIMARY KEY,
+        attention_id TEXT NOT NULL UNIQUE
+          REFERENCES attention_records(attention_id) ON DELETE RESTRICT,
+        channel TEXT NOT NULL CHECK (channel = 'operator-notification'),
+        idempotency_key TEXT NOT NULL UNIQUE,
+        request_digest TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN (
+          'pending', 'delivering', 'delivered', 'failed', 'uncertain'
+        )),
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        attempt INTEGER NOT NULL CHECK (attempt >= 0),
+        lease_id TEXT,
+        lease_owner TEXT,
+        lease_expires_at TEXT,
+        last_error_code TEXT,
+        provider_receipt_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        CHECK (
+          (state = 'pending' AND attempt = 0)
+          OR state != 'pending'
+        ),
+        CHECK (
+          (state = 'delivering' AND lease_id IS NOT NULL
+            AND lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)
+          OR
+          (state != 'delivering' AND lease_id IS NULL
+            AND lease_owner IS NULL AND lease_expires_at IS NULL)
+        ),
+        CHECK (
+          (state IN ('pending', 'delivering') AND completed_at IS NULL)
+          OR
+          (state IN ('delivered', 'failed', 'uncertain')
+            AND completed_at IS NOT NULL)
+        ),
+        CHECK (
+          (state IN ('failed', 'uncertain') AND last_error_code IS NOT NULL)
+          OR state NOT IN ('failed', 'uncertain')
+        )
+      ) STRICT;
+
+      CREATE INDEX attention_deliveries_pending_created
+        ON attention_deliveries(created_at, delivery_id)
+        WHERE state = 'pending';
+
+      CREATE INDEX attention_deliveries_state_updated
+        ON attention_deliveries(state, updated_at, delivery_id);
+    `
   }
 ];

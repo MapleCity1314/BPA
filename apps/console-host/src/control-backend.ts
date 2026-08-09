@@ -431,6 +431,7 @@ export class UdsControlBackend implements ControlBackend {
       const alerts: AttentionView[] = records(attentionValue).flatMap((item) => {
         const id = text(item.id);
         const kind = text(item.kind);
+        const deliveryState = text(item.deliveryState, "missing");
         if (
           !id ||
           ![
@@ -439,7 +440,15 @@ export class UdsControlBackend implements ControlBackend {
             "action",
             "approval",
             "blocking"
-          ].includes(kind)
+          ].includes(kind) ||
+          ![
+            "pending",
+            "delivering",
+            "delivered",
+            "failed",
+            "uncertain",
+            "missing"
+          ].includes(deliveryState)
         ) {
           return [];
         }
@@ -455,7 +464,12 @@ export class UdsControlBackend implements ControlBackend {
               "查看运行记录后再决定是否重新发起。"
             ),
             createdAt: safeTimestamp(item.createdAt, observedAt),
-            revision: integer(item.revision)
+            revision: integer(item.revision),
+            deliveryState: deliveryState as AttentionView["deliveryState"],
+            deliveryAttempt: integer(item.deliveryAttempt),
+            ...(text(item.deliveryErrorCode)
+              ? { deliveryErrorCode: text(item.deliveryErrorCode) }
+              : {})
           }
         ];
       });

@@ -29,6 +29,8 @@ import {
   type ArtifactType,
   type AssistanceTaskRecord,
   type AssistanceTaskListFilter,
+  type AttentionDeliveryRecord,
+  type AttentionDeliveryState,
   type AttentionRecord,
   type AuditRecord,
   type BrowserCapabilityRecord,
@@ -2365,7 +2367,10 @@ export class SqlitePersistence implements Persistence {
       this.#commitAttentionForTerminal({
         runId: input.task.task.runId,
         nextStatus: input.nextRunStatus ?? "running",
-        ...(input.attention ? { attention: input.attention } : {})
+        ...(input.attention ? { attention: input.attention } : {}),
+        ...(input.attentionDelivery
+          ? { attentionDelivery: input.attentionDelivery }
+          : {})
       });
       if (input.checkpoint) {
         const checkpointUpdate = this.#db
@@ -5228,6 +5233,218 @@ export class SqlitePersistence implements Persistence {
     })();
   }
 
+  getAttentionDelivery(id: string): AttentionDeliveryRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM attention_deliveries WHERE delivery_id = ?")
+      .get(id) as SqlRow | undefined;
+    return row ? this.#readAttentionDelivery(row) : undefined;
+  }
+
+  getAttentionDeliveryForAttention(
+    attentionId: string
+  ): AttentionDeliveryRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM attention_deliveries WHERE attention_id = ?")
+      .get(attentionId) as SqlRow | undefined;
+    return row ? this.#readAttentionDelivery(row) : undefined;
+  }
+
+  listAttentionDeliveries(input: {
+    states?: readonly AttentionDeliveryState[];
+    limit: number;
+  }): AttentionDeliveryRecord[] {
+    const requestedLimit = Number.isSafeInteger(input.limit)
+      ? input.limit
+      : 100;
+    const limit = Math.min(Math.max(requestedLimit, 1), 200);
+    const states = [...new Set(input.states ?? [])];
+    const rows = (states.length === 0
+      ? this.#db
+          .prepare(
+            `SELECT * FROM attention_deliveries
+             ORDER BY created_at DESC, delivery_id
+             LIMIT ?`
+          )
+          .all(limit)
+      : this.#db
+          .prepare(
+            `SELECT * FROM attention_deliveries
+             WHERE state IN (${states.map(() => "?").join(",")})
+             ORDER BY created_at DESC, delivery_id
+             LIMIT ?`
+          )
+          .all(...states, limit)) as SqlRow[];
+    return rows.map((row) => this.#readAttentionDelivery(row));
+  }
+
+  claimNextAttentionDelivery(input: {
+    leaseId: string;
+    leaseOwner: string;
+    claimedAt: string;
+    leaseExpiresAt: string;
+  }): AttentionDeliveryRecord | undefined {
+    assertTimestamp(input.claimedAt, "claimedAt");
+    assertTimestamp(input.leaseExpiresAt, "leaseExpiresAt");
+    if (
+      !input.leaseId.trim() ||
+      !input.leaseOwner.trim() ||
+      Date.parse(input.leaseExpiresAt) <= Date.parse(input.claimedAt)
+    ) {
+      throw new Error("Attention delivery lease is invalid");
+    }
+    return this.#db.transaction(() => {
+      const row = this.#db
+        .prepare(
+          `SELECT delivery_id, revision
+           FROM attention_deliveries
+           WHERE state = 'pending'
+           ORDER BY created_at, delivery_id
+           LIMIT 1`
+        )
+        .get() as SqlRow | undefined;
+      if (!row) return undefined;
+      const result = this.#db
+        .prepare(
+          `UPDATE attention_deliveries
+           SET state = 'delivering', revision = revision + 1,
+               attempt = attempt + 1, lease_id = ?, lease_owner = ?,
+               lease_expires_at = ?, updated_at = ?
+           WHERE delivery_id = ? AND state = 'pending' AND revision = ?`
+        )
+        .run(
+          input.leaseId,
+          input.leaseOwner,
+          input.leaseExpiresAt,
+          input.claimedAt,
+          String(row.delivery_id),
+          Number(row.revision)
+        );
+      if (result.changes !== 1) {
+        throw new RevisionConflictError("Attention delivery claim CAS failed");
+      }
+      return this.getAttentionDelivery(String(row.delivery_id))!;
+    })();
+  }
+
+  completeAttentionDelivery(input: {
+    id: string;
+    expectedRevision: number;
+    leaseId: string;
+    outcome: "delivered" | "failed" | "uncertain";
+    completedAt: string;
+    lastErrorCode?: string;
+    providerReceiptId?: string;
+  }): AttentionDeliveryRecord {
+    assertTimestamp(input.completedAt, "completedAt");
+    assertRevision(input.expectedRevision, "expectedRevision");
+    if (
+      !input.id.trim() ||
+      !input.leaseId.trim() ||
+      (input.outcome === "delivered" && input.lastErrorCode !== undefined) ||
+      (input.outcome !== "delivered" && !input.lastErrorCode?.trim()) ||
+      (input.outcome !== "delivered" && input.providerReceiptId !== undefined) ||
+      (input.providerReceiptId !== undefined && !input.providerReceiptId.trim())
+    ) {
+      throw new Error("Attention delivery outcome is invalid");
+    }
+    return this.#db.transaction(() => {
+      const current = this.getAttentionDelivery(input.id);
+      const result = this.#db
+        .prepare(
+          `UPDATE attention_deliveries
+           SET state = ?, revision = revision + 1, lease_id = NULL,
+               lease_owner = NULL, lease_expires_at = NULL,
+               last_error_code = ?, provider_receipt_id = ?,
+               updated_at = ?, completed_at = ?
+           WHERE delivery_id = ? AND state = 'delivering'
+             AND revision = ? AND lease_id = ?`
+        )
+        .run(
+          input.outcome,
+          input.lastErrorCode ?? null,
+          input.providerReceiptId ?? null,
+          input.completedAt,
+          input.completedAt,
+          input.id,
+          input.expectedRevision,
+          input.leaseId
+        );
+      if (result.changes !== 1 || !current) {
+        throw new RevisionConflictError(
+          `Attention delivery ${input.id} completion CAS failed`
+        );
+      }
+      const completed = this.getAttentionDelivery(input.id)!;
+      this.#insertAuditRecord({
+        id: this.#idFactory(),
+        action: "attention.delivery.completed",
+        actor: `delivery:${current.leaseOwner}`,
+        target: `attention-delivery:${input.id}`,
+        detail: {
+          attentionId: current.attentionId,
+          outcome: input.outcome,
+          attempt: current.attempt,
+          previousRevision: input.expectedRevision,
+          revision: completed.revision,
+          ...(input.lastErrorCode
+            ? { lastErrorCode: input.lastErrorCode }
+            : {})
+        },
+        occurredAt: input.completedAt
+      });
+      return completed;
+    })();
+  }
+
+  expireAttentionDeliveryLeases(input: { now: string }): number {
+    assertTimestamp(input.now, "now");
+    return this.#db.transaction(() => {
+      const expired = this.#db
+        .prepare(
+          `SELECT * FROM attention_deliveries
+           WHERE state = 'delivering'
+             AND julianday(lease_expires_at) <= julianday(?)
+           ORDER BY lease_expires_at, delivery_id`
+        )
+        .all(input.now) as SqlRow[];
+      for (const row of expired) {
+        const delivery = this.#readAttentionDelivery(row);
+        const result = this.#db
+          .prepare(
+            `UPDATE attention_deliveries
+             SET state = 'uncertain', revision = revision + 1,
+                 lease_id = NULL, lease_owner = NULL,
+                 lease_expires_at = NULL,
+                 last_error_code = 'DELIVERY_LEASE_EXPIRED',
+                 updated_at = ?, completed_at = ?
+             WHERE delivery_id = ? AND state = 'delivering'
+               AND revision = ?`
+          )
+          .run(input.now, input.now, delivery.id, delivery.revision);
+        if (result.changes !== 1) {
+          throw new RevisionConflictError(
+            `Attention delivery ${delivery.id} expiry CAS failed`
+          );
+        }
+        this.#insertAuditRecord({
+          id: this.#idFactory(),
+          action: "attention.delivery.expired",
+          actor: "runtime:delivery-recovery",
+          target: `attention-delivery:${delivery.id}`,
+          detail: {
+            attentionId: delivery.attentionId,
+            attempt: delivery.attempt,
+            previousRevision: delivery.revision,
+            revision: delivery.revision + 1,
+            lastErrorCode: "DELIVERY_LEASE_EXPIRED"
+          },
+          occurredAt: input.now
+        });
+      }
+      return expired.length;
+    })();
+  }
+
   getNodeExecution(id: string): NodeExecutionRecord | undefined {
     const row = this.#db
       .prepare("SELECT * FROM node_executions WHERE id = ?")
@@ -5478,13 +5695,16 @@ export class SqlitePersistence implements Persistence {
     runId: string;
     nextStatus: RunStatus;
     attention?: AttentionRecord;
+    attentionDelivery?: AttentionDeliveryRecord;
   }): void {
     const requiresAttention = ["rejected", "failed", "uncertain"].includes(
       input.nextStatus
     );
     if (!requiresAttention) {
-      if (input.attention) {
-        throw new Error("Only rejected, failed or uncertain Runs emit Attention");
+      if (input.attention || input.attentionDelivery) {
+        throw new Error(
+          "Only rejected, failed or uncertain Runs emit Attention delivery"
+        );
       }
       return;
     }
@@ -5494,13 +5714,41 @@ export class SqlitePersistence implements Persistence {
       input.attention.state !== "open" ||
       input.attention.revision !== 0 ||
       input.attention.acknowledgedAt !== undefined ||
-      input.attention.acknowledgedBy !== undefined
+      input.attention.acknowledgedBy !== undefined ||
+      !input.attentionDelivery ||
+      input.attentionDelivery.attentionId !== input.attention.item.id ||
+      input.attentionDelivery.channel !== "operator-notification" ||
+      !input.attentionDelivery.id.trim() ||
+      !input.attentionDelivery.idempotencyKey.trim() ||
+      input.attentionDelivery.state !== "pending" ||
+      input.attentionDelivery.revision !== 0 ||
+      input.attentionDelivery.attempt !== 0 ||
+      input.attentionDelivery.leaseId !== undefined ||
+      input.attentionDelivery.leaseOwner !== undefined ||
+      input.attentionDelivery.leaseExpiresAt !== undefined ||
+      input.attentionDelivery.lastErrorCode !== undefined ||
+      input.attentionDelivery.providerReceiptId !== undefined ||
+      input.attentionDelivery.completedAt !== undefined ||
+      input.attentionDelivery.createdAt !== input.attention.item.createdAt ||
+      input.attentionDelivery.updatedAt !== input.attention.item.createdAt
     ) {
       throw new Error(
-        `Terminal Run ${input.runId} requires one new open Attention record`
+        `Terminal Run ${input.runId} requires one new Attention delivery pair`
       );
     }
+    assertDigest(input.attentionDelivery.requestDigest, "requestDigest");
+    assertJsonCompatible(
+      input.attentionDelivery.payload,
+      "attention delivery payload"
+    );
+    const actualRequestDigest = `sha256:${createHash("sha256")
+      .update(json(input.attentionDelivery.payload))
+      .digest("hex")}`;
+    if (input.attentionDelivery.requestDigest !== actualRequestDigest) {
+      throw new Error("Attention delivery request digest does not match payload");
+    }
     this.#insertAttention(input.attention);
+    this.#insertAttentionDelivery(input.attentionDelivery);
   }
 
   #insertAttention(record: AttentionRecord): void {
@@ -5534,6 +5782,37 @@ export class SqlitePersistence implements Persistence {
         item.dueAt ?? null,
         record.acknowledgedAt ?? null,
         record.acknowledgedBy ?? null
+      );
+  }
+
+  #insertAttentionDelivery(record: AttentionDeliveryRecord): void {
+    this.#db
+      .prepare(
+        `INSERT INTO attention_deliveries(
+          delivery_id, attention_id, channel, idempotency_key,
+          request_digest, payload_json, state, revision, attempt,
+          lease_id, lease_owner, lease_expires_at, last_error_code,
+          provider_receipt_id, created_at, updated_at, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        record.id,
+        record.attentionId,
+        record.channel,
+        record.idempotencyKey,
+        record.requestDigest,
+        json(record.payload),
+        record.state,
+        record.revision,
+        record.attempt,
+        record.leaseId ?? null,
+        record.leaseOwner ?? null,
+        record.leaseExpiresAt ?? null,
+        record.lastErrorCode ?? null,
+        record.providerReceiptId ?? null,
+        record.createdAt,
+        record.updatedAt,
+        record.completedAt ?? null
       );
   }
 
@@ -6088,6 +6367,38 @@ export class SqlitePersistence implements Persistence {
       ...(row.acknowledged_by == null
         ? {}
         : { acknowledgedBy: String(row.acknowledged_by) })
+    };
+  }
+
+  #readAttentionDelivery(row: SqlRow): AttentionDeliveryRecord {
+    return {
+      id: String(row.delivery_id),
+      attentionId: String(row.attention_id),
+      channel: "operator-notification",
+      idempotencyKey: String(row.idempotency_key),
+      requestDigest: String(row.request_digest),
+      payload: parseJson(row.payload_json),
+      state: row.state as AttentionDeliveryState,
+      revision: Number(row.revision),
+      attempt: Number(row.attempt),
+      ...(row.lease_id == null ? {} : { leaseId: String(row.lease_id) }),
+      ...(row.lease_owner == null
+        ? {}
+        : { leaseOwner: String(row.lease_owner) }),
+      ...(row.lease_expires_at == null
+        ? {}
+        : { leaseExpiresAt: String(row.lease_expires_at) }),
+      ...(row.last_error_code == null
+        ? {}
+        : { lastErrorCode: String(row.last_error_code) }),
+      ...(row.provider_receipt_id == null
+        ? {}
+        : { providerReceiptId: String(row.provider_receipt_id) }),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      ...(row.completed_at == null
+        ? {}
+        : { completedAt: String(row.completed_at) })
     };
   }
 

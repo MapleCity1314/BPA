@@ -223,7 +223,10 @@ describe("Operator Console", () => {
           reason: "浏览器返回了登录阻断。",
           requestedAction: "在受管 Chrome Profile 中完成人工登录。",
           createdAt: "2026-07-30T03:58:00.000Z",
-          revision: 0
+          revision: 0,
+          deliveryState: "uncertain" as const,
+          deliveryAttempt: 1,
+          deliveryErrorCode: "DELIVERY_LEASE_EXPIRED"
         }
       ]
     }));
@@ -237,6 +240,8 @@ describe("Operator Console", () => {
       screen.getByText("在受管 Chrome Profile 中完成人工登录。")
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "查看 1 项问题" }));
+    expect(screen.getByText(/通知结果不确定/u)).toBeInTheDocument();
+    expect(screen.getByText(/DELIVERY_LEASE_EXPIRED/u)).toBeInTheDocument();
     expect(screen.getByText(/Run run-login/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "已知晓" }));
     expect(api.acknowledgeAttention).toHaveBeenCalledWith(

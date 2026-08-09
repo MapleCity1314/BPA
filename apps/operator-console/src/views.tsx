@@ -711,6 +711,14 @@ export function TaskCenter({
   onCompleted(): Promise<void>;
   onAttentionAcknowledged(): Promise<void>;
 }) {
+  const deliveryLabel: Record<AttentionView["deliveryState"], string> = {
+    pending: "通知待投递",
+    delivering: "通知投递中",
+    delivered: "通知渠道已受理",
+    failed: "通知投递失败",
+    uncertain: "通知结果不确定",
+    missing: "通知任务缺失"
+  };
   const [busyId, setBusyId] = useState("");
   const [message, setMessage] = useState("");
   async function submit(task: TaskView, decision: string) {
@@ -767,7 +775,14 @@ export function TaskCenter({
                 <small>
                   {formatTime(alert.createdAt)}
                   {alert.runId ? ` · Run ${alert.runId}` : ""}
+                  {` · ${deliveryLabel[alert.deliveryState]}`}
+                  {alert.deliveryAttempt > 0
+                    ? ` · 尝试 ${alert.deliveryAttempt}`
+                    : ""}
                 </small>
+                {alert.deliveryErrorCode ? (
+                  <small>通知诊断码：{alert.deliveryErrorCode}</small>
+                ) : null}
               </div>
               <div className="choice-row">
                 <button

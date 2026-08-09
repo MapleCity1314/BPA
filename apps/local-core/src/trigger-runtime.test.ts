@@ -3,6 +3,7 @@ import { projectTerminalRunAttention } from "@bpa/attention-core";
 import { describe,expect,it } from "vitest";
 import type { RunRecord,TriggerSpecDefinition } from "@bpa/persistence";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
+import { createTerminalAttentionDelivery } from "./attention-delivery.js";
 import { TriggerRuntime } from "./trigger-runtime.js";
 
 const base:TriggerSpecDefinition = {
@@ -140,18 +141,26 @@ describe("deterministic Trigger Runtime",() => {
         type:`RUN_${terminalStatus.toUpperCase()}`,
         payload:{},occurredAt:"2026-08-05T00:00:01.000Z"
       };
+      const item = terminalStatus === "cancelled"
+        ? undefined
+        : projectTerminalRunAttention({
+            id:run.id,workflowId:run.workflowId,
+            workflowVersion:run.workflowVersion,status:terminalStatus,
+            updatedAt:terminalEvent.occurredAt,events:[terminalEvent]
+          });
       store.commitRunTransition({
         runId:run.id,expectedRevision:run.revision,nextStatus:terminalStatus,
-        ...(terminalStatus === "cancelled" ? {} : {
+        ...(item ? {
           attention:{
-            item:projectTerminalRunAttention({
-              id:run.id,workflowId:run.workflowId,
-              workflowVersion:run.workflowVersion,status:terminalStatus,
-              updatedAt:terminalEvent.occurredAt,events:[terminalEvent]
-            }),
+            item,
             state:"open" as const,revision:0
-          }
-        }),
+          },
+          attentionDelivery:createTerminalAttentionDelivery({
+            attention:item,
+            workflowId:run.workflowId,
+            workflowVersion:run.workflowVersion
+          })
+        } : {}),
         event:terminalEvent
       });
 

@@ -13,6 +13,7 @@ import {
 } from "@bpa/node-runtime";
 import type {
   ExecutionEventRecord,
+  AttentionDeliveryRecord,
   AttentionRecord,
   NodeExecutionRecord,
   NodeExecutionStatus,
@@ -25,6 +26,7 @@ import {
   formatValidationErrors,
   type RiskSignal
 } from "@bpa/schemas";
+import { createTerminalAttentionDelivery } from "../attention-delivery.js";
 
 /**
  * Compatibility adapter for Runtime 0.3 Workflow IR v1.
@@ -641,13 +643,13 @@ export class LocalWorkflowEngine {
       nodeExecutionId,
       ...(terminalError ? { error: terminalError } : {})
     });
-    const attention = this.#terminalAttention(run, status, event);
+    const terminalAttention = this.#terminalAttention(run, status, event);
     return this.persistence.commitRunTransition({
       runId: run.id,
       expectedRevision: this.persistence.getRun(run.id)!.revision,
       nextStatus: status,
       ...(output === undefined ? {} : { output }),
-      ...(attention ? { attention } : {}),
+      ...(terminalAttention ?? {}),
       event
     });
   }
@@ -656,22 +658,35 @@ export class LocalWorkflowEngine {
     run: RunRecord,
     status: RunStatus,
     event: ExecutionEventRecord
-  ): AttentionRecord | undefined {
+  ):
+    | {
+        attention: AttentionRecord;
+        attentionDelivery: AttentionDeliveryRecord;
+      }
+    | undefined {
     if (status !== "rejected" && status !== "failed" && status !== "uncertain") {
       return undefined;
     }
+    const item = projectTerminalRunAttention({
+      id: run.id,
+      workflowId: run.workflowId,
+      workflowVersion: run.workflowVersion,
+      status,
+      ...(run.currentNodeKey ? { currentNodeKey: run.currentNodeKey } : {}),
+      updatedAt: event.occurredAt,
+      events: [{ type: event.type, payload: event.payload }]
+    });
     return {
-      item: projectTerminalRunAttention({
-        id: run.id,
+      attention: {
+        item,
+        state: "open",
+        revision: 0
+      },
+      attentionDelivery: createTerminalAttentionDelivery({
+        attention: item,
         workflowId: run.workflowId,
-        workflowVersion: run.workflowVersion,
-        status,
-        ...(run.currentNodeKey ? { currentNodeKey: run.currentNodeKey } : {}),
-        updatedAt: event.occurredAt,
-        events: [{ type: event.type, payload: event.payload }]
-      }),
-      state: "open",
-      revision: 0
+        workflowVersion: run.workflowVersion
+      })
     };
   }
 

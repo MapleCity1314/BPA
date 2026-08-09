@@ -47,19 +47,27 @@ Workflow terminal fact
 
 ## 4. 第二层：持久 Attention 与 Delivery Outbox
 
-当前 Schema v16 候选先新增第一个平台事实，不把飞书逻辑塞进 Workflow：
+Schema v16 已新增第一个平台事实；Schema v17 候选继续增加平台级投递状态机，不把飞书
+逻辑塞进 Workflow：
 
 - `attention_record`：稳定 ID、Run/Node 身份、分类、严重度、创建时间、确认状态和确认人。
 - `attention_delivery`：Attention ID、Channel、幂等键、请求摘要、投递状态、效果确认和
   `uncertain` 原因。
 
-`attention_record` 候选已经实现 open/acknowledged、revision CAS、确认审计、重启恢复和
-Operator Console 的“已知晓”动作。`attention_delivery` 仍是下一切片；Schema v16 不做
-历史失败回填，避免把无法证明是否已处理的旧 Run 猜成新的未处理事项。
+`attention_record` 已实现 open/acknowledged、revision CAS、确认审计、重启恢复和 Operator
+Console 的“已知晓”动作。Schema v17 候选要求问题终态必须在同一事务写入一条 pending
+`attention_delivery`；缺少任一事实时终态整体回滚。Delivery 通过 revision CAS 领取，记录
+attempt、短租约、明确成功、明确失败或 `uncertain`；投递中的租约过期直接落为
+`DELIVERY_LEASE_EXPIRED`，不得自动重复发送。Operator Console 同时显示投递状态、次数和
+受控诊断码。平台中立 Dispatcher 每次最多领取一条任务；Provider 明确拒绝才记 `failed`，
+传输异常一律脱敏为 `DELIVERY_TRANSPORT_UNCERTAIN`。v16/v17 均不做历史失败回填，旧记录
+没有可证明投递事实时显示 `missing`。
 
-生成必须与 Run 终态转换位于同一 SQLite 事务。投递器只消费 Outbox，不读取业务表；
-成功、明确失败和效果不确定分别持久化。超时后如果不能证明消息未送达，状态必须为
-`uncertain`，不得自动重复发送。
+生成必须与 Run 终态转换位于同一 SQLite 事务。投递器只消费平台级 Delivery，不读取业务
+表；成功、明确失败和效果不确定分别持久化。超时后如果不能证明消息未送达，状态必须为
+`uncertain`，不得自动重复发送。当前候选只完成持久化状态机和对账可见性，尚未连接真实
+通知 Channel；因此 `delivered` 只在未来 Provider 明确受理后才能写入，不能由本机测试伪造
+成生产事实。
 
 第一种 Channel 采用现有公司通知通道，但凭证只存在于目标 Mac 的 `0600` 配置中。
 消息只含 Workflow、Run ID、严重度、发生时间和控制台链接，不含 Cookie、页面正文、

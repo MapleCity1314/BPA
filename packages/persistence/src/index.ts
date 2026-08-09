@@ -268,6 +268,33 @@ export interface AttentionRecord {
   acknowledgedBy?: string;
 }
 
+export type AttentionDeliveryState =
+  | "pending"
+  | "delivering"
+  | "delivered"
+  | "failed"
+  | "uncertain";
+
+export interface AttentionDeliveryRecord {
+  id: string;
+  attentionId: string;
+  channel: "operator-notification";
+  idempotencyKey: string;
+  requestDigest: string;
+  payload: unknown;
+  state: AttentionDeliveryState;
+  revision: number;
+  attempt: number;
+  leaseId?: string;
+  leaseOwner?: string;
+  leaseExpiresAt?: string;
+  lastErrorCode?: string;
+  providerReceiptId?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
 export interface CreateRunInput {
   run: RunRecord;
   event: ExecutionEventRecord;
@@ -301,6 +328,7 @@ export interface RunTransitionInput {
   currentNodeKey?: string;
   output?: unknown;
   attention?: AttentionRecord;
+  attentionDelivery?: AttentionDeliveryRecord;
   event: ExecutionEventRecord;
 }
 
@@ -380,6 +408,7 @@ export interface SubmitAssistanceAndWakeInput {
   currentNodeKey?: string;
   output?: unknown;
   attention?: AttentionRecord;
+  attentionDelivery?: AttentionDeliveryRecord;
   assistanceTasks?: readonly AssistanceTaskRecord[];
   additionalOutbox?: readonly OutboxMessage[];
   acknowledgeOutboxIds?: readonly string[];
@@ -744,6 +773,35 @@ export interface AttentionStore {
     actor: string;
     acknowledgedAt: string;
   }): AttentionRecord;
+}
+
+export interface AttentionDeliveryStore {
+  getAttentionDelivery(id: string): AttentionDeliveryRecord | undefined;
+  getAttentionDeliveryForAttention(
+    attentionId: string
+  ): AttentionDeliveryRecord | undefined;
+  listAttentionDeliveries(input: {
+    states?: readonly AttentionDeliveryState[];
+    limit: number;
+  }): AttentionDeliveryRecord[];
+  claimNextAttentionDelivery(input: {
+    leaseId: string;
+    leaseOwner: string;
+    claimedAt: string;
+    leaseExpiresAt: string;
+  }): AttentionDeliveryRecord | undefined;
+  completeAttentionDelivery(input: {
+    id: string;
+    expectedRevision: number;
+    leaseId: string;
+    outcome: "delivered" | "failed" | "uncertain";
+    completedAt: string;
+    lastErrorCode?: string;
+    providerReceiptId?: string;
+  }): AttentionDeliveryRecord;
+  expireAttentionDeliveryLeases(input: {
+    now: string;
+  }): number;
 }
 
 export interface AuditRecord {
@@ -1289,6 +1347,7 @@ export interface Persistence
     GatewayDeliveryUnitOfWork,
     ExecutionStore,
     AttentionStore,
+    AttentionDeliveryStore,
     WorkflowAuthoringStore,
     AuthoringStore,
     SourceAssetStore,

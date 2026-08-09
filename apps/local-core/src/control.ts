@@ -922,11 +922,21 @@ export class LocalCoreService {
           : 100;
         return this.persistence
           .listAttention({ states: ["open"], limit })
-          .map((record) => ({
-            ...record.item,
-            state: record.state,
-            revision: record.revision
-          }));
+          .map((record) => {
+            const delivery = this.persistence.getAttentionDeliveryForAttention(
+              record.item.id
+            );
+            return {
+              ...record.item,
+              state: record.state,
+              revision: record.revision,
+              deliveryState: delivery?.state ?? "missing",
+              deliveryAttempt: delivery?.attempt ?? 0,
+              ...(delivery?.lastErrorCode
+                ? { deliveryErrorCode: delivery.lastErrorCode }
+                : {})
+            };
+          });
       }
       case "attention.acknowledge":
         return this.persistence.acknowledgeAttention({

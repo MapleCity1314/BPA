@@ -45,6 +45,15 @@ export interface AttentionView {
   requestedAction: string;
   createdAt: string;
   revision: number;
+  deliveryState:
+    | "pending"
+    | "delivering"
+    | "delivered"
+    | "failed"
+    | "uncertain"
+    | "missing";
+  deliveryAttempt: number;
+  deliveryErrorCode?: string;
 }
 
 export interface DashboardSnapshot {
