@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ExternalDomainLeaseProviderError,
@@ -20,8 +21,12 @@ const cleanups: Array<() => Promise<void>> = [];
 async function inventoryServer(
   respond: (request: RequestFrame, socket: Socket) => unknown
 ): Promise<string> {
-  const directory = mkdtempSync(join(tmpdir(), "bpa-domain-lease-"));
-  const socketPath = join(directory, "inventory.sock");
+  const directory = process.platform === "win32"
+    ? undefined
+    : mkdtempSync(join(tmpdir(), "bpa-domain-lease-"));
+  const socketPath = process.platform === "win32"
+    ? `\\\\.\\pipe\\bpa-domain-lease-${randomUUID()}`
+    : join(directory!, "inventory.sock");
   const sockets = new Set<Socket>();
   const server: Server = createServer((socket) => {
     sockets.add(socket);
@@ -47,9 +52,20 @@ async function inventoryServer(
   cleanups.push(async () => {
     for (const socket of sockets) socket.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    rmSync(directory, { recursive: true, force: true });
+    if (directory) rmSync(directory, { recursive: true, force: true });
   });
   return socketPath;
+}
+
+function missingSocketPath(prefix: string): string {
+  if (process.platform === "win32") {
+    return `\\\\.\\pipe\\${prefix}-${randomUUID()}`;
+  }
+  const directory = mkdtempSync(join(tmpdir(), `${prefix}-`));
+  cleanups.push(async () =>
+    rmSync(directory, { recursive: true, force: true })
+  );
+  return join(directory, "missing.sock");
 }
 
 afterEach(async () => {
@@ -149,13 +165,7 @@ describe("InventoryDomainLeaseClient", () => {
   });
 
   it("marks connection and timeout failures as transport-uncertain", async () => {
-    const missingPath = join(
-      mkdtempSync(join(tmpdir(), "bpa-domain-lease-missing-")),
-      "missing.sock"
-    );
-    cleanups.push(async () =>
-      rmSync(dirname(missingPath), { recursive: true, force: true })
-    );
+    const missingPath = missingSocketPath("bpa-domain-lease-missing");
     const missing = new InventoryDomainLeaseClient(missingPath, 50);
     await expect(missing.read("inventory-production-cycle")).rejects.toMatchObject({
       code: "INVENTORY_SERVICE_UNAVAILABLE",
@@ -216,13 +226,7 @@ describe("InventoryDomainLeaseClient", () => {
       }
     });
 
-    const missingPath = join(
-      mkdtempSync(join(tmpdir(), "bpa-snapshot-writer-missing-")),
-      "missing.sock"
-    );
-    cleanups.push(async () =>
-      rmSync(dirname(missingPath), { recursive: true, force: true })
-    );
+    const missingPath = missingSocketPath("bpa-snapshot-writer-missing");
     const unavailable = new InventoryDomainLeaseClient(missingPath, 50);
     const error = await unavailable
       .persistSnapshot(
