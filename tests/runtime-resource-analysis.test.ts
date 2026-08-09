@@ -41,6 +41,13 @@ function sample(
         cpuPercent: 1,
         rssKiB,
         elapsed: "01:00"
+      },
+      "com.bpa.inventory-monitor": {
+        pid: 20,
+        parentPid: 1,
+        cpuPercent: 0.5,
+        rssKiB: Math.round(rssKiB * 0.75),
+        elapsed: "01:00"
       }
     },
     chromeProfile: {
@@ -212,6 +219,8 @@ describe("runtime resource analysis", () => {
       continuityComplete: true,
       corePidStable: true,
       coreRuntimeIdentityStable: true,
+      inventoryMonitorComplete: true,
+      inventoryMonitorPidStable: true,
       chromeProfileComplete: true,
       nodeAndChromeMeasurable: true,
       sqlitePageCacheMeasurable: true,
@@ -268,6 +277,120 @@ describe("runtime resource analysis", () => {
     expect(result.conclusionGate.blockers).toEqual([
       "chrome_profile_samples_missing"
     ]);
+  });
+
+  it("fails closed when inventory monitor samples are missing", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-analysis-"));
+    const input = join(root, "samples.jsonl");
+    const first = sample("2026-08-05T00:00:00.000Z", 10, 100, 4096);
+    const last = sample("2026-08-06T00:00:00.000Z", 10, 120, 8192);
+    first.services["com.bpa.inventory-monitor"] = null;
+    last.services["com.bpa.inventory-monitor"] = null;
+    writeFileSync(
+      input,
+      `${JSON.stringify(first)}\n${JSON.stringify(last)}\n`
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        script,
+        "--input",
+        input,
+        "--expected-interval-seconds",
+        "43200",
+        "--require-complete"
+      ],
+      { encoding: "utf8" }
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("inventory_monitor_samples_missing");
+    expect(JSON.parse(result.stdout).conclusionGate).toMatchObject({
+      inventoryMonitorComplete: false,
+      inventoryMonitorPidStable: false,
+      nodeAndChromeMeasurable: false,
+      phaseZeroResourceMeasurementComplete: false,
+      blockers: ["inventory_monitor_samples_missing"]
+    });
+  });
+
+  it("fails closed when an inventory monitor sample is missing mid-window", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-analysis-"));
+    const input = join(root, "samples.jsonl");
+    const first = sample("2026-08-05T00:00:00.000Z", 10, 100, 4096);
+    const middle = sample("2026-08-05T12:00:00.000Z", 10, 110, 6144);
+    const last = sample("2026-08-06T00:00:00.000Z", 10, 120, 8192);
+    middle.services["com.bpa.inventory-monitor"] = null;
+    writeFileSync(
+      input,
+      `${JSON.stringify(first)}\n${JSON.stringify(middle)}\n${JSON.stringify(last)}\n`
+    );
+
+    const result = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          script,
+          "--input",
+          input,
+          "--expected-interval-seconds",
+          "43200"
+        ],
+        { encoding: "utf8" }
+      )
+    );
+
+    expect(result.services["com.bpa.inventory-monitor"]).toMatchObject({
+      availableSamples: 2,
+      missingSamples: 1
+    });
+    expect(result.conclusionGate).toMatchObject({
+      inventoryMonitorComplete: false,
+      inventoryMonitorPidStable: false,
+      nodeAndChromeMeasurable: false,
+      phaseZeroResourceMeasurementComplete: false,
+      blockers: ["inventory_monitor_samples_missing"]
+    });
+  });
+
+  it("fails closed when the inventory monitor PID changes", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-analysis-"));
+    const input = join(root, "samples.jsonl");
+    const first = sample("2026-08-05T00:00:00.000Z", 10, 100, 4096);
+    const last = sample("2026-08-06T00:00:00.000Z", 10, 120, 8192);
+    last.services["com.bpa.inventory-monitor"]!.pid = 21;
+    writeFileSync(
+      input,
+      `${JSON.stringify(first)}\n${JSON.stringify(last)}\n`
+    );
+
+    const result = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          script,
+          "--input",
+          input,
+          "--expected-interval-seconds",
+          "43200"
+        ],
+        { encoding: "utf8" }
+      )
+    );
+
+    expect(result.services["com.bpa.inventory-monitor"]).toMatchObject({
+      missingSamples: 0,
+      uniquePids: [20, 21],
+      pidChanges: 1
+    });
+    expect(result.conclusionGate).toMatchObject({
+      inventoryMonitorComplete: true,
+      inventoryMonitorPidStable: false,
+      nodeAndChromeMeasurable: false,
+      phaseZeroResourceMeasurementComplete: false,
+      blockers: ["inventory_monitor_pid_changed"]
+    });
   });
 
   it("can enforce the conclusion gate with a non-zero exit status", () => {

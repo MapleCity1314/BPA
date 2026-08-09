@@ -8,9 +8,9 @@
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- Git 基线：截至 2026-08-09，PR #2–#25 均已在 required checks 通过后进入 `main`；
-  最新基线为 PR #25 merge commit `152ffbf6e7719cd76c42551ec095709998689f78`。阶段 0 结构收敛、资源观测、单浏览器常驻候选、
-  爆款图片来源闭包校验和体验分事实链均已进入主线。
+- Git 基线：截至 2026-08-09，PR #2–#26 均已在 required checks 通过后进入 `main`；
+  最新基线为 PR #26 merge commit `8999fbfa49de45292274a59f6ebe2319c01bbeda`。阶段 0 结构收敛、资源观测、单浏览器常驻候选、
+  爆款图片来源闭包校验、体验分事实链和清退商品 Mac Runtime 候选均已进入主线。
 - GitHub `main` 已启用管理员同样受约束的 Branch Protection：必须走 Pull Request、
   与主线同步、解决 review conversation，并通过 macOS、Windows、性能、双架构发布、
   可复现性和 WorkBuddy 交付共 10 个 required checks；禁止 force-push 和删除主线。
@@ -185,7 +185,11 @@ page cache 均完整且稳定，RSS 起止与线性斜率没有显示单调爬�
 超过 deadline 时提前结束，最终比 24 小时少约 10 秒。因此这批证据只能判定“结构完整
 且接近 24 小时”，不能判定阶段 0 通过。当前候选改为以首个样本为绝对起点，并强制在
 deadline 当时或之后记录最后一个样本；虚拟时钟测试覆盖单次采集耗时存在时仍达到请求
-窗口。该修复尚未部署，新的严格 24 小时生产窗口仍待执行。
+窗口。分析门禁同时要求 `com.bpa.inventory-monitor` 每个样本都可测且 PID 不变化；库存
+Monitor 整段或局部缺失时返回 `inventory_monitor_samples_missing`，中途重启时返回
+`inventory_monitor_pid_changed`，不能把两个 PID 的 RSS 拼接成一条平稳曲线，也不能只凭
+Core、Chrome 和 SQLite 完整就宣称阶段 0 三桶测量完成。该修复尚未部署，新的严格 24
+小时生产窗口仍待执行。
 
 PR #11 同时把 7 天门禁的前置问题与库存控制面可见性收口：资源采样器会在绝对 deadline
 当时或之后补最后一个样本；库存面板把 120 分钟内的活动采集和陈旧 `running` 记录分开；
