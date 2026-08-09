@@ -4,6 +4,10 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { InventoryRepository } from "./repository.js";
 import type { InventoryShopConfig } from "./shop-config.js";
 import { DASHBOARD_CLIENT_CSS, DASHBOARD_CLIENT_JS } from "./dashboard-client.js";
+import {
+  buildSystemOperationalReminders,
+  type CollectionControlHealth
+} from "./dashboard-analytics.js";
 
 const SESSION_COOKIE = "bpa_inventory_session";
 const SESSION_IDLE_MS = 30 * 60 * 1000;
@@ -207,7 +211,7 @@ function aggregateBacktest(overviews: readonly Record<string, unknown>[]): Recor
 function aggregateOverviews(entries: readonly {
   readonly shop: InventoryShopConfig;
   readonly overview: Record<string, unknown>;
-}[]): Record<string, unknown> {
+}[], controlHealth: CollectionControlHealth): Record<string, unknown> {
   const overviews = entries.map((entry) => entry.overview);
   const enriched = entries.map(({ shop,overview }) => {
     const incidents: Record<string,unknown>[] = records(overview.incidents).map((incident) => ({ ...incident,shop_id:shop.id,shop_name:shop.name }));
@@ -255,7 +259,11 @@ function aggregateOverviews(entries: readonly {
       incidents:incidents.length
     },
     products:enriched.flatMap((entry) => entry.products),incidents,
-    reminders:enriched.flatMap((entry) => entry.reminders),
+    controlHealth,
+    reminders:[
+      ...buildSystemOperationalReminders(controlHealth),
+      ...enriched.flatMap((entry) => entry.reminders)
+    ],
     schedules:enriched.flatMap((entry) => entry.schedules)
       .sort((left,right) => String(right.scheduled_for ?? "").localeCompare(String(left.scheduled_for ?? ""))).slice(0,20),
     backtest:aggregateBacktest(overviews),shopStatuses,
@@ -293,7 +301,7 @@ const MULTI_SHOP_HTML = HTML
 const MULTI_SHOP_CSS = `${CSS}.shop-picker{display:flex;align-items:center;gap:7px;margin:0;color:var(--muted);font-size:11px;white-space:nowrap}.shop-picker select{width:auto;min-width:180px;margin:0;padding:8px 30px 8px 10px;background:#fff;color:var(--navy);font-weight:650}`;
 
 export async function startInventoryWebServer(input: {
-  repository: Pick<InventoryRepository, "overview" | "reviewIncident">;
+  repository: Pick<InventoryRepository, "collectionControlHealth" | "overview" | "reviewIncident">;
   shopId?: string;
   shops?: readonly InventoryShopConfig[];
   port?: number;
@@ -323,10 +331,13 @@ export async function startInventoryWebServer(input: {
   let aggregateInFlight: Promise<Record<string,unknown>> | undefined;
   const refreshAggregate = (): Promise<Record<string,unknown>> => {
     if (aggregateInFlight) return aggregateInFlight;
-    aggregateInFlight = Promise.all(shops.map(async (shop) => ({
-      shop,overview:await input.repository.overview(shop.id)
-    }))).then((entries) => {
-      const value = aggregateOverviews(entries);
+    aggregateInFlight = Promise.all([
+      input.repository.collectionControlHealth(),
+      Promise.all(shops.map(async (shop) => ({
+        shop,overview:await input.repository.overview(shop.id)
+      })))
+    ]).then(([controlHealth,entries]) => {
+      const value = aggregateOverviews(entries,controlHealth);
       aggregateCache = { at:now(),value };
       return value;
     }).finally(() => { aggregateInFlight = undefined; });
@@ -387,8 +398,17 @@ export async function startInventoryWebServer(input: {
           return json(response,404,{ error:"SHOP_NOT_CONFIGURED" });
         }
         const shop = configuredShop(requestedShopId);
+        const [overview,controlHealth] = await Promise.all([
+          input.repository.overview(shop.id),
+          input.repository.collectionControlHealth()
+        ]);
         return json(response,200,{
-          ...await input.repository.overview(shop.id),
+          ...overview,
+          controlHealth,
+          reminders:[
+            ...buildSystemOperationalReminders(controlHealth),
+            ...records(overview.reminders)
+          ],
           recovery:await readRecoveryStatus(input.recoveryStatusPath),
           shops:shops.map(({ id,name }) => ({ id,name })),
           selectedShop:{ id:shop.id,name:shop.name }

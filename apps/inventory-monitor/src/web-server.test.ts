@@ -4,6 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startInventoryWebServer } from "./web-server.js";
 
+const healthyControl = () => ({
+  activeCollectionCount:0,
+  staleCollectionCount:0,
+  oldestStaleStartedAt:null,
+  staleAfterMinutes:120
+});
+
 describe("inventory review server", () => {
   it("exposes a bounded recovery status without trusting arbitrary fields", async () => {
     const directory = await mkdtemp(join(tmpdir(),"bpa-inventory-recovery-"));
@@ -17,6 +24,7 @@ describe("inventory review server", () => {
       ignored:"must not be exposed"
     }));
     const repository = {
+      collectionControlHealth:vi.fn(async () => healthyControl()),
       overview: vi.fn(async () => ({ counts:{ products:1,skus:1,incidents:0 } })),
       reviewIncident: vi.fn(async () => undefined)
     };
@@ -46,6 +54,7 @@ describe("inventory review server", () => {
 
   it("uses a one-time launch token, idle cookie and CSRF boundary", async () => {
     const repository = {
+      collectionControlHealth:vi.fn(async () => healthyControl()),
       overview: vi.fn(async () => ({ counts: { products: 0,skus: 0,incidents: 0 } })),
       reviewIncident: vi.fn(async () => undefined)
     };
@@ -74,6 +83,8 @@ describe("inventory review server", () => {
       expect(clientScript).toContain("部分成功");
       expect(clientScript).toContain("已自动回退到历史订单同步");
       expect(clientScript).toContain("dataQualityGroups");
+      expect(clientScript).toContain("运行与控制提醒");
+      expect(clientScript).toContain("控制记录待核对");
       expect(clientScript).not.toContain("订单数据质量阻断");
       expect(clientScript).toContain("数据待确认");
       expect(clientScript).toContain("影响 '+esc(group.count)+' 个商品");
@@ -118,6 +129,7 @@ describe("inventory review server", () => {
 
   it("keeps a signed rolling session across a service restart and enforces idle expiry", async () => {
     const repository = {
+      collectionControlHealth:vi.fn(async () => healthyControl()),
       overview: vi.fn(async () => ({ counts: { products: 77,skus: 168,incidents: 0 } })),
       reviewIncident: vi.fn(async () => undefined)
     };
@@ -159,6 +171,7 @@ describe("inventory review server", () => {
 
   it("isolates overview queries to the selected configured shop", async () => {
     const repository = {
+      collectionControlHealth:vi.fn(async () => healthyControl()),
       overview: vi.fn(async (shopId: string) => ({ shopId,counts:{ products:0,skus:0,incidents:0 } })),
       reviewIncident: vi.fn(async () => undefined)
     };
@@ -198,6 +211,7 @@ describe("inventory review server", () => {
 
   it("supports a reusable LAN bootstrap token while retaining isolated sessions", async () => {
     const repository = {
+      collectionControlHealth:vi.fn(async () => healthyControl()),
       overview: vi.fn(async () => ({ counts:{ products:0,skus:0,incidents:0 } })),
       reviewIncident: vi.fn(async () => undefined)
     };
@@ -222,6 +236,7 @@ describe("inventory review server", () => {
 
   it("automatically restores a loopback review session without exposing the shared token",async () => {
     const repository = {
+      collectionControlHealth:vi.fn(async () => healthyControl()),
       overview:vi.fn(async () => ({ counts:{ products:0,skus:0,incidents:0 } })),
       reviewIncident:vi.fn(async () => undefined)
     };
@@ -238,6 +253,12 @@ describe("inventory review server", () => {
 
   it("returns an all-store command-center overview by default",async () => {
     const repository = {
+      collectionControlHealth:vi.fn(async () => ({
+        activeCollectionCount:0,
+        staleCollectionCount:1,
+        oldestStaleStartedAt:"2026-08-07T15:23:46.407Z",
+        staleAfterMinutes:120
+      })),
       overview:vi.fn(async (shopId: string) => ({
         shopId,counts:{ products:shopId === "shop-1" ? 2 : 3,skus:shopId === "shop-1" ? 4 : 5,freshProducts:1 },
         freshness:{ latestInventoryAt:"2026-08-04T06:00:00.000Z",latestOrderAt:"2026-08-04T06:10:00.000Z" },
@@ -265,9 +286,12 @@ describe("inventory review server", () => {
           { shop_id:"shop-1",shop_name:"一号店" },
           { shop_id:"shop-2",shop_name:"二号店" }
         ],
+        controlHealth:{ staleCollectionCount:1 },
+        reminders:[{ id:"collection-control-stale",severity:"critical",title:"采集控制记录未收口" }],
         shopStatuses:[{ id:"shop-1",name:"一号店" },{ id:"shop-2",name:"二号店" }]
       });
       expect(repository.overview).toHaveBeenCalledTimes(2);
+      expect(repository.collectionControlHealth).toHaveBeenCalledOnce();
     } finally {
       await server.close();
     }

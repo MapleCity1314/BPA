@@ -8,8 +8,8 @@
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- Git 基线：截至 2026-08-09，PR #2–#9 均已在 required checks 通过后进入 `main`；
-  最新基线为 PR #9 merge commit `0ce1612a7054`。阶段 0 结构收敛、资源观测、清退商品
+- Git 基线：截至 2026-08-09，PR #2–#10 均已在 required checks 通过后进入 `main`；
+  最新基线为 PR #10 merge commit `890643e2c9a0`。阶段 0 结构收敛、资源观测、清退商品
   Mac 目标约束、爆款图片来源闭包校验和体验分候选均已进入主线。
 - GitHub `main` 已启用管理员同样受约束的 Branch Protection：必须走 Pull Request、
   与主线同步、解决 review conversation，并通过 macOS、Windows、性能、双架构发布、
@@ -154,6 +154,15 @@ metrics 可用，Core、Chrome 和库存 Monitor PID 均未变化，Runtime iden
 生产闭包，同连接 cache 使用值保持稳定。该窗口仍不足 24 小时，不能据此得出长期稳定
 或内存泄漏结论。
 
+2026-08-09 回读完整样本得到 1439 个连续样本，覆盖 23.9972 小时；最大间隔约 60.19
+秒，Core PID、Runtime identity、库存 Monitor PID、Chrome profile 和同连接 SQLite
+page cache 均完整且稳定，RSS 起止与线性斜率没有显示单调爬升。但严格门禁仍只返回
+`minimum_duration_not_reached`：采集循环把每次命令耗时累积到间隔中，并在下一间隔会
+超过 deadline 时提前结束，最终比 24 小时少约 10 秒。因此这批证据只能判定“结构完整
+且接近 24 小时”，不能判定阶段 0 通过。当前候选改为以首个样本为绝对起点，并强制在
+deadline 当时或之后记录最后一个样本；虚拟时钟测试覆盖单次采集耗时存在时仍达到请求
+窗口。该修复尚未部署，新的严格 24 小时生产窗口仍待执行。
+
 ## 4. Codex 过渡状态
 
 阶段 0–2 允许 Codex：
@@ -207,8 +216,8 @@ Mac 上的登录态真实页面 E2E。
 2026-08-06 的只读 Trigger 审计进一步确认：完整 13 店周期仍由 launchd 和
 `production-cycle.ts` 编排，不是一个已发布 Workflow。PR #3 已让 Workflow 的
 `rejected` 成为不可恢复的真实终态；当时 Trigger Run 仍没有钉死不可变的 TriggerSpec
-快照，并会压缩 Workflow 终态。2026-08-09 候选已修复版本血缘与终态保真；待其通过
-主线门禁后，继续补人工 actor 审计和策略执行，再迁移库存编排。不得用一个仅调用旧
+快照，并会压缩 Workflow 终态。2026-08-09 已修复版本血缘与终态保真；后续继续补人工
+actor 审计和策略执行，再迁移库存编排。不得用一个仅调用旧
 脚本的壳 Node 伪装成产品 Workflow。
 
 2026-08-06 20:59 的生产只读复核发现最新周期失败于
@@ -230,12 +239,21 @@ typecheck 已通过；生产已部署精确 RC，现场 schema、索引和查询
 首个自然 13 店周期已经完整成功，租约续期与终态清理均闭合；业务恢复已由生产证据确认，
 但 24 小时和 7 天稳定性门禁仍未完成。
 
-2026-08-09 的 Trigger 血缘候选新增 Schema v15：`trigger_spec_versions` 以
+2026-08-09 已合并的 Trigger 血缘修复新增 Schema v15：`trigger_spec_versions` 以
 `triggerId + triggerVersion` 保存不可变执行配置；`enabled` 单独作为带 CAS 和审计的
 当前控制状态。活动 Trigger Run 恢复、续租和释放只使用其已记录版本，不再回读同 ID
 的当前配置。Trigger Run 同时原样保留 Workflow 的
-`rejected`、`uncertain`、`cancelled`、`failed` 终态。该候选只完成本机代码与迁移回归，
-尚未部署；库存仍由原生产控制面运行。
+`rejected`、`uncertain`、`cancelled`、`failed` 终态。该修复已通过 10 项 required checks
+并进入主线，但尚未部署；库存仍由原生产控制面运行。
+
+2026-08-09 只读生产复核显示最新自然周期于 11:54（Asia/Shanghai）成功终止：13/13
+店完成，库存 319/319 持久化、失败 0，四类共 52 个步骤均为终态；当前有效租约和运行中
+schedule 均为 0。与此同时，`ops.collection_run` 仍保留一条约 37 小时前开始且标记为
+`running` 的陈旧记录，只有部分店铺步骤，和当前进程、租约及最新成功周期构成控制面
+矛盾。它不代表采集仍在执行，也不能作为等待或补触发依据。当前面板候选把 120 分钟内
+的 `running` 与陈旧记录分开：前者才允许显示“库存正在更新”，后者在全店和单店概览
+显示一次“采集控制记录未收口”严重告警，并明确要求先核对进程、租约和步骤终态、不要
+补触发。候选未部署，也没有修改这条生产记录。
 
 候选 RC 已完成首次 source-to-closure 故障注入：在隔离 Home 和 v12 临时数据库中，
 强制让新 launch agent bootstrap 以状态 42 失败。installer 随后恢复了旧 launchd
@@ -285,9 +303,9 @@ Workflow fixture 一致，且来源 URL 均属于抖音商品图片 CDN。闭包
 2. ~~为当前 JSONL 增加确定性分析器，且把 SQLite 文件大小与 page cache 证据分开。~~
 3. ~~完成 Core 热轮询索引与控制租约空结果协议修复的正式门禁，并在没有运行中
    schedule、collection 或有效 lease 的维护窗口内完成首次 source-to-closure 切换。~~
-4. 等待并分析新 Core、Chrome 和 SQLite 同连接 page cache 的 24 小时采样结果；首个
-   自然 13 店周期已成功，不再需要人工补触发。
+4. 修复后的采样器重新取得不少于 24 小时的 Core、Chrome 和 SQLite 同连接 page
+   cache 窗口；上一窗口因少约 10 秒未通过严格门禁，不得四舍五入为完成。
 5. 启动 Core 7 天稳定性窗口并记录重启、RSS 趋势与运行事件。
-6. ~~修复 Trigger 版本钉死与终态保真。~~ 候选已完成，待完整门禁和主线合并；随后
-   进入阶段 1 的登录恢复、告警和统一控制台。
+6. ~~修复 Trigger 版本钉死与终态保真。~~ 已通过完整门禁并进入主线；随后进入阶段 1
+   的登录恢复、告警和统一控制台。
 7. 依次完成清退商品、库存监控、爆款图片证据流的正式产品回归。

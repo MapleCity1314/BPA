@@ -16,8 +16,11 @@ import {
 import type { Pool, PoolClient } from "pg";
 import {
   buildOperationalReminders,
-  buildStoreDemandBacktest
+  buildStoreDemandBacktest,
+  type CollectionControlHealth
 } from "./dashboard-analytics.js";
+
+const COLLECTION_STALE_MINUTES = 120;
 
 export interface PersistableDoudianSnapshot {
   readonly snapshotVersion: string;
@@ -151,6 +154,37 @@ export class InventoryRepository {
   async health(): Promise<{ databaseTime: string }> {
     const result = await this.pool.query<{ now: Date }>("SELECT now() AS now");
     return { databaseTime: row(result.rows, "database health").now.toISOString() };
+  }
+
+  async collectionControlHealth(): Promise<CollectionControlHealth> {
+    const result = await this.pool.query<{
+      active_collection_count: number;
+      stale_collection_count: number;
+      oldest_stale_started_at: Date | null;
+    }>(
+      `SELECT
+         count(*) FILTER (
+           WHERE status='running'
+             AND started_at >= now()-($1::int * interval '1 minute')
+         )::int AS active_collection_count,
+         count(*) FILTER (
+           WHERE status='running'
+             AND started_at < now()-($1::int * interval '1 minute')
+         )::int AS stale_collection_count,
+         min(started_at) FILTER (
+           WHERE status='running'
+             AND started_at < now()-($1::int * interval '1 minute')
+         ) AS oldest_stale_started_at
+       FROM ops.collection_run`,
+      [COLLECTION_STALE_MINUTES]
+    );
+    const health = row(result.rows,"collection control health");
+    return {
+      activeCollectionCount:health.active_collection_count,
+      staleCollectionCount:health.stale_collection_count,
+      oldestStaleStartedAt:health.oldest_stale_started_at?.toISOString() ?? null,
+      staleAfterMinutes:COLLECTION_STALE_MINUTES
+    };
   }
 
   async recordConfiguration(details: Record<string, unknown>): Promise<void> {
@@ -1255,6 +1289,14 @@ export class InventoryRepository {
     const generatedAt = new Date().toISOString();
     const backtest = buildStoreDemandBacktest(dailyDemand.rows);
     const coldStartState = row(coldStart.rows,"inventory cold-start overview");
+    const activeCollectionCutoff = Date.parse(generatedAt) - COLLECTION_STALE_MINUTES * 60_000;
+    const collectionActive = schedules.rows.some((schedule) => {
+      if (schedule.status !== "running") return false;
+      const startedAt = schedule.started_at instanceof Date
+        ? schedule.started_at.getTime()
+        : Date.parse(String(schedule.started_at));
+      return Number.isFinite(startedAt) && startedAt >= activeCollectionCutoff;
+    });
     const reminders = buildOperationalReminders({
       now:generatedAt,
       latestInventoryAt:state.latest_inventory_at?.toISOString() ?? null,
@@ -1262,7 +1304,7 @@ export class InventoryRepository {
       productCount:state.product_count,
       freshProductCount:state.fresh_product_count,
       scheduleCount:schedules.rows.length,
-      collectionRunning:schedules.rows.some((schedule) => schedule.status === "running"),
+      collectionActive,
       incidents:incidents.rows as Record<string, unknown>[],
       backtest
     });
