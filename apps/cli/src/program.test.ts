@@ -195,6 +195,26 @@ describe("dataset CLI control mapping", () => {
   });
 });
 
+describe("inventory reconciliation CLI control mapping",() => {
+  it("separates read-only inspection from an explicitly confirmed resolve",async () => {
+    const { client,program } = fixture();
+    await program.parseAsync([
+      "node","bpa","inventory","reconciliation","inspect"
+    ]);
+    const token = `sha256:${"a".repeat(64)}`;
+    await program.parseAsync([
+      "node","bpa","inventory","reconciliation","resolve",token,"--yes"
+    ]);
+    expect(client.calls).toEqual([
+      { method:"inventory.reconciliation.inspect",params:{} },
+      {
+        method:"inventory.reconciliation.resolve",
+        params:{ resolutionToken:token,confirmed:true }
+      }
+    ]);
+  });
+});
+
 describe("Trigger CLI control mapping",() => {
   it("fires a Manual Trigger with a caller idempotency key",async () => {
     const { client,program } = fixture();

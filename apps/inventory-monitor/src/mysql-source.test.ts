@@ -81,6 +81,13 @@ const lease = {
   holderId: "trigger-attempt:test",
   fencingToken: 7
 } as const;
+const effect = {
+  effectId:`inventory-effect:sha256:${"a".repeat(64)}`,
+  inputDigest:`sha256:${"b".repeat(64)}`,
+  identityDigest:`sha256:${"c".repeat(64)}`,
+  runId:"run:test",invocationId:"invocation:test",
+  idempotencyKey:"idempotency:test",leaseRequestId:"lease-request:test"
+} as const;
 
 describe("MySQL WDT sales source", () => {
   it("does not guess missing credentials", () => {
@@ -118,7 +125,7 @@ describe("MySQL WDT sales source", () => {
     await expect(sync.sync({
       shopName: "一号店",
       expectedShopId: "10461048",
-      lease
+      lease,effect
     })).resolves.toMatchObject({ status: "no_changes", processed: 0 });
     expect(query).toHaveBeenNthCalledWith(
       1,
@@ -170,7 +177,7 @@ describe("MySQL WDT sales source", () => {
       await expect(sync.sync({
         shopName: "一号店",
         expectedShopId: "10461048",
-        lease
+        lease,effect
       })).rejects.toThrow("WDT_DATA_QUALITY_INVALID");
       expect(repository.upsertOrderChunk).toHaveBeenCalledOnce();
       expect(repository.failOrderSync).toHaveBeenCalledOnce();
@@ -192,7 +199,7 @@ describe("MySQL WDT sales source", () => {
       await expect(sync.sync({
         shopName: "一号店",
         expectedShopId: "10461048",
-        lease
+        lease,effect
       })).rejects.toMatchObject({
         code: "SALES_DEMAND_PARTIAL_COMMIT",
         causeCode: "ETIMEDOUT",
@@ -216,7 +223,7 @@ describe("MySQL WDT sales source", () => {
       await expect(sync.sync({
         shopName: "一号店",
         expectedShopId: "10461048",
-        lease
+        lease,effect
       })).rejects.toThrow("SCHEDULER_LEASE_LOST");
       expect(repository.upsertOrderChunk).not.toHaveBeenCalled();
     } finally {
@@ -234,7 +241,7 @@ describe("MySQL WDT sales source", () => {
       await expect(sync.sync({
         shopName: "一号店",
         expectedShopId: "10461048",
-        lease
+        lease,effect
       })).rejects.toThrow("WDT_SOURCE_UNAVAILABLE");
       expect(repository.failOrderSync).toHaveBeenCalledOnce();
     } finally {

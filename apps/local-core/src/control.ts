@@ -114,6 +114,11 @@ import {
 } from "./inventory-domain-lease-client.js";
 import { assertScheduleDefinition } from "./schedule-calendar.js";
 import { RecoverySessionService } from "./recovery-session.js";
+import {
+  inventoryProductionCycleQuery,
+  projectInventoryProductionCycleSummary
+} from "./inventory-production-cycle-summary.js";
+import { InventoryEffectReconciliationService } from "./inventory-effect-reconciliation.js";
 
 export const CONTROL_MAX_MESSAGE_BYTES = 512 * 1024;
 
@@ -172,6 +177,7 @@ export class LocalCoreService {
   readonly datasets: PackagingDatasetService;
   readonly triggers: TriggerRuntime;
   readonly externalDomainLeases: ExternalDomainLeaseCoordinator;
+  readonly inventoryReconciliation: InventoryEffectReconciliationService | undefined;
   readonly recoverySessions: RecoverySessionService;
   readonly #resourceBindings: RuntimeResourceBindingService;
   readonly #trustedEvidence: TrustedEvidenceQueryService;
@@ -197,6 +203,12 @@ export class LocalCoreService {
       (provider): provider is InventoryDomainLeaseClient =>
         provider instanceof InventoryDomainLeaseClient
     );
+    this.inventoryReconciliation = inventoryServiceClient
+      ? new InventoryEffectReconciliationService(
+          persistence,
+          inventoryServiceClient
+        )
+      : undefined;
     this.externalDomainLeases = new ExternalDomainLeaseCoordinator(
       persistence,
       configuredExternalDomainLeaseProviders
@@ -416,14 +428,18 @@ export class LocalCoreService {
     if (
       !request.method.startsWith("assistance.task.") &&
       request.method !== "dataset.import" &&
-      request.method !== "dataset.import.staged"
+      request.method !== "dataset.import.staged" &&
+      !request.method.startsWith("inventory.reconciliation.")
     ) {
       return this.handle(request);
     }
     try {
       const params = request.params ?? {};
-      const result =
-        request.method === "dataset.import"
+      const result = request.method === "inventory.reconciliation.inspect"
+        ? await this.#inspectInventoryReconciliation(params)
+        : request.method === "inventory.reconciliation.resolve"
+          ? await this.#resolveInventoryReconciliation(params)
+        : request.method === "dataset.import"
           ? await this.datasets.import({
               path: String(params.path),
               id: String(params.id),
@@ -450,6 +466,35 @@ export class LocalCoreService {
         }
       };
     }
+  }
+
+  async #inspectInventoryReconciliation(
+    params: Record<string, unknown>
+  ): Promise<unknown> {
+    if (Object.keys(params).length !== 0) {
+      throw new Error("INVENTORY_RECONCILIATION_PARAMS_NOT_ALLOWED");
+    }
+    if (!this.inventoryReconciliation) {
+      throw new Error("INVENTORY_RECONCILIATION_PROVIDER_UNAVAILABLE");
+    }
+    return this.inventoryReconciliation.inspect();
+  }
+
+  async #resolveInventoryReconciliation(
+    params: Record<string, unknown>
+  ): Promise<unknown> {
+    if (Object.keys(params).length !== 2 ||
+      typeof params.resolutionToken !== "string" || params.confirmed !== true) {
+      throw new Error("INVENTORY_RECONCILIATION_RESOLVE_PARAMS_INVALID");
+    }
+    if (!this.inventoryReconciliation) {
+      throw new Error("INVENTORY_RECONCILIATION_PROVIDER_UNAVAILABLE");
+    }
+    const result = await this.inventoryReconciliation.resolve({
+      resolutionToken:params.resolutionToken,
+      resolvedBy:userInfo().username
+    });
+    return result;
   }
 
   async #importStagedDataset(
@@ -1046,6 +1091,16 @@ export class LocalCoreService {
           actor: String(params.actor || userInfo().username),
           resourceBindings: params.resourceBindings
         });
+      case "inventory.production-cycle.latest": {
+        if (Object.keys(params).length!==0) {
+          throw new Error("INVENTORY_PRODUCTION_CYCLE_QUERY_PARAMS_NOT_ALLOWED");
+        }
+        return projectInventoryProductionCycleSummary(
+          this.persistence.getLatestTriggeredWorkflowExecution(
+            inventoryProductionCycleQuery
+          )
+        );
+      }
       case "attention.list": {
         const requestedLimit = Number(params.limit ?? 100);
         const limit = Number.isSafeInteger(requestedLimit)

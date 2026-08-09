@@ -1,17 +1,20 @@
-import { describe, expect, it } from "vitest";
-import type {
-  ExternalDomainLeaseRecord,
-  Persistence,
-  RunRecord,
-  TriggerAttemptRecord,
-  TriggerOccurrenceRecord,
-  TriggerSpecDefinition
+import { contentDigest } from "@bpa/compiler";
+import {
+  RevisionConflictError,
+  type ExternalDomainLeaseRecord,
+  type Persistence,
+  type RunRecord,
+  type TriggerAttemptRecord,
+  type TriggerOccurrenceRecord,
+  type TriggerSpecDefinition
 } from "@bpa/persistence";
 import type { RuntimeInvocation } from "@bpa/node-runtime";
 import type { JsonValue } from "@bpa/workflow-ir";
+import { describe, expect, it } from "vitest";
 import {
   InventoryDataRuntimeProvider,
   InventoryServiceWriterError,
+  type InventoryEffectIdentity,
   type InventoryServiceWriter,
   type InventoryWriteOperation,
   type LeaseFence
@@ -106,6 +109,7 @@ interface FakeState {
     diagnostic: string;
     updatedAt: string;
   };
+  reconciliationRevisionConflictOnce?: boolean;
 }
 
 function store(state: FakeState): Persistence {
@@ -119,12 +123,23 @@ function store(state: FakeState): Persistence {
       state.spec?.id === id && state.spec.version === version
         ? state.spec
         : undefined,
+    getExternalDomainLease: (requestId: string) =>
+      state.leases.find((candidate) => candidate.requestId === requestId),
     listExternalDomainLeases: () => state.leases,
     markExternalDomainLeaseReconciliationRequired: (
       input: Parameters<
         Persistence["markExternalDomainLeaseReconciliationRequired"]
       >[0]
     ) => {
+      if (state.reconciliationRevisionConflictOnce) {
+        state.reconciliationRevisionConflictOnce = false;
+        state.leases = state.leases.map((candidate) =>
+          candidate.requestId === input.requestId
+            ? { ...candidate, revision: candidate.revision + 1 }
+            : candidate
+        );
+        throw new RevisionConflictError("simulated renewal race");
+      }
       state.reconciliation = input;
       const current = state.leases.find(
         (candidate) => candidate.requestId === input.requestId
@@ -212,6 +227,7 @@ class FakeWriter implements InventoryServiceWriter {
     operation: InventoryWriteOperation;
     input: JsonValue;
     lease: LeaseFence;
+    effect: InventoryEffectIdentity;
   }> = [];
 
   constructor(readonly error?: Error) {}
@@ -221,6 +237,7 @@ class FakeWriter implements InventoryServiceWriter {
       readonly operation: InventoryWriteOperation;
       readonly input: JsonValue;
       readonly lease: LeaseFence;
+      readonly effect: InventoryEffectIdentity;
     }
   ): Promise<JsonValue> {
     this.calls.push(structuredClone(request));
@@ -378,6 +395,30 @@ describe("InventoryDataRuntimeProvider", () => {
           leaseKey: "inventory-production-cycle",
           holderId: "attempt:inventory",
           fencingToken: 7
+        },
+        effect: {
+          effectId: `inventory-effect:${contentDigest({
+            idempotencyKey: "inventory:10001:80001",
+            identity: invocation({}).identity,
+            node: invocation({}).node
+          })}`,
+          inputDigest: contentDigest({
+            operation: "inventory.snapshot.persist",
+            input: {
+              snapshot: {
+                shop: { id: "10001" },
+                product: { id: "80001" }
+              }
+            }
+          }),
+          identityDigest: contentDigest({
+            identity: invocation({}).identity,
+            node: invocation({}).node
+          }),
+          runId: run.id,
+          invocationId: "invocation:inventory",
+          idempotencyKey: "inventory:10001:80001",
+          leaseRequestId: "external-lease:inventory"
         }
       }
     ]);
@@ -478,6 +519,31 @@ describe("InventoryDataRuntimeProvider", () => {
     });
     expect(JSON.stringify(result)).not.toContain("secret");
     expect(JSON.stringify(fakeState.reconciliation)).not.toContain("secret");
+  });
+
+  it("re-reads the exact lease after a concurrent renewal before marking uncertainty", async () => {
+    const fakeState = state({ reconciliationRevisionConflictOnce: true });
+    const writer = new FakeWriter(
+      new InventoryServiceWriterError(
+        "INVENTORY_SERVICE_UNAVAILABLE",
+        "response was not received",
+        true
+      )
+    );
+    const result = await provider(fakeState, writer).invoke(
+      invocation({ snapshot: { product: { id: "80001" } } }),
+      new AbortController().signal
+    );
+
+    expect(result.status).toBe("uncertain");
+    expect(fakeState.reconciliation).toMatchObject({
+      requestId: lease.requestId,
+      expectedRevision: lease.revision + 1
+    });
+    expect(fakeState.leases[0]).toMatchObject({
+      state: "reconciliation_required",
+      revision: lease.revision + 2
+    });
   });
 
   it("treats scheduler lease loss as uncertain and reconciliation-required", async () => {

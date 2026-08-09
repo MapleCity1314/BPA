@@ -8,6 +8,13 @@ import {
 const lease = {
   leaseKey:"inventory-production-cycle",holderId:"trigger-attempt:test",fencingToken:7
 };
+const effect = {
+  effectId:`inventory-effect:sha256:${"a".repeat(64)}`,
+  inputDigest:`sha256:${"b".repeat(64)}`,
+  identityDigest:`sha256:${"c".repeat(64)}`,
+  runId:"run:test",invocationId:"invocation:test",
+  idempotencyKey:"idempotency:test",leaseRequestId:"lease-request:test"
+};
 
 function verified(productId:string,snapshotId:string) {
   const envelope:FactEnvelope<InventoryProductFact> = {
@@ -53,13 +60,16 @@ function input(repository:unknown) {
     shop:{ id:"10461048",name:"一号店" },
     attemptedSnapshots:2,persistedSnapshots:2,failedSnapshots:0,unresolvedSnapshots:0,
     snapshotReceipts:[receipt("p1","s1"),receipt("p2","s2")],
-    lease,repository:repository as never
+    lease,effect,repository:repository as never
   };
 }
 
 describe("shop forecast-risk refresh",() => {
   it("collects a zero-write deterministic product failure after a completed product",async () => {
     const repository = {
+      beginInventoryEffect:vi.fn(async () => undefined),
+      recordInventoryEffectItem:vi.fn(async () => undefined),
+      completeForecastRiskEffect:vi.fn(async () => undefined),
       verifiedSnapshotFacts:vi.fn(async () => [verified("p1","s1"),verified("p2","s2")]),
       forecastInputs:vi.fn(async ({ productId }:{ productId:string }) => {
         if (productId === "p2") throw new Error("FORECAST_INPUT_INVALID");
@@ -77,6 +87,9 @@ describe("shop forecast-risk refresh",() => {
 
   it("keeps a missing exact persisted snapshot as a deterministic compact partial",async () => {
     const repository = {
+      beginInventoryEffect:vi.fn(async () => undefined),
+      recordInventoryEffectItem:vi.fn(async () => undefined),
+      completeForecastRiskEffect:vi.fn(async () => undefined),
       verifiedSnapshotFacts:vi.fn(async () => [verified("p1","s1")]),
       forecastInputs:vi.fn(async ({ productId }:{ productId:string }) => forecastInput(productId)),
       persistForecastRiskProduct:vi.fn(async () => ({ forecastIds:["forecast:1"],evaluationId:"evaluation:1",incidentsUpdated:0 }))
@@ -89,6 +102,9 @@ describe("shop forecast-risk refresh",() => {
 
   it("stops after an uncertain second product transaction",async () => {
     const repository = {
+      beginInventoryEffect:vi.fn(async () => undefined),
+      recordInventoryEffectItem:vi.fn(async () => undefined),
+      completeForecastRiskEffect:vi.fn(async () => undefined),
       verifiedSnapshotFacts:vi.fn(async () => [verified("p1","s1"),verified("p2","s2")]),
       forecastInputs:vi.fn(async ({ productId }:{ productId:string }) => forecastInput(productId)),
       persistForecastRiskProduct:vi.fn()

@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import mysql, { type Pool as MysqlPool, type RowDataPacket } from "mysql2/promise";
-import type { InventoryRepository, LeaseFence, NormalizedOrderLine } from "./repository.js";
+import type {
+  InventoryEffectIdentity,
+  InventoryRepository,
+  LeaseFence,
+  NormalizedOrderLine
+} from "./repository.js";
 
 const WDT_SOURCE_SYSTEM = "ecom-profit-mysql:wdt-stockout";
 const PAGE_SIZE = 5_000;
@@ -145,6 +150,7 @@ export class MysqlSalesDemandSync {
     readonly shopName: string;
     readonly expectedShopId?: string;
     readonly lease: LeaseFence;
+    readonly effect:InventoryEffectIdentity;
   }): Promise<Record<string, unknown>> {
     return this.syncWdt(input);
   }
@@ -157,16 +163,19 @@ export class MysqlSalesDemandSync {
     readonly shopName: string;
     readonly expectedShopId?: string;
     readonly lease: LeaseFence;
+    readonly effect:InventoryEffectIdentity;
   }): Promise<Record<string, unknown>> {
     const shopId = required(input.expectedShopId, "expectedShopId", 200);
     const syncRunId = `sync:${randomUUID()}`;
     const current = await this.repository.currentWatermark(WDT_SOURCE_SYSTEM, shopId);
-    await this.repository.beginOrderSync({
+    const replay = await this.repository.beginOrderSync({
       syncRunId,
       sourceSystem: WDT_SOURCE_SYSTEM,
       shopId,
+      effect:input.effect,
       ...(current ? { sourceWatermark: current } : {})
     },input.lease);
+    if (replay) return replay;
     const digest = createHash("sha256");
     let cursor = current ? Number(current) : 0;
     let watermark = cursor;
@@ -222,7 +231,12 @@ export class MysqlSalesDemandSync {
           digest.update(`${source.id}:${rowHash}\n`);
         }
         await this.repository.upsertOrderChunk({
-          syncRunId,sourceSystem:WDT_SOURCE_SYSTEM,shopId,rows:normalized
+          syncRunId,sourceSystem:WDT_SOURCE_SYSTEM,shopId,rows:normalized,
+          effect:input.effect,
+          progress:{
+            stagedChunks:committedChunks + 1,
+            stagedRows:committedRows + normalized.length
+          }
         },input.lease);
         committedChunks += 1;
         committedRows += normalized.length;
@@ -234,8 +248,13 @@ export class MysqlSalesDemandSync {
       }
       if (!recentObservedAt || !coverageCompleteThrough) {
         if (processed === 0) {
-          await this.repository.completeNoChangeOrderSync(syncRunId,input.lease);
-          return { status:"no_changes",syncRunId,watermark:current ?? null,processed:0 };
+          const result = {
+            status:"no_changes",syncRunId,watermark:current ?? null,processed:0
+          };
+          await this.repository.completeNoChangeOrderSync(
+            syncRunId,input.effect,result,input.lease
+          );
+          return result;
         }
         throw new Error("WDT_DATA_QUALITY_INVALID");
       }
@@ -244,7 +263,7 @@ export class MysqlSalesDemandSync {
         syncRunId,sourceSystem:WDT_SOURCE_SYSTEM,shopId,
         watermark:String(watermark),sourceDigest,
         recordCount:processed,historicalCompleteThrough,
-        observedAt:recentObservedAt
+        observedAt:recentObservedAt,effect:input.effect
       },input.lease);
       return {
         status:"succeeded",syncRunId,shopId,watermark:String(watermark),
@@ -254,7 +273,8 @@ export class MysqlSalesDemandSync {
     } catch (error) {
       try {
         await this.repository.failOrderSync(
-          syncRunId,controlledCauseCode(error),input.lease
+          syncRunId,controlledCauseCode(error),input.effect,
+          { stagedChunks:committedChunks,stagedRows:committedRows },input.lease
         );
       } catch (cleanupError) {
         if (controlledCauseCode(cleanupError) === "SCHEDULER_LEASE_LOST") {

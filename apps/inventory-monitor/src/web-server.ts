@@ -12,6 +12,10 @@ import type {
   InventoryPanelReminder,
   RuntimeAttentionReminderProvider
 } from "./runtime-attention-reminders.js";
+import type {
+  InventoryPanelProductionCycle,
+  RuntimeProductionCycleSummaryProvider
+} from "./runtime-production-cycle-summary.js";
 
 const SESSION_COOKIE = "bpa_inventory_session";
 const SESSION_IDLE_MS = 30 * 60 * 1000;
@@ -223,8 +227,7 @@ function aggregateOverviews(entries: readonly {
       ...reminder,id:`${shop.id}:${String(reminder.id ?? "reminder")}`,shop_id:shop.id,shop_name:shop.name
     }));
     const products: Record<string,unknown>[] = records(overview.products).map((product) => ({ ...product,shop_id:shop.id,shop_name:shop.name }));
-    const schedules: Record<string,unknown>[] = records(overview.schedules).map((schedule) => ({ ...schedule,shop_id:shop.id,shop_name:shop.name }));
-    return { shop,overview,incidents,reminders,products,schedules };
+    return { shop,overview,incidents,reminders,products };
   });
   const incidents = enriched.flatMap((entry) => entry.incidents).sort((left,right) => {
     const rank = (value: unknown): number => ({ critical:0,warning:1,unknown:2,normal:3 } as Record<string,number>)[String(value)] ?? 4;
@@ -268,8 +271,6 @@ function aggregateOverviews(entries: readonly {
       ...buildSystemOperationalReminders(controlHealth),
       ...enriched.flatMap((entry) => entry.reminders)
     ],
-    schedules:enriched.flatMap((entry) => entry.schedules)
-      .sort((left,right) => String(right.scheduled_for ?? "").localeCompare(String(left.scheduled_for ?? ""))).slice(0,20),
     backtest:aggregateBacktest(overviews),shopStatuses,
     coldStart:{
       directModel:cold.reduce((sum,item) => sum + finite(item.directModel),0),
@@ -287,7 +288,7 @@ function loopback(request: IncomingMessage): boolean {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
-const HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BPA 库存风险指挥台</title><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/app-v2.css"></head><body><header><div class="brand"><span class="brand-mark">B</span><div><p>BPA INVENTORY CONTROL</p><h1>抖店库存风险指挥台</h1></div></div><div class="header-actions"><span class="status-chip" id="status"><i></i>正在连接</span><button class="secondary" id="enableNotify">开启桌面提醒</button><button id="reload">刷新数据</button></div></header><main><section class="metrics" id="metrics"></section><section class="priority-grid"><article class="panel incidents-panel"><div class="section-title"><div><p class="eyebrow">RISK WORKBENCH</p><h2>当前风险事件</h2></div><span class="count-badge" id="incidentCount">0</span></div><div id="incidents"></div></article><article class="panel reminders-panel"><div class="section-title"><div><p class="eyebrow">ACTION REQUIRED</p><h2>运营提醒</h2></div><span class="count-badge" id="reminderCount">0</span></div><div id="reminders"></div></article></section><section class="panel readiness-panel compact-panel"><div class="section-title"><div><p class="eyebrow">SYSTEM READINESS</p><h2>数据与冷启动</h2></div><span class="live-dot">在线</span></div><div id="readiness"></div></section><section class="panel backtest-panel"><div class="section-title"><div><p class="eyebrow">QUANTITATIVE BACKTEST</p><h2>需求预测滚动回测</h2></div><div class="legend"><span class="actual">实际销量</span><span class="p50">P50</span><span class="p90">P90</span></div></div><div id="backtest"></div></section><section class="panel inventory-panel"><div class="section-title"><div><p class="eyebrow">INVENTORY & FORECAST</p><h2>商品、SKU 与渠道风险</h2></div><span class="muted" id="inventoryUpdated"></span></div><div id="products"></div></section><section class="details-grid"><article class="panel"><h2>生产规则</h2><div id="rules"></div></article><article class="panel"><div class="section-title"><h2>运行记录</h2><span class="muted">30 分钟租约调度</span></div><div id="schedules"></div></article></section></main><dialog id="review"><form method="dialog"><h3>记录运营判断</h3><input id="incidentId" type="hidden"><label>结论<select id="decision"><option value="valid">有效风险</option><option value="false_positive">误报</option><option value="needs_context">信息不足</option></select></label><label>备注<textarea id="note" maxlength="4000" placeholder="记录处置动作或补充信息"></textarea></label><menu><button class="secondary" value="cancel">取消</button><button id="submit" value="default">保存判断</button></menu></form></dialog><script src="/app.js"></script></body></html>`;
+const HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BPA 库存风险指挥台</title><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/app-v2.css"></head><body><header><div class="brand"><span class="brand-mark">B</span><div><p>BPA INVENTORY CONTROL</p><h1>抖店库存风险指挥台</h1></div></div><div class="header-actions"><span class="status-chip" id="status"><i></i>正在连接</span><button class="secondary" id="enableNotify">开启桌面提醒</button><button id="reload">刷新数据</button></div></header><main><section class="metrics" id="metrics"></section><section class="priority-grid"><article class="panel incidents-panel"><div class="section-title"><div><p class="eyebrow">RISK WORKBENCH</p><h2>当前风险事件</h2></div><span class="count-badge" id="incidentCount">0</span></div><div id="incidents"></div></article><article class="panel reminders-panel"><div class="section-title"><div><p class="eyebrow">ACTION REQUIRED</p><h2>运营提醒</h2></div><span class="count-badge" id="reminderCount">0</span></div><div id="reminders"></div></article></section><section class="panel readiness-panel compact-panel"><div class="section-title"><div><p class="eyebrow">SYSTEM READINESS</p><h2>数据与冷启动</h2></div><span class="live-dot">在线</span></div><div id="readiness"></div></section><section class="panel backtest-panel"><div class="section-title"><div><p class="eyebrow">QUANTITATIVE BACKTEST</p><h2>需求预测滚动回测</h2></div><div class="legend"><span class="actual">实际销量</span><span class="p50">P50</span><span class="p90">P90</span></div></div><div id="backtest"></div></section><section class="panel inventory-panel"><div class="section-title"><div><p class="eyebrow">INVENTORY & FORECAST</p><h2>商品、SKU 与渠道风险</h2></div><span class="muted" id="inventoryUpdated"></span></div><div id="products"></div></section><section class="details-grid"><article class="panel"><h2>生产规则</h2><div id="rules"></div></article><article class="panel"><div class="section-title"><h2>正式库存周期</h2><span class="muted">BPA Trigger · 13 店</span></div><div id="schedules"></div></article></section></main><dialog id="review"><form method="dialog"><h3>记录运营判断</h3><input id="incidentId" type="hidden"><label>结论<select id="decision"><option value="valid">有效风险</option><option value="false_positive">误报</option><option value="needs_context">信息不足</option></select></label><label>备注<textarea id="note" maxlength="4000" placeholder="记录处置动作或补充信息"></textarea></label><menu><button class="secondary" value="cancel">取消</button><button id="submit" value="default">保存判断</button></menu></form></dialog><script src="/app.js"></script></body></html>`;
 
 const CSS = `:root{font-family:Inter,"SF Pro Display","PingFang SC",sans-serif;color:#162033;background:#f5f7fa;font-synthesis:none;--navy:#142b4a;--blue:#225c9f;--green:#19735a;--red:#c23b33;--amber:#b86a18;--line:#e2e7ee;--muted:#69758a}*{box-sizing:border-box}body{margin:0;min-width:320px}header{height:84px;display:flex;justify-content:space-between;align-items:center;padding:0 max(28px,4vw);background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}.brand,.header-actions,.section-title,.product-head{display:flex;align-items:center;gap:14px}.brand-mark{width:38px;height:38px;border-radius:10px;background:var(--navy);color:#fff;display:grid;place-items:center;font-size:20px;font-weight:800}.brand p,.eyebrow{margin:0 0 4px;color:#718096;font-size:10px;font-weight:700;letter-spacing:.14em}.brand h1{margin:0;font-size:20px;color:var(--navy);letter-spacing:-.02em}.header-actions{gap:9px}.status-chip,.live-dot,.tag{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:7px 11px;background:#eef6f2;color:var(--green);font-size:12px;font-weight:650}.status-chip i{width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 0 4px #19735a18}.status-chip.warning{background:#fff6e9;color:var(--amber)}.status-chip.critical{background:#fff0ef;color:var(--red)}button{border:0;border-radius:8px;background:var(--navy);color:white;padding:9px 14px;font-weight:650;cursor:pointer}button:hover{filter:brightness(1.08)}button.secondary{background:#fff;color:#34445b;border:1px solid #d5dce5}main{max-width:1500px;margin:0 auto;padding:24px 28px 64px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric,.panel,.product{background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 7px 22px #16203308}.metric{padding:17px 18px;position:relative;overflow:hidden}.metric:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:#cad3df}.metric.critical:before{background:var(--red)}.metric.warning:before{background:var(--amber)}.metric.good:before{background:var(--green)}.metric small{color:var(--muted);font-size:12px}.metric strong{display:block;margin-top:7px;font-size:25px;line-height:1.1;color:var(--navy)}.metric span{display:block;margin-top:6px;color:#8993a4;font-size:11px}.operations-grid{display:grid;grid-template-columns:1.25fr .75fr;gap:14px;margin-top:14px}.panel{padding:20px}.section-title{justify-content:space-between;margin-bottom:16px}.section-title h2,.panel>h2{margin:0;font-size:16px;color:var(--navy)}.count-badge{min-width:29px;height:29px;display:grid;place-items:center;border-radius:8px;background:#edf2f8;color:var(--navy);font-size:13px;font-weight:800}.reminder{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:start;padding:13px 0;border-top:1px solid #edf0f4}.reminder:first-child{border-top:0}.reminder-icon{width:31px;height:31px;border-radius:9px;display:grid;place-items:center;font-weight:800;background:#eef2f7;color:#627086}.reminder.critical .reminder-icon{background:#fff0ef;color:var(--red)}.reminder.warning .reminder-icon{background:#fff6e9;color:var(--amber)}.reminder h3{margin:0 0 4px;font-size:13px}.reminder p{margin:0;color:var(--muted);font-size:12px;line-height:1.5}.reminder-action{color:var(--blue);font-size:11px;text-align:right;max-width:150px}.readiness-row{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid #edf0f4;font-size:12px}.readiness-row:last-child{border-bottom:0}.readiness-row span{color:var(--muted)}.readiness-row strong{font-size:12px}.cold-block{margin-top:14px;padding-top:13px;border-top:1px solid #edf0f4}.cold-head{display:flex;justify-content:space-between;font-size:12px}.bar{height:7px;background:#edf1f5;border-radius:99px;overflow:hidden;margin:9px 0 7px;display:flex}.bar i:nth-child(1){background:var(--green)}.bar i:nth-child(2){background:#e2a648}.bar i:nth-child(3){background:#9aa6b6}.bar-legend{display:flex;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:10px}.backtest-panel,.inventory-panel,.details-grid,.panel+section{margin-top:14px}.legend{display:flex;gap:14px;font-size:11px;color:var(--muted)}.legend span:before{content:"";display:inline-block;width:14px;height:3px;margin-right:5px;vertical-align:middle;border-radius:2px}.legend .actual:before{background:var(--navy)}.legend .p50:before{background:#3b82c4}.legend .p90:before{background:#d7903c}.chart-layout{display:grid;grid-template-columns:1fr 180px;gap:22px;align-items:center}.chart-wrap{height:255px;min-width:0}.chart-wrap svg{width:100%;height:100%;display:block}.chart-metrics{display:grid;gap:9px}.chart-metric{padding:11px;border:1px solid var(--line);border-radius:9px}.chart-metric small{display:block;color:var(--muted);font-size:10px}.chart-metric strong{display:block;margin-top:5px;font-size:18px;color:var(--navy)}.details-grid{display:grid;grid-template-columns:1.35fr .65fr;gap:14px}.rule{padding:10px 0;border-bottom:1px solid #edf0f4}.rule:last-child{border:0}.rule small{display:block;color:var(--muted)}.rule strong{display:block;margin-top:4px;font-size:12px}.muted{color:#7b8799;font-size:11px}.empty{padding:24px;border:1px dashed #d6dde6;border-radius:10px;color:var(--muted);background:#fafbfd;font-size:12px}.product{padding:15px;margin-top:10px;box-shadow:none}.product h3{margin:0 0 4px;font-size:14px}.product-head{justify-content:space-between}.product-stock{text-align:right}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{text-align:left;padding:10px 11px;border-bottom:1px solid #edf0f4;font-size:11px;vertical-align:top}th{background:#f8fafc;color:#68758a;font-weight:650;white-space:nowrap}.channels{max-width:260px;line-height:1.65}.severity-critical{color:var(--red);font-weight:750}.severity-warning{color:var(--amber);font-weight:750}.severity-unknown{color:#69758a;font-weight:750}.severity-normal{color:var(--green);font-weight:750}.severity-pill{display:inline-flex;padding:4px 7px;border-radius:6px;background:#f3f5f8}.severity-pill.severity-critical{background:#fff0ef}.severity-pill.severity-warning{background:#fff6e9}dialog{border:0;border-radius:14px;min-width:420px;padding:24px;box-shadow:0 24px 80px #16203333}dialog::backdrop{background:#12213b66}dialog h3{margin-top:0}label{display:block;margin:14px 0;font-size:13px}select,textarea{display:block;width:100%;margin-top:6px;padding:10px;border:1px solid #d5dce5;border-radius:8px;font:inherit}textarea{min-height:100px}menu{display:flex;justify-content:flex-end;gap:10px;padding:0;margin-bottom:0}@media(max-width:1050px){.operations-grid,.details-grid{grid-template-columns:1fr}.chart-layout{grid-template-columns:1fr}.chart-metrics{grid-template-columns:repeat(4,1fr)}}@media(max-width:760px){header{height:auto;padding:16px;align-items:flex-start;gap:12px}.header-actions{flex-wrap:wrap;justify-content:flex-end}.brand p{display:none}.brand h1{font-size:16px}main{padding:14px}.metrics{grid-template-columns:1fr 1fr}.chart-metrics{grid-template-columns:1fr 1fr}.legend{display:none}table{display:block;overflow:auto}.panel{padding:15px}}`;
 
@@ -316,6 +317,7 @@ export async function startInventoryWebServer(input: {
   sessionSecret?: string;
   recoveryStatusPath?: string;
   runtimeAttentionReminders?: RuntimeAttentionReminderProvider;
+  runtimeProductionCycleSummary?: RuntimeProductionCycleSummaryProvider;
 }): Promise<InventoryWebHandle> {
   const now = input.now ?? Date.now;
   const shops = input.shops ?? (input.shopId
@@ -369,6 +371,21 @@ export async function startInventoryWebServer(input: {
       }];
     }
   };
+  const runtimeProductionCycleSummary = async (): Promise<
+    InventoryPanelProductionCycle | {
+      readonly state: "unavailable";
+      readonly reasonCode: "CORE_UNAVAILABLE";
+    }
+  > => {
+    if (!input.runtimeProductionCycleSummary) {
+      return { state: "unavailable", reasonCode: "CORE_UNAVAILABLE" };
+    }
+    try {
+      return await input.runtimeProductionCycleSummary();
+    } catch {
+      return { state: "unavailable", reasonCode: "CORE_UNAVAILABLE" };
+    }
+  };
   void refreshAggregate().catch(() => undefined);
   const authenticate = (request: IncomingMessage): { session: Session; cookie: string } | undefined => {
     const encoded = cookies(request)[SESSION_COOKIE];
@@ -408,13 +425,15 @@ export async function startInventoryWebServer(input: {
       if (url.pathname === "/api/overview" && request.method === "GET") {
         const requestedShopId = url.searchParams.get("shopId");
         if (requestedShopId === null || requestedShopId === "all") {
-          const [overview,runtimeReminders] = await Promise.all([
+          const [overview,runtimeReminders,productionCycle] = await Promise.all([
             allStoreOverview(),
-            runtimeAttentionReminders()
+            runtimeAttentionReminders(),
+            runtimeProductionCycleSummary()
           ]);
           return json(response,200,{
             ...overview,
             reminders:[...records(overview.reminders),...runtimeReminders],
+            productionCycle,
             recovery:await readRecoveryStatus(input.recoveryStatusPath),
             shops:shops.map(({ id,name }) => ({ id,name })),
             selectedShop:{ id:"all",name:"全店" }
@@ -424,14 +443,17 @@ export async function startInventoryWebServer(input: {
           return json(response,404,{ error:"SHOP_NOT_CONFIGURED" });
         }
         const shop = configuredShop(requestedShopId);
-        const [overview,controlHealth,runtimeReminders] = await Promise.all([
+        const [overview,controlHealth,runtimeReminders,productionCycle] = await Promise.all([
           input.repository.overview(shop.id),
           input.repository.collectionControlHealth(),
-          runtimeAttentionReminders()
+          runtimeAttentionReminders(),
+          runtimeProductionCycleSummary()
         ]);
+        const { schedules: _legacySchedules, ...publicOverview } = overview;
         return json(response,200,{
-          ...overview,
+          ...publicOverview,
           controlHealth,
+          productionCycle,
           reminders:[
             ...buildSystemOperationalReminders(controlHealth),
             ...records(overview.reminders),

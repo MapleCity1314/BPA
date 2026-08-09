@@ -44,6 +44,22 @@
 - 标签页仍由专用 Chrome Profile 与固定 CDP 端口物理隔离；只回收工作流创建的
   商品页和订单页。
 
+## BPA Workflow 候选的写入清障
+
+以下命令只适用于已经部署 PostgreSQL v7 effect receipt、SQLite v25 和正式
+`doudian.inventory.production-cycle@1.0.0` 的 BPA Workflow 候选；当前 legacy
+`production-cycle.ts` 生产入口不得使用这组命令：
+
+```bash
+bpa inventory reconciliation inspect
+bpa inventory reconciliation resolve <resolution-token> --yes
+```
+
+`inspect` 只读核对旧 Run 的完整 effect receipt 集合。`resolve` 只接受刚才检查得到的
+精确 token；它不重试业务写、不修改 uncertain Run、不确认 Attention，也不能释放或改写
+新 owner 的租约。远端仍有 active owner、receipt 集合缺失或身份不一致、快照 effect 仍为
+running、token 已变化时都会失败关闭。不得使用 free-form force clear。
+
 ## 诊断与安全停止
 
 登录失效、验证码、店铺不匹配、未知弹窗、结构变化和控制租约丢失都会安全停止，

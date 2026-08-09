@@ -14,6 +14,7 @@ import { InventoryServiceProtocol } from "./service-protocol.js";
 import { inventoryShopsFromEnvironment } from "./shop-config.js";
 import { startInventoryWebServer } from "./web-server.js";
 import { createRuntimeAttentionReminderProvider } from "./runtime-attention-reminders.js";
+import { createRuntimeProductionCycleSummaryProvider } from "./runtime-production-cycle-summary.js";
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -90,7 +91,10 @@ const attentionControl = new ControlClient(
 );
 const web = await startInventoryWebServer({
   repository,shops,port,sessionSecret,listenHost,publicHost,accessToken,recoveryStatusPath,
-  runtimeAttentionReminders:createRuntimeAttentionReminderProvider(attentionControl)
+  runtimeAttentionReminders:createRuntimeAttentionReminderProvider(attentionControl),
+  runtimeProductionCycleSummary:createRuntimeProductionCycleSummaryProvider(
+    attentionControl
+  )
 });
 const launchUrlFile = process.env.BPA_INVENTORY_LAUNCH_URL_FILE?.trim() || (
   isWindowsNamedPipe(socketPath)

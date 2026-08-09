@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -85,12 +85,134 @@ function grant(overrides: Record<string, unknown> = {}): Record<string, unknown>
   };
 }
 
+const effect = {
+  effectId: `inventory-effect:sha256:${"a".repeat(64)}`,
+  inputDigest: `sha256:${"b".repeat(64)}`,
+  identityDigest: `sha256:${"c".repeat(64)}`,
+  runId: "run:inventory",
+  invocationId: "invocation:inventory",
+  idempotencyKey: "inventory:10001:80001",
+  leaseRequestId: "external-lease:inventory"
+} as const;
+
+function effectSummary(index: number): Record<string, unknown> {
+  return {
+    effectId: `inventory-effect:sha256:${index.toString(16).padStart(64, "0")}`,
+    operation: "inventory.snapshot.persist",
+    inputDigest: `sha256:${"b".repeat(64)}`,
+    identityDigest: `sha256:${"c".repeat(64)}`,
+    runId: effect.runId,
+    leaseRequestId: effect.leaseRequestId,
+    status: "succeeded",
+    progressCounts: { persistedSnapshots: 1 },
+    itemCounts: { succeeded: 0, failed: 0 },
+    resultDigest: `sha256:${"d".repeat(64)}`,
+    errorCode: null,
+    updatedAt: "2026-08-09T08:00:00.000Z",
+    completedAt: "2026-08-09T08:00:00.000Z"
+  };
+}
+
 describe("InventoryDomainLeaseClient", () => {
   it("allows the sales sync Node deadline while bounding ordinary writes", () => {
     expect(inventoryWriteTimeoutMs("sales-demand.sync")).toBe(600_000);
     expect(inventoryWriteTimeoutMs("inventory.snapshot.persist")).toBe(30_000);
     expect(inventoryWriteTimeoutMs("inventory.shop.forecast-risk.refresh"))
       .toBe(1_800_000);
+  });
+
+  it("reads a stable paginated inventory effect report without crossing the frame bound", async () => {
+    const requests: RequestFrame[] = [];
+    const allItems = [effectSummary(1), effectSummary(2), effectSummary(3)];
+    const digest = `sha256:${createHash("sha256")
+      .update(JSON.stringify(allItems)).digest("hex")}`;
+    const socketPath = await inventoryServer((request) => {
+      requests.push(request);
+      const cursor = request.input.cursor as Record<string, unknown> | undefined;
+      const items = cursor ? allItems.slice(2) : allItems.slice(0, 2);
+      return {
+        ok: true,
+        id: request.id,
+        result: {
+          status: "available",
+          items,
+          nextCursor: cursor
+            ? null
+            : {
+                operation: "inventory.snapshot.persist",
+                effectId: effectSummary(2).effectId
+              },
+          totalCount: 3,
+          reportDigest: digest
+        }
+      };
+    });
+    const client = new InventoryDomainLeaseClient(socketPath);
+
+    await expect(client.inspectInventoryEffects({
+      leaseRequestId: effect.leaseRequestId,
+      runId: effect.runId,
+      lease: {
+        leaseKey: "inventory-production-cycle",
+        holderId: "trigger-attempt:test",
+        fencingToken: 7
+      }
+    })).resolves.toMatchObject({
+      status: "available",
+      reportDigest: digest,
+      effects: [{ effectId: effectSummary(1).effectId },
+        { effectId: effectSummary(2).effectId },
+        { effectId: effectSummary(3).effectId }]
+    });
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.input).toMatchObject({ limit: 100 });
+    expect(requests[1]?.input.cursor).toEqual({
+      operation: "inventory.snapshot.persist",
+      effectId: effectSummary(2).effectId
+    });
+  });
+
+  it("reconciles an exact effect without accepting a mismatched receipt",async () => {
+    const requests:RequestFrame[] = [];
+    const socketPath = await inventoryServer((request) => {
+      requests.push(request);
+      return {
+        ok:true,id:request.id,result:{
+          effectId:effect.effectId,
+          operation:"inventory.shop.forecast-risk.refresh",
+          status:"failed",classification:"confirmed_partial"
+        }
+      };
+    });
+    const client = new InventoryDomainLeaseClient(socketPath);
+    await expect(client.reconcileInventoryEffect({
+      leaseRequestId:effect.leaseRequestId,runId:effect.runId,
+      lease:{
+        leaseKey:"inventory-production-cycle",
+        holderId:"trigger-attempt:test",fencingToken:7
+      },effect
+    })).resolves.toMatchObject({
+      effectId:effect.effectId,status:"failed",classification:"confirmed_partial"
+    });
+    expect(requests[0]).toMatchObject({
+      operation:"inventory.effect.reconcile",
+      input:{ leaseRequestId:effect.leaseRequestId,runId:effect.runId,effect }
+    });
+
+    const badSocket = await inventoryServer((request) => ({
+      ok:true,id:request.id,result:{
+        effectId:`inventory-effect:sha256:${"f".repeat(64)}`,
+        operation:"inventory.shop.forecast-risk.refresh",
+        status:"failed",classification:"confirmed_partial"
+      }
+    }));
+    await expect(new InventoryDomainLeaseClient(badSocket).reconcileInventoryEffect({
+      leaseRequestId:effect.leaseRequestId,runId:effect.runId,
+      lease:{
+        leaseKey:"inventory-production-cycle",
+        holderId:"trigger-attempt:test",fencingToken:7
+      },effect
+    })).rejects.toMatchObject({ code:"INVENTORY_SERVICE_PROTOCOL_ERROR" });
   });
 
   it("returns a strictly validated acquisition grant", async () => {
@@ -217,7 +339,8 @@ describe("InventoryDomainLeaseClient", () => {
             leaseKey: "inventory-production-cycle",
             holderId: "trigger-attempt:test",
             fencingToken: 7
-          }
+          },
+          effect
         },
         new AbortController().signal
       )
@@ -233,7 +356,14 @@ describe("InventoryDomainLeaseClient", () => {
           leaseKey: "inventory-production-cycle",
           holderId: "trigger-attempt:test",
           fencingToken: 7
-        }
+        },
+        effectId: effect.effectId,
+        inputDigest: effect.inputDigest,
+        identityDigest: effect.identityDigest,
+        runId: effect.runId,
+        invocationId: effect.invocationId,
+        idempotencyKey: effect.idempotencyKey,
+        leaseRequestId: effect.leaseRequestId
       }
     });
 
@@ -248,7 +378,8 @@ describe("InventoryDomainLeaseClient", () => {
             leaseKey: "inventory-production-cycle",
             holderId: "trigger-attempt:test",
             fencingToken: 7
-          }
+          },
+          effect
         },
         new AbortController().signal
       )
@@ -276,7 +407,8 @@ describe("InventoryDomainLeaseClient", () => {
         leaseKey:"inventory-production-cycle",
         holderId:"trigger-attempt:test",
         fencingToken:7
-      }
+      },
+      effect
     },new AbortController().signal).catch(
       (caught) => caught as InventoryServiceWriterError
     );

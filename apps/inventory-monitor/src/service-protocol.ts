@@ -5,12 +5,14 @@ import { isWindowsNamedPipe } from "@bpa/platform-runtime";
 import type { MysqlSalesDemandSync } from "./mysql-source.js";
 import type {
   InventoryRepository,
+  InventoryEffectIdentity,
   LeaseFence,
   PersistableDoudianSnapshot
 } from "./repository.js";
 import { refreshShopForecastRisk } from "./shop-forecast-risk-refresh.js";
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
+const MAX_RESPONSE_BYTES = 1024 * 1024;
 const DOMAIN_LEASE_KEY = "inventory-production-cycle";
 const MIN_DOMAIN_LEASE_TTL_SECONDS = 5;
 const MAX_DOMAIN_LEASE_TTL_SECONDS = 3_600;
@@ -20,6 +22,8 @@ const OPERATIONS = [
   "domain-lease.renew",
   "domain-lease.release",
   "domain-lease.read",
+  "inventory.effect.list",
+  "inventory.effect.reconcile",
   "sales-demand.sync",
   "inventory.snapshot.persist",
   "inventory.orders.freshness.read",
@@ -93,9 +97,11 @@ function operationError(
   return new InventoryServiceOperationError(
     code,
     code === "SCHEDULER_LEASE_LOST" ||
+      code === "INVENTORY_EFFECT_IN_PROGRESS" ||
       code === "SALES_DEMAND_PARTIAL_COMMIT" ||
       code === "INVENTORY_SHOP_FORECAST_RISK_PARTIAL_COMMIT" ||
-      (WRITE_OPERATIONS.has(operation) && transportFailure(error, code))
+      ((WRITE_OPERATIONS.has(operation) || operation === "inventory.effect.reconcile") &&
+        transportFailure(error, code))
   );
 }
 
@@ -110,6 +116,15 @@ function record(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`${label} must be an object`);
   }
   return value as Record<string, unknown>;
+}
+
+function exactKeys(value:Record<string,unknown>,expected:readonly string[],label:string):void {
+  const actual = Object.keys(value).sort();
+  const required = [...expected].sort();
+  if (actual.length !== required.length ||
+    actual.some((key,index) => key !== required[index])) {
+    throw new Error(`${label.toUpperCase().replaceAll(" ","_")}_INVALID`);
+  }
 }
 
 function text(value: unknown, label: string, maximum = 500): string {
@@ -139,6 +154,24 @@ function lease(value: unknown): LeaseFence {
   };
 }
 
+function effectIdentity(input:Record<string,unknown>):InventoryEffectIdentity {
+  const effectId = text(input.effectId,"effectId",200);
+  const inputDigest = text(input.inputDigest,"inputDigest",100);
+  const identityDigest = text(input.identityDigest,"identityDigest",100);
+  if (!/^inventory-effect:sha256:[0-9a-f]{64}$/u.test(effectId) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(inputDigest) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(identityDigest)) {
+    throw new Error("INVENTORY_EFFECT_IDENTITY_INVALID");
+  }
+  return {
+    effectId,inputDigest,identityDigest,
+    runId:text(input.runId,"runId",200),
+    invocationId:text(input.invocationId,"invocationId",200),
+    idempotencyKey:text(input.idempotencyKey,"idempotencyKey",500),
+    leaseRequestId:text(input.leaseRequestId,"leaseRequestId",200)
+  };
+}
+
 function domainLeaseKey(value: unknown): string {
   const valueText = text(value,"leaseKey",500);
   if (valueText !== DOMAIN_LEASE_KEY) throw new Error("DOMAIN_LEASE_KEY_NOT_ALLOWED");
@@ -159,7 +192,14 @@ function domainLeaseTtl(value: unknown): number {
 
 function response(socket: Socket, value: unknown): void {
   if (!socket.destroyed && socket.writable) {
-    socket.end(`${JSON.stringify(value)}\n`);
+    const encoded = `${JSON.stringify(value)}\n`;
+    socket.end(Buffer.byteLength(encoded,"utf8") <= MAX_RESPONSE_BYTES
+      ? encoded
+      : `${JSON.stringify({
+          ok:false,error:{
+            code:"RESPONSE_TOO_LARGE",message:"Response exceeded 1 MiB"
+          }
+        })}\n`);
   }
 }
 
@@ -295,6 +335,9 @@ export class InventoryServiceProtocol {
       operation === "inventory.shop.forecast-risk.refresh"
       ? lease(input.lease)
       : undefined;
+    const writeEffect = WRITE_OPERATIONS.has(operation)
+      ? effectIdentity(input)
+      : undefined;
     try {
       let result: unknown;
       if (operation === "health.read") {
@@ -328,6 +371,69 @@ export class InventoryServiceProtocol {
       });
     } else if (operation === "domain-lease.read") {
       result = await this.repository.readDomainLease(domainLeaseKey(input.leaseKey)) ?? null;
+    } else if (operation === "inventory.effect.list") {
+      exactKeys(
+        input,
+        input.cursor === undefined
+          ? ["leaseRequestId","runId","lease","limit"]
+          : ["leaseRequestId","runId","lease","limit","cursor"],
+        "inventory effect list input"
+      );
+      const leaseInput = record(input.lease,"lease");
+      exactKeys(leaseInput,["leaseKey","holderId","fencingToken"],"inventory effect list lease");
+      const oldLease = lease(leaseInput);
+      if (input.limit !== 100) throw new Error("INVENTORY_EFFECT_PAGE_LIMIT_INVALID");
+      const cursor = input.cursor === undefined
+        ? undefined
+        : record(input.cursor,"cursor");
+      if (cursor) exactKeys(cursor,["operation","effectId"],"inventory effect list cursor");
+      const cursorOperation = cursor?.operation;
+      if (cursorOperation !== undefined && !WRITE_OPERATIONS.has(cursorOperation as Operation)) {
+        throw new Error("INVENTORY_EFFECT_CURSOR_INVALID");
+      }
+      const cursorEffectId = cursor === undefined
+        ? undefined
+        : text(cursor.effectId,"cursor.effectId",200);
+      if (cursorEffectId !== undefined &&
+        !/^inventory-effect:sha256:[0-9a-f]{64}$/u.test(cursorEffectId)) {
+        throw new Error("INVENTORY_EFFECT_CURSOR_INVALID");
+      }
+      result = await this.repository.listInventoryEffectsForReconciliation({
+        leaseRequestId:text(input.leaseRequestId,"leaseRequestId",200),
+        lease:{ ...oldLease,leaseKey:domainLeaseKey(oldLease.leaseKey) },
+        runId:text(input.runId,"runId",200),limit:100,
+        ...(cursor ? { cursor:{
+          operation:cursorOperation as
+            | "sales-demand.sync"
+            | "inventory.snapshot.persist"
+            | "inventory.shop.forecast-risk.refresh",
+          effectId:cursorEffectId!
+        } } : {})
+      });
+    } else if (operation === "inventory.effect.reconcile") {
+      exactKeys(
+        input,
+        ["leaseRequestId","runId","lease","effect"],
+        "inventory effect reconcile input"
+      );
+      const leaseInput = record(input.lease,"lease");
+      exactKeys(
+        leaseInput,
+        ["leaseKey","holderId","fencingToken"],
+        "inventory effect reconcile lease"
+      );
+      const oldLease = lease(leaseInput);
+      const effectInput = record(input.effect,"effect");
+      exactKeys(effectInput,[
+        "effectId","inputDigest","identityDigest","runId","invocationId",
+        "idempotencyKey","leaseRequestId"
+      ],"inventory effect reconcile effect");
+      result = await this.repository.reconcileInventoryEffect({
+        leaseRequestId:text(input.leaseRequestId,"leaseRequestId",200),
+        runId:text(input.runId,"runId",200),
+        lease:{ ...oldLease,leaseKey:domainLeaseKey(oldLease.leaseKey) },
+        effect:effectIdentity(effectInput)
+      });
     } else if (operation === "sales-demand.sync") {
       if (!this.salesSync) throw new Error("MYSQL_SOURCE_NOT_CONFIGURED");
       const requestedShop = {
@@ -337,13 +443,15 @@ export class InventoryServiceProtocol {
       result = await this.salesSync.sync({
         shopName: requestedShop.name,
         expectedShopId: requestedShop.id,
-        lease:writeFence!
+        lease:writeFence!,effect:writeEffect!
       });
     } else if (operation === "inventory.snapshot.persist") {
       if (this.configuredShops.length === 0) throw new Error("SHOP_IDENTITY_NOT_CONFIGURED");
       const snapshot = record(input.snapshot,"snapshot") as unknown as PersistableDoudianSnapshot;
       const configuredShop = this.configuredShop(snapshot.shop.id, snapshot.shop.name);
-      result = await this.repository.persistSnapshot({ ...snapshot,shop:configuredShop },writeFence!);
+      result = await this.repository.persistSnapshot(
+        { ...snapshot,shop:configuredShop },writeEffect!,writeFence!
+      );
     } else if (operation === "inventory.orders.freshness.read") {
       const requestedShop = record(input.shop,"shop");
       const shop = this.configuredShop(
@@ -390,6 +498,7 @@ export class InventoryServiceProtocol {
           ? input.snapshotReceipts
           : (() => { throw new Error("INVENTORY_FORECAST_RISK_INPUT_INVALID"); })(),
         lease:writeFence!,
+        effect:writeEffect!,
         repository:this.repository
       });
       }

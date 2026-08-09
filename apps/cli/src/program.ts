@@ -206,6 +206,30 @@ export function createCliProgram(options: CliProgramOptions): Command {
       "trigger.fire",{ id,requestKey:commandOptions.requestKey as string,actor }
     )));
 
+  const inventory = program
+    .command("inventory")
+    .description("inspect inventory production state and resolve verified effects");
+
+  const reconciliation = inventory
+    .command("reconciliation")
+    .description("inspect or resolve an uncertain inventory write boundary");
+
+  reconciliation
+    .command("inspect")
+    .description("read the exact PG receipt set without changing state")
+    .action(async () => output(await client.request(
+      "inventory.reconciliation.inspect",{}
+    )));
+
+  reconciliation
+    .command("resolve")
+    .description("resolve the exact inspected receipt set and release its old lease")
+    .argument("<resolution-token>", "token returned by reconciliation inspect")
+    .requiredOption("--yes", "confirm the verified reconciliation")
+    .action(async (resolutionToken) => output(await client.request(
+      "inventory.reconciliation.resolve",{ resolutionToken,confirmed:true }
+    )));
+
   const dataset = program
     .command("dataset")
     .description("import and inspect immutable datasets");
