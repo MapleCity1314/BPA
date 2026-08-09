@@ -531,12 +531,22 @@ function analyze(samples, options) {
   );
   const coreIdentityStable =
     coreIdentity.pidStable && coreIdentity.runtimeIdentityStable;
+  const inventoryMonitor = processSummary(
+    samples,
+    (sample) => sample.services["com.bpa.inventory-monitor"] ?? null
+  );
+  const inventoryMonitorComplete = inventoryMonitor.missingSamples === 0;
+  const inventoryMonitorPidStable =
+    inventoryMonitorComplete &&
+    inventoryMonitor.uniquePids.length === 1 &&
+    inventoryMonitor.pidChanges === 0;
   const chromeProfile = chromeSummary(samples);
   const chromeProfileComplete = chromeProfile.missingSamples === 0;
   const nodeAndChromeMeasurable =
     windowComplete &&
     continuityComplete &&
     coreIdentity.pidStable &&
+    inventoryMonitorPidStable &&
     chromeProfileComplete;
   const sqlite = sqliteSummary(samples, options.expectedIntervalSeconds);
   const sqlitePageCacheMeasurable =
@@ -567,6 +577,8 @@ function analyze(samples, options) {
       continuityComplete,
       corePidStable: coreIdentity.pidStable,
       coreRuntimeIdentityStable: coreIdentity.runtimeIdentityStable,
+      inventoryMonitorComplete,
+      inventoryMonitorPidStable,
       chromeProfileComplete,
       nodeAndChromeMeasurable,
       sqlitePageCacheMeasurable,
@@ -586,6 +598,12 @@ function analyze(samples, options) {
         ...(coreIdentity.runtimeIdentityExpected &&
         coreIdentity.runtimeIdentities.length > 1
           ? ["core_runtime_identity_changed"]
+          : []),
+        ...(!inventoryMonitorComplete
+          ? ["inventory_monitor_samples_missing"]
+          : []),
+        ...(inventoryMonitorComplete && !inventoryMonitorPidStable
+          ? ["inventory_monitor_pid_changed"]
           : []),
         ...(!chromeProfileComplete ? ["chrome_profile_samples_missing"] : []),
         ...(sqlite.pageCache.status !== "measured"
