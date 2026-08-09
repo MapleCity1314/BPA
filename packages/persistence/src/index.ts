@@ -385,7 +385,7 @@ export interface ExecutionUnitOfWork {
     input: CreateRunInput & {
       planSnapshot: RunPlanSnapshotRecord;
       checkpoint: EngineCheckpointRecord;
-      triggerRunId?: string;
+      triggerAttemptId?: string;
       outbox?: readonly OutboxMessage[];
       assistanceTasks?: readonly AssistanceTaskRecord[];
     }
@@ -896,11 +896,15 @@ export interface AuditRecord {
   occurredAt: string;
 }
 
-export type TriggerRunStatus =
-  | "due"
-  | "lease_acquired"
-  | "run_created"
+export type TriggerOccurrenceStatus =
+  | "pending"
+  | "deferred"
   | "running"
+  | "terminal";
+
+export type TriggerAttemptStatus = "pending" | "running" | "terminal";
+
+export type TriggerTerminalOutcome =
   | "complete"
   | "partial"
   | "blocked"
@@ -909,7 +913,8 @@ export type TriggerRunStatus =
   | "uncertain"
   | "cancelled"
   | "failed"
-  | "skipped";
+  | "skipped"
+  | "missed";
 
 export interface TriggerSpecRecord {
   spec: TriggerSpecDefinition;
@@ -920,18 +925,44 @@ export interface TriggerSpecRecord {
   updatedBy: string;
 }
 
-export interface TriggerRunRecord {
-  triggerRunId: string;
+export interface TriggerOccurrenceRecord {
+  occurrenceId: string;
   triggerId: string;
   triggerVersion: string;
   occurrenceKey: string;
-  status: TriggerRunStatus;
-  workflowRunId?: string;
-  fencingToken?: number;
-  browserFencingToken?: number;
+  scheduledAt: string;
+  status: TriggerOccurrenceStatus;
+  nextAttemptAt?: string;
+  attemptCount: number;
+  revision: number;
+  terminalOutcome?: TriggerTerminalOutcome;
   datasetId?: string;
   datasetVersion?: string;
   diagnostic?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TriggerAttemptRecord {
+  attemptId: string;
+  occurrenceId: string;
+  attemptNumber: number;
+  revision: number;
+  status: TriggerAttemptStatus;
+  terminalOutcome?: TriggerTerminalOutcome;
+  workflowRunId?: string;
+  fencingToken?: number;
+  browserFencingToken?: number;
+  diagnostic?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TriggerScheduleStateRecord {
+  triggerId: string;
+  triggerVersion: string;
+  cursorAt: string;
+  revision: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -963,20 +994,77 @@ export interface TriggerStore {
     version: string
   ): TriggerSpecDefinition | undefined;
   listTriggerSpecs(): TriggerSpecRecord[];
-  claimTriggerOccurrence(input: TriggerRunRecord):
-    | { status: "accepted"; record: TriggerRunRecord }
-    | { status: "duplicate"; record: TriggerRunRecord };
-  updateTriggerRun(input: {
-    triggerRunId: string;
-    status: TriggerRunStatus;
+  claimTriggerOccurrence(input: TriggerOccurrenceRecord):
+    | { status: "accepted"; record: TriggerOccurrenceRecord }
+    | { status: "duplicate"; record: TriggerOccurrenceRecord };
+  updateTriggerOccurrence(input: {
+    occurrenceId: string;
+    expectedRevision: number;
+    status: TriggerOccurrenceStatus;
     updatedAt: string;
+    nextAttemptAt?: string;
+    terminalOutcome?: TriggerTerminalOutcome;
+    diagnostic?: string;
+  }): TriggerOccurrenceRecord;
+  getTriggerOccurrence(occurrenceId: string): TriggerOccurrenceRecord | undefined;
+  listTriggerOccurrences(triggerId?: string): TriggerOccurrenceRecord[];
+  listActiveTriggerOccurrences(triggerId?: string): TriggerOccurrenceRecord[];
+  listRunnableTriggerOccurrences(input: {
+    now: string;
+    triggerId?: string;
+  }): TriggerOccurrenceRecord[];
+  createTriggerAttempt(input: {
+    attemptId: string;
+    occurrenceId: string;
+    expectedOccurrenceRevision: number;
+    createdAt: string;
+  }): {
+    occurrence: TriggerOccurrenceRecord;
+    attempt: TriggerAttemptRecord;
+  };
+  updateTriggerAttempt(input: {
+    attemptId: string;
+    expectedRevision: number;
+    status: TriggerAttemptStatus;
+    updatedAt: string;
+    terminalOutcome?: TriggerTerminalOutcome;
     workflowRunId?: string;
     fencingToken?: number;
     browserFencingToken?: number;
     diagnostic?: string;
-  }): TriggerRunRecord;
-  getTriggerRun(triggerRunId: string): TriggerRunRecord | undefined;
-  listTriggerRuns(triggerId?: string): TriggerRunRecord[];
+  }): TriggerAttemptRecord;
+  finishTriggerAttempt(input: {
+    attemptId: string;
+    expectedAttemptRevision: number;
+    occurrenceId: string;
+    expectedOccurrenceRevision: number;
+    outcome: TriggerTerminalOutcome;
+    diagnostic?: string;
+    updatedAt: string;
+  }): {
+    occurrence: TriggerOccurrenceRecord;
+    attempt: TriggerAttemptRecord;
+  };
+  getTriggerAttempt(attemptId: string): TriggerAttemptRecord | undefined;
+  listTriggerAttempts(occurrenceId: string): TriggerAttemptRecord[];
+  listActiveTriggerAttempts(triggerId?: string): TriggerAttemptRecord[];
+  getTriggerScheduleState(
+    triggerId: string,
+    triggerVersion: string
+  ): TriggerScheduleStateRecord | undefined;
+  initializeTriggerScheduleState(input: {
+    triggerId: string;
+    triggerVersion: string;
+    cursorAt: string;
+    createdAt: string;
+  }): TriggerScheduleStateRecord;
+  advanceTriggerScheduleState(input: {
+    triggerId: string;
+    triggerVersion: string;
+    expectedRevision: number;
+    cursorAt: string;
+    updatedAt: string;
+  }): TriggerScheduleStateRecord;
   latestDatasetVersion(datasetId: string): {
     id: string;
     version: string;
@@ -1001,6 +1089,7 @@ export interface TriggerStore {
     fencingToken: number;
     releasedAt: string;
   }): boolean;
+  listTriggerLeases(now: string): BrowserControlLeaseRecord[];
   acquireBrowserControlLease(input: {
     resourceId: string;
     ownerId: string;

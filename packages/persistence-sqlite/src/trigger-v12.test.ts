@@ -3,12 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { describe,expect,it } from "vitest";
-import type { TriggerSpecDefinition } from "@bpa/persistence";
+import type { TriggerOccurrenceRecord,TriggerSpecDefinition } from "@bpa/persistence";
 import { SqlitePersistence } from "./index.js";
 
 const now = "2026-08-05T00:00:00.000Z";
 const spec:TriggerSpecDefinition = {
-  apiVersion:"bpa.trigger/v1alpha1",
+  apiVersion:"bpa.trigger/v1alpha2",
   id:"inventory.refresh.manual",
   version:"1.0.0",
   appId:"inventory-monitor",
@@ -22,7 +22,27 @@ const spec:TriggerSpecDefinition = {
   retryPolicy:"none"
 };
 
-describe("Trigger and Browser Control Lease persistence",() => {
+function occurrence(
+  id: string,
+  scheduledAt = now,
+  overrides: Partial<TriggerOccurrenceRecord> = {}
+): TriggerOccurrenceRecord {
+  return {
+    occurrenceId:id,
+    triggerId:spec.id,
+    triggerVersion:spec.version,
+    occurrenceKey:`manual:${id}`,
+    scheduledAt,
+    status:"pending",
+    attemptCount:0,
+    revision:0,
+    createdAt:now,
+    updatedAt:now,
+    ...overrides
+  };
+}
+
+describe("Trigger occurrence, attempt, schedule and lease persistence",() => {
   it("audits versioned Trigger configuration and enforces CAS enable changes",() => {
     const store = new SqlitePersistence({ path:":memory:" });
     const created = store.putTriggerSpec({ spec,actor:"operator",occurredAt:now });
@@ -63,20 +83,219 @@ describe("Trigger and Browser Control Lease persistence",() => {
     store.close();
   });
 
-  it("deduplicates occurrences and fences competing browser owners",() => {
+  it("deduplicates logical occurrences and retains Dataset lineage",() => {
     const store = new SqlitePersistence({ path:":memory:" });
     store.putTriggerSpec({ spec,actor:"operator",occurredAt:now });
-    const occurrence = {
-      triggerRunId:"tr-1",triggerId:spec.id,triggerVersion:spec.version,
-      occurrenceKey:"manual:req-1",status:"due" as const,createdAt:now,updatedAt:now
+    const first = occurrence("occ-1",now,{
+      datasetId:"inventory",datasetVersion:"2026-08-05"
+    });
+    expect(store.claimTriggerOccurrence(first)).toEqual({ status:"accepted",record:first });
+    expect(store.claimTriggerOccurrence({
+      ...first,occurrenceId:"occ-competing"
+    })).toEqual({ status:"duplicate",record:first });
+    expect(store.getTriggerOccurrence(first.occurrenceId)).toMatchObject({
+      datasetId:"inventory",datasetVersion:"2026-08-05",attemptCount:0,revision:0
+    });
+    const nextSpec = { ...spec,version:"2.0.0" };
+    store.putTriggerSpec({
+      spec:nextSpec,actor:"operator",occurredAt:"2026-08-05T00:00:01.000Z"
+    });
+    const nextVersion = {
+      ...first,occurrenceId:"occ-v2",triggerVersion:"2.0.0"
     };
-    expect(store.claimTriggerOccurrence(occurrence).status).toBe("accepted");
-    expect(store.claimTriggerOccurrence({ ...occurrence,triggerRunId:"tr-2" }).status)
-      .toBe("duplicate");
+    expect(store.claimTriggerOccurrence(nextVersion)).toEqual({
+      status:"accepted",record:nextVersion
+    });
+    store.close();
+  });
+
+  it("lists due work in schedule order and excludes deferred work before its retry time",() => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    store.putTriggerSpec({ spec,actor:"operator",occurredAt:now });
+    store.claimTriggerOccurrence(occurrence("later","2026-08-05T00:02:00.000Z"));
+    store.claimTriggerOccurrence(occurrence("earlier","2026-08-05T00:01:00.000Z"));
+    store.claimTriggerOccurrence(occurrence("future","2026-08-06T00:00:00.000Z"));
+    store.claimTriggerOccurrence(occurrence("deferred","2026-08-05T00:00:00.000Z"));
+    store.updateTriggerOccurrence({
+      occurrenceId:"deferred",expectedRevision:0,status:"deferred",
+      nextAttemptAt:"2026-08-05T00:10:00.000Z",updatedAt:now
+    });
+    expect(store.listRunnableTriggerOccurrences({
+      now:"2026-08-05T00:05:00.000Z"
+    }).map((item) => item.occurrenceId)).toEqual(["earlier","later"]);
+    expect(store.listRunnableTriggerOccurrences({
+      now:"2026-08-05T00:10:00.000Z"
+    }).map((item) => item.occurrenceId)).toEqual(["deferred","earlier","later"]);
+    store.close();
+  });
+
+  it("creates an attempt with an occurrence CAS and does not consume losing claims",() => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    store.putTriggerSpec({ spec,actor:"operator",occurredAt:now });
+    store.claimTriggerOccurrence(occurrence("occ-attempt"));
+    expect(() => store.updateTriggerOccurrence({
+      occurrenceId:"occ-attempt",expectedRevision:0,status:"running",updatedAt:now
+    })).toThrow("Invalid Trigger Occurrence transition: pending -> running");
+    const claimed = store.createTriggerAttempt({
+      attemptId:"attempt-1",occurrenceId:"occ-attempt",
+      expectedOccurrenceRevision:0,createdAt:now
+    });
+    expect(claimed).toMatchObject({
+      occurrence:{ status:"running",attemptCount:1,revision:1 },
+      attempt:{ attemptNumber:1,status:"pending",revision:0 }
+    });
+    expect(() => store.createTriggerAttempt({
+      attemptId:"attempt-loser",occurrenceId:"occ-attempt",
+      expectedOccurrenceRevision:0,createdAt:now
+    })).toThrow("Trigger Occurrence is not claimable");
+    expect(store.getTriggerOccurrence("occ-attempt")?.attemptCount).toBe(1);
+    expect(store.listTriggerAttempts("occ-attempt")).toHaveLength(1);
+    expect(() => store.updateTriggerAttempt({
+      attemptId:"attempt-1",expectedRevision:0,status:"pending",updatedAt:now
+    })).toThrow("Invalid Trigger Attempt transition: pending -> pending");
+
+    const running = store.updateTriggerAttempt({
+      attemptId:"attempt-1",expectedRevision:0,status:"running",updatedAt:now,
+      fencingToken:1,browserFencingToken:2
+    });
+    expect(running).toMatchObject({ status:"running",revision:1,fencingToken:1 });
+    expect(() => store.updateTriggerAttempt({
+      attemptId:"attempt-1",expectedRevision:0,status:"terminal",
+      terminalOutcome:"failed",updatedAt:now
+    })).toThrow("Trigger Attempt revision changed");
+    const terminalAttempt = store.updateTriggerAttempt({
+      attemptId:"attempt-1",expectedRevision:1,status:"terminal",
+      terminalOutcome:"failed",updatedAt:now
+    });
+    expect(() => store.updateTriggerAttempt({
+      attemptId:"attempt-1",expectedRevision:terminalAttempt.revision,
+      status:"running",updatedAt:now
+    })).toThrow("Invalid Trigger Attempt transition: terminal -> running");
+    const terminalOccurrence = store.updateTriggerOccurrence({
+      occurrenceId:"occ-attempt",expectedRevision:1,status:"terminal",
+      terminalOutcome:"failed",updatedAt:now
+    });
+    expect(() => store.updateTriggerOccurrence({
+      occurrenceId:"occ-attempt",expectedRevision:terminalOccurrence.revision,
+      status:"deferred",nextAttemptAt:"2026-08-05T01:00:00.000Z",updatedAt:now
+    })).toThrow("Invalid Trigger Occurrence transition: terminal -> deferred");
+    store.close();
+  });
+
+  it("finishes an Attempt and its running Occurrence atomically",() => {
+    let injectFailure = true;
+    const store = new SqlitePersistence({
+      path:":memory:",
+      failureInjector(point) {
+        if (injectFailure && point === "trigger_attempt.finish.after_attempt") {
+          throw new Error("simulated finish crash");
+        }
+      }
+    });
+    store.putTriggerSpec({ spec,actor:"operator",occurredAt:now });
+    store.claimTriggerOccurrence(occurrence("occ-finish"));
+    store.createTriggerAttempt({
+      attemptId:"attempt-finish",occurrenceId:"occ-finish",
+      expectedOccurrenceRevision:0,createdAt:now
+    });
+
+    expect(() => store.finishTriggerAttempt({
+      attemptId:"attempt-finish",expectedAttemptRevision:0,
+      occurrenceId:"occ-finish",expectedOccurrenceRevision:1,
+      outcome:"blocked",diagnostic:"blocked before Run creation",updatedAt:now
+    })).toThrow("simulated finish crash");
+    expect(store.getTriggerAttempt("attempt-finish")).toMatchObject({
+      status:"pending",revision:0
+    });
+    expect(store.getTriggerOccurrence("occ-finish")).toMatchObject({
+      status:"running",revision:1
+    });
+
+    injectFailure = false;
+    expect(() => store.finishTriggerAttempt({
+      attemptId:"attempt-finish",expectedAttemptRevision:0,
+      occurrenceId:"occ-finish",expectedOccurrenceRevision:0,
+      outcome:"blocked",updatedAt:now
+    })).toThrow("Trigger Occurrence finish CAS failed");
+    expect(store.getTriggerAttempt("attempt-finish")).toMatchObject({
+      status:"pending",revision:0
+    });
+    expect(store.getTriggerOccurrence("occ-finish")).toMatchObject({
+      status:"running",revision:1
+    });
+
+    expect(() => store.finishTriggerAttempt({
+      attemptId:"attempt-finish",expectedAttemptRevision:1,
+      occurrenceId:"occ-finish",expectedOccurrenceRevision:1,
+      outcome:"blocked",updatedAt:now
+    })).toThrow("Trigger Attempt finish CAS failed");
+
+    expect(store.finishTriggerAttempt({
+      attemptId:"attempt-finish",expectedAttemptRevision:0,
+      occurrenceId:"occ-finish",expectedOccurrenceRevision:1,
+      outcome:"blocked",diagnostic:"blocked before Run creation",updatedAt:now
+    })).toMatchObject({
+      attempt:{ status:"terminal",terminalOutcome:"blocked",revision:1,
+        diagnostic:"blocked before Run creation" },
+      occurrence:{ status:"terminal",terminalOutcome:"blocked",revision:2,
+        diagnostic:"blocked before Run creation" }
+    });
+    store.close();
+  });
+
+  it("returns every active attempt beyond the historical 200-row window",() => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    store.putTriggerSpec({ spec,actor:"operator",occurredAt:now });
+    for (let index = 0; index < 205; index += 1) {
+      const occurrenceId = `occ-${index}`;
+      store.claimTriggerOccurrence(occurrence(occurrenceId));
+      store.createTriggerAttempt({
+        attemptId:`attempt-${index}`,occurrenceId,
+        expectedOccurrenceRevision:0,createdAt:now
+      });
+    }
+    expect(store.listActiveTriggerAttempts(spec.id)).toHaveLength(205);
+    expect(store.listActiveTriggerOccurrences(spec.id)).toHaveLength(205);
+    store.close();
+  });
+
+  it("initializes one schedule cursor anchor and advances it with CAS",() => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    store.putTriggerSpec({ spec,actor:"operator",occurredAt:now });
+    const initial = store.initializeTriggerScheduleState({
+      triggerId:spec.id,triggerVersion:spec.version,cursorAt:now,createdAt:now
+    });
+    expect(initial).toMatchObject({ cursorAt:now,revision:0 });
+    expect(store.initializeTriggerScheduleState({
+      triggerId:spec.id,triggerVersion:spec.version,
+      cursorAt:"2026-08-06T00:00:00.000Z",createdAt:"2026-08-06T00:00:00.000Z"
+    })).toEqual(initial);
+    expect(store.advanceTriggerScheduleState({
+      triggerId:spec.id,triggerVersion:spec.version,expectedRevision:0,
+      cursorAt:"2026-08-06T00:00:00.000Z",updatedAt:"2026-08-06T00:00:00.000Z"
+    })).toMatchObject({ cursorAt:"2026-08-06T00:00:00.000Z",revision:1 });
+    expect(() => store.advanceTriggerScheduleState({
+      triggerId:spec.id,triggerVersion:spec.version,expectedRevision:0,
+      cursorAt:"2026-08-07T00:00:00.000Z",updatedAt:"2026-08-07T00:00:00.000Z"
+    })).toThrow("Trigger Schedule State revision changed");
+    expect(() => store.advanceTriggerScheduleState({
+      triggerId:spec.id,triggerVersion:spec.version,expectedRevision:1,
+      cursorAt:now,updatedAt:"2026-08-07T00:00:00.000Z"
+    })).toThrow("Trigger Schedule State revision changed");
+    store.close();
+  });
+
+  it("fences competing browser owners",() => {
+    const store = new SqlitePersistence({ path:":memory:" });
     const first = store.acquireBrowserControlLease({
       resourceId:"browser:1",ownerId:"owner-a",now,ttlSeconds:120
     });
     expect(first?.fencingToken).toBe(1);
+    const rollbackRenewal = store.renewBrowserControlLease({
+      resourceId:"browser:1",ownerId:"owner-a",fencingToken:1,
+      now:"2026-08-04T23:00:00.000Z",ttlSeconds:120
+    });
+    expect(rollbackRenewal?.expiresAt).toBe(first?.expiresAt);
     expect(store.acquireBrowserControlLease({
       resourceId:"browser:1",ownerId:"owner-b",now,ttlSeconds:120
     })).toBeUndefined();
@@ -92,38 +311,55 @@ describe("Trigger and Browser Control Lease persistence",() => {
     store.close();
   });
 
-  it("backfills the current TriggerSpec when upgrading the version store",() => {
-    const directory = mkdtempSync(join(tmpdir(),"bpa-trigger-v15-"));
+  it("refuses to silently remove an occupied legacy Trigger control plane",() => {
+    const directory = mkdtempSync(join(tmpdir(),"bpa-trigger-v20-"));
     const path = join(directory,"bpa.sqlite3");
     try {
       const seeded = new SqlitePersistence({ path });
       seeded.putTriggerSpec({ spec,actor:"operator",occurredAt:now });
-      seeded.claimTriggerOccurrence({
-        triggerRunId:"tr-upgrade",triggerId:spec.id,
-        triggerVersion:spec.version,occurrenceKey:"manual:upgrade",
-        status:"due",createdAt:now,updatedAt:now
-      });
       seeded.close();
       const legacy = new Database(path);
       legacy.exec(`
-        DROP TABLE recovery_sessions;
-        DROP TABLE attention_deliveries;
-        DROP TABLE attention_records;
-        DROP TABLE trigger_spec_versions;
-        ALTER TABLE trigger_runs DROP COLUMN browser_fencing_token;
-        DELETE FROM schema_migrations WHERE version IN (15, 16, 17, 18, 19);
+        DROP TABLE trigger_schedule_state;
+        DROP TABLE trigger_attempts;
+        DROP TABLE trigger_occurrences;
+        CREATE TABLE trigger_runs (
+          trigger_run_id TEXT PRIMARY KEY,
+          trigger_id TEXT NOT NULL REFERENCES trigger_specs(trigger_id) ON DELETE RESTRICT,
+          trigger_version TEXT NOT NULL,
+          occurrence_key TEXT NOT NULL,
+          status TEXT NOT NULL,
+          workflow_run_id TEXT REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+          fencing_token INTEGER,
+          dataset_id TEXT,
+          dataset_version TEXT,
+          diagnostic TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          browser_fencing_token INTEGER,
+          UNIQUE(trigger_id, occurrence_key)
+        ) STRICT;
+        INSERT INTO trigger_runs VALUES (
+          'legacy-run', '${spec.id}', '${spec.version}', 'manual:legacy',
+          'failed', NULL, 3, 'inventory', 'v1', 'legacy diagnostic',
+          '${now}', '${now}', 4
+        );
+        DELETE FROM schema_migrations WHERE version=20;
       `);
       legacy.close();
 
-      const upgraded = new SqlitePersistence({ path });
-      expect(upgraded.health().schemaVersion).toBe(19);
-      expect(upgraded.getTriggerSpecVersion(spec.id,spec.version)).toEqual(spec);
-      expect(upgraded.listTriggerRuns(spec.id)).toEqual([
-        expect.objectContaining({
-          triggerRunId:"tr-upgrade",triggerVersion:spec.version,status:"due"
-        })
-      ]);
-      upgraded.close();
+      expect(() => new SqlitePersistence({ path })).toThrow(
+        "Schema 20 requires an empty legacy Trigger control plane"
+      );
+      const unchanged = new Database(path, { readonly: true });
+      expect(
+        unchanged.prepare("SELECT MAX(version) AS version FROM schema_migrations")
+          .get()
+      ).toEqual({ version: 19 });
+      expect(
+        unchanged.prepare("SELECT COUNT(*) AS count FROM trigger_runs").get()
+      ).toEqual({ count: 1 });
+      unchanged.close();
     } finally {
       rmSync(directory,{ recursive:true,force:true });
     }

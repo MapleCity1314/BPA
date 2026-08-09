@@ -1479,5 +1479,86 @@ export const migrations: Migration[] = [
           browser_fencing_token IS NULL OR browser_fencing_token >= 1
         );
     `
+  },
+  {
+    version: 20,
+    sql: `
+      CREATE TABLE trigger_occurrences (
+        occurrence_id TEXT PRIMARY KEY,
+        trigger_id TEXT NOT NULL
+          REFERENCES trigger_specs(trigger_id) ON DELETE RESTRICT,
+        trigger_version TEXT NOT NULL,
+        occurrence_key TEXT NOT NULL,
+        scheduled_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (
+          'pending', 'deferred', 'running', 'terminal'
+        )),
+        next_attempt_at TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+        revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+        terminal_outcome TEXT CHECK (terminal_outcome IS NULL OR terminal_outcome IN (
+          'complete', 'partial', 'blocked', 'degraded', 'rejected',
+          'uncertain', 'cancelled', 'failed', 'skipped', 'missed'
+        )),
+        dataset_id TEXT,
+        dataset_version TEXT,
+        diagnostic TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(trigger_id, trigger_version, occurrence_key),
+        CHECK ((status = 'deferred') = (next_attempt_at IS NOT NULL)),
+        CHECK ((status = 'terminal') = (terminal_outcome IS NOT NULL))
+      ) STRICT;
+
+      CREATE TABLE trigger_attempts (
+        attempt_id TEXT PRIMARY KEY,
+        occurrence_id TEXT NOT NULL
+          REFERENCES trigger_occurrences(occurrence_id) ON DELETE RESTRICT,
+        attempt_number INTEGER NOT NULL CHECK (attempt_number >= 1),
+        revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'terminal')),
+        terminal_outcome TEXT CHECK (terminal_outcome IS NULL OR terminal_outcome IN (
+          'complete', 'partial', 'blocked', 'degraded', 'rejected',
+          'uncertain', 'cancelled', 'failed', 'skipped', 'missed'
+        )),
+        workflow_run_id TEXT REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        fencing_token INTEGER CHECK (fencing_token IS NULL OR fencing_token >= 1),
+        browser_fencing_token INTEGER
+          CHECK (browser_fencing_token IS NULL OR browser_fencing_token >= 1),
+        diagnostic TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(occurrence_id, attempt_number),
+        CHECK ((status = 'terminal') = (terminal_outcome IS NOT NULL))
+      ) STRICT;
+
+      CREATE UNIQUE INDEX trigger_attempts_one_active
+        ON trigger_attempts(occurrence_id)
+        WHERE status != 'terminal';
+      CREATE INDEX trigger_attempts_active
+        ON trigger_attempts(status, created_at, attempt_id)
+        WHERE status != 'terminal';
+
+      DROP TABLE trigger_runs;
+
+      CREATE INDEX trigger_occurrences_recent
+        ON trigger_occurrences(trigger_id, scheduled_at DESC, occurrence_id);
+      CREATE INDEX trigger_occurrences_runnable
+        ON trigger_occurrences(status, next_attempt_at, scheduled_at, occurrence_id)
+        WHERE status IN ('pending', 'deferred');
+
+      CREATE TABLE trigger_schedule_state (
+        trigger_id TEXT NOT NULL,
+        trigger_version TEXT NOT NULL,
+        cursor_at TEXT NOT NULL,
+        revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(trigger_id, trigger_version),
+        FOREIGN KEY(trigger_id, trigger_version)
+          REFERENCES trigger_spec_versions(trigger_id, trigger_version)
+          ON DELETE RESTRICT
+      ) STRICT;
+    `
   }
 ];

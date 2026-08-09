@@ -131,8 +131,12 @@ PR #19 已把这项边界下沉到 Trigger Runtime：凡 TriggerSpec 声明
 fencing token 持久化到 Schema v19 的 Trigger Run；运行期间与业务并发租约一起续租，
 Workflow Run 创建与 Trigger Run 关联在一个事务中提交，终态再一起释放两把租约。
 浏览器控制租约已被库存、另一条 Trigger 或 Recovery Session 持有时，
-当前 occurrence 直接 `skipped`，不等待、不启动额外浏览器。fixture 使用库存、清退商品、
+PR #19 的 occurrence 会直接 `skipped`。当前 Schema v20 候选已把逻辑 Occurrence 与
+execution Attempt 分表：租约忙只写持久 `deferred + nextAttemptAt`，不创建 Attempt、
+不启动额外浏览器；释放后由同一 Mac Trigger Runtime 继续竞争。fixture 使用库存、清退商品、
 体验分三个不同业务并发键和同一浏览器实例，证明任一时刻只有一个 Run 能进入浏览器阶段。
+v1alpha2 候选还把积压限制为每 tick 最多 1000 个 occurrence，并在追平前禁止启动旧页
+候选；Schema 19 仍有旧 TriggerSpec/Run 时 Schema 20 启动即失败，生产不能直接热升级。
 后续正式资产 E2E 又以一个 Browser Session 和一个页面依次跑完三条 Workflow，证明 Trigger
 终态后租约释放且实例记录不增长；它仍是 Provider fixture，真实页面、标签页上限和 Chrome
 进程数仍需后续本机浏览器 E2E 验收。

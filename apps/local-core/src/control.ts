@@ -101,6 +101,7 @@ import {
 } from "./staging-transfer.js";
 import { LocalCandidateArchiveService } from "./candidate-archive-service.js";
 import { TriggerRuntime } from "./trigger-runtime.js";
+import { assertScheduleDefinition } from "./schedule-calendar.js";
 import { RecoverySessionService } from "./recovery-session.js";
 
 export const CONTROL_MAX_MESSAGE_BYTES = 512 * 1024;
@@ -145,7 +146,7 @@ export class LocalCoreService {
     this.datasets = new PackagingDatasetService(persistence);
     this.triggers = new TriggerRuntime(
       persistence,
-      (trigger,input,triggerRunId) => {
+      (trigger,input,triggerAttemptId) => {
         this.#assertRuntimeAvailable();
         const resolved = this.#resolveWorkflowResources(
           trigger.spec.workflow.id,
@@ -158,7 +159,7 @@ export class LocalCoreService {
           input,
           resolved.resourceBindings ?? {},
           `trigger:${trigger.spec.id}`,
-          triggerRunId
+          triggerAttemptId
         ) as RunRecord;
       }
     );
@@ -750,6 +751,9 @@ export class LocalCoreService {
           );
         }
         const spec = params.spec as TriggerSpecDefinition;
+        if (spec.kind === "schedule" && spec.schedule) {
+          assertScheduleDefinition(spec.schedule);
+        }
         if (!this.persistence.getPublished("workflow",spec.workflow.id,spec.workflow.version)) {
           throw new Error(
             `Published workflow not found: ${spec.workflow.id}@${spec.workflow.version}`
@@ -763,7 +767,7 @@ export class LocalCoreService {
       case "trigger.list":
         return this.persistence.listTriggerSpecs();
       case "trigger.runs":
-        return this.persistence.listTriggerRuns(
+        return this.persistence.listTriggerOccurrences(
           params.triggerId === undefined ? undefined : String(params.triggerId)
         );
       case "trigger.enable":
@@ -784,24 +788,39 @@ export class LocalCoreService {
         if (!requestKey) throw new Error("Manual Trigger requires requestKey");
         return this.triggers.fire({ trigger,occurrenceKey:`manual:${requestKey}` });
       }
-      case "browser.control-lease.acquire":
+      case "browser.control-lease.acquire": {
+        const ownerId = String(params.ownerId);
+        if (ownerId.startsWith("trigger-attempt:")) {
+          throw new Error("LEASE_OWNER_RESERVED");
+        }
         return this.persistence.acquireBrowserControlLease({
-          resourceId:String(params.resourceId),ownerId:String(params.ownerId),
+          resourceId:String(params.resourceId),ownerId,
           now:new Date().toISOString(),ttlSeconds:Number(params.ttlSeconds ?? 120)
         });
-      case "browser.control-lease.renew":
+      }
+      case "browser.control-lease.renew": {
+        const ownerId = String(params.ownerId);
+        if (ownerId.startsWith("trigger-attempt:")) {
+          throw new Error("LEASE_OWNER_RESERVED");
+        }
         return this.persistence.renewBrowserControlLease({
-          resourceId:String(params.resourceId),ownerId:String(params.ownerId),
+          resourceId:String(params.resourceId),ownerId,
           fencingToken:Number(params.fencingToken),now:new Date().toISOString(),
           ttlSeconds:Number(params.ttlSeconds ?? 120)
         });
-      case "browser.control-lease.release":
+      }
+      case "browser.control-lease.release": {
+        const ownerId = String(params.ownerId);
+        if (ownerId.startsWith("trigger-attempt:")) {
+          throw new Error("LEASE_OWNER_RESERVED");
+        }
         return {
           released:this.persistence.releaseBrowserControlLease({
-            resourceId:String(params.resourceId),ownerId:String(params.ownerId),
+            resourceId:String(params.resourceId),ownerId,
             fencingToken:Number(params.fencingToken),releasedAt:new Date().toISOString()
           })
         };
+      }
       case "browser.control-lease.list":
         return this.persistence.listBrowserControlLeases(new Date().toISOString());
       case "browser.session.list":
@@ -1428,7 +1447,7 @@ export class LocalCoreService {
     input: unknown,
     resourceBindings: unknown,
     actor: string,
-    triggerRunId?: string
+    triggerAttemptId?: string
   ): unknown {
     const artifact = this.persistence.getPublished(
       "workflow",
@@ -1481,7 +1500,7 @@ export class LocalCoreService {
           resourceSlots: Object.keys(plan.resourceSlots ?? {}).sort()
         },
         bindResources,
-        triggerRunId
+        triggerAttemptId
       );
     }
     if (

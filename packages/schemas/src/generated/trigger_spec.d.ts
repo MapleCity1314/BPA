@@ -1,9 +1,9 @@
 /* Generated from canonical JSON Schema. Do not edit manually. */
 
-export type BPATriggerSpecV1Alpha1 = {
+export type BPATriggerSpecV1Alpha2 = {
   [k: string]: unknown;
 } & {
-  apiVersion: "bpa.trigger/v1alpha1";
+  apiVersion: "bpa.trigger/v1alpha2";
   id: string;
   version: string;
   appId: string;
@@ -20,12 +20,22 @@ export type BPATriggerSpecV1Alpha1 = {
   concurrencyKey: string;
   browserInstanceId?: string;
   idempotencyPolicy: "occurrence" | "dataset_version" | "request_key";
-  retryPolicy: "none" | "safe_once";
+  retryPolicy: "none";
   missedRunPolicy?: "skip" | "run_once" | "bounded_catch_up";
-  schedule?: {
-    intervalSeconds: number;
-    timezone?: string;
-  };
+  maxCatchUpOccurrences?: number;
+  schedule?:
+    | {
+        type: "daily";
+        timezone: string;
+        localTime: string;
+        onTimeWindowSeconds: number;
+      }
+    | {
+        type: "interval";
+        anchorAt: string;
+        intervalSeconds: number;
+        onTimeWindowSeconds: number;
+      };
   dataset?: {
     id: string;
   };

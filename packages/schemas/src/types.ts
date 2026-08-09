@@ -63,7 +63,7 @@ import type {
 import type {
   BPAAuthoringCandidateBundleV1Alpha1
 } from "./generated/candidate_bundle.js";
-import type { BPATriggerSpecV1Alpha1 } from "./generated/trigger_spec.js";
+import type { BPATriggerSpecV1Alpha2 } from "./generated/trigger_spec.js";
 
 export type {
   BPABrowserProtocolV2Message,
@@ -84,7 +84,7 @@ export type {
   BPASourceRecordV1Alpha1,
   BPAAssetRecordV1Alpha1,
   BPAEvidenceLinkV1Alpha1,
-  BPATriggerSpecV1Alpha1,
+  BPATriggerSpecV1Alpha2,
   BPASignedPermissionGrant,
   BPAWorkflow,
   BPAWorkflowV1Alpha2,
@@ -120,7 +120,7 @@ export type ScenarioSpecDefinition = BPAAuthoringScenarioSpecV1Alpha1;
 export type AuthoringSessionDefinition = BPAAuthoringSessionV1Alpha1;
 export type PageSnapshotDefinition = BPAAuthoringPageSnapshotV1Alpha1;
 export type CandidateBundleDefinition = BPAAuthoringCandidateBundleV1Alpha1;
-export type TriggerSpecDefinition = BPATriggerSpecV1Alpha1;
+export type TriggerSpecDefinition = BPATriggerSpecV1Alpha2;
 export type SignedPermissionGrant = BPASignedPermissionGrant;
 export type RiskLevel = BPAWorkflow["spec"]["riskLevel"];
 export type TimingPolicy = BPATimingPolicyV1;
