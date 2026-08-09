@@ -92,6 +92,26 @@ function records(value: unknown): Record<string, unknown>[] {
     : [];
 }
 
+function attentionList(value: unknown): {
+  items: Record<string, unknown>[];
+  total: number;
+  truncated: boolean;
+} | undefined {
+  const envelope = record(value);
+  if (!envelope || !Array.isArray(envelope.items)) return undefined;
+  const items = records(envelope.items);
+  if (items.length !== envelope.items.length) return undefined;
+  const total = integer(envelope.total, -1);
+  if (
+    total < items.length ||
+    typeof envelope.truncated !== "boolean" ||
+    (envelope.truncated ? total <= items.length : total !== items.length)
+  ) {
+    return undefined;
+  }
+  return { items, total, truncated: envelope.truncated };
+}
+
 function text(value: unknown, fallback = ""): string {
   return typeof value === "string" && value ? value : fallback;
 }
@@ -405,9 +425,13 @@ export class UdsControlBackend implements ControlBackend {
             .catch(() => []),
           this.#client
             .request<unknown>(CONSOLE_CONTROL_METHODS.attentionList, {
+              states: ["open"],
               limit: 100
             })
-            .catch(() => []),
+            .then(
+              (value) => ({ available: true as const, value }),
+              () => ({ available: false as const, value: undefined })
+            ),
           query.includeRecoverySessions === false
             ? Promise.resolve([])
             : this.#client
@@ -505,53 +529,96 @@ export class UdsControlBackend implements ControlBackend {
               ]
             : [];
       const pendingTaskCount = records(taskValue).length;
-      const alerts: AttentionView[] = records(attentionValue).flatMap((item) => {
-        const id = text(item.id);
-        const kind = text(item.kind);
-        const deliveryState = text(item.deliveryState, "missing");
-        if (
-          !id ||
-          ![
-            "information",
-            "review",
-            "action",
-            "approval",
-            "blocking"
-          ].includes(kind) ||
-          ![
-            "pending",
-            "delivering",
-            "delivered",
+      const parsedAttention = attentionValue.available
+        ? attentionList(attentionValue.value)
+        : undefined;
+      const attentionTotal = parsedAttention?.total ?? 0;
+      const attentionTruncated = parsedAttention?.truncated ?? false;
+      const alerts: AttentionView[] = (parsedAttention?.items ?? []).flatMap(
+        (item) => {
+          const id = text(item.id);
+          const kind = text(item.kind);
+          const deliveryState = text(item.deliveryState, "missing");
+          const deliveryPolicy = text(item.deliveryPolicy);
+          const sourceRef = record(item.sourceRef);
+          const sourceKind = text(sourceRef?.kind);
+          const sourceRunId = text(sourceRef?.runId);
+          const sourceOccurrenceId = text(sourceRef?.occurrenceId);
+          const sourceRefIsValid =
+            (sourceKind === "workflow-run" && sourceRunId.length > 0) ||
+            (sourceKind === "trigger-occurrence" &&
+              sourceOccurrenceId.length > 0);
+          const runStatus = text(item.runStatus);
+          const terminalRunIsSafe = [
+            "rejected",
             "failed",
-            "uncertain",
-            "missing"
-          ].includes(deliveryState)
-        ) {
-          return [];
-        }
-        return [
-          {
-            id,
-            ...(text(item.runId) ? { runId: text(item.runId) } : {}),
-            kind: kind as AttentionView["kind"],
-            title: text(item.title, "任务需要处理"),
-            reason: text(item.reason, "任务没有确定完成。"),
-            requestedAction: text(
-              item.requestedAction,
-              "查看运行记录后再决定是否重新发起。"
-            ),
-            createdAt: safeTimestamp(item.createdAt, observedAt),
-            revision: integer(item.revision),
-            deliveryState: deliveryState as AttentionView["deliveryState"],
-            deliveryAttempt: integer(item.deliveryAttempt),
-            recoverable:
-              item.groupKey === "authentication" && kind === "blocking",
-            ...(text(item.deliveryErrorCode)
-              ? { deliveryErrorCode: text(item.deliveryErrorCode) }
-              : {})
+            "uncertain"
+          ].includes(runStatus);
+          if (
+            !id ||
+            !sourceRefIsValid ||
+            !["operator-notification", "dashboard-only"].includes(
+              deliveryPolicy
+            ) ||
+            ![
+              "information",
+              "review",
+              "action",
+              "approval",
+              "blocking"
+            ].includes(kind) ||
+            ![
+              "pending",
+              "delivering",
+              "delivered",
+              "failed",
+              "uncertain",
+              "not-requested",
+              "missing"
+            ].includes(deliveryState) ||
+            (deliveryPolicy === "dashboard-only") !==
+              (deliveryState === "not-requested") ||
+            (deliveryState === "not-requested" &&
+              (integer(item.deliveryAttempt) !== 0 ||
+                text(item.deliveryErrorCode).length > 0))
+          ) {
+            return [];
           }
-        ];
-      });
+          return [
+            {
+              id,
+              ...(sourceRunId ? { runId: sourceRunId } : {}),
+              kind: kind as AttentionView["kind"],
+              title: text(item.title, "任务需要处理"),
+              reason: text(item.reason, "任务没有确定完成。"),
+              requestedAction: text(
+                item.requestedAction,
+                "查看运行记录后再决定是否重新发起。"
+              ),
+              createdAt: safeTimestamp(item.createdAt, observedAt),
+              revision: integer(item.revision),
+              deliveryState: deliveryState as AttentionView["deliveryState"],
+              deliveryAttempt: integer(item.deliveryAttempt),
+              recoverable:
+                sourceKind === "workflow-run" &&
+                sourceRunId.length > 0 &&
+                item.source === "browser" &&
+                deliveryPolicy === "operator-notification" &&
+                item.groupKey === "authentication" &&
+                kind === "blocking" &&
+                item.blocking === true &&
+                terminalRunIsSafe &&
+                browserSessions.some((session) => session.recoveryBinding),
+              ...(text(item.deliveryErrorCode)
+                ? { deliveryErrorCode: text(item.deliveryErrorCode) }
+                : {})
+            }
+          ];
+        }
+      );
+      const attentionAvailable =
+        parsedAttention !== undefined &&
+        alerts.length === parsedAttention.items.length;
       const recoverySessions = records(recoveryValue).flatMap((value) => {
         try {
           return [recoverySessionView(value)];
@@ -561,13 +628,15 @@ export class UdsControlBackend implements ControlBackend {
       });
       return {
         attention:
-          !boolean(persistence.writable) || !browserReady
+          !boolean(persistence.writable) || !browserReady || !attentionAvailable
             ? "action"
             : alerts.some((item) =>
                 ["action", "approval", "blocking"].includes(item.kind)
               )
               ? "action"
-            : pendingTaskCount > 0
+            : alerts.length > 0 ||
+                pendingTaskCount > 0 ||
+                attentionTruncated
               ? "attention"
               : "normal",
         headline:
@@ -575,11 +644,15 @@ export class UdsControlBackend implements ControlBackend {
             ? "业务数据暂时不可写"
             : !browserReady
               ? "请连接并准备 Chrome"
-              : alerts.length > 0
-                ? `发现 ${alerts.length} 项运行问题`
-              : pendingTaskCount > 0
-                ? `有 ${pendingTaskCount} 项等待处理`
-                : "系统运行正常",
+              : !attentionAvailable
+                ? "运行问题状态暂时不可读"
+                : alerts.length > 0
+                  ? `发现 ${alerts.length} 项运行问题`
+                  : attentionTruncated
+                    ? `运行问题超过显示上限，共 ${attentionTotal} 项`
+                    : pendingTaskCount > 0
+                      ? `有 ${pendingTaskCount} 项等待处理`
+                      : "系统运行正常",
         runtimeVersion: "0.6.0",
         components: [
           {
@@ -615,13 +688,29 @@ export class UdsControlBackend implements ControlBackend {
               : browserConnected
                 ? "扩展已连接，正在等待页面能力"
                 : "尚未连接浏览器"
+          },
+          {
+            id: "attention",
+            label: "运行问题",
+            status: attentionAvailable ? "healthy" : "unavailable",
+            summary: attentionAvailable
+              ? attentionTruncated
+                ? `当前显示 ${alerts.length} 项，共 ${attentionTotal} 项`
+                : `已读取 ${attentionTotal} 项待处理状态`
+              : "运行问题状态暂时不可读，请稍后复核"
           }
         ],
         browserSessions,
         alerts,
         recoverySessions,
         activeRunCount: 0,
-        pendingTaskCount
+        pendingTaskCount,
+        ...(attentionAvailable
+          ? {
+              attentionTotal,
+              attentionTruncated
+            }
+          : {})
       };
     } catch {
       return {

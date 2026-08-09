@@ -3,6 +3,7 @@ import {
   aggregateAttentionItems,
   attentionRequiresInterruption,
   createAttentionItem,
+  projectTerminalTriggerOccurrenceAttention,
   projectTerminalRunAttention,
   type AttentionItem
 } from "./index.js";
@@ -28,6 +29,25 @@ function item(id: string, overrides: Partial<AttentionItem> = {}): AttentionItem
 }
 
 describe("AttentionItem", () => {
+  it("projects pre-Run Trigger terminal outcomes without leaking diagnostics", () => {
+    const attention = projectTerminalTriggerOccurrenceAttention({
+      occurrenceId: "occurrence-private-id",
+      outcome: "blocked",
+      updatedAt: "2026-08-09T12:00:00.000Z"
+    });
+
+    expect(attention).toMatchObject({
+      id: "trigger-occurrence-terminal:occurrence-private-id",
+      stageKey: "trigger",
+      groupKey: "trigger-blocked",
+      kind: "blocking",
+      source: "runtime",
+      blocking: true,
+      batchable: false
+    });
+    expect(JSON.stringify(attention)).not.toContain("diagnostic");
+  });
+
   it("groups similar ambiguity into one batch prompt", () => {
     const grouped = aggregateAttentionItems([
       item("attention-1"),

@@ -136,8 +136,18 @@ export class RecoverySessionService {
       !attention ||
       attention.state !== "open" ||
       attention.revision !== input.expectedAttentionRevision ||
+      attention.sourceRef.kind !== "workflow-run" ||
+      attention.deliveryPolicy !== "operator-notification" ||
+      attention.item.source !== "browser" ||
       !attention.item.blocking ||
       attention.item.groupKey !== "authentication"
+    ) {
+      throw new Error("RECOVERY_ATTENTION_NOT_ELIGIBLE");
+    }
+    const run = this.persistence.getRun(attention.sourceRef.runId);
+    if (
+      !run ||
+      !["rejected", "failed", "uncertain"].includes(run.status)
     ) {
       throw new Error("RECOVERY_ATTENTION_NOT_ELIGIBLE");
     }
@@ -177,6 +187,7 @@ export class RecoverySessionService {
     const record = this.persistence.issueRecoverySession({
       id: this.idFactory(),
       attentionId: input.attentionId,
+      expectedAttentionRevision: input.expectedAttentionRevision,
       requestedBy: input.requestedBy,
       browserSessionId: input.browserSessionId,
       browserInstanceId: input.browserInstanceId,
@@ -194,10 +205,13 @@ export class RecoverySessionService {
   }
 
   list(limit = 100): PublicRecoverySession[] {
-    this.#expire();
     return this.persistence
       .listRecoverySessions({ limit })
       .map(publicRecord);
+  }
+
+  sweepExpired(): void {
+    this.#expire();
   }
 
   activate(input: {

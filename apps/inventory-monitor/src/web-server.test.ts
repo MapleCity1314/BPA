@@ -88,6 +88,7 @@ describe("inventory review server", () => {
       expect(clientScript).not.toContain("订单数据质量阻断");
       expect(clientScript).toContain("数据待确认");
       expect(clientScript).toContain("影响 '+esc(group.count)+' 个商品");
+      expect(clientScript).toContain("item.notificationEligible!==false");
       const launch = new URL(server.launchUrl);
       const launchToken = new URLSearchParams(launch.hash.slice(1)).get("token");
       expect(launch.hostname).toBe("127.0.0.1");
@@ -292,6 +293,93 @@ describe("inventory review server", () => {
       });
       expect(repository.overview).toHaveBeenCalledTimes(2);
       expect(repository.collectionControlHealth).toHaveBeenCalledOnce();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("reads runtime attention only after authentication and appends safe reminders",async () => {
+    const repository = {
+      collectionControlHealth:vi.fn(async () => healthyControl()),
+      overview:vi.fn(async () => ({
+        counts:{ products:1,skus:1,incidents:0 },
+        reminders:[],products:[],incidents:[],schedules:[],coldStart:{},
+        backtest:{ status:"insufficient_data",points:[] },rules:{}
+      })),
+      reviewIncident:vi.fn(async () => undefined)
+    };
+    const runtimeAttentionReminders = vi.fn(async () => [{
+      id:"bpa-trigger-attention:0123456789abcdef01234567" as const,
+      severity:"warning" as const,
+      title:"库存采集错过计划时间",
+      detail:"该轮采集未在计划窗口内开始。",
+      source:"BPA 触发调度",
+      action:"检查共享浏览器和调度状态。",
+      notificationEligible:false
+    }]);
+    const server = await startInventoryWebServer({
+      repository,shopId:"shop-1",port:0,runtimeAttentionReminders
+    });
+    try {
+      const unauthenticated = await fetch(
+        `http://127.0.0.1:${server.port}/api/overview`,
+        { headers:{ "x-forwarded-for":"192.0.2.1" } }
+      );
+      expect(unauthenticated.status).toBe(401);
+      expect(runtimeAttentionReminders).not.toHaveBeenCalled();
+
+      const session = await fetch(`http://127.0.0.1:${server.port}/api/session`);
+      const cookie = session.headers.get("set-cookie")?.split(";",1)[0];
+      const overview = await fetch(
+        `http://127.0.0.1:${server.port}/api/overview`,
+        { headers:{ cookie:cookie! } }
+      );
+      expect(overview.status).toBe(200);
+      await expect(overview.json()).resolves.toMatchObject({
+        reminders:[{
+          id:"bpa-trigger-attention:0123456789abcdef01234567",
+          title:"库存采集错过计划时间",
+          notificationEligible:false
+        }]
+      });
+      expect(runtimeAttentionReminders).toHaveBeenCalledOnce();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps inventory readable and reports a safe warning when Core attention is unavailable",async () => {
+    const repository = {
+      collectionControlHealth:vi.fn(async () => healthyControl()),
+      overview:vi.fn(async () => ({
+        counts:{ products:3,skus:7,incidents:0 },
+        reminders:[],products:[],incidents:[],schedules:[],coldStart:{},
+        backtest:{ status:"insufficient_data",points:[] },rules:{}
+      })),
+      reviewIncident:vi.fn(async () => undefined)
+    };
+    const server = await startInventoryWebServer({
+      repository,shopId:"shop-1",port:0,
+      runtimeAttentionReminders:vi.fn(async () => {
+        throw new Error("socket /private/internal/core.sock unavailable");
+      })
+    });
+    try {
+      const session = await fetch(`http://127.0.0.1:${server.port}/api/session`);
+      const cookie = session.headers.get("set-cookie")?.split(";",1)[0];
+      const response = await fetch(
+        `http://127.0.0.1:${server.port}/api/overview`,
+        { headers:{ cookie:cookie! } }
+      );
+      expect(response.status).toBe(200);
+      const overview = await response.json() as Record<string,unknown>;
+      expect(overview.counts).toEqual(expect.objectContaining({ products:3,skus:7 }));
+      expect(overview.reminders).toEqual(expect.arrayContaining([expect.objectContaining({
+        id:"bpa-trigger-attention:unavailable",
+        title:"BPA 触发状态暂不可读",
+        notificationEligible:false
+      })]));
+      expect(JSON.stringify(overview)).not.toContain("/private/internal/core.sock");
     } finally {
       await server.close();
     }

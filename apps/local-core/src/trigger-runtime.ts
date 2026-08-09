@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { projectTerminalTriggerOccurrenceAttention } from "@bpa/attention-core";
 import type {
+  AttentionRecord,
   BrowserControlLeaseRecord,
   Persistence,
   RunRecord,
@@ -212,16 +214,16 @@ export class TriggerRuntime {
     }
     const now = nowDate.toISOString();
     for (const stale of candidates.slice(0, keepFrom)) {
-      this.persistence.updateTriggerOccurrence({
+      this.persistence.finishTriggerOccurrenceWithAttention({
         occurrenceId: stale.occurrenceId,
         expectedRevision: stale.revision,
-        status: "terminal",
-        terminalOutcome: outcome,
+        outcome,
         diagnostic:
           outcome === "skipped"
             ? "The schedule occurrence exceeded its on-time window."
             : "A newer schedule occurrence superseded this catch-up candidate.",
-        updatedAt: now
+        updatedAt: now,
+        attention: this.triggerAttention(stale, outcome, now)
       });
     }
   }
@@ -241,13 +243,13 @@ export class TriggerRuntime {
         occurrence.triggerVersion
       );
       if (!pinned) {
-        this.persistence.updateTriggerOccurrence({
+        this.persistence.finishTriggerOccurrenceWithAttention({
           occurrenceId: occurrence.occurrenceId,
           expectedRevision: occurrence.revision,
-          status: "terminal",
-          terminalOutcome: "failed",
+          outcome: "failed",
           diagnostic: "Pinned TriggerSpec version is missing.",
-          updatedAt: now
+          updatedAt: now,
+          attention: this.triggerAttention(occurrence, "failed", now)
         });
         continue;
       }
@@ -351,14 +353,24 @@ export class TriggerRuntime {
       this.createRun(trigger, trigger.spec.input, attemptId);
     } catch (error) {
       const diagnostic = error instanceof Error ? error.message : String(error);
+      const currentAttempt = this.persistence.getTriggerAttempt(attemptId)!;
+      if (currentAttempt.workflowRunId) {
+        return {
+          occurrence: this.persistence.getTriggerOccurrence(
+            created.occurrence.occurrenceId
+          )!,
+          attempt: currentAttempt
+        };
+      }
       this.persistence.finishTriggerAttempt({
         attemptId,
-        expectedAttemptRevision: attempt.revision,
+        expectedAttemptRevision: currentAttempt.revision,
         occurrenceId: created.occurrence.occurrenceId,
         expectedOccurrenceRevision: created.occurrence.revision,
         outcome: "blocked",
         diagnostic,
-        updatedAt: now
+        updatedAt: now,
+        attention: this.triggerAttention(created.occurrence, "blocked", now)
       });
       this.releaseLeases(
         trigger.spec,
@@ -392,10 +404,9 @@ export class TriggerRuntime {
     now: string
   ): TriggerOccurrenceRecord {
     try {
-      return this.persistence.updateTriggerOccurrence({
+      return this.persistence.deferTriggerOccurrence({
         occurrenceId: occurrence.occurrenceId,
         expectedRevision: occurrence.revision,
-        status: "deferred",
         nextAttemptAt: new Date(
           Date.parse(now) + DEFER_SECONDS * 1_000
         ).toISOString(),
@@ -559,7 +570,10 @@ export class TriggerRuntime {
       expectedOccurrenceRevision: occurrence.revision,
       outcome,
       ...(diagnostic ? { diagnostic } : {}),
-      updatedAt: now
+      updatedAt: now,
+      ...(!attempt.workflowRunId && (outcome === "blocked" || outcome === "failed")
+        ? { attention: this.triggerAttention(occurrence, outcome, now) }
+        : {})
     });
     this.releaseLeases(trigger, attempt.attemptId, leases, now);
   }
@@ -578,7 +592,10 @@ export class TriggerRuntime {
       expectedOccurrenceRevision: occurrence.revision,
       outcome,
       diagnostic,
-      updatedAt: now
+      updatedAt: now,
+      ...(!attempt.workflowRunId && (outcome === "blocked" || outcome === "failed")
+        ? { attention: this.triggerAttention(occurrence, outcome, now) }
+        : {})
     });
   }
 
@@ -658,5 +675,26 @@ export class TriggerRuntime {
 
   private browserResourceId(browserInstanceId: string): string {
     return `browser-instance:${browserInstanceId}`;
+  }
+
+  private triggerAttention(
+    occurrence: TriggerOccurrenceRecord,
+    outcome: "missed" | "skipped" | "blocked" | "failed",
+    now: string
+  ): AttentionRecord {
+    return {
+      sourceRef: {
+        kind: "trigger-occurrence",
+        occurrenceId: occurrence.occurrenceId
+      },
+      deliveryPolicy: "dashboard-only",
+      item: projectTerminalTriggerOccurrenceAttention({
+        occurrenceId: occurrence.occurrenceId,
+        outcome,
+        updatedAt: now
+      }),
+      state: "open",
+      revision: 0
+    };
   }
 }

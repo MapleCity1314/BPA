@@ -61,6 +61,12 @@ export interface TerminalRunAttentionInput {
   }[];
 }
 
+export interface TerminalTriggerOccurrenceAttentionInput {
+  readonly occurrenceId: string;
+  readonly outcome: "missed" | "skipped" | "blocked" | "failed";
+  readonly updatedAt: string;
+}
+
 const AUTHENTICATION_CODES = new Set([
   "AUTH_REQUIRED",
   "CAPTCHA_REQUIRED",
@@ -132,6 +138,66 @@ export function projectTerminalRunAttention(
         : "查看运行记录中的失败步骤，处理原因后再重新发起。",
     blocking,
     batchable: false,
+    attemptedActions: [],
+    resumesAutomatically: false,
+    createdAt: input.updatedAt
+  });
+}
+
+/**
+ * Projects a Trigger occurrence that terminated before a Workflow Run existed.
+ * The copy is deliberately controlled: diagnostics, Trigger identifiers and
+ * shop inputs never cross into dashboard-facing Attention records.
+ */
+export function projectTerminalTriggerOccurrenceAttention(
+  input: TerminalTriggerOccurrenceAttentionInput
+): AttentionItem {
+  const presentation = (() => {
+    switch (input.outcome) {
+      case "missed":
+        return {
+          kind: "review" as const,
+          title: "计划任务未执行",
+          reason: "系统保留了更新的补跑机会，本次计划窗口未执行。",
+          requestedAction: "查看任务调度状态；确认最新一次计划任务已经进入执行队列。",
+          blocking: false,
+          batchable: true
+        };
+      case "skipped":
+        return {
+          kind: "review" as const,
+          title: "计划任务已跳过",
+          reason: "本次计划任务已超过允许的准时执行窗口。",
+          requestedAction: "查看任务调度状态；如持续出现，请检查浏览器占用和计划频率。",
+          blocking: false,
+          batchable: true
+        };
+      case "blocked":
+        return {
+          kind: "blocking" as const,
+          title: "任务启动前已安全阻断",
+          reason: "工作流尚未启动，系统已停止本次执行以避免不确定操作。",
+          requestedAction: "查看 BPA 运行状态并处理阻断原因；确认前不要重复触发。",
+          blocking: true,
+          batchable: false
+        };
+      case "failed":
+        return {
+          kind: "action" as const,
+          title: "任务启动失败",
+          reason: "工作流尚未创建，本次任务已在启动阶段失败。",
+          requestedAction: "查看 BPA 运行状态并处理启动故障，然后等待下一次计划任务。",
+          blocking: false,
+          batchable: false
+        };
+    }
+  })();
+  return createAttentionItem({
+    id: `trigger-occurrence-terminal:${input.occurrenceId}`,
+    stageKey: "trigger",
+    groupKey: `trigger-${input.outcome}`,
+    source: "runtime",
+    ...presentation,
     attemptedActions: [],
     resumesAutomatically: false,
     createdAt: input.updatedAt

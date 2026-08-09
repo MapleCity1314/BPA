@@ -244,7 +244,7 @@ async function launch(
 
 describe("Console Host security boundary", () => {
   it("exchanges a fragment-only token once and creates a hardened session", async () => {
-    const { handle, exchange, cookie } = await launch();
+    const { backend, handle, exchange, cookie } = await launch();
     expect(handle.launchUrl).toContain("/#token=");
     expect(exchange.status).toBe(200);
     expect(exchange.headers.get("set-cookie")).toContain("HttpOnly");
@@ -268,6 +268,9 @@ describe("Console Host security boundary", () => {
       headers: { Cookie: cookie }
     });
     expect(dashboard.status).toBe(200);
+    expect(backend.getDashboard).toHaveBeenCalledWith({
+      includeRecoverySessions: true
+    });
   });
 
   it("acknowledges attention through an authenticated CAS mutation", async () => {
@@ -470,7 +473,7 @@ describe("Console Host security boundary", () => {
         id: "attention-secret",
         runId: "run-secret",
         kind: "blocking",
-        title: "需要复核",
+        title: "internal.workflow.trigger-occurrence-1 需要复核",
         reason: "socket=/private/core.sock",
         requestedAction: "open /private/browser-profile",
         createdAt: "2030-01-01T00:00:00.000Z",
@@ -503,6 +506,7 @@ describe("Console Host security boundary", () => {
       pendingTaskCount: 0,
       alerts: [{
         id: "viewer-attention-1",
+        title: "运行状态需要关注",
         reason: "运行产生一项需要关注的状态。",
         requestedAction: "请在 Mac 执行端复核后处理。",
         revision: 0,
@@ -514,6 +518,7 @@ describe("Console Host security boundary", () => {
     expect(JSON.stringify(dashboardBody)).not.toContain("attention-secret");
     expect(JSON.stringify(dashboardBody)).not.toContain("run-secret");
     expect(JSON.stringify(dashboardBody)).not.toContain("INTERNAL_TRANSPORT_ERROR");
+    expect(JSON.stringify(dashboardBody)).not.toContain("internal.workflow");
     expect(backend.getDashboard).toHaveBeenCalledWith({
       includeRecoverySessions: false
     });

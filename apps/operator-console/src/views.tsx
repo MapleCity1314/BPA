@@ -745,6 +745,7 @@ export function TaskCenter({
     delivered: "通知渠道已受理",
     failed: "通知投递失败",
     uncertain: "通知结果不确定",
+    "not-requested": "仅在工作台显示",
     missing: "通知任务缺失"
   };
   const [busyId, setBusyId] = useState("");

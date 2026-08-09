@@ -943,23 +943,78 @@ export class LocalCoreService {
         const limit = Number.isSafeInteger(requestedLimit)
           ? Math.min(Math.max(requestedLimit, 1), 200)
           : 100;
-        return this.persistence
-          .listAttention({ states: ["open"], limit })
-          .map((record) => {
+        const states = Array.isArray(params.states)
+          ? params.states.map(String)
+          : ["open"];
+        if (
+          states.length === 0 ||
+          states.some(
+            (state) => state !== "open" && state !== "acknowledged"
+          )
+        ) {
+          throw new Error("Attention state filter is invalid.");
+        }
+        const sourceKinds = params.sourceKind === undefined
+          ? undefined
+          : [String(params.sourceKind)];
+        if (
+          sourceKinds?.some(
+            (kind) => kind !== "workflow-run" && kind !== "trigger-occurrence"
+          )
+        ) {
+          throw new Error("Attention source filter is invalid.");
+        }
+        const appIds = params.appIds === undefined
+          ? undefined
+          : Array.isArray(params.appIds)
+            ? params.appIds.map(String)
+            : (() => {
+                throw new Error("Attention app filter is invalid.");
+              })();
+        if (appIds && appIds.length === 0) {
+          throw new Error("Attention app filter is invalid.");
+        }
+        const result = this.persistence.queryAttention({
+          states: states as ("open" | "acknowledged")[],
+          ...(sourceKinds
+            ? {
+                sourceKinds: sourceKinds as (
+                  | "workflow-run"
+                  | "trigger-occurrence"
+                )[]
+              }
+            : {}),
+          ...(appIds ? { appIds } : {}),
+          limit
+        });
+        return {
+          items: result.records.map((record) => {
             const delivery = this.persistence.getAttentionDeliveryForAttention(
               record.item.id
             );
+            const run = record.sourceRef.kind === "workflow-run"
+              ? this.persistence.getRun(record.sourceRef.runId)
+              : undefined;
             return {
               ...record.item,
+              sourceRef: record.sourceRef,
+              deliveryPolicy: record.deliveryPolicy,
               state: record.state,
               revision: record.revision,
-              deliveryState: delivery?.state ?? "missing",
+              ...(run ? { runStatus: run.status } : {}),
+              deliveryState:
+                record.deliveryPolicy === "dashboard-only"
+                  ? "not-requested"
+                  : delivery?.state ?? "missing",
               deliveryAttempt: delivery?.attempt ?? 0,
               ...(delivery?.lastErrorCode
                 ? { deliveryErrorCode: delivery.lastErrorCode }
                 : {})
             };
-          });
+          }),
+          total: result.total,
+          truncated: result.truncated
+        };
       }
       case "attention.acknowledge":
         return this.persistence.acknowledgeAttention({
@@ -1501,6 +1556,11 @@ export class LocalCoreService {
         },
         bindResources,
         triggerAttemptId
+      );
+    }
+    if (triggerAttemptId) {
+      throw new Error(
+        "Triggered execution requires a canonical Workflow."
       );
     }
     if (

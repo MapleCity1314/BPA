@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse } from "yaml";
 import {
   CONTROL_HELLO_PROTOCOL_VERSION,
   CONTROL_MAX_MESSAGE_BYTES,
@@ -109,6 +111,80 @@ afterEach(async () => {
 });
 
 describe("local control socket", () => {
+  it("blocks a legacy Workflow Trigger before creating an orphan Run", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const service = new LocalCoreService(persistence);
+    for (const path of [
+      "../../../nodes/core/control.start.node.yaml",
+      "../../../nodes/core/data.select.node.yaml",
+      "../../../nodes/core/data.merge.node.yaml",
+      "../../../nodes/core/control.succeed.node.yaml"
+    ]) {
+      const node = parse(
+        readFileSync(new URL(path, import.meta.url), "utf8")
+      ) as unknown;
+      expect(service.handle({
+        id: `publish-node:${path}`,
+        method: "asset.publish",
+        params: { assetType: "node", content: node, actor: "test" }
+      })).toMatchObject({ ok: true });
+    }
+    const workflow = parse(
+      readFileSync(
+        new URL("../../../workflows/examples/core.data-flow-smoke.workflow.yaml", import.meta.url),
+        "utf8"
+      )
+    ) as unknown;
+    expect(service.handle({
+      id: "publish-legacy-workflow",
+      method: "asset.publish",
+      params: { assetType: "workflow", content: workflow, actor: "test" }
+    })).toMatchObject({ ok: true });
+    expect(service.handle({
+      id: "put-legacy-trigger",
+      method: "trigger.put",
+      params: {
+        actor: "test",
+        spec: {
+          apiVersion: "bpa.trigger/v1alpha2",
+          id: "legacy-trigger",
+          version: "1.0.0",
+          appId: "inventory-monitor",
+          kind: "manual",
+          workflow: { id: "core.data-flow-smoke", version: "1.0.0" },
+          enabled: true,
+          inputSchemaVersion: "legacy-trigger/1",
+          input: { payload: {} },
+          concurrencyKey: "legacy-trigger",
+          idempotencyPolicy: "request_key",
+          retryPolicy: "none"
+        }
+      }
+    })).toMatchObject({ ok: true });
+
+    const fired = service.handle({
+      id: "fire-legacy-trigger",
+      method: "trigger.fire",
+      params: { id: "legacy-trigger", requestKey: "request-1" }
+    });
+
+    expect(fired).toMatchObject({
+      ok: true,
+      result: {
+        occurrence: { status: "terminal", terminalOutcome: "blocked" },
+        attempt: { status: "terminal", terminalOutcome: "blocked" }
+      }
+    });
+    expect(persistence.listRuns({ limit: 20 })).toEqual([]);
+    expect(persistence.queryAttention({
+      sourceKinds: ["trigger-occurrence"],
+      appIds: ["inventory-monitor"],
+      limit: 20
+    })).toMatchObject({ total: 1, truncated: false });
+    expect(persistence.listTriggerLeases(new Date().toISOString())).toEqual([]);
+    persistence.close();
+  });
+
   it("lists durable terminal attention with sanitized login guidance", () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const service = new LocalCoreService(persistence);
@@ -160,6 +236,8 @@ describe("local control socket", () => {
       nextStatus: "rejected",
       currentNodeKey: "collect",
       attention: {
+        sourceRef: { kind: "workflow-run", runId: run.id },
+        deliveryPolicy: "operator-notification",
         item: attentionItem,
         state: "open",
         revision: 0
@@ -180,21 +258,36 @@ describe("local control socket", () => {
 
     expect(response).toMatchObject({
       ok: true,
-      result: [
-        {
-          id: "run-terminal:run-login-alert",
-          runId: "run-login-alert",
-          groupKey: "authentication",
-          kind: "blocking",
-          attemptedActions: [],
-          state: "open",
-          revision: 0,
-          deliveryState: "pending",
-          deliveryAttempt: 0
-        }
-      ]
+      result: {
+        items: [
+          {
+            id: "run-terminal:run-login-alert",
+            runId: "run-login-alert",
+            sourceRef: { kind: "workflow-run", runId: "run-login-alert" },
+            deliveryPolicy: "operator-notification",
+            groupKey: "authentication",
+            kind: "blocking",
+            attemptedActions: [],
+            state: "open",
+            revision: 0,
+            runStatus: "rejected",
+            deliveryState: "pending",
+            deliveryAttempt: 0
+          }
+        ],
+        total: 1,
+        truncated: false
+      }
     });
     expect(JSON.stringify(response)).not.toContain("private browser diagnostic");
+    expect(service.handle({
+      id: "attention-empty-app-filter",
+      method: "attention.list",
+      params: { appIds: [], limit: 20 }
+    })).toMatchObject({
+      ok: false,
+      error: { message: "Attention app filter is invalid." }
+    });
     expect(
       service.handle({
         id: "attention-acknowledge",
@@ -215,7 +308,10 @@ describe("local control socket", () => {
         method: "attention.list",
         params: { limit: 20 }
       })
-    ).toMatchObject({ ok: true, result: [] });
+    ).toMatchObject({
+      ok: true,
+      result: { items: [], total: 0, truncated: false }
+    });
     persistence.close();
   });
 
@@ -271,7 +367,7 @@ describe("local control socket", () => {
       sendControlRequest(socketPath, "doctor")
     ).resolves.toMatchObject({
       status: "ok",
-      persistence: { adapter: "sqlite", schemaVersion: 20 }
+      persistence: { adapter: "sqlite", schemaVersion: 21 }
     });
   });
 

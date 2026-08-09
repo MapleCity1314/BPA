@@ -434,6 +434,9 @@ export class SqlitePersistence implements Persistence {
       if (migration.version === 20) {
         this.#assertSeparatedTriggerModelReady();
       }
+      if (migration.version === 21) {
+        this.#assertTriggerAttentionModelReady();
+      }
       this.#db.transaction(() => {
         this.#db.exec(migration.sql);
         this.#inject(`migration.${migration.version}.after_sql`);
@@ -480,6 +483,24 @@ export class SqlitePersistence implements Persistence {
     if (triggerRunCount > 0 || triggerSpecCount > 0) {
       throw new Error(
         "Schema 20 requires an empty legacy Trigger control plane; export and retire v1alpha1 TriggerSpecs and Trigger Runs before upgrading."
+      );
+    }
+  }
+
+  #assertTriggerAttentionModelReady(): void {
+    const occupied = [
+      "attention_records",
+      "attention_deliveries",
+      "recovery_sessions"
+    ].filter((table) => {
+      const row = this.#db
+        .prepare(`SELECT COUNT(*) AS count FROM ${table}`)
+        .get() as { count: number };
+      return Number(row.count) > 0;
+    });
+    if (occupied.length > 0) {
+      throw new Error(
+        "Schema 21 requires an empty legacy Attention control plane; export and retire Attention, deliveries and Recovery Sessions before upgrading."
       );
     }
   }
@@ -5049,35 +5070,26 @@ export class SqlitePersistence implements Persistence {
     return { status:"duplicate",record:this.#readTriggerOccurrence(existing) };
   }
 
-  updateTriggerOccurrence(input: {
+  deferTriggerOccurrence(input: {
     occurrenceId: string;
     expectedRevision: number;
-    status: TriggerOccurrenceStatus;
     updatedAt: string;
-    nextAttemptAt?: string;
-    terminalOutcome?: TriggerTerminalOutcome;
+    nextAttemptAt: string;
     diagnostic?: string;
   }): TriggerOccurrenceRecord {
     assertRevision(input.expectedRevision,"expectedRevision");
-    if ((input.status === "deferred") !== (input.nextAttemptAt !== undefined)) {
+    if (!Number.isFinite(Date.parse(input.nextAttemptAt))) {
       throw new Error("Deferred Trigger Occurrence requires nextAttemptAt");
-    }
-    if ((input.status === "terminal") !== (input.terminalOutcome !== undefined)) {
-      throw new Error("Terminal Trigger Occurrence requires terminalOutcome");
     }
     const current = this.getTriggerOccurrence(input.occurrenceId);
     if (!current || current.revision !== input.expectedRevision) {
       throw new RevisionConflictError("Trigger Occurrence revision changed");
     }
     const allowed =
-      (current.status === "pending" &&
-        (input.status === "deferred" || input.status === "terminal")) ||
-      (current.status === "deferred" &&
-        (input.status === "deferred" || input.status === "terminal")) ||
-      (current.status === "running" && input.status === "terminal");
+      current.status === "pending" || current.status === "deferred";
     if (!allowed) {
       throw new Error(
-        `Invalid Trigger Occurrence transition: ${current.status} -> ${input.status}`
+        `Invalid Trigger Occurrence transition: ${current.status} -> deferred`
       );
     }
     const result = this.#db.prepare(
@@ -5086,7 +5098,7 @@ export class SqlitePersistence implements Persistence {
            diagnostic=COALESCE(?,diagnostic),revision=revision+1
        WHERE occurrence_id=? AND revision=? AND status=?`
     ).run(
-      input.status,input.nextAttemptAt ?? null,input.terminalOutcome ?? null,
+      "deferred",input.nextAttemptAt,null,
       input.updatedAt,input.diagnostic ?? null,input.occurrenceId,input.expectedRevision,
       current.status
     );
@@ -5094,6 +5106,72 @@ export class SqlitePersistence implements Persistence {
       throw new RevisionConflictError("Trigger Occurrence revision changed");
     }
     return this.getTriggerOccurrence(input.occurrenceId)!;
+  }
+
+  finishTriggerOccurrenceWithAttention(input: {
+    occurrenceId: string;
+    expectedRevision: number;
+    outcome: "missed" | "skipped" | "blocked" | "failed";
+    diagnostic?: string;
+    updatedAt: string;
+    attention: AttentionRecord;
+  }): {
+    occurrence: TriggerOccurrenceRecord;
+    attention: AttentionRecord;
+  } {
+    assertRevision(input.expectedRevision, "expectedRevision");
+    this.#assertTriggerOccurrenceAttention(
+      input.attention,
+      input.occurrenceId,
+      input.updatedAt
+    );
+    return this.#db.transaction(() => {
+      const current = this.getTriggerOccurrence(input.occurrenceId);
+      if (!current) {
+        throw new RevisionConflictError("Trigger Occurrence revision changed");
+      }
+      if (current.status === "terminal") {
+        const existing = this.#getAttentionForTriggerOccurrence(
+          input.occurrenceId
+        );
+        if (
+          current.terminalOutcome === input.outcome &&
+          current.diagnostic === input.diagnostic &&
+          existing &&
+          this.#sameAttentionIdentity(existing,input.attention)
+        ) {
+          return { occurrence: current, attention: existing };
+        }
+        throw new RevisionConflictError("Trigger Occurrence is already terminal");
+      }
+      if (
+        current.revision !== input.expectedRevision ||
+        (current.status !== "pending" && current.status !== "deferred")
+      ) {
+        throw new RevisionConflictError("Trigger Occurrence is not finishable");
+      }
+      const result = this.#db.prepare(
+        `UPDATE trigger_occurrences
+         SET status='terminal',terminal_outcome=?,next_attempt_at=NULL,
+             diagnostic=?,updated_at=?,revision=revision+1
+         WHERE occurrence_id=? AND revision=? AND status IN ('pending','deferred')`
+      ).run(
+        input.outcome,
+        input.diagnostic ?? null,
+        input.updatedAt,
+        input.occurrenceId,
+        input.expectedRevision
+      );
+      if (result.changes !== 1) {
+        throw new RevisionConflictError("Trigger Occurrence finish CAS failed");
+      }
+      this.#inject("trigger_occurrence.attention.after_occurrence");
+      this.#insertAttention(input.attention);
+      return {
+        occurrence: this.getTriggerOccurrence(input.occurrenceId)!,
+        attention: this.getAttention(input.attention.item.id)!
+      };
+    })();
   }
 
   getTriggerOccurrence(occurrenceId: string): TriggerOccurrenceRecord | undefined {
@@ -5252,6 +5330,7 @@ export class SqlitePersistence implements Persistence {
     outcome: TriggerTerminalOutcome;
     diagnostic?: string;
     updatedAt: string;
+    attention?: AttentionRecord;
   }): { occurrence:TriggerOccurrenceRecord;attempt:TriggerAttemptRecord } {
     assertRevision(input.expectedAttemptRevision,"expectedAttemptRevision");
     assertRevision(input.expectedOccurrenceRevision,"expectedOccurrenceRevision");
@@ -5260,7 +5339,52 @@ export class SqlitePersistence implements Persistence {
       if (!attempt || attempt.occurrenceId !== input.occurrenceId) {
         throw new RevisionConflictError("Trigger Attempt finish identity changed");
       }
+      const requiresDashboardAttention =
+        !attempt.workflowRunId &&
+        (input.outcome === "blocked" || input.outcome === "failed");
+      if (
+        !attempt.workflowRunId &&
+        input.outcome !== "blocked" &&
+        input.outcome !== "failed"
+      ) {
+        throw new Error(
+          "A pre-Run Trigger Attempt may only terminate as blocked or failed"
+        );
+      }
+      if (requiresDashboardAttention) {
+        if (!input.attention) {
+          throw new Error(
+            `${input.outcome} pre-Run Trigger Attempt requires dashboard Attention`
+          );
+        }
+        this.#assertTriggerOccurrenceAttention(
+          input.attention,
+          input.occurrenceId,
+          input.updatedAt
+        );
+      } else if (input.attention) {
+        throw new Error(
+          "Only blocked or failed pre-Run Trigger Attempts emit dashboard Attention"
+        );
+      }
       if (attempt.status === "terminal") {
+        const occurrence = this.getTriggerOccurrence(input.occurrenceId);
+        const existing = this.#getAttentionForTriggerOccurrence(
+          input.occurrenceId
+        );
+        if (
+          requiresDashboardAttention &&
+          attempt.terminalOutcome === input.outcome &&
+          attempt.diagnostic === input.diagnostic &&
+          occurrence?.status === "terminal" &&
+          occurrence.terminalOutcome === input.outcome &&
+          occurrence.diagnostic === input.diagnostic &&
+          input.attention &&
+          existing &&
+          this.#sameAttentionIdentity(existing,input.attention)
+        ) {
+          return { occurrence, attempt };
+        }
         throw new Error("A terminal Trigger Attempt cannot be finished again");
       }
       const occurrence = this.getTriggerOccurrence(input.occurrenceId);
@@ -5292,6 +5416,10 @@ export class SqlitePersistence implements Persistence {
       );
       if (occurrenceResult.changes !== 1) {
         throw new RevisionConflictError("Trigger Occurrence finish CAS failed");
+      }
+      if (input.attention) {
+        this.#inject("trigger_attempt.finish.before_attention");
+        this.#insertAttention(input.attention);
       }
       return {
         occurrence:this.getTriggerOccurrence(input.occurrenceId)!,
@@ -5543,32 +5671,77 @@ export class SqlitePersistence implements Persistence {
     return row ? this.#readAttention(row) : undefined;
   }
 
-  listAttention(input: {
+  queryAttention(input: {
     states?: readonly AttentionRecord["state"][];
+    sourceKinds?: readonly AttentionRecord["sourceRef"]["kind"][];
+    appIds?: readonly string[];
     limit: number;
-  }): AttentionRecord[] {
-    const requestedLimit = Number.isSafeInteger(input.limit)
-      ? input.limit
-      : 100;
-    const limit = Math.min(Math.max(requestedLimit, 1), 200);
+  }): {
+    records: AttentionRecord[];
+    total: number;
+    truncated: boolean;
+  } {
+    if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 200) {
+      throw new Error("Attention query limit must be between 1 and 200");
+    }
     const states = [...new Set(input.states ?? [])];
-    const rows = (states.length === 0
-      ? this.#db
-          .prepare(
-            `SELECT * FROM attention_records
-             ORDER BY created_at DESC, attention_id
-             LIMIT ?`
-          )
-          .all(limit)
-      : this.#db
-          .prepare(
-            `SELECT * FROM attention_records
-             WHERE state IN (${states.map(() => "?").join(",")})
-             ORDER BY created_at DESC, attention_id
-             LIMIT ?`
-          )
-          .all(...states, limit)) as SqlRow[];
-    return rows.map((row) => this.#readAttention(row));
+    const sourceKinds = [...new Set(input.sourceKinds ?? [])];
+    const appIds = [...new Set(input.appIds ?? [])];
+    if (
+      (input.states !== undefined && states.length === 0) ||
+      (input.sourceKinds !== undefined && sourceKinds.length === 0) ||
+      (input.appIds !== undefined && appIds.length === 0) ||
+      appIds.length > 100 ||
+      appIds.some((appId) => !appId.trim() || appId.length > 200)
+    ) {
+      throw new Error("Attention appId filter is invalid");
+    }
+    const conditions: string[] = [];
+    const parameters: unknown[] = [];
+    if (states.length > 0) {
+      conditions.push(`attention.state IN (${states.map(() => "?").join(",")})`);
+      parameters.push(...states);
+    }
+    if (sourceKinds.length > 0) {
+      conditions.push(
+        `attention.source_type IN (${sourceKinds.map(() => "?").join(",")})`
+      );
+      parameters.push(...sourceKinds);
+    }
+    if (appIds.length > 0) {
+      conditions.push(
+        `attention.source_type='trigger-occurrence'
+         AND json_extract(version.spec_json,'$.appId') IN (
+           ${appIds.map(() => "?").join(",")}
+         )`
+      );
+      parameters.push(...appIds);
+    }
+    const joins = appIds.length > 0
+      ? `LEFT JOIN trigger_occurrences occurrence
+           ON occurrence.occurrence_id=attention.trigger_occurrence_id
+         LEFT JOIN trigger_spec_versions version
+           ON version.trigger_id=occurrence.trigger_id
+          AND version.trigger_version=occurrence.trigger_version`
+      : "";
+    const predicate = conditions.length > 0
+      ? `WHERE ${conditions.join(" AND ")}`
+      : "";
+    const total = Number((this.#db.prepare(
+      `SELECT COUNT(*) AS count FROM attention_records attention
+       ${joins} ${predicate}`
+    ).get(...parameters) as { count:number }).count);
+    const rows = this.#db.prepare(
+      `SELECT attention.* FROM attention_records attention
+       ${joins} ${predicate}
+       ORDER BY attention.created_at DESC,attention.attention_id
+       LIMIT ?`
+    ).all(...parameters,input.limit) as SqlRow[];
+    return {
+      records:rows.map((row) => this.#readAttention(row)),
+      total,
+      truncated:total > rows.length
+    };
   }
 
   acknowledgeAttention(input: {
@@ -5617,6 +5790,7 @@ export class SqlitePersistence implements Persistence {
   issueRecoverySession(
     input: IssueRecoverySessionInput
   ): RecoverySessionRecord {
+    assertRevision(input.expectedAttentionRevision, "expectedAttentionRevision");
     return this.#db.transaction(() => {
       const required = [
         input.id,
@@ -5671,12 +5845,27 @@ export class SqlitePersistence implements Persistence {
       const attention = this.getAttention(input.attentionId);
       if (
         !attention ||
+        attention.sourceRef.kind !== "workflow-run" ||
+        attention.deliveryPolicy !== "operator-notification" ||
         attention.state !== "open" ||
+        attention.revision !== input.expectedAttentionRevision ||
+        attention.item.source !== "browser" ||
         !attention.item.blocking ||
         attention.item.groupKey !== "authentication"
       ) {
         throw new RecoverySessionConflictError(
           "Recovery Session Attention is not eligible"
+        );
+      }
+      const run = this.getRun(attention.sourceRef.runId);
+      if (
+        !run ||
+        (run.status !== "rejected" &&
+          run.status !== "failed" &&
+          run.status !== "uncertain")
+      ) {
+        throw new RecoverySessionConflictError(
+          "Recovery Session Run is not eligible"
         );
       }
       const page = this.getBrowserPageObservation(
@@ -6459,6 +6648,9 @@ export class SqlitePersistence implements Persistence {
     }
     if (
       !input.attention ||
+      input.attention.sourceRef.kind !== "workflow-run" ||
+      input.attention.sourceRef.runId !== input.runId ||
+      input.attention.deliveryPolicy !== "operator-notification" ||
       input.attention.item.runId !== input.runId ||
       input.attention.state !== "open" ||
       input.attention.revision !== 0 ||
@@ -6502,18 +6694,44 @@ export class SqlitePersistence implements Persistence {
 
   #insertAttention(record: AttentionRecord): void {
     const item = record.item;
+    const workflowRunId =
+      record.sourceRef.kind === "workflow-run"
+        ? record.sourceRef.runId
+        : undefined;
+    const triggerOccurrenceId =
+      record.sourceRef.kind === "trigger-occurrence"
+        ? record.sourceRef.occurrenceId
+        : undefined;
+    if (
+      !item.id.trim() ||
+      (record.sourceRef.kind === "workflow-run" &&
+        (!workflowRunId?.trim() ||
+          item.runId !== workflowRunId ||
+          record.deliveryPolicy !== "operator-notification")) ||
+      (record.sourceRef.kind === "trigger-occurrence" &&
+        (!triggerOccurrenceId?.trim() ||
+          item.runId !== undefined ||
+          record.deliveryPolicy !== "dashboard-only"))
+    ) {
+      throw new Error("Attention source reference is invalid");
+    }
     this.#db
       .prepare(
         `INSERT INTO attention_records(
-          attention_id, run_id, stage_key, group_key, kind, source, title,
-          reason, requested_action, blocking, batchable,
+          attention_id, source_type, workflow_run_id, trigger_occurrence_id,
+          delivery_policy,
+          stage_key, group_key, kind, source, title, reason, requested_action,
+          blocking, batchable,
           attempted_actions_json, resumes_automatically, state, revision,
           created_at, due_at, acknowledged_at, acknowledged_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         item.id,
-        item.runId,
+        record.sourceRef.kind,
+        workflowRunId ?? null,
+        triggerOccurrenceId ?? null,
+        record.deliveryPolicy,
         item.stageKey,
         item.groupKey,
         item.kind,
@@ -6532,6 +6750,54 @@ export class SqlitePersistence implements Persistence {
         record.acknowledgedAt ?? null,
         record.acknowledgedBy ?? null
       );
+  }
+
+  #assertTriggerOccurrenceAttention(
+    record: AttentionRecord,
+    occurrenceId: string,
+    updatedAt: string
+  ): void {
+    if (
+      record.sourceRef.kind !== "trigger-occurrence" ||
+      record.sourceRef.occurrenceId !== occurrenceId ||
+      record.deliveryPolicy !== "dashboard-only" ||
+      record.item.id !== `trigger-occurrence-terminal:${occurrenceId}` ||
+      record.item.runId !== undefined ||
+      record.item.createdAt !== updatedAt ||
+      record.state !== "open" ||
+      record.revision !== 0 ||
+      record.acknowledgedAt !== undefined ||
+      record.acknowledgedBy !== undefined
+    ) {
+      throw new Error(
+        `Trigger Occurrence ${occurrenceId} requires one new dashboard Attention`
+      );
+    }
+  }
+
+  #getAttentionForTriggerOccurrence(
+    occurrenceId: string
+  ): AttentionRecord | undefined {
+    const row = this.#db.prepare(
+      `SELECT * FROM attention_records
+       WHERE source_type='trigger-occurrence' AND trigger_occurrence_id=?`
+    ).get(occurrenceId) as SqlRow | undefined;
+    return row ? this.#readAttention(row) : undefined;
+  }
+
+  #sameAttentionIdentity(
+    left: AttentionRecord,
+    right: AttentionRecord
+  ): boolean {
+    return canonicalJson({
+      sourceRef:left.sourceRef,
+      deliveryPolicy:left.deliveryPolicy,
+      item:left.item
+    }) === canonicalJson({
+      sourceRef:right.sourceRef,
+      deliveryPolicy:right.deliveryPolicy,
+      item:right.item
+    });
   }
 
   #insertAttentionDelivery(record: AttentionDeliveryRecord): void {
@@ -7118,10 +7384,21 @@ export class SqlitePersistence implements Persistence {
   }
 
   #readAttention(row: SqlRow): AttentionRecord {
+    const sourceRef: AttentionRecord["sourceRef"] =
+      row.source_type === "workflow-run"
+        ? { kind: "workflow-run", runId: String(row.workflow_run_id) }
+        : {
+            kind: "trigger-occurrence",
+            occurrenceId: String(row.trigger_occurrence_id)
+          };
     return {
+      sourceRef,
+      deliveryPolicy: row.delivery_policy as AttentionRecord["deliveryPolicy"],
       item: {
         id: String(row.attention_id),
-        runId: String(row.run_id),
+        ...(sourceRef.kind === "workflow-run"
+          ? { runId: sourceRef.runId }
+          : {}),
         stageKey: String(row.stage_key),
         groupKey: String(row.group_key),
         kind: row.kind as AttentionRecord["item"]["kind"],
