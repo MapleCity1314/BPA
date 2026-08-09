@@ -271,8 +271,28 @@ describe("local control socket", () => {
       sendControlRequest(socketPath, "doctor")
     ).resolves.toMatchObject({
       status: "ok",
-      persistence: { adapter: "sqlite", schemaVersion: 19 }
+      persistence: { adapter: "sqlite", schemaVersion: 20 }
     });
+  });
+
+  it("reserves Trigger Attempt lease owner identities for the Runtime", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const service = new LocalCoreService(persistence);
+    expect(
+      service.handle({
+        id: "reserved-owner",
+        method: "browser.control-lease.acquire",
+        params: {
+          resourceId: "browser-instance:test",
+          ownerId: "trigger-attempt:external",
+          ttlSeconds: 120
+        }
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { message: "LEASE_OWNER_RESERVED" }
+    });
+    persistence.close();
   });
 
   it("serves versioned control envelopes without breaking legacy framing", async () => {

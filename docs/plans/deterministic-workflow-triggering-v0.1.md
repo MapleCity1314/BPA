@@ -69,6 +69,7 @@ TriggerSpec
 
 ```ts
 interface TriggerSpec {
+  readonly apiVersion: "bpa.trigger/v1alpha2";
   readonly id: string;
   readonly version: string;
   readonly appId: string;
@@ -78,8 +79,22 @@ interface TriggerSpec {
   readonly inputSchemaVersion: string;
   readonly concurrencyKey: string;
   readonly idempotencyPolicy: string;
-  readonly retryPolicy: string;
+  readonly retryPolicy: "none";
   readonly missedRunPolicy?: "skip" | "run_once" | "bounded_catch_up";
+  readonly maxCatchUpOccurrences?: number;
+  readonly schedule?:
+    | {
+        readonly type: "daily";
+        readonly timezone: string;
+        readonly localTime: string;
+        readonly onTimeWindowSeconds: number;
+      }
+    | {
+        readonly type: "interval";
+        readonly anchorAt: string;
+        readonly intervalSeconds: number;
+        readonly onTimeWindowSeconds: number;
+      };
 }
 ```
 
@@ -90,15 +105,18 @@ TriggerSpec 固定工作流版本和权限边界。修改 Trigger、Workflow 版
 ## 6. 运行状态机
 
 ```text
-enabled
-→ due
-→ lease_acquired
-→ run_created
-→ running
-→ complete | partial | blocked | degraded | failed | skipped
+TriggerSpec
+→ TriggerOccurrence: pending | deferred | running | terminal
+                       ↓ 0..N
+                     TriggerAttempt: pending | running | terminal
+                       ↓ 0..1
+                     Workflow Run
 ```
 
-- `skipped`：已有有效运行或策略明确跳过。
+- `deferred`：业务或浏览器租约正忙，保留同一 occurrence 并在
+  `nextAttemptAt` 后继续竞争；它不是终态，也不消耗业务 Attempt。
+- `skipped`：`missedRunPolicy: skip` 明确放弃已经越过 on-time window 的周期。
+- `missed`：`run_once` 或 `bounded_catch_up` 的容量不足，较旧周期被更新周期取代。
 - `blocked`：登录、验证码、权限、店铺或风险边界阻断。
 - `partial`：存在有效输出，但范围不完整。
 - `degraded`：使用合格旧事实或回退路径继续处理。
@@ -167,7 +185,19 @@ AI 不能绕开 Runtime 租约、权限和效果确认，也不能成为内部�
   的后来配置。
 - [x] Trigger Run 原样保留 Workflow 的 `rejected`、`uncertain`、`cancelled` 和 `failed`
   终态，不再压缩为 `blocked`、`degraded` 或笼统失败。
-- [ ] 增加 bounded catch-up 的多周期补偿和可视化运行日历；当前 Schedule 每周期至多运行一次，重启后按 `run_once` 语义处理当前周期。
+- [x] Schedule 使用显式 daily/interval 日历、IANA 时区、固定 anchor、on-time window
+  与持久 cursor；`skip`、`run_once`、`bounded_catch_up` 已进入候选实现。
+- [x] Schema v20 将逻辑 TriggerOccurrence 与 execution TriggerAttempt 分离；浏览器忙
+  改为持久 `deferred`，活动查询不再受最近 200 条窗口影响。
+- [x] TriggerSpec 升为破坏性的 `bpa.trigger/v1alpha2`；Schema 19 中只要仍有旧
+  TriggerSpec 或 Trigger Run，Schema 20 就拒绝启动并保持原库不变，禁止静默删除或解释
+  旧计划。部署前必须导出、停用并清退旧控制面后重新发布 v1alpha2。
+- [x] 大积压按每次 tick 最多 1000 个 occurrence 分页物化，未清完前不启动候选；每页
+  都执行 missed-run 收敛，避免一条长期停机计划阻塞整个 Core。已终态 Attempt 遗留的
+  两类租约在下一次 tick 按 fencing token 清理；在 Attempt 入库前崩溃的极短窗口仍依赖
+  最长 300 秒 TTL，不能提前清扫不存在的 Attempt，否则会引入并发竞态。
+- [ ] 将 pre-Run `blocked`、`missed`、`skipped` 与 dashboard-only Attention 在同一
+  SQLite 事务提交；完成前不能宣称调度问题已经进入面板。
 
 ### P2：事件和产品入口
 

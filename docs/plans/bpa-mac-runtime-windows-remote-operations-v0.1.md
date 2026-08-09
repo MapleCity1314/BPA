@@ -66,8 +66,9 @@ Operator 只能提交稳定 `automationId + operationId`，不能提交 Workflow
 Mac 上已经发布并允许的 Manual Trigger。
 
 请求必须异步返回 `operationId`；重复点击、响应丢失、客户端重启和 Gateway/Core 重启后，
-同一 operation 只能对应一个持久 Trigger occurrence。现有 Trigger Run 可承担 occurrence
-防重，但正式开放前仍需补可信 actor 审计和远程操作查询投影。
+同一 operation 只能对应一个持久 Trigger occurrence。Schema v20 候选已将
+TriggerOccurrence 与 TriggerAttempt 分离并承担 occurrence 防重；正式开放前仍需补可信
+actor 审计和远程操作查询投影。
 
 ## 4. 浏览器与性能
 
@@ -85,9 +86,9 @@ Mac 上已经发布并允许的 Manual Trigger。
 1. 体验分的“逐店立即持久化”采用幂等事实表，唯一键至少包含 `runId + shopKey`；
    foreach 终态后再一次发布不可变 DatasetVersion。同日重跑产生新版本，partial 不能覆盖
    “最新完整结果”。
-2. 当前浏览器忙会把 occurrence 记为 `skipped`，而 `missedRunPolicy` 尚未被 Runtime 执行；
-   interval 也不等于北京时间日历调度。Mac 正式接管日任务前，必须实现日历锚点、有界
-   `run_once` 补跑及 skipped Attention。
+2. Schema v20 候选已实现 daily/interval 日历锚点、IANA 时区、持久 cursor、三种
+   missed-run policy 和租约忙时的 `deferred`。Mac 正式接管日任务前还必须把 pre-Run
+   `blocked/missed/skipped` 与 dashboard-only Attention 原子提交；当前不得声称问题已上面板。
 3. 清退 Windows runner 当前负责 `YYYY-MM-DD.json/latest.json`。Mac 事实、Dataset、
    Attention 和远程结果投影成立前，不删除旧交付；替代闭环成立后应删除而非保留兼容层。
 

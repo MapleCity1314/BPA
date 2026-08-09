@@ -28,7 +28,7 @@ import {
 
 describe("TriggerSpec schema",() => {
   const base = {
-    apiVersion:"bpa.trigger/v1alpha1",
+    apiVersion:"bpa.trigger/v1alpha2",
     id:"inventory.refresh.manual",
     version:"1.0.0",
     appId:"inventory-monitor",
@@ -47,7 +47,19 @@ describe("TriggerSpec schema",() => {
     expect(validateTriggerSpec({
       ...base,id:"inventory.refresh.schedule",kind:"schedule",
       idempotencyPolicy:"occurrence",missedRunPolicy:"run_once",
-      schedule:{ intervalSeconds:1800,timezone:"Asia/Shanghai" }
+      schedule:{
+        type:"daily",timezone:"Asia/Shanghai",localTime:"09:30",
+        onTimeWindowSeconds:1800
+      }
+    })).toBe(true);
+    expect(validateTriggerSpec({
+      ...base,id:"inventory.refresh.interval",kind:"schedule",
+      idempotencyPolicy:"occurrence",missedRunPolicy:"bounded_catch_up",
+      maxCatchUpOccurrences:3,
+      schedule:{
+        type:"interval",anchorAt:"2026-08-09T00:00:00.000Z",
+        intervalSeconds:1800,onTimeWindowSeconds:300
+      }
     })).toBe(true);
     expect(validateTriggerSpec({
       ...base,id:"inventory.risk.dataset",kind:"dataset",
@@ -59,7 +71,49 @@ describe("TriggerSpec schema",() => {
     expect(validateTriggerSpec({ ...base,kind:"schedule" })).toBe(false);
     expect(validateTriggerSpec({
       ...base,kind:"schedule",missedRunPolicy:"skip",
-      schedule:{ intervalSeconds:10 }
+      idempotencyPolicy:"occurrence",
+      schedule:{
+        type:"interval",anchorAt:"2026-08-09T00:00:00.000Z",
+        intervalSeconds:10,onTimeWindowSeconds:10
+      }
+    })).toBe(false);
+    expect(validateTriggerSpec({
+      ...base,kind:"schedule",missedRunPolicy:"bounded_catch_up",
+      idempotencyPolicy:"occurrence",
+      schedule:{
+        type:"daily",timezone:"Asia/Shanghai",localTime:"25:00",
+        onTimeWindowSeconds:1800
+      }
+    })).toBe(false);
+    expect(validateTriggerSpec({
+      ...base,kind:"schedule",missedRunPolicy:"bounded_catch_up",
+      idempotencyPolicy:"occurrence",
+      schedule:{
+        type:"daily",timezone:"Asia/Shanghai",localTime:"09:30",
+        onTimeWindowSeconds:1800
+      }
+    })).toBe(false);
+    expect(validateTriggerSpec({
+      ...base,kind:"schedule",missedRunPolicy:"run_once",
+      maxCatchUpOccurrences:2,idempotencyPolicy:"occurrence",
+      schedule:{
+        type:"daily",timezone:"Asia/Shanghai",localTime:"09:30",
+        onTimeWindowSeconds:1800
+      }
+    })).toBe(false);
+    expect(validateTriggerSpec({
+      ...base,kind:"schedule",missedRunPolicy:"skip",
+      idempotencyPolicy:"occurrence",retryPolicy:"safe_once",
+      schedule:{
+        type:"daily",timezone:"Asia/Shanghai",localTime:"09:30",
+        onTimeWindowSeconds:1800
+      }
+    })).toBe(false);
+    expect(validateTriggerSpec({
+      ...base,schedule:{
+        type:"daily",timezone:"Asia/Shanghai",localTime:"09:30",
+        onTimeWindowSeconds:1800
+      }
     })).toBe(false);
   });
 });

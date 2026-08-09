@@ -432,10 +432,10 @@ describe("recoverable execution persistence", () => {
     store.close();
   });
 
-  it("atomically links a leased Trigger Run to its recoverable Workflow Run", () => {
+  it("atomically links a running Trigger Attempt to its recoverable Workflow Run", () => {
     const store = new SqlitePersistence({ path: ":memory:" });
     const spec = {
-      apiVersion:"bpa.trigger/v1alpha1" as const,
+      apiVersion:"bpa.trigger/v1alpha2" as const,
       id:"inventory.atomic-link",version:"1.0.0",appId:"inventory-monitor",
       kind:"manual" as const,
       workflow:{ id:"test.workflow",version:"1.0.0" },enabled:true,
@@ -444,14 +444,18 @@ describe("recoverable execution persistence", () => {
       idempotencyPolicy:"request_key" as const,retryPolicy:"none" as const
     };
     store.putTriggerSpec({ spec,actor:"test",occurredAt:timestamp });
-    const triggerRunId = "trigger-run:atomic-link";
+    const occurrenceId = "trigger-occurrence:atomic-link";
     store.claimTriggerOccurrence({
-      triggerRunId,triggerId:spec.id,triggerVersion:spec.version,
-      occurrenceKey:"manual:atomic",status:"due",createdAt:timestamp,
-      updatedAt:timestamp
+      occurrenceId,triggerId:spec.id,triggerVersion:spec.version,
+      occurrenceKey:"manual:atomic",scheduledAt:timestamp,status:"pending",
+      attemptCount:0,revision:0,createdAt:timestamp,updatedAt:timestamp
     });
-    store.updateTriggerRun({
-      triggerRunId,status:"lease_acquired",updatedAt:timestamp,
+    const attemptId = "trigger-attempt:atomic-link";
+    store.createTriggerAttempt({
+      attemptId,occurrenceId,expectedOccurrenceRevision:0,createdAt:timestamp
+    });
+    store.updateTriggerAttempt({
+      attemptId,expectedRevision:0,status:"running",updatedAt:timestamp,
       fencingToken:1,browserFencingToken:1
     });
     const run:RunRecord = {
@@ -462,11 +466,11 @@ describe("recoverable execution persistence", () => {
 
     store.createRecoverableRun({
       run,planSnapshot:planSnapshot(run.id),checkpoint:checkpoint(run.id),
-      event:event(run.id,1,"RUN_CREATED"),triggerRunId
+      event:event(run.id,1,"RUN_CREATED"),triggerAttemptId:attemptId
     });
 
-    expect(store.listTriggerRuns(spec.id)[0]).toMatchObject({
-      triggerRunId,status:"run_created",workflowRunId:run.id,
+    expect(store.getTriggerAttempt(attemptId)).toMatchObject({
+      attemptId,status:"running",workflowRunId:run.id,revision:2,
       fencingToken:1,browserFencingToken:1
     });
     store.close();
@@ -482,8 +486,8 @@ describe("recoverable execution persistence", () => {
 
     expect(() => store.createRecoverableRun({
       run,planSnapshot:planSnapshot(run.id),checkpoint:checkpoint(run.id),
-      event:event(run.id,1,"RUN_CREATED"),triggerRunId:"trigger-run:missing"
-    })).toThrow("Trigger Run is not ready for atomic Run creation");
+      event:event(run.id,1,"RUN_CREATED"),triggerAttemptId:"trigger-attempt:missing"
+    })).toThrow("Trigger Attempt is not ready for atomic Run creation");
     expect(store.getRun(run.id)).toBeUndefined();
     expect(store.getRunPlanSnapshot(run.id)).toBeUndefined();
     expect(store.getEngineCheckpoint(run.id)).toBeUndefined();
@@ -1766,7 +1770,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(19);
+      expect(store.health().schemaVersion).toBe(20);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1797,10 +1801,12 @@ describe("append-only migrations", () => {
 
       const legacy = new Database(databasePath);
       legacy.exec(`
+        DROP TABLE trigger_schedule_state;
+        DROP TABLE trigger_attempts;
+        DROP TABLE trigger_occurrences;
         DROP TABLE trigger_spec_versions;
         DROP TABLE browser_control_leases;
         DROP TABLE trigger_leases;
-        DROP TABLE trigger_runs;
         DROP TABLE trigger_specs;
         DROP TABLE candidate_exports;
         DROP TABLE candidate_bundle_validations;
@@ -1879,12 +1885,12 @@ describe("append-only migrations", () => {
         DROP TABLE attention_deliveries;
         DROP TABLE attention_records;
         DELETE FROM schema_migrations
-        WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19);
+        WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(19);
+      expect(upgraded.health().schemaVersion).toBe(20);
       expect(upgraded.getAssistanceTask(task.task.taskId)).toEqual(task);
       expect(
         upgraded.getAssistanceRequestResult("not-recorded")
@@ -1909,7 +1915,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(19);
+      expect(store.health().schemaVersion).toBe(20);
       expect(store.getAssistanceRequestResult("not-recorded")).toBeUndefined();
       store.close();
     } finally {
@@ -1931,7 +1937,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(19);
+      expect(store.health().schemaVersion).toBe(20);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1946,10 +1952,12 @@ describe("append-only migrations", () => {
       seeded.close();
       const legacy = new Database(databasePath);
       legacy.exec(`
+        DROP TABLE trigger_schedule_state;
+        DROP TABLE trigger_attempts;
+        DROP TABLE trigger_occurrences;
         DROP TABLE trigger_spec_versions;
         DROP TABLE browser_control_leases;
         DROP TABLE trigger_leases;
-        DROP TABLE trigger_runs;
         DROP TABLE trigger_specs;
         DROP TABLE candidate_exports;
         DROP TABLE candidate_bundle_validations;
@@ -2023,12 +2031,12 @@ describe("append-only migrations", () => {
         DROP TABLE attention_deliveries;
         DROP TABLE attention_records;
         DELETE FROM schema_migrations
-        WHERE version IN (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19);
+        WHERE version IN (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(19);
+      expect(upgraded.health().schemaVersion).toBe(20);
       expect(
         upgraded.createWorkflowDraft({
           draftId: "v5-upgraded-draft",
@@ -2069,7 +2077,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(19);
+      expect(store.health().schemaVersion).toBe(20);
       expect(store.getWorkflowDraft("not-created")).toBeUndefined();
       store.close();
     } finally {
@@ -2082,7 +2090,7 @@ describe("append-only migrations", () => {
     const databasePath = join(directory, "bpa.sqlite3");
     try {
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(19);
+      expect(store.health().schemaVersion).toBe(20);
       store.close();
       const raw = new Database(databasePath);
       raw

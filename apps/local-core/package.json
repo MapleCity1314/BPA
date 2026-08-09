@@ -22,15 +22,16 @@
     "@bpa/evidence-core": "workspace:*",
     "@bpa/gateway-core": "workspace:*",
     "@bpa/node-runtime": "workspace:*",
-    "@bpa/page-model": "workspace:*",
-    "@bpa/platform-runtime": "workspace:*",
     "@bpa/packaging-dataset": "workspace:*",
+    "@bpa/page-model": "workspace:*",
     "@bpa/persistence": "workspace:*",
     "@bpa/persistence-sqlite": "workspace:*",
+    "@bpa/platform-runtime": "workspace:*",
     "@bpa/resource-binding": "workspace:*",
     "@bpa/schemas": "workspace:*",
     "@bpa/sqlite-observability": "workspace:*",
     "@bpa/team-runtime": "workspace:*",
-    "@bpa/workflow-ir": "workspace:*"
+    "@bpa/workflow-ir": "workspace:*",
+    "@js-temporal/polyfill": "^0.5.1"
   }
 }

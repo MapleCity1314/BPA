@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://bpa.local/schemas/trigger-spec/v1",
-  "title": "BPATriggerSpecV1Alpha1",
+  "$id": "https://bpa.local/schemas/trigger-spec/v1alpha2",
+  "title": "BPATriggerSpecV1Alpha2",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -19,7 +19,7 @@
     "retryPolicy"
   ],
   "properties": {
-    "apiVersion": { "const": "bpa.trigger/v1alpha1" },
+    "apiVersion": { "const": "bpa.trigger/v1alpha2" },
     "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$" },
     "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
     "appId": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -39,16 +39,54 @@
     "concurrencyKey": { "type": "string", "minLength": 1, "maxLength": 256 },
     "browserInstanceId": { "type": "string", "minLength": 1, "maxLength": 256 },
     "idempotencyPolicy": { "enum": ["occurrence", "dataset_version", "request_key"] },
-    "retryPolicy": { "enum": ["none", "safe_once"] },
+    "retryPolicy": { "const": "none" },
     "missedRunPolicy": { "enum": ["skip", "run_once", "bounded_catch_up"] },
+    "maxCatchUpOccurrences": { "type": "integer", "minimum": 1, "maximum": 24 },
     "schedule": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["intervalSeconds"],
-      "properties": {
-        "intervalSeconds": { "type": "integer", "minimum": 60, "maximum": 604800 },
-        "timezone": { "type": "string", "minLength": 1, "maxLength": 64 }
-      }
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "timezone", "localTime", "onTimeWindowSeconds"],
+          "properties": {
+            "type": { "const": "daily" },
+            "timezone": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^(?:UTC|[A-Za-z_]+(?:/[A-Za-z0-9._+-]+)+)$"
+            },
+            "localTime": {
+              "type": "string",
+              "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+            },
+            "onTimeWindowSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "anchorAt", "intervalSeconds", "onTimeWindowSeconds"],
+          "properties": {
+            "type": { "const": "interval" },
+            "anchorAt": { "type": "string", "format": "date-time" },
+            "intervalSeconds": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 604800
+            },
+            "onTimeWindowSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 604800
+            }
+          }
+        }
+      ]
     },
     "dataset": {
       "type": "object",
@@ -64,7 +102,19 @@
       "if": { "properties": { "kind": { "const": "schedule" } } },
       "then": {
         "required": ["schedule", "missedRunPolicy"],
-        "properties": { "schedule": {}, "missedRunPolicy": {} }
+        "properties": {
+          "schedule": {},
+          "missedRunPolicy": {},
+          "idempotencyPolicy": { "const": "occurrence" },
+          "retryPolicy": { "const": "none" }
+        }
+      },
+      "else": {
+        "properties": {
+          "schedule": false,
+          "missedRunPolicy": false,
+          "maxCatchUpOccurrences": false
+        }
       }
     },
     {
@@ -73,6 +123,14 @@
         "required": ["dataset"],
         "properties": { "dataset": {} }
       }
+    },
+    {
+      "if": {
+        "required": ["missedRunPolicy"],
+        "properties": { "missedRunPolicy": { "const": "bounded_catch_up" } }
+      },
+      "then": { "required": ["maxCatchUpOccurrences"] },
+      "else": { "properties": { "maxCatchUpOccurrences": false } }
     }
   ]
 }

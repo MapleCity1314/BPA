@@ -87,8 +87,12 @@ import {
   type SourceRecordDefinition,
   type StagingLeaseRecord,
   type StepInstanceRecord,
-  type TriggerRunRecord,
-  type TriggerRunStatus,
+  type TriggerAttemptRecord,
+  type TriggerAttemptStatus,
+  type TriggerOccurrenceRecord,
+  type TriggerOccurrenceStatus,
+  type TriggerScheduleStateRecord,
+  type TriggerTerminalOutcome,
   type TriggerSpecDefinition,
   type TriggerSpecRecord,
   type SubmitAssistanceAndWakeInput,
@@ -427,6 +431,9 @@ export class SqlitePersistence implements Persistence {
     for (const migration of migrations.filter(
       (candidate) => candidate.version > current
     )) {
+      if (migration.version === 20) {
+        this.#assertSeparatedTriggerModelReady();
+      }
       this.#db.transaction(() => {
         this.#db.exec(migration.sql);
         this.#inject(`migration.${migration.version}.after_sql`);
@@ -456,6 +463,24 @@ export class SqlitePersistence implements Persistence {
           }
         }
       })();
+    }
+  }
+
+  #assertSeparatedTriggerModelReady(): void {
+    const triggerRunCount = Number(
+      (this.#db.prepare("SELECT COUNT(*) AS count FROM trigger_runs").get() as {
+        count: number;
+      }).count
+    );
+    const triggerSpecCount = Number(
+      (this.#db.prepare("SELECT COUNT(*) AS count FROM trigger_specs").get() as {
+        count: number;
+      }).count
+    );
+    if (triggerRunCount > 0 || triggerSpecCount > 0) {
+      throw new Error(
+        "Schema 20 requires an empty legacy Trigger control plane; export and retire v1alpha1 TriggerSpecs and Trigger Runs before upgrading."
+      );
     }
   }
 
@@ -1584,7 +1609,7 @@ export class SqlitePersistence implements Persistence {
     input: CreateRunInput & {
       planSnapshot: RunPlanSnapshotRecord;
       checkpoint: EngineCheckpointRecord;
-      triggerRunId?: string;
+      triggerAttemptId?: string;
       outbox?: readonly OutboxMessage[];
       assistanceTasks?: readonly AssistanceTaskRecord[];
     }
@@ -1631,16 +1656,16 @@ export class SqlitePersistence implements Persistence {
       this.#inject("recoverable_run.after_effects");
       this.#insertEvent(input.event);
       this.#inject("recoverable_run.after_event");
-      if (input.triggerRunId) {
+      if (input.triggerAttemptId) {
         const linked = this.#db.prepare(
-          `UPDATE trigger_runs
-           SET status='run_created',workflow_run_id=?,updated_at=?
-           WHERE trigger_run_id=? AND status='lease_acquired'
+          `UPDATE trigger_attempts
+           SET workflow_run_id=?,updated_at=?,revision=revision+1
+           WHERE attempt_id=? AND status='running'
              AND workflow_run_id IS NULL`
-        ).run(input.run.id,input.run.createdAt,input.triggerRunId);
+        ).run(input.run.id,input.run.createdAt,input.triggerAttemptId);
         if (linked.changes !== 1) {
           throw new Error(
-            `Trigger Run is not ready for atomic Run creation: ${input.triggerRunId}`
+            `Trigger Attempt is not ready for atomic Run creation: ${input.triggerAttemptId}`
           );
         }
       }
@@ -4994,71 +5019,364 @@ export class SqlitePersistence implements Persistence {
       .map((row) => this.#readTriggerSpec(row));
   }
 
-  claimTriggerOccurrence(input: TriggerRunRecord):
-    | { status:"accepted";record:TriggerRunRecord }
-    | { status:"duplicate";record:TriggerRunRecord } {
+  claimTriggerOccurrence(input: TriggerOccurrenceRecord):
+    | { status:"accepted";record:TriggerOccurrenceRecord }
+    | { status:"duplicate";record:TriggerOccurrenceRecord } {
+    if (
+      input.status !== "pending" || input.attemptCount !== 0 || input.revision !== 0 ||
+      input.nextAttemptAt !== undefined || input.terminalOutcome !== undefined
+    ) {
+      throw new Error("A new Trigger Occurrence must start pending at revision zero");
+    }
     const result = this.#db.prepare(
-      `INSERT INTO trigger_runs(
-        trigger_run_id,trigger_id,trigger_version,occurrence_key,status,
-        workflow_run_id,fencing_token,browser_fencing_token,
+      `INSERT INTO trigger_occurrences(
+        occurrence_id,trigger_id,trigger_version,occurrence_key,scheduled_at,
+        status,next_attempt_at,attempt_count,revision,terminal_outcome,
         dataset_id,dataset_version,diagnostic,created_at,updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(trigger_id,occurrence_key) DO NOTHING`
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(trigger_id,trigger_version,occurrence_key) DO NOTHING`
     ).run(
-      input.triggerRunId,input.triggerId,input.triggerVersion,input.occurrenceKey,input.status,
-      input.workflowRunId ?? null,input.fencingToken ?? null,
-      input.browserFencingToken ?? null,input.datasetId ?? null,input.datasetVersion ?? null,
-      input.diagnostic ?? null,input.createdAt,input.updatedAt
+      input.occurrenceId,input.triggerId,input.triggerVersion,input.occurrenceKey,
+      input.scheduledAt,input.status,input.nextAttemptAt ?? null,input.attemptCount,
+      input.revision,input.terminalOutcome ?? null,input.datasetId ?? null,
+      input.datasetVersion ?? null,input.diagnostic ?? null,input.createdAt,input.updatedAt
     );
     if (result.changes === 1) return { status:"accepted",record:input };
     const existing = this.#db.prepare(
-      "SELECT * FROM trigger_runs WHERE trigger_id=? AND occurrence_key=?"
-    ).get(input.triggerId,input.occurrenceKey) as SqlRow;
-    return { status:"duplicate",record:this.#readTriggerRun(existing) };
+      `SELECT * FROM trigger_occurrences
+       WHERE trigger_id=? AND trigger_version=? AND occurrence_key=?`
+    ).get(input.triggerId,input.triggerVersion,input.occurrenceKey) as SqlRow;
+    return { status:"duplicate",record:this.#readTriggerOccurrence(existing) };
   }
 
-  updateTriggerRun(input: {
-    triggerRunId: string;
-    status: TriggerRunStatus;
+  updateTriggerOccurrence(input: {
+    occurrenceId: string;
+    expectedRevision: number;
+    status: TriggerOccurrenceStatus;
     updatedAt: string;
+    nextAttemptAt?: string;
+    terminalOutcome?: TriggerTerminalOutcome;
+    diagnostic?: string;
+  }): TriggerOccurrenceRecord {
+    assertRevision(input.expectedRevision,"expectedRevision");
+    if ((input.status === "deferred") !== (input.nextAttemptAt !== undefined)) {
+      throw new Error("Deferred Trigger Occurrence requires nextAttemptAt");
+    }
+    if ((input.status === "terminal") !== (input.terminalOutcome !== undefined)) {
+      throw new Error("Terminal Trigger Occurrence requires terminalOutcome");
+    }
+    const current = this.getTriggerOccurrence(input.occurrenceId);
+    if (!current || current.revision !== input.expectedRevision) {
+      throw new RevisionConflictError("Trigger Occurrence revision changed");
+    }
+    const allowed =
+      (current.status === "pending" &&
+        (input.status === "deferred" || input.status === "terminal")) ||
+      (current.status === "deferred" &&
+        (input.status === "deferred" || input.status === "terminal")) ||
+      (current.status === "running" && input.status === "terminal");
+    if (!allowed) {
+      throw new Error(
+        `Invalid Trigger Occurrence transition: ${current.status} -> ${input.status}`
+      );
+    }
+    const result = this.#db.prepare(
+      `UPDATE trigger_occurrences
+       SET status=?,next_attempt_at=?,terminal_outcome=?,updated_at=?,
+           diagnostic=COALESCE(?,diagnostic),revision=revision+1
+       WHERE occurrence_id=? AND revision=? AND status=?`
+    ).run(
+      input.status,input.nextAttemptAt ?? null,input.terminalOutcome ?? null,
+      input.updatedAt,input.diagnostic ?? null,input.occurrenceId,input.expectedRevision,
+      current.status
+    );
+    if (result.changes !== 1) {
+      throw new RevisionConflictError("Trigger Occurrence revision changed");
+    }
+    return this.getTriggerOccurrence(input.occurrenceId)!;
+  }
+
+  getTriggerOccurrence(occurrenceId: string): TriggerOccurrenceRecord | undefined {
+    const row = this.#db.prepare(
+      "SELECT * FROM trigger_occurrences WHERE occurrence_id=?"
+    ).get(occurrenceId) as SqlRow | undefined;
+    return row ? this.#readTriggerOccurrence(row) : undefined;
+  }
+
+  listTriggerOccurrences(triggerId?: string): TriggerOccurrenceRecord[] {
+    const rows = (triggerId
+      ? this.#db.prepare(
+          `SELECT * FROM trigger_occurrences
+           WHERE trigger_id=? ORDER BY scheduled_at DESC,occurrence_id DESC LIMIT 200`
+        ).all(triggerId)
+      : this.#db.prepare(
+          `SELECT * FROM trigger_occurrences
+           ORDER BY scheduled_at DESC,occurrence_id DESC LIMIT 200`
+        ).all()) as SqlRow[];
+    return rows.map((row) => this.#readTriggerOccurrence(row));
+  }
+
+  listActiveTriggerOccurrences(triggerId?: string): TriggerOccurrenceRecord[] {
+    const rows = (triggerId
+      ? this.#db.prepare(
+          `SELECT * FROM trigger_occurrences
+           WHERE trigger_id=? AND status!='terminal'
+           ORDER BY scheduled_at,trigger_id,occurrence_id`
+        ).all(triggerId)
+      : this.#db.prepare(
+          `SELECT * FROM trigger_occurrences WHERE status!='terminal'
+           ORDER BY scheduled_at,trigger_id,occurrence_id`
+        ).all()) as SqlRow[];
+    return rows.map((row) => this.#readTriggerOccurrence(row));
+  }
+
+  listRunnableTriggerOccurrences(input: {
+    now: string;
+    triggerId?: string;
+  }): TriggerOccurrenceRecord[] {
+    const rows = (input.triggerId
+      ? this.#db.prepare(
+          `SELECT * FROM trigger_occurrences
+           WHERE trigger_id=? AND (
+             status='pending' OR (status='deferred' AND next_attempt_at<=?)
+           ) AND julianday(scheduled_at)<=julianday(?)
+           ORDER BY scheduled_at,occurrence_id`
+        ).all(input.triggerId,input.now,input.now)
+      : this.#db.prepare(
+          `SELECT * FROM trigger_occurrences
+           WHERE (status='pending' OR (status='deferred' AND next_attempt_at<=?))
+             AND julianday(scheduled_at)<=julianday(?)
+           ORDER BY scheduled_at,occurrence_id`
+        ).all(input.now,input.now)) as SqlRow[];
+    return rows.map((row) => this.#readTriggerOccurrence(row));
+  }
+
+  createTriggerAttempt(input: {
+    attemptId: string;
+    occurrenceId: string;
+    expectedOccurrenceRevision: number;
+    createdAt: string;
+  }): { occurrence:TriggerOccurrenceRecord;attempt:TriggerAttemptRecord } {
+    assertRevision(input.expectedOccurrenceRevision,"expectedOccurrenceRevision");
+    return this.#db.transaction(() => {
+      const row = this.#db.prepare(
+        "SELECT * FROM trigger_occurrences WHERE occurrence_id=?"
+      ).get(input.occurrenceId) as SqlRow | undefined;
+      if (!row) throw new Error(`Trigger Occurrence not found: ${input.occurrenceId}`);
+      const current = this.#readTriggerOccurrence(row);
+      if (
+        current.revision !== input.expectedOccurrenceRevision ||
+        (current.status !== "pending" && current.status !== "deferred")
+      ) {
+        throw new RevisionConflictError("Trigger Occurrence is not claimable");
+      }
+      const attemptNumber = current.attemptCount + 1;
+      const claimed = this.#db.prepare(
+        `UPDATE trigger_occurrences
+         SET status='running',next_attempt_at=NULL,attempt_count=?,revision=revision+1,
+             diagnostic=NULL,updated_at=?
+         WHERE occurrence_id=? AND revision=? AND status IN ('pending','deferred')`
+      ).run(
+        attemptNumber,input.createdAt,input.occurrenceId,input.expectedOccurrenceRevision
+      );
+      if (claimed.changes !== 1) {
+        throw new RevisionConflictError("Trigger Occurrence claim CAS failed");
+      }
+      this.#db.prepare(
+        `INSERT INTO trigger_attempts(
+          attempt_id,occurrence_id,attempt_number,revision,status,created_at,updated_at
+        ) VALUES (?,?,?,0,'pending',?,?)`
+      ).run(
+        input.attemptId,input.occurrenceId,attemptNumber,input.createdAt,input.createdAt
+      );
+      return {
+        occurrence:this.getTriggerOccurrence(input.occurrenceId)!,
+        attempt:this.getTriggerAttempt(input.attemptId)!
+      };
+    })();
+  }
+
+  updateTriggerAttempt(input: {
+    attemptId: string;
+    expectedRevision: number;
+    status: TriggerAttemptStatus;
+    updatedAt: string;
+    terminalOutcome?: TriggerTerminalOutcome;
     workflowRunId?: string;
     fencingToken?: number;
     browserFencingToken?: number;
     diagnostic?: string;
-  }): TriggerRunRecord {
+  }): TriggerAttemptRecord {
+    assertRevision(input.expectedRevision,"expectedRevision");
+    if ((input.status === "terminal") !== (input.terminalOutcome !== undefined)) {
+      throw new Error("Terminal Trigger Attempt requires terminalOutcome");
+    }
+    const current = this.getTriggerAttempt(input.attemptId);
+    if (!current || current.revision !== input.expectedRevision) {
+      throw new RevisionConflictError("Trigger Attempt revision changed");
+    }
+    const allowed =
+      (current.status === "pending" &&
+        (input.status === "running" || input.status === "terminal")) ||
+      (current.status === "running" && input.status === "terminal");
+    if (!allowed) {
+      throw new Error(
+        `Invalid Trigger Attempt transition: ${current.status} -> ${input.status}`
+      );
+    }
     const result = this.#db.prepare(
-      `UPDATE trigger_runs SET status=?,updated_at=?,
-         workflow_run_id=COALESCE(?,workflow_run_id),
-         fencing_token=COALESCE(?,fencing_token),
-         browser_fencing_token=COALESCE(?,browser_fencing_token),
-         diagnostic=COALESCE(?,diagnostic)
-       WHERE trigger_run_id=?`
+      `UPDATE trigger_attempts
+       SET status=?,terminal_outcome=?,updated_at=?,revision=revision+1,
+           workflow_run_id=COALESCE(?,workflow_run_id),
+           fencing_token=COALESCE(?,fencing_token),
+           browser_fencing_token=COALESCE(?,browser_fencing_token),
+           diagnostic=COALESCE(?,diagnostic)
+       WHERE attempt_id=? AND revision=? AND status=?`
     ).run(
-      input.status,input.updatedAt,input.workflowRunId ?? null,input.fencingToken ?? null,
-      input.browserFencingToken ?? null,input.diagnostic ?? null,input.triggerRunId
+      input.status,input.terminalOutcome ?? null,input.updatedAt,
+      input.workflowRunId ?? null,input.fencingToken ?? null,
+      input.browserFencingToken ?? null,input.diagnostic ?? null,
+      input.attemptId,input.expectedRevision,current.status
     );
-    if (result.changes !== 1) throw new Error(`Trigger Run not found: ${input.triggerRunId}`);
-    const row = this.#db.prepare("SELECT * FROM trigger_runs WHERE trigger_run_id=?")
-      .get(input.triggerRunId) as SqlRow;
-    return this.#readTriggerRun(row);
+    if (result.changes !== 1) {
+      throw new RevisionConflictError("Trigger Attempt revision changed");
+    }
+    return this.getTriggerAttempt(input.attemptId)!;
   }
 
-  getTriggerRun(triggerRunId: string): TriggerRunRecord | undefined {
+  finishTriggerAttempt(input: {
+    attemptId: string;
+    expectedAttemptRevision: number;
+    occurrenceId: string;
+    expectedOccurrenceRevision: number;
+    outcome: TriggerTerminalOutcome;
+    diagnostic?: string;
+    updatedAt: string;
+  }): { occurrence:TriggerOccurrenceRecord;attempt:TriggerAttemptRecord } {
+    assertRevision(input.expectedAttemptRevision,"expectedAttemptRevision");
+    assertRevision(input.expectedOccurrenceRevision,"expectedOccurrenceRevision");
+    return this.#db.transaction(() => {
+      const attempt = this.getTriggerAttempt(input.attemptId);
+      if (!attempt || attempt.occurrenceId !== input.occurrenceId) {
+        throw new RevisionConflictError("Trigger Attempt finish identity changed");
+      }
+      if (attempt.status === "terminal") {
+        throw new Error("A terminal Trigger Attempt cannot be finished again");
+      }
+      const occurrence = this.getTriggerOccurrence(input.occurrenceId);
+      if (!occurrence || occurrence.status !== "running") {
+        throw new RevisionConflictError("Trigger Occurrence is not running");
+      }
+      const attemptResult = this.#db.prepare(
+        `UPDATE trigger_attempts
+         SET status='terminal',terminal_outcome=?,diagnostic=?,
+             updated_at=?,revision=revision+1
+         WHERE attempt_id=? AND occurrence_id=? AND revision=?
+           AND status IN ('pending','running')`
+      ).run(
+        input.outcome,input.diagnostic ?? null,input.updatedAt,input.attemptId,
+        input.occurrenceId,input.expectedAttemptRevision
+      );
+      if (attemptResult.changes !== 1) {
+        throw new RevisionConflictError("Trigger Attempt finish CAS failed");
+      }
+      this.#inject("trigger_attempt.finish.after_attempt");
+      const occurrenceResult = this.#db.prepare(
+        `UPDATE trigger_occurrences
+         SET status='terminal',terminal_outcome=?,next_attempt_at=NULL,
+             diagnostic=?,updated_at=?,revision=revision+1
+         WHERE occurrence_id=? AND revision=? AND status='running'`
+      ).run(
+        input.outcome,input.diagnostic ?? null,input.updatedAt,input.occurrenceId,
+        input.expectedOccurrenceRevision
+      );
+      if (occurrenceResult.changes !== 1) {
+        throw new RevisionConflictError("Trigger Occurrence finish CAS failed");
+      }
+      return {
+        occurrence:this.getTriggerOccurrence(input.occurrenceId)!,
+        attempt:this.getTriggerAttempt(input.attemptId)!
+      };
+    })();
+  }
+
+  getTriggerAttempt(attemptId: string): TriggerAttemptRecord | undefined {
     const row = this.#db.prepare(
-      "SELECT * FROM trigger_runs WHERE trigger_run_id=?"
-    ).get(triggerRunId) as SqlRow | undefined;
-    return row ? this.#readTriggerRun(row) : undefined;
+      "SELECT * FROM trigger_attempts WHERE attempt_id=?"
+    ).get(attemptId) as SqlRow | undefined;
+    return row ? this.#readTriggerAttempt(row) : undefined;
   }
 
-  listTriggerRuns(triggerId?: string): TriggerRunRecord[] {
+  listTriggerAttempts(occurrenceId: string): TriggerAttemptRecord[] {
+    return (this.#db.prepare(
+      `SELECT * FROM trigger_attempts
+       WHERE occurrence_id=? ORDER BY attempt_number,attempt_id`
+    ).all(occurrenceId) as SqlRow[]).map((row) => this.#readTriggerAttempt(row));
+  }
+
+  listActiveTriggerAttempts(triggerId?: string): TriggerAttemptRecord[] {
     const rows = (triggerId
       ? this.#db.prepare(
-          "SELECT * FROM trigger_runs WHERE trigger_id=? ORDER BY created_at DESC LIMIT 200"
+          `SELECT a.* FROM trigger_attempts a
+           JOIN trigger_occurrences o ON o.occurrence_id=a.occurrence_id
+           WHERE a.status!='terminal' AND o.trigger_id=?
+           ORDER BY a.created_at,a.attempt_id`
         ).all(triggerId)
       : this.#db.prepare(
-          "SELECT * FROM trigger_runs ORDER BY created_at DESC LIMIT 200"
+          `SELECT * FROM trigger_attempts WHERE status!='terminal'
+           ORDER BY created_at,attempt_id`
         ).all()) as SqlRow[];
-    return rows.map((row) => this.#readTriggerRun(row));
+    return rows.map((row) => this.#readTriggerAttempt(row));
+  }
+
+  getTriggerScheduleState(
+    triggerId: string,
+    triggerVersion: string
+  ): TriggerScheduleStateRecord | undefined {
+    const row = this.#db.prepare(
+      `SELECT * FROM trigger_schedule_state
+       WHERE trigger_id=? AND trigger_version=?`
+    ).get(triggerId,triggerVersion) as SqlRow | undefined;
+    return row ? this.#readTriggerScheduleState(row) : undefined;
+  }
+
+  initializeTriggerScheduleState(input: {
+    triggerId: string;
+    triggerVersion: string;
+    cursorAt: string;
+    createdAt: string;
+  }): TriggerScheduleStateRecord {
+    this.#db.prepare(
+      `INSERT INTO trigger_schedule_state(
+        trigger_id,trigger_version,cursor_at,revision,created_at,updated_at
+      ) VALUES (?,?,?,0,?,?)
+      ON CONFLICT(trigger_id,trigger_version) DO NOTHING`
+    ).run(
+      input.triggerId,input.triggerVersion,input.cursorAt,input.createdAt,input.createdAt
+    );
+    return this.getTriggerScheduleState(input.triggerId,input.triggerVersion)!;
+  }
+
+  advanceTriggerScheduleState(input: {
+    triggerId: string;
+    triggerVersion: string;
+    expectedRevision: number;
+    cursorAt: string;
+    updatedAt: string;
+  }): TriggerScheduleStateRecord {
+    assertRevision(input.expectedRevision,"expectedRevision");
+    const result = this.#db.prepare(
+      `UPDATE trigger_schedule_state
+       SET cursor_at=?,revision=revision+1,updated_at=?
+       WHERE trigger_id=? AND trigger_version=? AND revision=? AND cursor_at<?`
+    ).run(
+      input.cursorAt,input.updatedAt,input.triggerId,input.triggerVersion,
+      input.expectedRevision,input.cursorAt
+    );
+    if (result.changes !== 1) {
+      throw new RevisionConflictError("Trigger Schedule State revision changed");
+    }
+    return this.getTriggerScheduleState(input.triggerId,input.triggerVersion)!;
   }
 
   latestDatasetVersion(datasetId: string): { id:string;version:string;createdAt:string } | undefined {
@@ -5097,6 +5415,16 @@ export class SqlitePersistence implements Persistence {
     );
   }
 
+  listTriggerLeases(nowValue: string): BrowserControlLeaseRecord[] {
+    return (this.#db.prepare(
+      "SELECT * FROM trigger_leases WHERE expires_at>? ORDER BY concurrency_key"
+    ).all(nowValue) as SqlRow[]).map((row) => ({
+      resourceId:String(row.concurrency_key),ownerId:String(row.owner_id),
+      fencingToken:Number(row.fencing_token),acquiredAt:String(row.acquired_at),
+      expiresAt:String(row.expires_at)
+    }));
+  }
+
   acquireBrowserControlLease(input: {
     resourceId:string;ownerId:string;now:string;ttlSeconds:number;
   }): BrowserControlLeaseRecord | undefined {
@@ -5113,9 +5441,12 @@ export class SqlitePersistence implements Persistence {
     }
     const expiresAt = new Date(Date.parse(input.now) + input.ttlSeconds * 1000).toISOString();
     const result = this.#db.prepare(
-      `UPDATE browser_control_leases SET expires_at=?
+      `UPDATE browser_control_leases
+       SET expires_at=CASE WHEN expires_at>? THEN expires_at ELSE ? END
        WHERE resource_id=? AND owner_id=? AND fencing_token=? AND expires_at>?`
-    ).run(expiresAt,input.resourceId,input.ownerId,input.fencingToken,input.now);
+    ).run(
+      expiresAt,expiresAt,input.resourceId,input.ownerId,input.fencingToken,input.now
+    );
     if (result.changes !== 1) return undefined;
     const row = this.#db.prepare(
       "SELECT * FROM browser_control_leases WHERE resource_id=?"
@@ -6348,19 +6679,45 @@ export class SqlitePersistence implements Persistence {
     };
   }
 
-  #readTriggerRun(row: SqlRow): TriggerRunRecord {
+  #readTriggerOccurrence(row: SqlRow): TriggerOccurrenceRecord {
     return {
-      triggerRunId:String(row.trigger_run_id),triggerId:String(row.trigger_id),
+      occurrenceId:String(row.occurrence_id),triggerId:String(row.trigger_id),
       triggerVersion:String(row.trigger_version),occurrenceKey:String(row.occurrence_key),
-      status:row.status as TriggerRunStatus,
+      scheduledAt:String(row.scheduled_at),status:row.status as TriggerOccurrenceStatus,
+      ...(row.next_attempt_at == null ? {} : { nextAttemptAt:String(row.next_attempt_at) }),
+      attemptCount:Number(row.attempt_count),revision:Number(row.revision),
+      ...(row.terminal_outcome == null
+        ? {}
+        : { terminalOutcome:row.terminal_outcome as TriggerTerminalOutcome }),
+      ...(row.dataset_id == null ? {} : { datasetId:String(row.dataset_id) }),
+      ...(row.dataset_version == null ? {} : { datasetVersion:String(row.dataset_version) }),
+      ...(row.diagnostic == null ? {} : { diagnostic:String(row.diagnostic) }),
+      createdAt:String(row.created_at),updatedAt:String(row.updated_at)
+    };
+  }
+
+  #readTriggerAttempt(row: SqlRow): TriggerAttemptRecord {
+    return {
+      attemptId:String(row.attempt_id),occurrenceId:String(row.occurrence_id),
+      attemptNumber:Number(row.attempt_number),revision:Number(row.revision),
+      status:row.status as TriggerAttemptStatus,
+      ...(row.terminal_outcome == null
+        ? {}
+        : { terminalOutcome:row.terminal_outcome as TriggerTerminalOutcome }),
       ...(row.workflow_run_id == null ? {} : { workflowRunId:String(row.workflow_run_id) }),
       ...(row.fencing_token == null ? {} : { fencingToken:Number(row.fencing_token) }),
       ...(row.browser_fencing_token == null
         ? {}
         : { browserFencingToken:Number(row.browser_fencing_token) }),
-      ...(row.dataset_id == null ? {} : { datasetId:String(row.dataset_id) }),
-      ...(row.dataset_version == null ? {} : { datasetVersion:String(row.dataset_version) }),
       ...(row.diagnostic == null ? {} : { diagnostic:String(row.diagnostic) }),
+      createdAt:String(row.created_at),updatedAt:String(row.updated_at)
+    };
+  }
+
+  #readTriggerScheduleState(row: SqlRow): TriggerScheduleStateRecord {
+    return {
+      triggerId:String(row.trigger_id),triggerVersion:String(row.trigger_version),
+      cursorAt:String(row.cursor_at),revision:Number(row.revision),
       createdAt:String(row.created_at),updatedAt:String(row.updated_at)
     };
   }
@@ -6423,9 +6780,10 @@ export class SqlitePersistence implements Persistence {
     }
     const expiresAt = new Date(Date.parse(nowValue) + ttlSeconds * 1000).toISOString();
     const result = this.#db.prepare(
-      `UPDATE ${table} SET expires_at=?
+      `UPDATE ${table}
+       SET expires_at=CASE WHEN expires_at>? THEN expires_at ELSE ? END
        WHERE ${keyColumn}=? AND owner_id=? AND fencing_token=? AND expires_at>?`
-    ).run(expiresAt,resourceId,ownerId,fencingToken,nowValue);
+    ).run(expiresAt,expiresAt,resourceId,ownerId,fencingToken,nowValue);
     if (result.changes !== 1) return undefined;
     const row = this.#db.prepare(
       `SELECT * FROM ${table} WHERE ${keyColumn}=?`

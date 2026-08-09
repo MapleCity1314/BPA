@@ -8,9 +8,14 @@ import {
   type RuntimeProvider
 } from "@bpa/node-runtime";
 import type { ArtifactRef,JsonValue } from "@bpa/workflow-ir";
-import type { RunRecord,TriggerRunRecord } from "@bpa/persistence";
+import type {
+  RunRecord,
+  TriggerAttemptRecord,
+  TriggerOccurrenceRecord
+} from "@bpa/persistence";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { LocalCoreService } from "./control.js";
+import type { TriggerFireResult } from "./trigger-runtime.js";
 
 const root = new URL("../../../",import.meta.url);
 const observedAt = "2026-08-09T08:00:00.000Z";
@@ -262,12 +267,16 @@ async function runTrigger(
     readonly workflowVersion:string;
     readonly workflowInput:Record<string,unknown>;
   }
-):Promise<{ readonly run:RunRecord;readonly triggerRun:TriggerRunRecord }> {
+):Promise<{
+  readonly run:RunRecord;
+  readonly triggerOccurrence:TriggerOccurrenceRecord;
+  readonly triggerAttempt:TriggerAttemptRecord;
+}> {
   expect(service.handle({
     id:`put:${input.id}`,method:"trigger.put",params:{
       actor:"test",
       spec:{
-        apiVersion:"bpa.trigger/v1alpha1",id:input.id,version:"1.0.0",
+        apiVersion:"bpa.trigger/v1alpha2",id:input.id,version:"1.0.0",
         appId:input.appId,kind:"manual",
         workflow:{ id:input.workflowId,version:input.workflowVersion },
         enabled:true,inputSchemaVersion:`${input.id}/1`,input:input.workflowInput,
@@ -280,23 +289,27 @@ async function runTrigger(
     id:`fire:${input.id}`,method:"trigger.fire",
     params:{ id:input.id,requestKey:"local-e2e" }
   });
-  if (!fired.ok || (fired.result as TriggerRunRecord).status !== "run_created") {
+  const triggerResult = fired.result as TriggerFireResult;
+  if (!fired.ok || triggerResult.attempt?.status !== "running") {
     throw new Error(`Trigger did not create a Run: ${JSON.stringify(fired)}`);
   }
-  const triggerRun = fired.result as TriggerRunRecord;
+  const triggerAttempt = triggerResult.attempt;
   for (let turn = 0;turn < 80;turn += 1) {
     await service.ir2Runtime.drainOnce();
-    const status = store.getRun(triggerRun.workflowRunId!)?.status;
+    const status = store.getRun(triggerAttempt.workflowRunId!)?.status;
     if (["succeeded","failed","rejected","uncertain","cancelled"].includes(String(status))) {
       break;
     }
   }
   service.triggers.tick();
-  const run = store.getRun(triggerRun.workflowRunId!);
-  if (!run) throw new Error(`Workflow Run missing: ${triggerRun.workflowRunId}`);
+  const run = store.getRun(triggerAttempt.workflowRunId!);
+  if (!run) throw new Error(`Workflow Run missing: ${triggerAttempt.workflowRunId}`);
   return {
     run,
-    triggerRun:store.getTriggerRun(triggerRun.triggerRunId)!
+    triggerOccurrence:store.getTriggerOccurrence(
+      triggerResult.occurrence.occurrenceId
+    )!,
+    triggerAttempt:store.getTriggerAttempt(triggerAttempt.attemptId)!
   };
 }
 
@@ -397,7 +410,10 @@ describe("local Doudian business Workflow acceptance",() => {
     });
     expect(retired).toMatchObject({
       run:{ status:"succeeded",output:{ alert:true,dailyRecord:{ status:"complete_with_items" } } },
-      triggerRun:{ status:"complete",browserFencingToken:1 }
+      triggerOccurrence:{ status:"terminal",terminalOutcome:"complete" },
+      triggerAttempt:{
+        status:"terminal",terminalOutcome:"complete",browserFencingToken:1
+      }
     });
     expect(store.listBrowserControlLeases(new Date().toISOString())).toEqual([]);
 
@@ -408,7 +424,10 @@ describe("local Doudian business Workflow acceptance",() => {
     });
     expect(experience).toMatchObject({
       run:{ status:"succeeded",output:{ status:"complete",daily:{ persistedCount:1 } } },
-      triggerRun:{ status:"complete",browserFencingToken:2 }
+      triggerOccurrence:{ status:"terminal",terminalOutcome:"complete" },
+      triggerAttempt:{
+        status:"terminal",terminalOutcome:"complete",browserFencingToken:2
+      }
     });
     expect(store.listBrowserControlLeases(new Date().toISOString())).toEqual([]);
 
@@ -422,7 +441,10 @@ describe("local Doudian business Workflow acceptance",() => {
     });
     expect(inventory).toMatchObject({
       run:{ status:"succeeded",output:{ shop:{ id:"10001",name:"测试店铺" } } },
-      triggerRun:{ status:"complete",browserFencingToken:3 }
+      triggerOccurrence:{ status:"terminal",terminalOutcome:"complete" },
+      triggerAttempt:{
+        status:"terminal",terminalOutcome:"complete",browserFencingToken:3
+      }
     });
     expect(store.listBrowserControlLeases(new Date().toISOString())).toEqual([]);
     expect(store.listBrowserSessions({ limit:10 }).records).toHaveLength(1);
@@ -489,7 +511,10 @@ describe("local Doudian business Workflow acceptance",() => {
         status:"uncertain",
         output:{ dailyRecord:{ status:"partial" },scan:{ status:"partial" } }
       },
-      triggerRun:{ status:"uncertain",browserFencingToken:1 }
+      triggerOccurrence:{ status:"terminal",terminalOutcome:"uncertain" },
+      triggerAttempt:{
+        status:"terminal",terminalOutcome:"uncertain",browserFencingToken:1
+      }
     });
     expect(invocations).toEqual([
       "doudian.alliance.shops.discover",

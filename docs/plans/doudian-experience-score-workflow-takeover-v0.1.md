@@ -546,10 +546,14 @@ spec:
 id: doudian-experience-daily
 kind: schedule
 workflow: doudian.experience-score.daily@1.0.1
-timezone: Asia/Shanghai
-schedule: daily 13:00
+schedule:
+  type: daily
+  timezone: Asia/Shanghai
+  localTime: "13:00"
+  onTimeWindowSeconds: 300
 idempotencyPolicy: occurrence
 missedRunPolicy: run_once
+retryPolicy: none
 concurrencyKey: doudian-account:company-main
 enabled: false
 ```

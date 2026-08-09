@@ -3,14 +3,27 @@ import type {
   BrowserControlLeaseRecord,
   Persistence,
   RunRecord,
-  TriggerRunRecord,
+  TriggerAttemptRecord,
+  TriggerOccurrenceRecord,
   TriggerSpecDefinition,
-  TriggerSpecRecord
+  TriggerSpecRecord,
+  TriggerTerminalOutcome
 } from "@bpa/persistence";
+import { RevisionConflictError } from "@bpa/persistence";
+import { occurrencePageBetween } from "./schedule-calendar.js";
 
 const LEASE_TTL_SECONDS = 300;
-const ACTIVE_TRIGGER_STATES = new Set([
-  "due","lease_acquired","run_created","running"
+const DEFER_SECONDS = 60;
+const ACTIVE_WORKFLOW_STATES = new Set([
+  "created",
+  "validated",
+  "queued",
+  "running",
+  "waiting_browser",
+  "waiting_assistance",
+  "waiting_human",
+  "paused",
+  "compensating"
 ]);
 
 interface TriggerControlLeases {
@@ -21,7 +34,13 @@ interface TriggerControlLeases {
 export interface TriggerFireInput {
   readonly trigger: TriggerSpecRecord;
   readonly occurrenceKey: string;
-  readonly dataset?: { readonly id:string;readonly version:string };
+  readonly scheduledAt?: string;
+  readonly dataset?: { readonly id: string; readonly version: string };
+}
+
+export interface TriggerFireResult {
+  readonly occurrence: TriggerOccurrenceRecord;
+  readonly attempt?: TriggerAttemptRecord;
 }
 
 export class TriggerRuntime {
@@ -30,159 +49,427 @@ export class TriggerRuntime {
     readonly createRun: (
       trigger: TriggerSpecRecord,
       input: unknown,
-      triggerRunId: string
+      triggerAttemptId: string
     ) => RunRecord,
     readonly clock: () => Date = () => new Date()
   ) {}
 
-  fire(input: TriggerFireInput): TriggerRunRecord {
+  fire(input: TriggerFireInput): TriggerFireResult {
     const now = this.clock().toISOString();
-    const triggerRunId = `trigger-run:${randomUUID()}`;
     const claimed = this.persistence.claimTriggerOccurrence({
-      triggerRunId,triggerId:input.trigger.spec.id,
-      triggerVersion:input.trigger.spec.version,
-      occurrenceKey:input.occurrenceKey,status:"due",
-      ...(input.dataset ? {
-        datasetId:input.dataset.id,datasetVersion:input.dataset.version
-      } : {}),
-      createdAt:now,updatedAt:now
+      occurrenceId: `trigger-occurrence:${randomUUID()}`,
+      triggerId: input.trigger.spec.id,
+      triggerVersion: input.trigger.spec.version,
+      occurrenceKey: input.occurrenceKey,
+      scheduledAt: input.scheduledAt ?? now,
+      status: "pending",
+      attemptCount: 0,
+      revision: 0,
+      ...(input.dataset
+        ? {
+            datasetId: input.dataset.id,
+            datasetVersion: input.dataset.version
+          }
+        : {}),
+      createdAt: now,
+      updatedAt: now
     });
-    if (claimed.status === "duplicate") return claimed.record;
-    const triggerLease = this.persistence.acquireTriggerLease({
-      concurrencyKey:input.trigger.spec.concurrencyKey,
-      ownerId:triggerRunId,now,ttlSeconds:LEASE_TTL_SECONDS
-    });
-    if (!triggerLease) {
-      return this.persistence.updateTriggerRun({
-        triggerRunId,status:"skipped",updatedAt:now,
-        diagnostic:"Another active Trigger Run owns the concurrency lease."
-      });
-    }
-    const browserInstanceId = input.trigger.spec.browserInstanceId;
-    const browserLease = browserInstanceId
-      ? this.persistence.acquireBrowserControlLease({
-          resourceId:this.browserResourceId(browserInstanceId),
-          ownerId:triggerRunId,now,ttlSeconds:LEASE_TTL_SECONDS
-        })
-      : undefined;
-    if (browserInstanceId && !browserLease) {
-      this.persistence.releaseTriggerLease({
-        concurrencyKey:input.trigger.spec.concurrencyKey,
-        ownerId:triggerRunId,fencingToken:triggerLease.fencingToken,releasedAt:now
-      });
-      return this.persistence.updateTriggerRun({
-        triggerRunId,status:"skipped",updatedAt:now,
-        diagnostic:"Another active controller owns the browser instance lease."
-      });
-    }
-    let run: RunRecord;
-    try {
-      this.persistence.updateTriggerRun({
-        triggerRunId,status:"lease_acquired",updatedAt:now,
-        fencingToken:triggerLease.fencingToken,
-        ...(browserLease
-          ? { browserFencingToken:browserLease.fencingToken }
-          : {})
-      });
-      const workflowInput = input.trigger.spec.input;
-      run = this.createRun(input.trigger,workflowInput,triggerRunId);
-    } catch (error) {
-      if (browserLease && browserInstanceId) {
-        this.persistence.releaseBrowserControlLease({
-          resourceId:this.browserResourceId(browserInstanceId),
-          ownerId:triggerRunId,fencingToken:browserLease.fencingToken,releasedAt:now
-        });
-      }
-      this.persistence.releaseTriggerLease({
-        concurrencyKey:input.trigger.spec.concurrencyKey,
-        ownerId:triggerRunId,fencingToken:triggerLease.fencingToken,releasedAt:now
-      });
-      return this.persistence.updateTriggerRun({
-        triggerRunId,status:"blocked",updatedAt:now,
-        diagnostic:error instanceof Error ? error.message : String(error)
-      });
-    }
-    const linked = this.persistence.getTriggerRun(triggerRunId);
-    if (
-      !linked ||
-      linked.status !== "run_created" ||
-      linked.workflowRunId !== run.id
-    ) {
-      throw new Error(
-        `Workflow Run was not atomically linked to Trigger Run: ${triggerRunId}`
-      );
-    }
-    return linked;
+    return this.startOccurrence(input.trigger, claimed.record, now);
   }
 
   tick(): void {
     const nowDate = this.clock();
     const now = nowDate.toISOString();
-    this.reconcileActiveRuns(now);
+    this.sweepAttemptLeases(now);
+    this.reconcileActiveAttempts(now);
+    this.sweepAttemptLeases(now);
+    const excludedTriggerIds = new Set<string>();
+    const triggerErrors: Error[] = [];
     for (const trigger of this.persistence.listTriggerSpecs()) {
       if (!trigger.spec.enabled) continue;
-      if (trigger.spec.kind === "schedule" && trigger.spec.schedule) {
-        const intervalMs = trigger.spec.schedule.intervalSeconds * 1000;
-        const occurrence = Math.floor(nowDate.getTime() / intervalMs) * intervalMs;
-        this.fire({ trigger,occurrenceKey:`schedule:${new Date(occurrence).toISOString()}` });
-      }
-      if (trigger.spec.kind === "dataset" && trigger.spec.dataset) {
-        const dataset = this.persistence.latestDatasetVersion(trigger.spec.dataset.id);
-        if (dataset) {
-          this.fire({
-            trigger,occurrenceKey:`dataset:${dataset.id}@${dataset.version}`,
-            dataset:{ id:dataset.id,version:dataset.version }
-          });
+      try {
+        if (trigger.spec.kind === "schedule" && trigger.spec.schedule) {
+          if (!this.materializeSchedule(trigger, nowDate)) {
+            excludedTriggerIds.add(trigger.spec.id);
+          }
         }
+        if (trigger.spec.kind === "dataset" && trigger.spec.dataset) {
+          const dataset = this.persistence.latestDatasetVersion(
+            trigger.spec.dataset.id
+          );
+          if (dataset) {
+            this.fire({
+              trigger,
+              occurrenceKey: `dataset:${dataset.id}@${dataset.version}`,
+              scheduledAt: dataset.createdAt,
+              dataset: { id: dataset.id, version: dataset.version }
+            });
+          }
+        }
+      } catch (error) {
+        excludedTriggerIds.add(trigger.spec.id);
+        triggerErrors.push(
+          new Error(`Trigger ${trigger.spec.id} tick failed.`, { cause: error })
+        );
       }
+    }
+    this.startRunnableOccurrences(now, excludedTriggerIds);
+    if (triggerErrors.length > 0) {
+      throw new AggregateError(triggerErrors, "One or more Trigger ticks failed.");
     }
   }
 
-  private reconcileActiveRuns(now: string): void {
-    for (const triggerRun of this.persistence.listTriggerRuns()) {
-      if (!ACTIVE_TRIGGER_STATES.has(triggerRun.status)) continue;
+  private materializeSchedule(
+    trigger: TriggerSpecRecord,
+    nowDate: Date
+  ): boolean {
+    const schedule = trigger.spec.schedule;
+    const missedRunPolicy = trigger.spec.missedRunPolicy;
+    if (!schedule || !missedRunPolicy) return true;
+    const now = nowDate.toISOString();
+    let state = this.persistence.initializeTriggerScheduleState({
+      triggerId: trigger.spec.id,
+      triggerVersion: trigger.spec.version,
+      cursorAt: trigger.updatedAt,
+      createdAt: now
+    });
+    if (Date.parse(trigger.updatedAt) > Date.parse(state.cursorAt)) {
+      state = this.persistence.advanceTriggerScheduleState({
+        triggerId: trigger.spec.id,
+        triggerVersion: trigger.spec.version,
+        expectedRevision: state.revision,
+        cursorAt: trigger.updatedAt,
+        updatedAt: now
+      });
+    }
+    if (Date.parse(state.cursorAt) >= nowDate.getTime()) return true;
+    const due = occurrencePageBetween(
+      schedule,
+      new Date(state.cursorAt),
+      nowDate
+    );
+    for (const item of due) {
+      this.persistence.claimTriggerOccurrence({
+        occurrenceId: `trigger-occurrence:${randomUUID()}`,
+        triggerId: trigger.spec.id,
+        triggerVersion: trigger.spec.version,
+        occurrenceKey: item.occurrenceKey,
+        scheduledAt: item.scheduledAt,
+        status: "pending",
+        attemptCount: 0,
+        revision: 0,
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+    const cursorAt = due.at(-1)?.scheduledAt ?? now;
+    state = this.persistence.advanceTriggerScheduleState({
+      triggerId: trigger.spec.id,
+      triggerVersion: trigger.spec.version,
+      expectedRevision: state.revision,
+      cursorAt,
+      updatedAt: now
+    });
+    this.applyMissedRunPolicy(trigger, nowDate);
+    return due.length < 1_000;
+  }
+
+  private applyMissedRunPolicy(
+    trigger: TriggerSpecRecord,
+    nowDate: Date
+  ): void {
+    const schedule = trigger.spec.schedule!;
+    const policy = trigger.spec.missedRunPolicy!;
+    const candidates = this.persistence
+      .listActiveTriggerOccurrences(trigger.spec.id)
+      .filter(
+        (item) =>
+          item.triggerVersion === trigger.spec.version &&
+          (item.status === "pending" || item.status === "deferred")
+      )
+      .sort(
+        (left, right) =>
+          Date.parse(left.scheduledAt) - Date.parse(right.scheduledAt) ||
+          left.occurrenceId.localeCompare(right.occurrenceId)
+      );
+    let keepFrom = candidates.length;
+    let outcome: Extract<TriggerTerminalOutcome, "missed" | "skipped"> =
+      "missed";
+    if (policy === "skip") {
+      const cutoff = nowDate.getTime() - schedule.onTimeWindowSeconds * 1_000;
+      keepFrom = candidates.findIndex(
+        (item) => Date.parse(item.scheduledAt) >= cutoff
+      );
+      if (keepFrom < 0) keepFrom = candidates.length;
+      outcome = "skipped";
+    } else if (policy === "run_once") {
+      keepFrom = Math.max(0, candidates.length - 1);
+    } else {
+      keepFrom = Math.max(
+        0,
+        candidates.length - (trigger.spec.maxCatchUpOccurrences ?? 0)
+      );
+    }
+    const now = nowDate.toISOString();
+    for (const stale of candidates.slice(0, keepFrom)) {
+      this.persistence.updateTriggerOccurrence({
+        occurrenceId: stale.occurrenceId,
+        expectedRevision: stale.revision,
+        status: "terminal",
+        terminalOutcome: outcome,
+        diagnostic:
+          outcome === "skipped"
+            ? "The schedule occurrence exceeded its on-time window."
+            : "A newer schedule occurrence superseded this catch-up candidate.",
+        updatedAt: now
+      });
+    }
+  }
+
+  private startRunnableOccurrences(
+    now: string,
+    excludedTriggerIds: ReadonlySet<string> = new Set()
+  ): void {
+    for (const occurrence of this.persistence.listRunnableTriggerOccurrences({
+      now
+    })) {
+      if (excludedTriggerIds.has(occurrence.triggerId)) continue;
+      const current = this.persistence.getTriggerSpec(occurrence.triggerId);
+      if (!current?.spec.enabled) continue;
+      const pinned = this.persistence.getTriggerSpecVersion(
+        occurrence.triggerId,
+        occurrence.triggerVersion
+      );
+      if (!pinned) {
+        this.persistence.updateTriggerOccurrence({
+          occurrenceId: occurrence.occurrenceId,
+          expectedRevision: occurrence.revision,
+          status: "terminal",
+          terminalOutcome: "failed",
+          diagnostic: "Pinned TriggerSpec version is missing.",
+          updatedAt: now
+        });
+        continue;
+      }
+      const trigger: TriggerSpecRecord =
+        current.spec.version === pinned.version
+          ? current
+          : {
+              spec: pinned,
+              revision: 0,
+              createdAt: occurrence.createdAt,
+              updatedAt: occurrence.updatedAt,
+              createdBy: "trigger-runtime",
+              updatedBy: "trigger-runtime"
+            };
+      this.startOccurrence(trigger, occurrence, now);
+    }
+  }
+
+  private startOccurrence(
+    trigger: TriggerSpecRecord,
+    occurrence: TriggerOccurrenceRecord,
+    now: string
+  ): TriggerFireResult {
+    if (
+      occurrence.status === "running" ||
+      occurrence.status === "terminal" ||
+      (occurrence.status === "deferred" &&
+        Date.parse(occurrence.nextAttemptAt ?? "") > Date.parse(now))
+    ) {
+      return {
+        occurrence,
+        ...this.latestAttempt(occurrence.occurrenceId)
+      };
+    }
+    const attemptId = `trigger-attempt:${randomUUID()}`;
+    const triggerLease = this.persistence.acquireTriggerLease({
+      concurrencyKey: trigger.spec.concurrencyKey,
+      ownerId: attemptId,
+      now,
+      ttlSeconds: LEASE_TTL_SECONDS
+    });
+    if (!triggerLease) {
+      return { occurrence: this.deferOccurrence(occurrence, now) };
+    }
+    const browserInstanceId = trigger.spec.browserInstanceId;
+    const browserLease = browserInstanceId
+      ? this.persistence.acquireBrowserControlLease({
+          resourceId: this.browserResourceId(browserInstanceId),
+          ownerId: attemptId,
+          now,
+          ttlSeconds: LEASE_TTL_SECONDS
+        })
+      : undefined;
+    if (browserInstanceId && !browserLease) {
+      this.persistence.releaseTriggerLease({
+        concurrencyKey: trigger.spec.concurrencyKey,
+        ownerId: attemptId,
+        fencingToken: triggerLease.fencingToken,
+        releasedAt: now
+      });
+      return { occurrence: this.deferOccurrence(occurrence, now) };
+    }
+    let created: {
+      occurrence: TriggerOccurrenceRecord;
+      attempt: TriggerAttemptRecord;
+    };
+    try {
+      created = this.persistence.createTriggerAttempt({
+        attemptId,
+        occurrenceId: occurrence.occurrenceId,
+        expectedOccurrenceRevision: occurrence.revision,
+        createdAt: now
+      });
+    } catch (error) {
+      this.releaseLeases(
+        trigger.spec,
+        attemptId,
+        { trigger: triggerLease, ...(browserLease ? { browser: browserLease } : {}) },
+        now
+      );
+      if (error instanceof RevisionConflictError) {
+        const current = this.persistence.getTriggerOccurrence(
+          occurrence.occurrenceId
+        );
+        if (!current) throw error;
+        return { occurrence: current, ...this.latestAttempt(current.occurrenceId) };
+      }
+      throw error;
+    }
+    let attempt = this.persistence.updateTriggerAttempt({
+      attemptId,
+      expectedRevision: created.attempt.revision,
+      status: "running",
+      fencingToken: triggerLease.fencingToken,
+      ...(browserLease
+        ? { browserFencingToken: browserLease.fencingToken }
+        : {}),
+      updatedAt: now
+    });
+    try {
+      this.createRun(trigger, trigger.spec.input, attemptId);
+    } catch (error) {
+      const diagnostic = error instanceof Error ? error.message : String(error);
+      this.persistence.finishTriggerAttempt({
+        attemptId,
+        expectedAttemptRevision: attempt.revision,
+        occurrenceId: created.occurrence.occurrenceId,
+        expectedOccurrenceRevision: created.occurrence.revision,
+        outcome: "blocked",
+        diagnostic,
+        updatedAt: now
+      });
+      this.releaseLeases(
+        trigger.spec,
+        attemptId,
+        { trigger: triggerLease, ...(browserLease ? { browser: browserLease } : {}) },
+        now
+      );
+      return {
+        occurrence: this.persistence.getTriggerOccurrence(
+          created.occurrence.occurrenceId
+        )!,
+        attempt: this.persistence.getTriggerAttempt(attemptId)!
+      };
+    }
+    attempt = this.persistence.getTriggerAttempt(attemptId)!;
+    if (!attempt.workflowRunId) {
+      throw new Error(
+        `Workflow Run was not atomically linked to Trigger Attempt: ${attemptId}`
+      );
+    }
+    return {
+      occurrence: this.persistence.getTriggerOccurrence(
+        created.occurrence.occurrenceId
+      )!,
+      attempt
+    };
+  }
+
+  private deferOccurrence(
+    occurrence: TriggerOccurrenceRecord,
+    now: string
+  ): TriggerOccurrenceRecord {
+    try {
+      return this.persistence.updateTriggerOccurrence({
+        occurrenceId: occurrence.occurrenceId,
+        expectedRevision: occurrence.revision,
+        status: "deferred",
+        nextAttemptAt: new Date(
+          Date.parse(now) + DEFER_SECONDS * 1_000
+        ).toISOString(),
+        updatedAt: now,
+        diagnostic: "The required execution lease is busy."
+      });
+    } catch (error) {
+      if (!(error instanceof RevisionConflictError)) throw error;
+      const current = this.persistence.getTriggerOccurrence(
+        occurrence.occurrenceId
+      );
+      if (!current) throw error;
+      return current;
+    }
+  }
+
+  private reconcileActiveAttempts(now: string): void {
+    for (const attempt of this.persistence.listActiveTriggerAttempts()) {
+      const occurrence = this.persistence.getTriggerOccurrence(
+        attempt.occurrenceId
+      );
+      if (!occurrence) continue;
       const trigger = this.persistence.getTriggerSpecVersion(
-        triggerRun.triggerId,
-        triggerRun.triggerVersion
+        occurrence.triggerId,
+        occurrence.triggerVersion
       );
       if (!trigger) {
-        this.persistence.updateTriggerRun({
-          triggerRunId:triggerRun.triggerRunId,status:"failed",updatedAt:now,
-          diagnostic:"Pinned TriggerSpec version is missing."
-        });
+        this.finishWithoutLeases(
+          attempt,
+          occurrence,
+          "failed",
+          now,
+          "Pinned TriggerSpec version is missing."
+        );
         continue;
       }
-      const control = this.findOrRenewLeases(trigger,triggerRun,now);
+      const control = this.findOrRenewLeases(trigger, attempt, now);
       if ("diagnostic" in control) {
-        this.persistence.updateTriggerRun({
-          triggerRunId:triggerRun.triggerRunId,status:"failed",updatedAt:now,
-          diagnostic:control.diagnostic
-        });
+        this.finishWithoutLeases(
+          attempt,
+          occurrence,
+          "failed",
+          now,
+          control.diagnostic
+        );
         continue;
       }
-      if (!triggerRun.workflowRunId) {
-        this.finish(
-          trigger,triggerRun,control.leases,"failed",now,
+      if (!attempt.workflowRunId) {
+        this.finishAttempt(
+          trigger,
+          attempt,
+          occurrence,
+          control.leases,
+          "failed",
+          now,
           "Workflow Run was not created before reconciliation."
         );
         continue;
       }
-      const run = this.persistence.getRun(triggerRun.workflowRunId);
+      const run = this.persistence.getRun(attempt.workflowRunId);
       if (!run) {
-        this.finish(
-          trigger,triggerRun,control.leases,"failed",now,"Workflow Run is missing."
+        this.finishAttempt(
+          trigger,
+          attempt,
+          occurrence,
+          control.leases,
+          "failed",
+          now,
+          "Workflow Run is missing."
         );
         continue;
       }
-      if (["created","validated","queued","running","waiting_browser","waiting_assistance","waiting_human","paused","compensating"].includes(run.status)) {
-        if (triggerRun.status !== "running") {
-          this.persistence.updateTriggerRun({
-            triggerRunId:triggerRun.triggerRunId,status:"running",updatedAt:now
-          });
-        }
-        continue;
-      }
-      const status = (() => {
+      if (ACTIVE_WORKFLOW_STATES.has(run.status)) continue;
+      const outcome: TriggerTerminalOutcome = (() => {
         switch (run.status) {
           case "succeeded":
             return "complete";
@@ -195,96 +482,178 @@ export class TriggerRuntime {
             throw new Error(`Unsupported Workflow terminal: ${run.status}`);
         }
       })();
-      this.finish(trigger,triggerRun,control.leases,status,now);
+      this.finishAttempt(
+        trigger,
+        attempt,
+        occurrence,
+        control.leases,
+        outcome,
+        now
+      );
     }
   }
 
   private findOrRenewLeases(
     trigger: TriggerSpecDefinition,
-    triggerRun: TriggerRunRecord,
+    attempt: TriggerAttemptRecord,
     now: string
   ): { readonly leases: TriggerControlLeases } | { readonly diagnostic: string } {
-    const triggerLease = triggerRun.fencingToken === undefined
-      ? undefined
-      : this.persistence.renewTriggerLease({
-        concurrencyKey:trigger.concurrencyKey,
-        ownerId:triggerRun.triggerRunId,fencingToken:triggerRun.fencingToken,
-        now,ttlSeconds:LEASE_TTL_SECONDS
-      });
+    const triggerLease =
+      attempt.fencingToken === undefined
+        ? undefined
+        : this.persistence.renewTriggerLease({
+            concurrencyKey: trigger.concurrencyKey,
+            ownerId: attempt.attemptId,
+            fencingToken: attempt.fencingToken,
+            now,
+            ttlSeconds: LEASE_TTL_SECONDS
+          });
     if (!triggerLease) {
-      this.releaseBrowserLease(trigger,triggerRun,now);
-      return { diagnostic:"Trigger concurrency lease was lost." };
+      this.releaseBrowserLease(trigger, attempt, now);
+      return { diagnostic: "Trigger concurrency lease was lost." };
     }
     if (!trigger.browserInstanceId) {
-      return { leases:{ trigger:triggerLease } };
+      return { leases: { trigger: triggerLease } };
     }
-    if (triggerRun.browserFencingToken === undefined) {
+    if (attempt.browserFencingToken === undefined) {
       this.persistence.releaseTriggerLease({
-        concurrencyKey:trigger.concurrencyKey,
-        ownerId:triggerRun.triggerRunId,
-        fencingToken:triggerLease.fencingToken,
-        releasedAt:now
+        concurrencyKey: trigger.concurrencyKey,
+        ownerId: attempt.attemptId,
+        fencingToken: triggerLease.fencingToken,
+        releasedAt: now
       });
-      return { diagnostic:"Browser instance lease token is missing." };
+      return { diagnostic: "Browser instance lease token is missing." };
     }
     const browserLease = this.persistence.renewBrowserControlLease({
-      resourceId:this.browserResourceId(trigger.browserInstanceId),
-      ownerId:triggerRun.triggerRunId,
-      fencingToken:triggerRun.browserFencingToken,
-      now,ttlSeconds:LEASE_TTL_SECONDS
+      resourceId: this.browserResourceId(trigger.browserInstanceId),
+      ownerId: attempt.attemptId,
+      fencingToken: attempt.browserFencingToken,
+      now,
+      ttlSeconds: LEASE_TTL_SECONDS
     });
     if (!browserLease) {
       this.persistence.releaseTriggerLease({
-        concurrencyKey:trigger.concurrencyKey,
-        ownerId:triggerRun.triggerRunId,
-        fencingToken:triggerLease.fencingToken,
-        releasedAt:now
+        concurrencyKey: trigger.concurrencyKey,
+        ownerId: attempt.attemptId,
+        fencingToken: triggerLease.fencingToken,
+        releasedAt: now
       });
-      return { diagnostic:"Browser instance lease was lost." };
+      return { diagnostic: "Browser instance lease was lost." };
     }
-    return { leases:{ trigger:triggerLease,browser:browserLease } };
+    return { leases: { trigger: triggerLease, browser: browserLease } };
   }
 
-  private finish(
+  private finishAttempt(
     trigger: TriggerSpecDefinition,
-    triggerRun: TriggerRunRecord,
+    attempt: TriggerAttemptRecord,
+    occurrence: TriggerOccurrenceRecord,
     leases: TriggerControlLeases,
-    status: "complete" | "rejected" | "failed" | "cancelled" | "uncertain",
+    outcome: TriggerTerminalOutcome,
     now: string,
     diagnostic?: string
   ): void {
-    this.persistence.updateTriggerRun({
-      triggerRunId:triggerRun.triggerRunId,status,updatedAt:now,
-      ...(diagnostic ? { diagnostic } : {})
+    this.persistence.finishTriggerAttempt({
+      attemptId: attempt.attemptId,
+      expectedAttemptRevision: attempt.revision,
+      occurrenceId: occurrence.occurrenceId,
+      expectedOccurrenceRevision: occurrence.revision,
+      outcome,
+      ...(diagnostic ? { diagnostic } : {}),
+      updatedAt: now
     });
+    this.releaseLeases(trigger, attempt.attemptId, leases, now);
+  }
+
+  private finishWithoutLeases(
+    attempt: TriggerAttemptRecord,
+    occurrence: TriggerOccurrenceRecord,
+    outcome: TriggerTerminalOutcome,
+    now: string,
+    diagnostic: string
+  ): void {
+    this.persistence.finishTriggerAttempt({
+      attemptId: attempt.attemptId,
+      expectedAttemptRevision: attempt.revision,
+      occurrenceId: occurrence.occurrenceId,
+      expectedOccurrenceRevision: occurrence.revision,
+      outcome,
+      diagnostic,
+      updatedAt: now
+    });
+  }
+
+  private releaseLeases(
+    trigger: TriggerSpecDefinition,
+    ownerId: string,
+    leases: TriggerControlLeases,
+    releasedAt: string
+  ): void {
     if (leases.browser && trigger.browserInstanceId) {
       this.persistence.releaseBrowserControlLease({
-        resourceId:this.browserResourceId(trigger.browserInstanceId),
-        ownerId:triggerRun.triggerRunId,
-        fencingToken:leases.browser.fencingToken,
-        releasedAt:now
+        resourceId: this.browserResourceId(trigger.browserInstanceId),
+        ownerId,
+        fencingToken: leases.browser.fencingToken,
+        releasedAt
       });
     }
     this.persistence.releaseTriggerLease({
-      concurrencyKey:trigger.concurrencyKey,
-      ownerId:triggerRun.triggerRunId,
-      fencingToken:leases.trigger.fencingToken,
-      releasedAt:now
+      concurrencyKey: trigger.concurrencyKey,
+      ownerId,
+      fencingToken: leases.trigger.fencingToken,
+      releasedAt
     });
   }
 
   private releaseBrowserLease(
     trigger: TriggerSpecDefinition,
-    triggerRun: TriggerRunRecord,
+    attempt: TriggerAttemptRecord,
     releasedAt: string
   ): void {
-    if (!trigger.browserInstanceId || triggerRun.browserFencingToken === undefined) return;
+    if (
+      !trigger.browserInstanceId ||
+      attempt.browserFencingToken === undefined
+    ) {
+      return;
+    }
     this.persistence.releaseBrowserControlLease({
-      resourceId:this.browserResourceId(trigger.browserInstanceId),
-      ownerId:triggerRun.triggerRunId,
-      fencingToken:triggerRun.browserFencingToken,
+      resourceId: this.browserResourceId(trigger.browserInstanceId),
+      ownerId: attempt.attemptId,
+      fencingToken: attempt.browserFencingToken,
       releasedAt
     });
+  }
+
+  private sweepAttemptLeases(now: string): void {
+    for (const lease of this.persistence.listTriggerLeases(now)) {
+      if (!lease.ownerId.startsWith("trigger-attempt:")) continue;
+      const attempt = this.persistence.getTriggerAttempt(lease.ownerId);
+      if (!attempt || attempt.status !== "terminal") continue;
+      this.persistence.releaseTriggerLease({
+        concurrencyKey: lease.resourceId,
+        ownerId: lease.ownerId,
+        fencingToken: lease.fencingToken,
+        releasedAt: now
+      });
+    }
+    for (const lease of this.persistence.listBrowserControlLeases(now)) {
+      if (!lease.ownerId.startsWith("trigger-attempt:")) continue;
+      const attempt = this.persistence.getTriggerAttempt(lease.ownerId);
+      if (!attempt || attempt.status !== "terminal") continue;
+      this.persistence.releaseBrowserControlLease({
+        resourceId: lease.resourceId,
+        ownerId: lease.ownerId,
+        fencingToken: lease.fencingToken,
+        releasedAt: now
+      });
+    }
+  }
+
+  private latestAttempt(
+    occurrenceId: string
+  ): { readonly attempt?: TriggerAttemptRecord } {
+    const attempts = this.persistence.listTriggerAttempts(occurrenceId);
+    const attempt = attempts.at(-1);
+    return attempt ? { attempt } : {};
   }
 
   private browserResourceId(browserInstanceId: string): string {
