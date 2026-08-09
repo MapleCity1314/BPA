@@ -37,6 +37,13 @@ const browserGateway = {
   connectionCount: 1,
   readySessionCount: 1,
   pendingCancelRequestCount: 0,
+  queue: {
+    pendingBrowserOutbox: 1,
+    queuedCommands: 2,
+    inFlightCommands: 1,
+    terminalResultsPendingApplication: 0,
+    totalPending: 4
+  },
   pageProbes: { active: 2, capacity: 32, ttlMs: 10_000 },
   extension: {
     activeCommands: 1,
@@ -54,6 +61,17 @@ const browserGateway = {
   }
 };
 
+const eventLoop = {
+  resolutionMs: 20 as const,
+  sampleCount: 59,
+  minimumMs: 19.9,
+  maximumMs: 45.25,
+  meanMs: 20.4,
+  p50Ms: 20.1,
+  p95Ms: 21.2,
+  p99Ms: 30.5
+};
+
 describe("Core runtime resource metrics", () => {
   it("atomically publishes only the allowlisted same-connection metrics", () => {
     const root = mkdtempSync(join(tmpdir(), "bpa-runtime-metrics-"));
@@ -64,6 +82,7 @@ describe("Core runtime resource metrics", () => {
         processId: 42,
         runtimeIdentity: "0.6.0-test",
         processMemoryUsage: () => processMemory,
+        eventLoop,
         browserGateway
       });
       expect(snapshot).toEqual({
@@ -78,6 +97,7 @@ describe("Core runtime resource metrics", () => {
           externalBytes: 10_000,
           arrayBuffersBytes: 5_000
         },
+        eventLoop,
         browserGateway,
         sqlite: {
           measurement: "same_connection_db_status64",
@@ -90,6 +110,7 @@ describe("Core runtime resource metrics", () => {
       }
       expect(Object.keys(snapshot).sort()).toEqual([
         "browserGateway",
+        "eventLoop",
         "pid",
         "process",
         "runtimeIdentity",
@@ -122,6 +143,7 @@ describe("Core runtime resource metrics", () => {
         writeRuntimeResourceMetrics(path, metrics, {
           processId: 42,
           processMemoryUsage: () => processMemory,
+          eventLoop,
           browserGateway,
           temporaryIdFactory: () => "collision"
         })
@@ -145,6 +167,7 @@ describe("Core runtime resource metrics", () => {
           {
             processId: 42,
             processMemoryUsage: () => processMemory,
+            eventLoop,
             browserGateway,
             temporaryIdFactory: () => "serialization-failure"
           }
@@ -180,6 +203,7 @@ describe("Core runtime resource metrics", () => {
             {
               processId: 42,
               processMemoryUsage: () => processMemory,
+              eventLoop,
               browserGateway,
               temporaryIdFactory: () => "aggregate-error"
             }

@@ -40,7 +40,7 @@ describe("runtime resource collector", () => {
       writeFileSync(
         metricsPath,
         `${JSON.stringify({
-          schema: "bpa.core-runtime-metrics/1",
+          schema: "bpa.core-runtime-metrics/2",
           sampledAt: "2026-08-06T12:00:00.000Z",
           pid: 42,
           runtimeIdentity: "0.6.0-test",
@@ -53,10 +53,29 @@ describe("runtime resource collector", () => {
             arrayBuffersBytes: 5_000,
             ignored: "must not escape"
           },
+          eventLoop: {
+            resolutionMs: 20,
+            sampleCount: 59,
+            minimumMs: 19.8,
+            maximumMs: 44.2,
+            meanMs: 20.4,
+            p50Ms: 20.1,
+            p95Ms: 21.5,
+            p99Ms: 30.2,
+            ignored: "must not escape"
+          },
           browserGateway: {
             connectionCount: 1,
             readySessionCount: 1,
             pendingCancelRequestCount: 0,
+            queue: {
+              pendingBrowserOutbox: 1,
+              queuedCommands: 2,
+              inFlightCommands: 1,
+              terminalResultsPendingApplication: 0,
+              totalPending: 4,
+              ignored: "must not escape"
+            },
             pageProbes: {
               active: 2,
               capacity: 32,
@@ -122,10 +141,27 @@ describe("runtime resource collector", () => {
           externalBytes: 10_000,
           arrayBuffersBytes: 5_000
         },
+        eventLoop: {
+          resolutionMs: 20,
+          sampleCount: 59,
+          minimumMs: 19.8,
+          maximumMs: 44.2,
+          meanMs: 20.4,
+          p50Ms: 20.1,
+          p95Ms: 21.5,
+          p99Ms: 30.2
+        },
         browserGateway: {
           connectionCount: 1,
           readySessionCount: 1,
           pendingCancelRequestCount: 0,
+          queue: {
+            pendingBrowserOutbox: 1,
+            queuedCommands: 2,
+            inFlightCommands: 1,
+            terminalResultsPendingApplication: 0,
+            totalPending: 4
+          },
           pageProbes: {
             active: 2,
             capacity: 32,

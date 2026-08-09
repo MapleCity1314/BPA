@@ -10,6 +10,7 @@ import { LocalControlServer, LocalCoreService } from "./control.js";
 import { resolveBpaPaths } from "./paths.js";
 import { CoreInstanceLock } from "./instance-lock.js";
 import { writeRuntimeResourceMetrics } from "./runtime-resource-metrics.js";
+import { RuntimeEventLoopMonitor } from "./runtime-event-loop-monitor.js";
 import {
   createOperatorNotificationDispatcher
 } from "./operator-notification.js";
@@ -69,6 +70,7 @@ const service = new LocalCoreService(
   paths.data,
   join(paths.run, "runtime-maintenance.lock")
 );
+const eventLoopMonitor = new RuntimeEventLoopMonitor();
 const writeResourceMetrics = (): void => {
   if (sqliteObservability.status !== "available") return;
   writeRuntimeResourceMetrics(
@@ -76,9 +78,11 @@ const writeResourceMetrics = (): void => {
     persistence.readSqliteResourceMetrics(),
     {
       runtimeIdentity: process.env.BPA_RUNTIME_ID?.trim() || null,
+      eventLoop: eventLoopMonitor.snapshot(),
       browserGateway: browserGateway.status().resourceUsage
     }
   );
+  eventLoopMonitor.reset();
 };
 try {
   writeResourceMetrics();
@@ -187,6 +191,7 @@ drainAttentionDelivery();
 const shutdown = async (): Promise<void> => {
   clearInterval(gatewayTimer);
   clearInterval(resourceMetricsTimer);
+  eventLoopMonitor.close();
   if (attentionDeliveryTimer) clearInterval(attentionDeliveryTimer);
   await server.stop().catch(() => undefined);
   await stagingServer.stop().catch(() => undefined);

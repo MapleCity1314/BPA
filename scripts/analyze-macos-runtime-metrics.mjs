@@ -365,7 +365,9 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
     const corePid = sample.services["com.bpa.core"]?.pid;
     const ageSeconds = (timestamp - metricsTimestamp) / 1_000;
     const processMetrics = metrics?.process;
+    const eventLoop = metrics?.eventLoop;
     const browserGateway = metrics?.browserGateway;
+    const gatewayQueue = browserGateway?.queue;
     const pageProbes = browserGateway?.pageProbes;
     const extension = browserGateway?.extension;
     const pacingReservations = extension?.pacingReservations;
@@ -377,7 +379,9 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
       ageSeconds <= expectedIntervalSeconds * 2 &&
       metrics.pid === corePid &&
       processMetrics &&
+      eventLoop &&
       browserGateway &&
+      gatewayQueue &&
       pageProbes &&
       extension &&
       pacingReservations &&
@@ -388,9 +392,16 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         processMetrics.heapUsedBytes,
         processMetrics.externalBytes,
         processMetrics.arrayBuffersBytes,
+        eventLoop.resolutionMs,
+        eventLoop.sampleCount,
         browserGateway.connectionCount,
         browserGateway.readySessionCount,
         browserGateway.pendingCancelRequestCount,
+        gatewayQueue.pendingBrowserOutbox,
+        gatewayQueue.queuedCommands,
+        gatewayQueue.inFlightCommands,
+        gatewayQueue.terminalResultsPendingApplication,
+        gatewayQueue.totalPending,
         pageProbes.active,
         pageProbes.capacity,
         pageProbes.ttlMs,
@@ -411,8 +422,31 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         extensionProbes.capacity,
         extensionProbes.ttlMs
       ].every((value) => Number.isSafeInteger(value) && value >= 0) &&
+      [
+        eventLoop.minimumMs,
+        eventLoop.maximumMs,
+        eventLoop.meanMs,
+        eventLoop.p50Ms,
+        eventLoop.p95Ms,
+        eventLoop.p99Ms
+      ].every((value) =>
+        typeof value === "number" && Number.isFinite(value) && value >= 0
+      ) &&
       processMetrics.heapUsedBytes <= processMetrics.heapTotalBytes &&
+      eventLoop.resolutionMs === 20 &&
+      eventLoop.minimumMs <= eventLoop.maximumMs &&
+      eventLoop.minimumMs <= eventLoop.meanMs &&
+      eventLoop.meanMs <= eventLoop.maximumMs &&
+      eventLoop.minimumMs <= eventLoop.p50Ms &&
+      eventLoop.p50Ms <= eventLoop.p95Ms &&
+      eventLoop.p95Ms <= eventLoop.p99Ms &&
+      eventLoop.p99Ms <= eventLoop.maximumMs &&
       browserGateway.readySessionCount <= browserGateway.connectionCount &&
+      gatewayQueue.totalPending ===
+        gatewayQueue.pendingBrowserOutbox +
+          gatewayQueue.queuedCommands +
+          gatewayQueue.inFlightCommands +
+          gatewayQueue.terminalResultsPendingApplication &&
       pageProbes.capacity >= 1 &&
       pageProbes.active <= pageProbes.capacity &&
       pageProbes.ttlMs >= 1 &&
@@ -436,7 +470,10 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
       ? [{ metrics, hour: (timestamp - firstTimestamp) / (60 * 60 * 1_000) }]
       : [];
   });
-  const complete = measured.length === samples.length;
+  const eventLoopObserved = measured.some(
+    ({ metrics }) => metrics.eventLoop.sampleCount > 0
+  );
+  const complete = measured.length === samples.length && eventLoopObserved;
   const summarize = (select, label) =>
     complete
       ? seriesSummary(
@@ -451,6 +488,7 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
     status: complete ? "measured" : "not_measured",
     measuredSamples: measured.length,
     missingSamples: samples.length - measured.length,
+    eventLoopObserved,
     process: {
       rssBytes: summarize(
         (metrics) => metrics.process.rssBytes,
@@ -473,6 +511,43 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         "Core process arrayBuffersBytes"
       )
     },
+    eventLoop: {
+      sampleCount: summarize(
+        (metrics) => metrics.eventLoop.sampleCount,
+        "Core event-loop sampleCount"
+      ),
+      minimumMs: summarize(
+        (metrics) => metrics.eventLoop.minimumMs,
+        "Core event-loop minimumMs"
+      ),
+      maximumMs: summarize(
+        (metrics) => metrics.eventLoop.maximumMs,
+        "Core event-loop maximumMs"
+      ),
+      meanMs: summarize(
+        (metrics) => metrics.eventLoop.meanMs,
+        "Core event-loop meanMs"
+      ),
+      p50Ms: summarize(
+        (metrics) => metrics.eventLoop.p50Ms,
+        "Core event-loop p50Ms"
+      ),
+      p95Ms: summarize(
+        (metrics) => metrics.eventLoop.p95Ms,
+        "Core event-loop p95Ms"
+      ),
+      p99Ms: summarize(
+        (metrics) => metrics.eventLoop.p99Ms,
+        "Core event-loop p99Ms"
+      ),
+      resolutionMs: complete
+        ? [
+            ...new Set(
+              measured.map(({ metrics }) => metrics.eventLoop.resolutionMs)
+            )
+          ]
+        : []
+    },
     browserGateway: {
       connectionCount: summarize(
         (metrics) => metrics.browserGateway.connectionCount,
@@ -486,6 +561,29 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         (metrics) => metrics.browserGateway.pendingCancelRequestCount,
         "Browser Gateway pendingCancelRequestCount"
       ),
+      queue: {
+        pendingBrowserOutbox: summarize(
+          (metrics) => metrics.browserGateway.queue.pendingBrowserOutbox,
+          "Browser Gateway pending browser outbox"
+        ),
+        queuedCommands: summarize(
+          (metrics) => metrics.browserGateway.queue.queuedCommands,
+          "Browser Gateway queued commands"
+        ),
+        inFlightCommands: summarize(
+          (metrics) => metrics.browserGateway.queue.inFlightCommands,
+          "Browser Gateway in-flight commands"
+        ),
+        terminalResultsPendingApplication: summarize(
+          (metrics) =>
+            metrics.browserGateway.queue.terminalResultsPendingApplication,
+          "Browser Gateway terminal results pending application"
+        ),
+        totalPending: summarize(
+          (metrics) => metrics.browserGateway.queue.totalPending,
+          "Browser Gateway total pending"
+        )
+      },
       activePageProbes: summarize(
         (metrics) => metrics.browserGateway.pageProbes.active,
         "Browser Gateway active page probes"
@@ -777,6 +875,7 @@ function analyze(samples, options) {
     samples,
     options.expectedIntervalSeconds
   );
+  const coreResidentMeasurable = coreResident.status === "measured";
   const sqlitePageCacheMeasurable =
     windowComplete &&
     continuityComplete &&
@@ -810,9 +909,11 @@ function analyze(samples, options) {
       chromeProfileComplete,
       nodeAndChromeMeasurable,
       sqlitePageCacheMeasurable,
+      coreResidentMeasurable,
       phaseZeroResourceMeasurementComplete:
         nodeAndChromeMeasurable &&
         coreIdentityStable &&
+        coreResidentMeasurable &&
         sqlitePageCacheMeasurable,
       blockers: [
         ...(!windowComplete ? ["minimum_duration_not_reached"] : []),
@@ -834,6 +935,9 @@ function analyze(samples, options) {
           ? ["inventory_monitor_pid_changed"]
           : []),
         ...(!chromeProfileComplete ? ["chrome_profile_samples_missing"] : []),
+        ...(!coreResidentMeasurable
+          ? ["core_resident_metrics_not_measured"]
+          : []),
         ...(sqlite.pageCache.status !== "measured"
           ? ["sqlite_page_cache_not_measured"]
           : [])

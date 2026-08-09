@@ -66,6 +66,13 @@ export interface BrowserGatewayStatus {
     connectionCount: number;
     readySessionCount: number;
     pendingCancelRequestCount: number;
+    queue: {
+      pendingBrowserOutbox: number;
+      queuedCommands: number;
+      inFlightCommands: number;
+      terminalResultsPendingApplication: number;
+      totalPending: number;
+    };
     pageProbes: {
       active: number;
       capacity: number;
@@ -392,6 +399,17 @@ export class LocalBrowserGateway implements RuntimeProvider {
     const readySessionCount = [...this.#connections.values()].filter(
       (connection) => connection.session?.ready
     ).length;
+    const commands = this.persistence.listPendingGatewayCommands();
+    const pendingBrowserOutbox = this.persistence
+      .listPendingEngineOutbox()
+      .filter((message) => message.topic === "browser.command.requested")
+      .length;
+    const queuedCommands = commands.filter(
+      (command) => command.state === "queued"
+    ).length;
+    const inFlightCommands = commands.length - queuedCommands;
+    const terminalResultsPendingApplication =
+      this.persistence.listGatewayCommandsNeedingApplication().length;
     return {
       connected: this.#connections.size > 0,
       ready: Boolean(primary?.session?.ready),
@@ -409,6 +427,17 @@ export class LocalBrowserGateway implements RuntimeProvider {
           (total, connection) => total + connection.cancelRequests.size,
           0
         ),
+        queue: {
+          pendingBrowserOutbox,
+          queuedCommands,
+          inFlightCommands,
+          terminalResultsPendingApplication,
+          totalPending:
+            pendingBrowserOutbox +
+            queuedCommands +
+            inFlightCommands +
+            terminalResultsPendingApplication
+        },
         pageProbes: this.#pageProbes.usage(),
         extension: primary?.session?.extensionResourceUsage ?? null
       },
