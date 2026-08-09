@@ -70,8 +70,15 @@ attempt、短租约、明确成功、明确失败或 `uncertain`；投递中的�
 成生产事实。
 
 第一种 Channel 采用现有公司通知通道，但凭证只存在于目标 Mac 的 `0600` 配置中。
-消息只含 Workflow、Run ID、严重度、发生时间和控制台链接，不含 Cookie、页面正文、
+消息只含 Workflow、Run ID、严重度、发生时间和受控操作提示，不含 Cookie、页面正文、
 数据库 URL 或原始错误堆栈。
+
+候选实现采用独立 `@bpa/adapter-feishu-notification`，不复用库存日报的业务模板。Core 默认
+不创建投递器；只有显式设置 `BPA_OPERATOR_NOTIFICATION_CONFIG` 后才读取绝对路径配置。
+配置必须是当前用户持有、非符号链接、严格 `0600`、不超过 8 KiB 的普通文件，仅允许
+`provider=feishu-webhook` 与 `webhookUrl` 两个字段。Webhook Origin 和路径受 allowlist 限制，
+请求、日志、审计和面板均不回显 URL。4xx 或 Provider 非零码是明确失败；5xx、超时、网络
+异常和畸形成功响应均为 `uncertain`。该开关在生产上线审批前保持未配置状态。
 
 ## 5. 第三层：远程登录恢复
 

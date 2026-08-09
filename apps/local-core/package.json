@@ -8,6 +8,7 @@
     "./paths": "./src/paths.ts"
   },
   "dependencies": {
+    "@bpa/adapter-feishu-notification": "workspace:*",
     "@bpa/asset-core": "workspace:*",
     "@bpa/asset-store-local": "workspace:*",
     "@bpa/assistance-core": "workspace:*",
