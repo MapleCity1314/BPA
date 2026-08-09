@@ -8,6 +8,7 @@ import {
   statSync
 } from "node:fs";
 import { dirname } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const SCHEMA = "bpa.runtime-resource-sample/1";
 const DEFAULT_LABELS = [
@@ -236,25 +237,54 @@ function writeSample(sample, output) {
   appendFileSync(output, line, { encoding: "utf8", mode: 0o600 });
 }
 
+export async function collectUntilComplete(options, dependencies = {}) {
+  const now = dependencies.now ?? Date.now;
+  const sleep = dependencies.sleep ?? ((milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const collect = dependencies.collect ?? collectSample;
+  const write = dependencies.write ?? writeSample;
+  const first = collect(options);
+  write(first, options.output);
+  if (options.durationSeconds === 0) return;
+
+  const firstSampledAt = Date.parse(first.sampledAt);
+  if (!Number.isFinite(firstSampledAt)) {
+    throw new Error("The first resource sample has an invalid timestamp");
+  }
+  const intervalMilliseconds = options.intervalSeconds * 1_000;
+  const deadline = firstSampledAt + options.durationSeconds * 1_000;
+  let scheduledAt = Math.min(deadline, firstSampledAt + intervalMilliseconds);
+  while (true) {
+    await sleep(Math.max(0, scheduledAt - now()));
+    const sample = collect(options);
+    write(sample, options.output);
+    const sampledAt = Date.parse(sample.sampledAt);
+    if (!Number.isFinite(sampledAt)) {
+      throw new Error("A resource sample has an invalid timestamp");
+    }
+    if (sampledAt >= deadline) return;
+    const nextRegularSample = scheduledAt + intervalMilliseconds;
+    scheduledAt = Math.min(
+      deadline,
+      nextRegularSample <= now()
+        ? now() + intervalMilliseconds
+        : nextRegularSample
+    );
+  }
+}
+
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   if (options.help) {
     process.stdout.write(`${usage()}\n`);
     return;
   }
-  const startedAt = Date.now();
-  do {
-    writeSample(collectSample(options), options.output);
-    if (options.durationSeconds === 0) break;
-    const elapsedSeconds = (Date.now() - startedAt) / 1000;
-    if (elapsedSeconds + options.intervalSeconds > options.durationSeconds) break;
-    await new Promise((resolve) =>
-      setTimeout(resolve, options.intervalSeconds * 1000)
-    );
-  } while (true);
+  await collectUntilComplete(options);
 }
 
-await main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}
