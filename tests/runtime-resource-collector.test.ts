@@ -3,10 +3,36 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { collectUntilComplete } from "../scripts/collect-macos-runtime-metrics.mjs";
 
 const collector = resolve("scripts/collect-macos-runtime-metrics.mjs");
 
 describe("runtime resource collector", () => {
+  it("records a final sample at or beyond the requested duration", async () => {
+    let clock = Date.parse("2026-08-06T00:00:00.000Z");
+    const sampledAt: string[] = [];
+    await collectUntilComplete(
+      { durationSeconds: 120, intervalSeconds: 60 },
+      {
+        now: () => clock,
+        sleep: async (milliseconds: number) => {
+          clock += milliseconds;
+        },
+        collect: () => {
+          clock += 5_000;
+          return { sampledAt: new Date(clock).toISOString() };
+        },
+        write: (sample: { sampledAt: string }) => {
+          sampledAt.push(sample.sampledAt);
+        }
+      }
+    );
+
+    expect(sampledAt).toHaveLength(3);
+    expect(Date.parse(sampledAt.at(-1)!) - Date.parse(sampledAt[0]!))
+      .toBeGreaterThanOrEqual(120_000);
+  });
+
   it("copies only validated Core metrics fields into the sample", () => {
     const root = mkdtempSync(join(tmpdir(), "bpa-runtime-collector-"));
     try {

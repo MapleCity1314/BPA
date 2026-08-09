@@ -36,6 +36,32 @@ export interface OperationalReminder {
   readonly source: string;
 }
 
+export interface CollectionControlHealth {
+  readonly activeCollectionCount: number;
+  readonly staleCollectionCount: number;
+  readonly oldestStaleStartedAt: string | null;
+  readonly staleAfterMinutes: number;
+}
+
+export function buildSystemOperationalReminders(
+  health: CollectionControlHealth
+): readonly OperationalReminder[] {
+  if (health.staleCollectionCount === 0) return [];
+  const oldest = health.oldestStaleStartedAt
+    ? new Date(health.oldestStaleStartedAt).toLocaleString("zh-CN",{
+        hour12:false,timeZone:"Asia/Shanghai"
+      })
+    : "时间待确认";
+  return [{
+    id:"collection-control-stale",
+    severity:"critical",
+    title:"采集控制记录未收口",
+    detail:`存在 ${health.staleCollectionCount} 条超过 ${health.staleAfterMinutes} 分钟仍标记 running 的采集记录，最早开始于 ${oldest}。这不代表任务仍在执行。`,
+    action:"核对进程、租约和步骤终态；确认前不要补触发",
+    source:"生产控制面一致性"
+  }];
+}
+
 function round(value: number, digits = 2): number {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
@@ -138,7 +164,7 @@ export function buildOperationalReminders(input: {
   readonly productCount: number;
   readonly freshProductCount: number;
   readonly scheduleCount: number;
-  readonly collectionRunning?: boolean;
+  readonly collectionActive?: boolean;
   readonly incidents: readonly Record<string, unknown>[];
   readonly backtest: StoreDemandBacktest;
 }): readonly OperationalReminder[] {
@@ -164,12 +190,12 @@ export function buildOperationalReminders(input: {
   } else if (inventoryAge > INVENTORY_DATA_VALIDITY_MINUTES) {
     reminders.push({
       id: "inventory-collection-stale",
-      severity: input.collectionRunning ? "warning" : "critical",
-      title: input.collectionRunning ? "库存正在更新" : "库存快照已过期",
-      detail: input.collectionRunning
+      severity: input.collectionActive ? "warning" : "critical",
+      title: input.collectionActive ? "库存正在更新" : "库存快照已过期",
+      detail: input.collectionActive
         ? `定时采集正在运行；上一份库存快照距今 ${Math.round(inventoryAge)} 分钟。风险结果继续保持待确认，完成后自动刷新。`
         : `最新库存距今 ${Math.round(inventoryAge)} 分钟，超过 2 小时有效期。`,
-      action: input.collectionRunning ? "等待本轮采集完成" : "检查浏览器会话与采集调度",
+      action: input.collectionActive ? "等待本轮采集完成" : "检查浏览器会话与采集调度",
       source: "库存快照新鲜度规则"
     });
   } else if (input.freshProductCount < input.productCount) {

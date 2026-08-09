@@ -1,6 +1,7 @@
 import { describe,expect,it } from "vitest";
 import {
   buildOperationalReminders,
+  buildSystemOperationalReminders,
   buildStoreDemandBacktest
 } from "./dashboard-analytics.js";
 
@@ -67,12 +68,28 @@ describe("dashboard analytics", () => {
       now:"2026-08-04T07:00:00.000Z",
       latestInventoryAt:"2026-08-04T04:59:00.000Z",
       latestOrderAt:"2026-08-04T06:45:00.000Z",
-      productCount:74,freshProductCount:74,scheduleCount:1,collectionRunning:true,
+      productCount:74,freshProductCount:74,scheduleCount:1,collectionActive:true,
       incidents:[],backtest:buildStoreDemandBacktest([])
     });
     expect(result).toContainEqual(expect.objectContaining({
       id:"inventory-collection-stale",severity:"warning",title:"库存正在更新"
     }));
+  });
+
+  it("raises one critical system reminder for stale running collections",() => {
+    const result = buildSystemOperationalReminders({
+      activeCollectionCount:0,
+      staleCollectionCount:1,
+      oldestStaleStartedAt:"2026-08-07T15:23:46.407Z",
+      staleAfterMinutes:120
+    });
+    expect(result).toEqual([expect.objectContaining({
+      id:"collection-control-stale",
+      severity:"critical",
+      title:"采集控制记录未收口"
+    })]);
+    expect(result[0]?.detail).toContain("1 条超过 120 分钟");
+    expect(result[0]?.action).toContain("不要补触发");
   });
 
   it("treats inventory and recent orders as valid for two hours",() => {
