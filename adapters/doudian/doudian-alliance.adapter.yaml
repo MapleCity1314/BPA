@@ -17,7 +17,7 @@ capabilities:
       - 2.0.0
     handlerId: doudian.alliance.shops.discover
     handlerVersion: 2.0.0
-    implementationDigest: sha256:d41febec7c052c2c3119d771725d021126ddfba67e0e8df85079bf39bba904bc
+    implementationDigest: sha256:49d841df712d5d32f265450d63ebc99cd3e6fd090989204591d8ddb10ea43533
     permissions:
       - browser.dom.read
       - browser.dom.write
@@ -28,7 +28,7 @@ capabilities:
       - 2.0.0
     handlerId: doudian.alliance.shop.retired-products.scan
     handlerVersion: 2.0.0
-    implementationDigest: sha256:d41febec7c052c2c3119d771725d021126ddfba67e0e8df85079bf39bba904bc
+    implementationDigest: sha256:49d841df712d5d32f265450d63ebc99cd3e6fd090989204591d8ddb10ea43533
     permissions:
       - browser.dom.read
       - browser.dom.write

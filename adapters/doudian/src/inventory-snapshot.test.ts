@@ -66,6 +66,7 @@ describe("doudian inventory snapshot", () => {
         "apps/extension/src/lib/adapter-node-registry.ts",
         "apps/extension/src/lib/alliance-retired-background.ts",
         "apps/extension/src/lib/alliance-retired-content.ts",
+        "apps/extension/src/lib/native-connection-supervisor.ts",
         "adapters/doudian/src/alliance-retired.ts",
         "adapters/doudian/src/inventory-snapshot.ts",
         "adapters/doudian/src/product-list-guard.ts"

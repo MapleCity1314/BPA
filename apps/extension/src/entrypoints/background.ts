@@ -71,6 +71,7 @@ import {
   ManagedTabLifecycle,
   parseManagedTabObservations
 } from "../lib/managed-tab-lifecycle";
+import { NativeConnectionSupervisor } from "../lib/native-connection-supervisor";
 
 const NATIVE_HOST = "com.bpa.browser";
 const PROTOCOL = BROWSER_PROTOCOL;
@@ -88,7 +89,10 @@ interface SessionState {
 export default defineBackground(() => {
   const session: SessionState = { incomingSeq: 0, outgoingSeq: 0 };
   let port: Browser.runtime.Port | undefined;
-  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let connect: () => Promise<void>;
+  const connectionSupervisor = new NativeConnectionSupervisor({
+    onReconnect: () => void connect()
+  });
   const activeCommands = new Set<string>();
   const activeTabCommands = new Map<number, string>();
   const managedTabs = new ManagedTabLifecycle();
@@ -1574,11 +1578,12 @@ export default defineBackground(() => {
     }
   };
 
-  const connect = async (): Promise<void> => {
-    if (reconnectTimer) clearTimeout(reconnectTimer);
+  connect = async (): Promise<void> => {
+    const generation = connectionSupervisor.begin();
+    if (generation === undefined) return;
+    let candidatePort: Browser.runtime.Port | undefined;
     try {
       await startupRecovery;
-      port = browser.runtime.connectNative(NATIVE_HOST);
       const stored = await browser.storage.local.get([
         "browserInstanceId",
         "resumeToken",
@@ -1587,22 +1592,82 @@ export default defineBackground(() => {
       const browserInstanceId =
         stored.browserInstanceId ?? crypto.randomUUID();
       await browser.storage.local.set({ browserInstanceId });
+      if (!connectionSupervisor.connecting(generation)) return;
+      candidatePort = browser.runtime.connectNative(NATIVE_HOST);
+      const activePort = candidatePort;
+      if (!connectionSupervisor.connected(generation)) {
+        activePort.disconnect();
+        return;
+      }
+      port = activePort;
       delete session.sessionId;
       delete session.keyId;
       delete session.publicKey;
       session.incomingSeq = 0;
       session.outgoingSeq = 0;
-      port.onMessage.addListener((message) => {
-        void handleMessage(message as Record<string, any>);
+      activePort.onMessage.addListener((message) => {
+        if (
+          !connectionSupervisor.accepts(generation) ||
+          port !== activePort
+        ) {
+          return;
+        }
+        const nativeMessage = message as Record<string, any>;
+        void handleMessage(nativeMessage)
+          .then(async () => {
+            if (nativeMessage.type !== "session.welcome") return;
+            if (typeof session.sessionId !== "string") {
+              const retryDelayMs = connectionSupervisor.failed(generation);
+              if (retryDelayMs === undefined) return;
+              if (port === activePort) port = undefined;
+              activePort.disconnect();
+              await updateStatus({
+                host: "disconnected",
+                core: "disconnected",
+                lastError: "Native Host 会话握手未建立。",
+                reconnectInMs: retryDelayMs
+              });
+              return;
+            }
+            connectionSupervisor.ready(generation);
+          })
+          .catch(async (error) => {
+            if (
+              !connectionSupervisor.accepts(generation) ||
+              port !== activePort
+            ) {
+              return;
+            }
+            if (nativeMessage.type !== "session.welcome") {
+              await updateStatus({
+                lastError:
+                  error instanceof Error ? error.message : String(error)
+              });
+              return;
+            }
+            const retryDelayMs = connectionSupervisor.failed(generation);
+            if (retryDelayMs === undefined) return;
+            if (port === activePort) port = undefined;
+            activePort.disconnect();
+            await updateStatus({
+              host: "disconnected",
+              core: "disconnected",
+              lastError:
+                error instanceof Error ? error.message : String(error),
+              reconnectInMs: retryDelayMs
+            });
+          });
       });
-      port.onDisconnect.addListener(() => {
-        port = undefined;
+      activePort.onDisconnect.addListener(() => {
+        const retryDelayMs = connectionSupervisor.disconnected(generation);
+        if (retryDelayMs === undefined) return;
+        if (port === activePort) port = undefined;
         void updateStatus({
           host: "disconnected",
           core: "disconnected",
-          lastError: browser.runtime.lastError?.message
+          lastError: browser.runtime.lastError?.message,
+          reconnectInMs: retryDelayMs
         });
-        reconnectTimer = setTimeout(() => void connect(), 2_000);
       });
       send(
         envelope(
@@ -1627,14 +1692,25 @@ export default defineBackground(() => {
         )
       );
     } catch (error) {
+      const retryDelayMs = connectionSupervisor.failed(generation);
+      if (retryDelayMs === undefined) return;
+      if (port === candidatePort) port = undefined;
+      candidatePort?.disconnect();
       await updateStatus({
         host: "disconnected",
         core: "disconnected",
-        lastError: error instanceof Error ? error.message : String(error)
+        lastError: error instanceof Error ? error.message : String(error),
+        reconnectInMs: retryDelayMs
       });
-      reconnectTimer = setTimeout(() => void connect(), 2_000);
     }
   };
+
+  browser.runtime.onSuspend.addListener(() => {
+    connectionSupervisor.stop();
+    const activePort = port;
+    port = undefined;
+    activePort?.disconnect();
+  });
 
   browser.runtime.onMessage.addListener((message, sender) => {
     if (
