@@ -29,6 +29,7 @@ import {
 } from "../lib/content-action-router";
 import { captureSemanticSnapshot } from "../lib/semantic-snapshot";
 import {
+  allianceRetiredErrorPayload,
   executeAllianceRetiredStage,
   type AllianceRetiredStageRequest
 } from "../lib/alliance-retired-content";
@@ -37,6 +38,11 @@ import {
   type ExperienceScoreStageRequest
 } from "../lib/experience-score-content";
 import { probeObservedPage } from "../lib/page-observer-registry";
+
+const runningAllianceStages = new Map<
+  string,
+  { readonly controller: AbortController; readonly completion: Promise<void> }
+>();
 
 function waitForPageChange(maxWaitMs: number): Promise<void> {
   return new Promise((resolve) => {
@@ -463,30 +469,60 @@ export default defineContentScript({
           });
           return true;
         }
+        if (request.type === "bpa.doudian.alliance.cancel-stage") {
+          const requestId = (
+            request as ContentActionRequest & { requestId?: unknown }
+          ).requestId;
+          if (typeof requestId !== "string" || requestId.length < 1) {
+            sendResponse({ ok: false, stopped: false });
+            return false;
+          }
+          const running = runningAllianceStages.get(requestId);
+          running?.controller.abort();
+          void (running?.completion ?? Promise.resolve()).finally(() =>
+            sendResponse({
+              ok: true,
+              requestId,
+              stopped: true
+            })
+          );
+          return true;
+        }
         if (request.type === "bpa.doudian.alliance.stage") {
-          void executeAllianceRetiredStage(
-            (
-              request as ContentActionRequest & {
-                request: AllianceRetiredStageRequest;
-              }
-            ).request
+          const stageRequest = request as ContentActionRequest & {
+            requestId?: unknown;
+            request: AllianceRetiredStageRequest;
+          };
+          if (
+            typeof stageRequest.requestId !== "string" ||
+            stageRequest.requestId.length < 1 ||
+            runningAllianceStages.has(stageRequest.requestId)
+          ) {
+            sendResponse({
+              ok: false,
+              error: allianceRetiredErrorPayload(undefined)
+            });
+            return false;
+          }
+          const requestId = stageRequest.requestId;
+          const controller = new AbortController();
+          const completion = executeAllianceRetiredStage(
+            stageRequest.request,
+            document,
+            location.href,
+            () => controller.signal.aborted
           )
-            .then((result) => sendResponse({ ok: true, result }))
-            .catch((error) =>
+            .then((result) => sendResponse({ ok: true, requestId, result }))
+            .catch((error) => {
+              const safeError = allianceRetiredErrorPayload(error);
               sendResponse({
                 ok: false,
-                error: {
-                  code:
-                    error instanceof Error
-                      ? error.message
-                      : "ALLIANCE_STAGE_FAILED",
-                  message:
-                    error instanceof Error
-                      ? error.message
-                      : String(error)
-                }
-              })
-            );
+                requestId,
+                error: safeError
+              });
+            })
+            .finally(() => runningAllianceStages.delete(requestId));
+          runningAllianceStages.set(requestId, { controller, completion });
           return true;
         }
         if (request.type === "bpa.doudian.experience.stage") {

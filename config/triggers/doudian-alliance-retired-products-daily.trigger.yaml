@@ -1,0 +1,24 @@
+apiVersion: bpa.trigger/v1alpha2
+id: doudian-alliance-retired-products-daily
+version: 1.0.0
+appId: retired-products-monitor
+kind: schedule
+workflow:
+  id: doudian.alliance-retired-products-monitor
+  version: 3.0.0
+enabled: false
+inputSchemaVersion: doudian-alliance-retired-products-daily/1
+input:
+  maxShops: 100
+concurrencyKey: doudian-account:company-main
+browserInstanceId: deployment-placeholder:replace-with-company-mac-browser-instance
+idempotencyPolicy: occurrence
+retryPolicy: none
+missedRunPolicy: run_once
+# Deployment gate: keep disabled until real Mac browserInstanceId replacement
+# and measured experience-score plus retired-products p95 prove 15:00 is safe.
+schedule:
+  type: daily
+  timezone: Asia/Shanghai
+  localTime: "15:00"
+  onTimeWindowSeconds: 300

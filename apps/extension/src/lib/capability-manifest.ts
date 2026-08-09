@@ -3,6 +3,7 @@ import type { BridgeCapability } from "@bpa/browser-bridge";
 export const BROWSER_PROTOCOL = "bpa.browser/2";
 export const DOUDIAN_ADAPTER_VERSION = "1.2.0";
 export const DOUDIAN_INVENTORY_ADAPTER_VERSION = "1.0.0";
+export const DOUDIAN_ALLIANCE_ADAPTER_VERSION = "2.0.0";
 export const DOUDIAN_ORIGIN = "https://fxg.jinritemai.com";
 export const DOUDIAN_BUYIN_ORIGIN = "https://buyin.jinritemai.com";
 export const CHANMAMA_ORIGIN = "https://www.chanmama.com";
@@ -27,7 +28,6 @@ export type ExtensionNodeId =
   | "doudian.editor.priority-items.inspect"
   | "doudian.alliance.shops.discover"
   | "doudian.alliance.shop.retired-products.scan"
-  | "doudian.alliance.retired-products.aggregate"
   | "doudian.experience.shops.discover"
   | "doudian.experience.shop.snapshot.read"
   | "ecommerce.marketplace.search-results.read";
@@ -218,7 +218,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   },
   {
     nodeId: "doudian.alliance.shops.discover",
-    versions: ["1.0.0"],
+    versions: ["2.0.0"],
     riskLevel: "R2",
     permissions: [
       "browser.dom.read",
@@ -233,12 +233,15 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
         observerCapabilityId: "doudian.page"
       }
     ],
-    adapter: { id: "doudian-alliance", version: "1.0.0" },
+    adapter: {
+      id: "doudian-alliance",
+      version: DOUDIAN_ALLIANCE_ADAPTER_VERSION
+    },
     executionTarget: "background"
   },
   {
     nodeId: "doudian.alliance.shop.retired-products.scan",
-    versions: ["1.0.0"],
+    versions: ["2.0.0"],
     riskLevel: "R2",
     permissions: [
       "browser.dom.read",
@@ -258,22 +261,10 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
         observerCapabilityId: "buyin.page"
       }
     ],
-    adapter: { id: "doudian-alliance", version: "1.0.0" },
-    executionTarget: "background"
-  },
-  {
-    nodeId: "doudian.alliance.retired-products.aggregate",
-    versions: ["1.0.0"],
-    riskLevel: "R0",
-    permissions: READ_ONLY_PERMISSIONS,
-    routes: [
-      {
-        origin: DOUDIAN_ORIGIN,
-        pathnamePrefixes: ["/ffa/g/list"],
-        observerCapabilityId: "doudian.page"
-      }
-    ],
-    adapter: { id: "doudian-alliance", version: "1.0.0" },
+    adapter: {
+      id: "doudian-alliance",
+      version: DOUDIAN_ALLIANCE_ADAPTER_VERSION
+    },
     executionTarget: "background"
   },
   {

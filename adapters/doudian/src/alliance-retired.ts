@@ -9,7 +9,91 @@ const BUYIN_RETIRED_PATH = "/dashboard/regulation/clear-out";
 const PRODUCT_ID_PATTERN = /(?:商品\s*ID|ID)[：:\s]*(\d{5,30})/iu;
 const NUMBER_PATTERN = /\d{5,30}/u;
 
-export const DOUDIAN_ALLIANCE_RUNTIME_VERSION = "1.0.0";
+export const DOUDIAN_ALLIANCE_RUNTIME_VERSION = "2.0.0";
+
+export type DoudianAllianceNodeErrorCode =
+  | "ALLIANCE_CONTENT_RESPONSE_TIMEOUT"
+  | "ALLIANCE_SOURCE_TAB_MISSING"
+  | "ALLIANCE_STAGE_FAILED"
+  | "ALLIANCE_TAB_TIMEOUT"
+  | "AUTH_REQUIRED"
+  | "BROWSER_DISCONNECTED"
+  | "CAPTCHA_REQUIRED"
+  | "COMMAND_RESULT_TOO_LARGE"
+  | "COMMAND_CANCELLED"
+  | "DEADLINE_EXCEEDED"
+  | "DOUDIAN_ALLIANCE_DISCOVERY_FAILED"
+  | "DOUDIAN_ALLIANCE_MAX_SHOPS_INVALID"
+  | "PAGE_LOADING"
+  | "PAGE_MISMATCH"
+  | "PAGE_URL_INVALID"
+  | "PROMOTION_DIALOG_CLOSE_AMBIGUOUS"
+  | "PROMOTION_DIALOG_UNRECOGNIZED"
+  | "PROMOTION_TAB_MISSING"
+  | "RETIRED_PRODUCT_LIMIT_EXCEEDED"
+  | "RETIRED_PRODUCT_ROW_CHANGED"
+  | "RETIRED_PRODUCTS_MISSING"
+  | "RETIRED_PRODUCTS_PAGE_LIMIT_EXCEEDED"
+  | "RETIRED_PRODUCTS_TABLE_CHANGED"
+  | "RETIRED_TAB_MISSING"
+  | "RISK_CONTROL"
+  | "SESSION_EXPIRED"
+  | "SHOP_CONTEXT_RESTORE_FAILED"
+  | "SHOP_IDENTITY_AMBIGUOUS"
+  | "SHOP_IDENTITY_MISMATCH"
+  | "SHOP_IDENTITY_UNCERTAIN"
+  | "SHOP_IDENTITY_UNCONFIRMED"
+  | "SHOP_LIMIT_EXCEEDED"
+  | "SHOP_LIST_EMPTY"
+  | "SHOP_LIST_INCOMPLETE"
+  | "SHOP_SWITCH_NOT_CONFIRMED"
+  | "SHOP_TARGET_INVALID";
+
+export const DOUDIAN_ALLIANCE_NODE_ERROR_CODES = new Set<DoudianAllianceNodeErrorCode>([
+  "ALLIANCE_CONTENT_RESPONSE_TIMEOUT",
+  "ALLIANCE_SOURCE_TAB_MISSING",
+  "ALLIANCE_STAGE_FAILED",
+  "ALLIANCE_TAB_TIMEOUT",
+  "AUTH_REQUIRED",
+  "BROWSER_DISCONNECTED",
+  "CAPTCHA_REQUIRED",
+  "COMMAND_RESULT_TOO_LARGE",
+  "COMMAND_CANCELLED",
+  "DEADLINE_EXCEEDED",
+  "DOUDIAN_ALLIANCE_DISCOVERY_FAILED",
+  "DOUDIAN_ALLIANCE_MAX_SHOPS_INVALID",
+  "PAGE_LOADING",
+  "PAGE_MISMATCH",
+  "PAGE_URL_INVALID",
+  "PROMOTION_DIALOG_CLOSE_AMBIGUOUS",
+  "PROMOTION_DIALOG_UNRECOGNIZED",
+  "PROMOTION_TAB_MISSING",
+  "RETIRED_PRODUCT_LIMIT_EXCEEDED",
+  "RETIRED_PRODUCT_ROW_CHANGED",
+  "RETIRED_PRODUCTS_MISSING",
+  "RETIRED_PRODUCTS_PAGE_LIMIT_EXCEEDED",
+  "RETIRED_PRODUCTS_TABLE_CHANGED",
+  "RETIRED_TAB_MISSING",
+  "RISK_CONTROL",
+  "SESSION_EXPIRED",
+  "SHOP_CONTEXT_RESTORE_FAILED",
+  "SHOP_IDENTITY_AMBIGUOUS",
+  "SHOP_IDENTITY_MISMATCH",
+  "SHOP_IDENTITY_UNCERTAIN",
+  "SHOP_IDENTITY_UNCONFIRMED",
+  "SHOP_LIMIT_EXCEEDED",
+  "SHOP_LIST_EMPTY",
+  "SHOP_LIST_INCOMPLETE",
+  "SHOP_SWITCH_NOT_CONFIRMED",
+  "SHOP_TARGET_INVALID"
+]);
+
+export class DoudianAllianceError extends Error {
+  constructor(readonly code: string) {
+    super(code);
+    this.name = "DoudianAllianceError";
+  }
+}
 
 export interface AllianceShop {
   readonly id?: string;
@@ -60,7 +144,7 @@ function requireUnique(
   elements: readonly HTMLElement[],
   errorCode: string
 ): HTMLElement {
-  if (elements.length !== 1) throw new Error(errorCode);
+  if (elements.length !== 1) throw new DoudianAllianceError(errorCode);
   return elements[0]!;
 }
 
@@ -68,7 +152,7 @@ function parsedUrl(pageUrl: string): URL {
   try {
     return new URL(pageUrl);
   } catch {
-    throw new Error("PAGE_URL_INVALID");
+    throw new DoudianAllianceError("PAGE_URL_INVALID");
   }
 }
 
@@ -78,14 +162,14 @@ export function assertDoudianProductListPage(pageUrl: string): void {
     url.origin !== DOUDIAN_ORIGIN ||
     url.pathname !== DOUDIAN_PRODUCT_LIST_PATH
   ) {
-    throw new Error("PAGE_MISMATCH");
+    throw new DoudianAllianceError("PAGE_MISMATCH");
   }
 }
 
 export function assertBuyinPromotePage(pageUrl: string): void {
   const url = parsedUrl(pageUrl);
   if (url.origin !== BUYIN_ORIGIN || url.pathname !== BUYIN_PROMOTE_PATH) {
-    throw new Error("PAGE_MISMATCH");
+    throw new DoudianAllianceError("PAGE_MISMATCH");
   }
 }
 
@@ -95,23 +179,34 @@ export function assertBuyinDashboardPage(pageUrl: string): void {
     url.origin !== BUYIN_ORIGIN ||
     !url.pathname.startsWith("/dashboard")
   ) {
-    throw new Error("PAGE_MISMATCH");
+    throw new DoudianAllianceError("PAGE_MISMATCH");
   }
 }
 
 export function assertBuyinRetiredPage(pageUrl: string): void {
   const url = parsedUrl(pageUrl);
   if (url.origin !== BUYIN_ORIGIN || url.pathname !== BUYIN_RETIRED_PATH) {
-    throw new Error("PAGE_MISMATCH");
+    throw new DoudianAllianceError("PAGE_MISMATCH");
   }
 }
 
 export function readDoudianHeaderShopName(doc: Document): string {
   const identity = readDoudianVisibleShopIdentity(doc);
   if (!identity.identityConfirmed) {
-    throw new Error("SHOP_IDENTITY_UNCONFIRMED");
+    throw new DoudianAllianceError("SHOP_IDENTITY_UNCONFIRMED");
   }
   return identity.name;
+}
+
+export function readDoudianHeaderShopIdentity(doc: Document): {
+  readonly id: string;
+  readonly name: string;
+} {
+  const identity = readDoudianVisibleShopIdentity(doc);
+  if (!identity.identityConfirmed || !/^\d{5,30}$/u.test(identity.id)) {
+    throw new DoudianAllianceError("SHOP_IDENTITY_UNCERTAIN");
+  }
+  return { id: identity.id, name: identity.name };
 }
 
 export function openDoudianShopSwitcher(doc: Document): void {
@@ -171,13 +266,15 @@ export function discoverDoudianAllianceShops(
   const cards = Array.from(
     dialog.querySelectorAll<HTMLElement>("[class*='roleItem']")
   );
-  if (cards.length === 0) throw new Error("SHOP_LIST_EMPTY");
+  if (cards.length === 0) throw new DoudianAllianceError("SHOP_LIST_EMPTY");
   const shops = cards.flatMap((card): AllianceShop[] => {
     const nameElement = card.querySelector<HTMLElement>(
       "[class*='introName']"
     );
     const name = normalizeText(nameElement?.textContent);
-    if (!name || name.length > 80) return [];
+    if (!name || name.length > 80) {
+      throw new DoudianAllianceError("SHOP_LIST_INCOMPLETE");
+    }
     const rowText = normalizeText(card.textContent);
     const blocked = blockedShopStatus(rowText);
     const id = shopIdFromText(rowText);
@@ -193,7 +290,9 @@ export function discoverDoudianAllianceShops(
   const identities = new Set<string>();
   for (const shop of shops) {
     const identity = shop.id ? `id:${shop.id}` : `name:${shop.name}`;
-    if (identities.has(identity)) throw new Error("SHOP_LIST_DUPLICATED");
+    if (identities.has(identity)) {
+      throw new DoudianAllianceError("SHOP_LIST_DUPLICATED");
+    }
     identities.add(identity);
   }
   for (const shop of shops) {
@@ -205,7 +304,7 @@ export function discoverDoudianAllianceShops(
           (!candidate.id || !shop.id)
       )
     ) {
-      throw new Error("SHOP_IDENTITY_AMBIGUOUS");
+      throw new DoudianAllianceError("SHOP_IDENTITY_AMBIGUOUS");
     }
   }
   return shops;
@@ -300,7 +399,9 @@ export function selectDoudianAllianceShop(
   shop: AllianceShop
 ): void {
   const expected = normalizeText(shop.name);
-  if (!expected || expected.length > 80) throw new Error("SHOP_TARGET_INVALID");
+  if (!expected || expected.length > 80) {
+    throw new DoudianAllianceError("SHOP_TARGET_INVALID");
+  }
   const dialog = visibleShopDialog(doc);
   const matches = Array.from(
     dialog.querySelectorAll<HTMLElement>("[class*='roleItem']")
@@ -315,7 +416,7 @@ export function selectDoudianAllianceShop(
   });
   const card = requireUnique(matches, "SHOP_TARGET_AMBIGUOUS");
   const blocked = blockedShopStatus(normalizeText(card.textContent));
-  if (blocked) throw new Error("SHOP_NOT_ACTIVE");
+  if (blocked) throw new DoudianAllianceError("SHOP_NOT_ACTIVE");
   card.click();
 }
 
@@ -352,7 +453,7 @@ export function dismissTopBuyinPromotionDialog(doc: Document): boolean {
     "推广策略支持分层设佣"
   ].some((signature) => dialogText.includes(signature));
   if (!knownDialog) {
-    throw new Error("PROMOTION_DIALOG_UNRECOGNIZED");
+    throw new DoudianAllianceError("PROMOTION_DIALOG_UNRECOGNIZED");
   }
   const closeButtons = Array.from(
     dialog.querySelectorAll<HTMLElement>(
@@ -440,7 +541,9 @@ function readBuyinShop(doc: Document): { id?: string; name: string } {
     .map((element) => normalizeText(element.textContent))
     .filter(Boolean);
   const uniqueNames = [...new Set(names)];
-  if (uniqueNames.length !== 1) throw new Error("SHOP_IDENTITY_UNCONFIRMED");
+  if (uniqueNames.length !== 1) {
+    throw new DoudianAllianceError("SHOP_IDENTITY_UNCONFIRMED");
+  }
   const headerText = normalizeText(
     doc.querySelector("header")?.textContent ?? doc.body?.textContent
   );
@@ -454,6 +557,15 @@ function readBuyinShop(doc: Document): { id?: string; name: string } {
 function updatedAtFromDocument(doc: Document): string | undefined {
   const text = normalizeText(doc.body?.textContent);
   return /当前记录更新时间[：:\s]*([0-9/.-]{8,10})/u.exec(text)?.[1];
+}
+
+function validFieldLength(
+  value: string,
+  minimum: number,
+  maximum: number
+): boolean {
+  const length = Array.from(value).length;
+  return length >= minimum && length <= maximum;
 }
 
 export function readBuyinRetiredProducts(
@@ -476,7 +588,7 @@ export function readBuyinRetiredProducts(
   if (
     expectedHeaders.some((header) => !headers.includes(header))
   ) {
-    throw new Error("RETIRED_PRODUCTS_TABLE_CHANGED");
+    throw new DoudianAllianceError("RETIRED_PRODUCTS_TABLE_CHANGED");
   }
   const rows = Array.from(table.querySelectorAll<HTMLTableRowElement>("tbody tr"));
   const empty =
@@ -488,7 +600,9 @@ export function readBuyinRetiredProducts(
         const cells = Array.from(row.querySelectorAll("td")).map((cell) =>
           normalizeText(cell.textContent)
         );
-        if (cells.length < 5) throw new Error("RETIRED_PRODUCT_ROW_CHANGED");
+        if (cells.length < 5) {
+          throw new DoudianAllianceError("RETIRED_PRODUCT_ROW_CHANGED");
+        }
         const productText = cells[1]!;
         const productId =
           PRODUCT_ID_PATTERN.exec(productText)?.[1] ??
@@ -500,6 +614,15 @@ export function readBuyinRetiredProducts(
                 .replace(productId, "")
             )
           : productText;
+        if (
+          !validFieldLength(cells[0]!, 1, 100) ||
+          !validFieldLength(title, 1, 500) ||
+          !validFieldLength(cells[2]!, 1, 100) ||
+          !validFieldLength(cells[3]!, 1, 100) ||
+          !validFieldLength(cells[4]!, 0, 1000)
+        ) {
+          throw new DoudianAllianceError("RETIRED_PRODUCT_ROW_CHANGED");
+        }
         return {
           treatmentId: cells[0]!,
           ...(productId ? { productId } : {}),
@@ -510,6 +633,9 @@ export function readBuyinRetiredProducts(
         };
       });
   const updatedAt = updatedAtFromDocument(doc);
+  if (updatedAt && !validFieldLength(updatedAt, 1, 100)) {
+    throw new DoudianAllianceError("RETIRED_PRODUCT_ROW_CHANGED");
+  }
   return {
     shop: readBuyinShop(doc),
     ...(updatedAt === undefined ? {} : { updatedAt }),

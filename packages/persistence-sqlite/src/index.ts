@@ -3,6 +3,10 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import {
+  parseSucceededRunBusinessAttentionMarker,
+  projectSucceededRunBusinessAttention
+} from "@bpa/attention-core";
+import {
   AssetReferenceConflictError,
   AuthoringConflictError,
   AuthoringOperationConflictError,
@@ -87,6 +91,7 @@ import {
   type RunPlanSnapshotRecord,
   type RunStatus,
   type RunTransitionInput,
+  type SucceededRunBusinessAttentionMarker,
   type SaveCandidateBundleInput,
   type ResourceAuthentication,
   type ResourceBindingSnapshot,
@@ -1801,6 +1806,11 @@ export class SqlitePersistence implements Persistence {
     }
   ): RunRecord {
     return this.#db.transaction(() => {
+      this.#assertOperationalAttentionMarker(
+        input.output,
+        input.operationalAttentionMarker,
+        input.nextStatus
+      );
       this.#assertOperationalDatasetPublicationMarker(
         input.runId,
         input.output,
@@ -1849,7 +1859,10 @@ export class SqlitePersistence implements Persistence {
           `Recoverable Run ${input.runId} revision changed`
         );
       }
-      this.#commitAttentionForTerminal(input);
+      this.#commitAttentionForTerminal({
+        ...input,
+        terminalAt: input.event.occurredAt
+      });
       if (
         (input.nextStatus === "succeeded" || input.nextStatus === "uncertain") &&
         input.operationalDatasetPublicationIntentId
@@ -1929,6 +1942,11 @@ export class SqlitePersistence implements Persistence {
 
   commitRunTransition(input: RunTransitionInput): RunRecord {
     return this.#db.transaction(() => {
+      this.#assertOperationalAttentionMarker(
+        input.output,
+        input.operationalAttentionMarker,
+        input.nextStatus
+      );
       this.#assertOperationalDatasetPublicationMarker(
         input.runId,
         input.output,
@@ -1956,7 +1974,10 @@ export class SqlitePersistence implements Persistence {
           `Run ${input.runId} revision is not ${input.expectedRevision}`
         );
       }
-      this.#commitAttentionForTerminal(input);
+      this.#commitAttentionForTerminal({
+        ...input,
+        terminalAt: input.event.occurredAt
+      });
       if (
         (input.nextStatus === "succeeded" || input.nextStatus === "uncertain") &&
         input.operationalDatasetPublicationIntentId
@@ -2517,6 +2538,11 @@ export class SqlitePersistence implements Persistence {
       ) {
         return { status: "stale" as const };
       }
+      this.#assertOperationalAttentionMarker(
+        input.output,
+        input.operationalAttentionMarker,
+        input.nextRunStatus ?? "running"
+      );
       this.#insertInbox(input.inbox);
       this.#inject("submit_task.after_inbox");
       const taskUpdate = this.#db
@@ -2559,6 +2585,10 @@ export class SqlitePersistence implements Persistence {
       this.#commitAttentionForTerminal({
         runId: input.task.task.runId,
         nextStatus: input.nextRunStatus ?? "running",
+        terminalAt: input.wakeEvent.occurredAt,
+        ...(input.operationalAttentionMarker
+          ? { operationalAttentionMarker: input.operationalAttentionMarker }
+          : {}),
         ...(input.attention ? { attention: input.attention } : {}),
         ...(input.attentionDelivery
           ? { attentionDelivery: input.attentionDelivery }
@@ -7141,17 +7171,21 @@ export class SqlitePersistence implements Persistence {
   #commitAttentionForTerminal(input: {
     runId: string;
     nextStatus: RunStatus;
+    terminalAt: string;
+    operationalAttentionMarker?: SucceededRunBusinessAttentionMarker;
     attention?: AttentionRecord;
     attentionDelivery?: AttentionDeliveryRecord;
   }): void {
-    const requiresAttention = ["rejected", "failed", "uncertain"].includes(
+    const failedTerminal = ["rejected", "failed", "uncertain"].includes(
       input.nextStatus
     );
+    const succeededBusinessFinding =
+      input.nextStatus === "succeeded" &&
+      input.operationalAttentionMarker !== undefined;
+    const requiresAttention = failedTerminal || succeededBusinessFinding;
     if (!requiresAttention) {
       if (input.attention || input.attentionDelivery) {
-        throw new Error(
-          "Only rejected, failed or uncertain Runs emit Attention delivery"
-        );
+        throw new Error("Run status does not permit an Attention delivery");
       }
       return;
     }
@@ -7185,6 +7219,42 @@ export class SqlitePersistence implements Persistence {
       throw new Error(
         `Terminal Run ${input.runId} requires one new Attention delivery pair`
       );
+    }
+    if (succeededBusinessFinding) {
+      const expected = projectSucceededRunBusinessAttention({
+        id: input.runId,
+        marker: input.operationalAttentionMarker!,
+        updatedAt: input.terminalAt
+      });
+      if (json(input.attention.item) !== json(expected)) {
+        throw new Error(
+          "Succeeded Run business Attention must use the controlled projection"
+        );
+      }
+      const run = this.getRun(input.runId);
+      if (!run) throw new Error(`Run not found: ${input.runId}`);
+      const expectedPayload = {
+        attentionId: expected.id,
+        runId: input.runId,
+        workflowId: run.workflowId,
+        workflowVersion: run.workflowVersion,
+        severity: expected.kind,
+        title: expected.title,
+        requestedAction: expected.requestedAction,
+        occurredAt: expected.createdAt
+      };
+      const expectedIdempotencyKey =
+        `attention:${expected.id}:operator-notification`;
+      if (
+        input.attentionDelivery.id !==
+          `delivery:${expectedIdempotencyKey}` ||
+        input.attentionDelivery.idempotencyKey !== expectedIdempotencyKey ||
+        json(input.attentionDelivery.payload) !== json(expectedPayload)
+      ) {
+        throw new Error(
+          "Succeeded Run business Attention delivery must use the controlled projection"
+        );
+      }
     }
     assertDigest(input.attentionDelivery.requestDigest, "requestDigest");
     assertJsonCompatible(
@@ -8261,6 +8331,42 @@ export class SqlitePersistence implements Persistence {
     if (outputMarker !== publicationIntentId) {
       throw new Error(
         "Operational Dataset publication marker must match terminal output"
+      );
+    }
+  }
+
+  #assertOperationalAttentionMarker(
+    output: unknown,
+    marker: SucceededRunBusinessAttentionMarker | undefined,
+    nextStatus: RunStatus
+  ): void {
+    const record =
+      output !== null && typeof output === "object" && !Array.isArray(output)
+        ? (output as Record<string, unknown>)
+        : undefined;
+    const outputMarker = record?.operationalAttentionMarker;
+    if (marker === undefined) {
+      if (outputMarker !== undefined) {
+        throw new Error(
+          "Operational Attention marker must be passed explicitly"
+        );
+      }
+      return;
+    }
+    if (nextStatus !== "succeeded") {
+      throw new Error(
+        "Operational Attention marker requires a succeeded terminal Run"
+      );
+    }
+    const explicit = parseSucceededRunBusinessAttentionMarker(marker);
+    const projected = parseSucceededRunBusinessAttentionMarker(outputMarker);
+    if (
+      explicit.version !== projected.version ||
+      explicit.kind !== projected.kind ||
+      explicit.code !== projected.code
+    ) {
+      throw new Error(
+        "Operational Attention marker must match terminal output"
       );
     }
   }

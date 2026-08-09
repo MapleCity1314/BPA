@@ -27,9 +27,17 @@ const canonicalAssets = {
     repositoryRoot,
     "nodes/core/doudian.alliance.shop.retired-products.scan.node.yaml"
   ),
+  "doudian.alliance.shop.retired-products.fact.persist.node.yaml": join(
+    repositoryRoot,
+    "nodes/core/doudian.alliance.shop.retired-products.fact.persist.node.yaml"
+  ),
   "doudian.alliance.retired-products.aggregate.node.yaml": join(
     repositoryRoot,
     "nodes/core/doudian.alliance.retired-products.aggregate.node.yaml"
+  ),
+  "doudian.alliance.retired-products.dataset.prepare.node.yaml": join(
+    repositoryRoot,
+    "nodes/core/doudian.alliance.retired-products.dataset.prepare.node.yaml"
   ),
   "doudian-alliance.adapter.yaml": join(
     repositoryRoot,
@@ -177,6 +185,18 @@ async function verifySource() {
         `Installer asset pin is stale for ${filename}: ${expectedDigest}`
       );
     }
+  }
+  if (
+    Object.keys(canonicalAssets).length !== 7 ||
+    !installer.includes(
+      'workflow = "doudian.alliance-retired-products-monitor@3.0.0"'
+    ) ||
+    !installer.includes('"--version", "3.0.0"') ||
+    !installer.includes("foreach ($Asset in $RequiredAssets)")
+  ) {
+    throw new Error(
+      "Installer must publish the seven-asset Workflow 3 closure through the real runner"
+    );
   }
   const promptDigest = await digest(
     join(skillSource, "references/workbuddy-automation-prompt.md")

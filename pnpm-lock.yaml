@@ -636,6 +636,9 @@ importers:
       '@bpa/asset-core':
         specifier: workspace:*
         version: link:../asset-core
+      '@bpa/attention-core':
+        specifier: workspace:*
+        version: link:../attention-core
       '@bpa/evidence-core':
         specifier: workspace:*
         version: link:../evidence-core

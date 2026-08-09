@@ -1,7 +1,9 @@
 import type {
   AllianceShop,
+  DoudianAllianceNodeErrorCode,
   RetiredProductsPage
 } from "@bpa/adapter-doudian";
+import { DOUDIAN_ALLIANCE_NODE_ERROR_CODES } from "@bpa/adapter-doudian";
 import type { RiskSignal } from "@bpa/schemas";
 import type {
   AllianceRetiredStageRequest,
@@ -14,6 +16,7 @@ const BUYIN_ORIGIN = "https://buyin.jinritemai.com";
 
 interface StageResponse {
   readonly ok: boolean;
+  readonly requestId?: string;
   readonly result?: AllianceRetiredStageResult;
   readonly error?: {
     readonly code: string;
@@ -25,14 +28,95 @@ interface PreflightResponse {
   readonly riskSignals?: readonly RiskSignal[];
 }
 
+interface CancelStageResponse {
+  readonly ok?: boolean;
+  readonly requestId?: string;
+  readonly stopped?: boolean;
+}
+
+export async function requestAllianceStageCancellation(
+  tabId: number,
+  requestId: string
+): Promise<boolean> {
+  const cancellation = (await browser.tabs
+    .sendMessage(tabId, {
+      type: "bpa.doudian.alliance.cancel-stage",
+      requestId
+    })
+    .catch(() => undefined)) as CancelStageResponse | undefined;
+  return (
+    cancellation?.ok === true &&
+    cancellation.requestId === requestId &&
+    cancellation.stopped === true
+  );
+}
+
+export async function completeCoreCancellationAfterStageStop(input: {
+  readonly safeStop: Promise<boolean>;
+  readonly onStopped: () => void | Promise<void>;
+}): Promise<boolean> {
+  if (!(await input.safeStop)) return false;
+  await input.onStopped();
+  return true;
+}
+
 export class AllianceRetiredDriverError extends Error {
   constructor(
-    readonly code: string,
+    readonly code: DoudianAllianceNodeErrorCode,
     readonly riskSignals: readonly RiskSignal[] = []
   ) {
-    super(code);
+    super(`Doudian alliance browser error: ${code}`);
     this.name = "AllianceRetiredDriverError";
   }
+}
+
+const DISCOVERY_ERROR_CODES = new Set<DoudianAllianceNodeErrorCode>([
+  "ALLIANCE_CONTENT_RESPONSE_TIMEOUT",
+  "PAGE_LOADING",
+  "PAGE_MISMATCH",
+  "PAGE_URL_INVALID",
+  "SHOP_IDENTITY_AMBIGUOUS",
+  "SHOP_IDENTITY_UNCONFIRMED",
+  "SHOP_LIST_EMPTY",
+  "SHOP_LIST_INCOMPLETE"
+]);
+
+const SCAN_ERROR_CODES = new Set<DoudianAllianceNodeErrorCode>([
+  "PAGE_LOADING",
+  "PAGE_MISMATCH",
+  "PAGE_URL_INVALID",
+  "PROMOTION_DIALOG_CLOSE_AMBIGUOUS",
+  "PROMOTION_DIALOG_UNRECOGNIZED",
+  "RETIRED_PRODUCT_LIMIT_EXCEEDED",
+  "RETIRED_PRODUCT_ROW_CHANGED",
+  "RETIRED_PRODUCTS_PAGE_LIMIT_EXCEEDED",
+  "RETIRED_PRODUCTS_TABLE_CHANGED",
+  "SHOP_IDENTITY_MISMATCH",
+  "SHOP_LIST_INCOMPLETE",
+  "SHOP_SWITCH_NOT_CONFIRMED",
+  "SHOP_TARGET_INVALID"
+]);
+
+function safeContentCode(
+  value: unknown,
+  expectedStage: AllianceRetiredStageResult["stage"]
+): DoudianAllianceNodeErrorCode {
+  const fallback =
+    expectedStage === "discover-shops"
+      ? "DOUDIAN_ALLIANCE_DISCOVERY_FAILED"
+      : "ALLIANCE_STAGE_FAILED";
+  if (typeof value !== "string" || !DOUDIAN_ALLIANCE_NODE_ERROR_CODES.has(
+    value as DoudianAllianceNodeErrorCode
+  )) {
+    return fallback;
+  }
+  const allowed =
+    expectedStage === "discover-shops"
+      ? DISCOVERY_ERROR_CODES
+      : SCAN_ERROR_CODES;
+  return allowed.has(value as DoudianAllianceNodeErrorCode)
+    ? (value as DoudianAllianceNodeErrorCode)
+    : fallback;
 }
 
 export interface AllianceRetiredBrowserDriver
@@ -68,11 +152,17 @@ export function createAllianceRetiredBrowserDriver(input: {
   readonly deadline: string;
   readonly isCancelled?: () => boolean;
   readonly stageResponseTimeoutMs?: number;
+  readonly onStageStarted?: (stage: {
+    readonly tabId: number;
+    readonly requestId: string;
+  }) => void;
+  readonly onStageStopped?: (requestId: string) => void;
 }): AllianceRetiredBrowserDriver {
   const managedTabIds = new Set<number>();
   let promoteTabId: number | undefined;
   let retiredTabId: number | undefined;
   let sourceUrl: string | undefined;
+  let stageSequence = 0;
 
   const assertBeforeDeadline = (): void => {
     if (
@@ -91,15 +181,25 @@ export function createAllianceRetiredBrowserDriver(input: {
 
   const preflight = async (tabId: number): Promise<void> => {
     assertBeforeDeadline();
-    const response = (await browser.tabs.sendMessage(tabId, {
-      type: "bpa.risk.preflight"
-    })) as PreflightResponse;
+    const response = (await browser.tabs
+      .sendMessage(tabId, { type: "bpa.risk.preflight" })
+      .catch(() => {
+        throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+      })) as PreflightResponse;
     const blocking = response.riskSignals?.find(
       (signal) => signal.severity === "blocking"
     );
     if (blocking) {
+      const code = [
+        "AUTH_REQUIRED",
+        "CAPTCHA_REQUIRED",
+        "RISK_CONTROL",
+        "SESSION_EXPIRED"
+      ].includes(blocking.code)
+        ? (blocking.code as DoudianAllianceNodeErrorCode)
+        : "RISK_CONTROL";
       throw new AllianceRetiredDriverError(
-        blocking.code,
+        code,
         response.riskSignals ?? []
       );
     }
@@ -111,6 +211,9 @@ export function createAllianceRetiredBrowserDriver(input: {
     expectedStage: T["stage"]
   ): Promise<T> => {
     await preflight(tabId);
+    assertNotCancelled();
+    const requestId = `${input.sourceTabId}:${Date.now()}:${++stageSequence}`;
+    input.onStageStarted?.({ tabId, requestId });
     const remaining = Date.parse(input.deadline) - Date.now();
     const timeoutMs = Math.max(
       1,
@@ -122,30 +225,44 @@ export function createAllianceRetiredBrowserDriver(input: {
       response = (await Promise.race([
         browser.tabs.sendMessage(tabId, {
           type: "bpa.doudian.alliance.stage",
+          requestId,
           request
         }),
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(
-            () => reject(new Error("ALLIANCE_CONTENT_RESPONSE_TIMEOUT")),
+            () =>
+              reject(
+                new AllianceRetiredDriverError(
+                  "ALLIANCE_CONTENT_RESPONSE_TIMEOUT"
+                )
+              ),
             timeoutMs
           );
         })
       ])) as StageResponse;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new AllianceRetiredDriverError(
-        /Extension context invalidated|Receiving end does not exist|message port closed/iu.test(
-          message
-        )
-          ? "BROWSER_CONTENT_SCRIPT_MISSING"
-          : message
-      );
+      if (
+        error instanceof AllianceRetiredDriverError &&
+        error.code === "ALLIANCE_CONTENT_RESPONSE_TIMEOUT"
+      ) {
+        if (!(await requestAllianceStageCancellation(tabId, requestId))) {
+          throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+        }
+        throw error;
+      }
+      if (error instanceof AllianceRetiredDriverError) throw error;
+      throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
     } finally {
       if (timer) clearTimeout(timer);
+      input.onStageStopped?.(requestId);
     }
-    if (!response?.ok || response.result?.stage !== expectedStage) {
+    if (
+      response?.requestId !== requestId ||
+      !response.ok ||
+      response.result?.stage !== expectedStage
+    ) {
       throw new AllianceRetiredDriverError(
-        response?.error?.code ?? "ALLIANCE_STAGE_FAILED"
+        safeContentCode(response?.error?.code, expectedStage)
       );
     }
     return response.result as T;
@@ -153,7 +270,9 @@ export function createAllianceRetiredBrowserDriver(input: {
 
   const captureTabs = async (): Promise<Map<number, Browser.tabs.Tab>> =>
     new Map(
-      (await browser.tabs.query({})).flatMap((tab) =>
+      (await browser.tabs.query({}).catch(() => {
+        throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+      })).flatMap((tab) =>
         tab.id == null ? [] : [[tab.id, tab] as const]
       )
     );
@@ -162,7 +281,7 @@ export function createAllianceRetiredBrowserDriver(input: {
     before: ReadonlyMap<number, Browser.tabs.Tab>,
     initiatingTabId: number,
     matches: (tab: Browser.tabs.Tab) => boolean,
-    timeoutCode: string
+    timeoutCode: "ALLIANCE_TAB_TIMEOUT"
   ): Promise<number> => {
     const initiating = before.get(initiatingTabId);
     if (!initiating) {
@@ -178,9 +297,11 @@ export function createAllianceRetiredBrowserDriver(input: {
     );
     while (Date.now() < Date.parse(input.deadline)) {
       assertNotCancelled();
-      const tabs = await browser.tabs.query({
-        windowId: initiating.windowId
-      });
+      const tabs = await browser.tabs
+        .query({ windowId: initiating.windowId })
+        .catch(() => {
+          throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+        });
       const candidates = tabs
         .filter((tab) => {
           if (
@@ -215,10 +336,7 @@ export function createAllianceRetiredBrowserDriver(input: {
         });
       const candidate = candidates[0];
       if (candidate?.id != null) {
-        if (
-          !before.has(candidate.id) &&
-          candidate.openerTabId === initiatingTabId
-        ) {
+        if (!before.has(candidate.id)) {
           managedTabIds.add(candidate.id);
         }
         return candidate.id;
@@ -239,19 +357,23 @@ export function createAllianceRetiredBrowserDriver(input: {
   };
 
   const discoverShopContext = async () => {
-      sourceUrl ??= (await browser.tabs.get(input.sourceTabId)).url;
-      const result = await stage<Extract<
-        AllianceRetiredStageResult,
-        { stage: "discover-shops" }
-      >>(
-        input.sourceTabId,
-        { stage: "discover-shops" },
-        "discover-shops"
-      );
-      return {
-        shops: result.shops,
-        currentShopName: result.currentShopName
-      };
+    sourceUrl ??= (
+      await browser.tabs.get(input.sourceTabId).catch(() => {
+        throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+      })
+    ).url;
+    const result = await stage<Extract<
+      AllianceRetiredStageResult,
+      { stage: "discover-shops" }
+    >>(
+      input.sourceTabId,
+      { stage: "discover-shops" },
+      "discover-shops"
+    );
+    return {
+      shops: result.shops,
+      currentShopName: result.currentShopName
+    };
   };
 
   return {
@@ -279,7 +401,7 @@ export function createAllianceRetiredBrowserDriver(input: {
         (tab) =>
           typeof tab.url === "string" &&
           tab.url.startsWith(`${BUYIN_ORIGIN}/dashboard`),
-        "BUYIN_LANDING_TAB_TIMEOUT"
+        "ALLIANCE_TAB_TIMEOUT"
       );
       const landingTab = await browser.tabs.get(landingTabId);
       if (tabMatches(landingTab, BUYIN_ORIGIN, PROMOTE_PATH)) {

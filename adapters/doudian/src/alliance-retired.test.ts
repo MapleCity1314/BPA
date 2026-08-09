@@ -2,6 +2,7 @@ import { JSDOM } from "jsdom";
 import { describe, expect, it, vi } from "vitest";
 import {
   discoverDoudianAllianceShops,
+  DOUDIAN_ALLIANCE_RUNTIME_VERSION,
   dismissBuyinPromotionDialogs,
   openBuyinRetiredProducts,
   openDoudianAlliancePromotion,
@@ -18,6 +19,56 @@ function documentOf(body: string): Document {
 }
 
 describe("Doudian alliance retired-products runtime", () => {
+  it("publishes only the exact v2 browser capabilities and implementation", () => {
+    const adapter = parseWorkflowYaml(
+      readFileSync(
+        new URL("../doudian-alliance.adapter.yaml", import.meta.url),
+        "utf8"
+      )
+    ) as {
+      metadata: { version: string };
+      extension: { minimumVersion: string };
+      capabilities: Array<{
+        nodeId: string;
+        nodeVersions: string[];
+        handlerVersion: string;
+        implementationDigest: string;
+      }>;
+    };
+    const implementationDigest = `sha256:${createHash("sha256")
+      .update(
+        [
+          "apps/extension/src/entrypoints/background.ts",
+          "apps/extension/src/entrypoints/content.ts",
+          "apps/extension/src/lib/adapter-node-registry.ts",
+          "apps/extension/src/lib/alliance-retired-background.ts",
+          "apps/extension/src/lib/alliance-retired-content.ts",
+          "adapters/doudian/src/alliance-retired.ts"
+        ]
+          .map((path) =>
+            readFileSync(new URL(`../../../${path}`, import.meta.url))
+          )
+          .join("\n")
+      )
+      .digest("hex")}`;
+
+    expect(DOUDIAN_ALLIANCE_RUNTIME_VERSION).toBe("2.0.0");
+    expect(adapter.metadata.version).toBe("2.0.0");
+    expect(adapter.extension.minimumVersion).toBe("0.6.1");
+    expect(adapter.capabilities).toHaveLength(2);
+    expect(adapter.capabilities.map((capability) => capability.nodeId)).toEqual([
+      "doudian.alliance.shops.discover",
+      "doudian.alliance.shop.retired-products.scan"
+    ]);
+    for (const capability of adapter.capabilities) {
+      expect(capability).toMatchObject({
+        nodeVersions: ["2.0.0"],
+        handlerVersion: "2.0.0",
+        implementationDigest
+      });
+    }
+  });
+
   it("discovers active shops and blocks inactive targets", () => {
     const doc = documentOf(`
       <div role="dialog">切换组织/店铺
@@ -47,6 +98,19 @@ describe("Doudian alliance retired-products runtime", () => {
         statusText: "停业整顿"
       })
     ).toThrow("SHOP_NOT_ACTIVE");
+  });
+
+  it("fails closed when a shop list mixes valid and malformed cards", () => {
+    const doc = documentOf(`
+      <div role="dialog">切换组织/店铺
+        <div class="roleItem"><span class="introName">甲食品旗舰店</span>店铺ID 10001 正常营业</div>
+        <div class="roleItem"><span class="introName"></span>店铺ID 10002 正常营业</div>
+      </div>
+    `);
+
+    expect(() => discoverDoudianAllianceShops(doc)).toThrow(
+      "SHOP_LIST_INCOMPLETE"
+    );
   });
 
   it("keeps same-name shops distinct when both stable IDs are visible", () => {
@@ -170,4 +234,23 @@ describe("Doudian alliance retired-products runtime", () => {
       }
     ]);
   });
+
+  it("rejects an overlong Chinese DOM field instead of serializing it", () => {
+    const doc = documentOf(`
+      <header><span class="btn-item-role-exchange-name__title">甲食品旗舰店</span></header>
+      <table>
+        <thead><tr><th>处理ID</th><th>商品信息</th><th>处理状态</th><th>处理时间</th><th>处理原因</th></tr></thead>
+        <tbody>
+          <tr><td>T-1</td><td>${"商".repeat(501)}</td><td>已清退</td><td>2026/07/31</td><td>原因</td></tr>
+        </tbody>
+      </table>
+    `);
+
+    expect(() => readBuyinRetiredProducts(doc)).toThrow(
+      "RETIRED_PRODUCT_ROW_CHANGED"
+    );
+  });
 });
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { parseWorkflowYaml } from "@bpa/compiler";

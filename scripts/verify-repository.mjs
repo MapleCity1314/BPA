@@ -5,6 +5,8 @@ import { execFile } from "node:child_process";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { parse } from "yaml";
+import Ajv2020 from "ajv/dist/2020.js";
+import addFormats from "ajv-formats";
 
 const root = resolve(import.meta.dirname, "..");
 const issues = [];
@@ -485,6 +487,44 @@ async function verifyAssets() {
   };
 }
 
+async function verifyTriggerTemplates() {
+  const directory = join(root, "config/triggers");
+  const filenames = (await readdir(directory))
+    .filter((name) => name.endsWith(".trigger.yaml"))
+    .sort();
+  const schema = await readJson(
+    join(root, "packages/schemas/schema/trigger-spec.schema.json")
+  );
+  const ajv = new Ajv2020({ allErrors: true, strict: true });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  for (const filename of filenames) {
+    const path = join(directory, filename);
+    const trigger = parse(await readFile(path, "utf8"));
+    if (!validate(trigger)) {
+      issues.push(
+        `Invalid TriggerSpec template ${relative(root, path)}: ${ajv.errorsText(validate.errors)}`
+      );
+      continue;
+    }
+    if (filename !== `${trigger.id}.trigger.yaml`) {
+      issues.push(
+        `TriggerSpec template filename ${filename} must match ${trigger.id}.trigger.yaml`
+      );
+    }
+    if (
+      trigger.enabled !== false ||
+      typeof trigger.browserInstanceId !== "string" ||
+      !trigger.browserInstanceId.startsWith("deployment-placeholder:")
+    ) {
+      issues.push(
+        `TriggerSpec source templates must stay disabled and bind a deployment-placeholder browser instance: ${relative(root, path)}`
+      );
+    }
+  }
+  return filenames.length;
+}
+
 async function verifySkills() {
   const skillRoot = join(root, "skills");
   const directories = (await readdir(skillRoot, { withFileTypes: true }))
@@ -690,6 +730,7 @@ async function verifyDependencyBoundaries() {
 
 const runtimeVersion = await verifyRuntimeVersions();
 const assets = await verifyAssets();
+const triggerTemplateCount = await verifyTriggerTemplates();
 const skillCount = await verifySkills();
 const shellScriptCount = await verifyScripts();
 const sourceFileCount = await verifyDependencyBoundaries();
@@ -715,6 +756,6 @@ if (issues.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    `Repository verified: Runtime ${runtimeVersion}, ${assets.nodeCount} Nodes, ${assets.workflowCount} Workflows, ${assets.adapterCount} Adapters, ${assets.assistanceProfileCount} Assistance Profiles, ${assets.policyCount} Policies, ${skillCount} Skills, ${shellScriptCount} shell scripts, ${sourceFileCount} dependency-checked source files.\n`
+    `Repository verified: Runtime ${runtimeVersion}, ${assets.nodeCount} Nodes, ${assets.workflowCount} Workflows, ${assets.adapterCount} Adapters, ${assets.assistanceProfileCount} Assistance Profiles, ${assets.policyCount} Policies, ${triggerTemplateCount} disabled TriggerSpec templates, ${skillCount} Skills, ${shellScriptCount} shell scripts, ${sourceFileCount} dependency-checked source files.\n`
   );
 }

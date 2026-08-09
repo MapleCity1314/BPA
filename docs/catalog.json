@@ -273,7 +273,7 @@
       "id": "repo.plan.mac-runtime-windows-remote-operations-0.1",
       "source": "docs/plans/bpa-mac-runtime-windows-remote-operations-v0.1.md",
       "title": "BPA Mac 唯一执行与 Windows 远程操作计划 v0.1",
-      "summary": "定义公司 Mac 唯一执行、Windows Viewer/Operator、单 Chrome、受控 Trigger 调用和旧 WorkBuddy 退出路径。",
+      "summary": "定义公司 Mac 唯一执行、Windows Viewer/Operator、单 Chrome和受控 Trigger；清退商品 Mac 事实链已形成候选，WorkBuddy 交付保留至真实 canary 后独立清退。",
       "authority": "plan",
       "implementation": "partial",
       "audience": ["operator", "developer", "integrator", "ai"],

@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@bpa/asset-core": "workspace:*",
+    "@bpa/attention-core": "workspace:*",
     "@bpa/evidence-core": "workspace:*",
     "@bpa/persistence": "workspace:*",
     "@bpa/resource-binding": "workspace:*",

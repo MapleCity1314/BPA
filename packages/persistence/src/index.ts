@@ -15,7 +15,10 @@ import type {
   BlobRecord,
   StagingLeaseRecord
 } from "@bpa/asset-core";
-import type { AttentionItem } from "@bpa/attention-core";
+import type {
+  AttentionItem,
+  SucceededRunBusinessAttentionMarker
+} from "@bpa/attention-core";
 import type {
   EvidenceChunkRecord,
   EvidenceTransferRecord
@@ -44,6 +47,7 @@ export type {
 } from "@bpa/schemas";
 export type { TriggerSpecDefinition } from "@bpa/schemas";
 export type { BlobRecord, StagingLeaseRecord } from "@bpa/asset-core";
+export type { SucceededRunBusinessAttentionMarker } from "@bpa/attention-core";
 export type {
   EvidenceChunkRecord,
   EvidenceTransferRecord
@@ -387,6 +391,7 @@ export interface RunTransitionInput {
   output?: unknown;
   attention?: AttentionRecord;
   attentionDelivery?: AttentionDeliveryRecord;
+  operationalAttentionMarker?: SucceededRunBusinessAttentionMarker;
   operationalDatasetPublicationIntentId?: string;
   event: ExecutionEventRecord;
 }
@@ -469,6 +474,7 @@ export interface SubmitAssistanceAndWakeInput {
   output?: unknown;
   attention?: AttentionRecord;
   attentionDelivery?: AttentionDeliveryRecord;
+  operationalAttentionMarker?: SucceededRunBusinessAttentionMarker;
   assistanceTasks?: readonly AssistanceTaskRecord[];
   additionalOutbox?: readonly OutboxMessage[];
   acknowledgeOutboxIds?: readonly string[];

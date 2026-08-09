@@ -88,7 +88,15 @@ try {
     ),
     join(
       repositoryRoot,
+      "nodes/core/doudian.alliance.shop.retired-products.fact.persist.node.yaml"
+    ),
+    join(
+      repositoryRoot,
       "nodes/core/doudian.alliance.retired-products.aggregate.node.yaml"
+    ),
+    join(
+      repositoryRoot,
+      "nodes/core/doudian.alliance.retired-products.dataset.prepare.node.yaml"
     ),
     join(repositoryRoot, "adapters/doudian/doudian-alliance.adapter.yaml"),
     join(

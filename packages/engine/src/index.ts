@@ -181,6 +181,78 @@ function outputKey(scopePath: ScopePath, stepKey: string): string {
   return `${scopeKey(scopePath)}:${stepKey}`;
 }
 
+function scopeFromOutputKey(key: string): ScopePath | undefined {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < key.length; index += 1) {
+    const character = key[index]!;
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+    if (character === "[") depth += 1;
+    if (character !== "]") continue;
+    depth -= 1;
+    if (depth !== 0 || key[index + 1] !== ":") continue;
+    try {
+      const parsed = JSON.parse(key.slice(0, index + 1)) as unknown;
+      if (
+        !Array.isArray(parsed) ||
+        parsed.some(
+          (segment) =>
+            !Array.isArray(segment) ||
+            segment.length !== 2 ||
+            typeof segment[0] !== "string" ||
+            typeof segment[1] !== "string"
+        )
+      ) {
+        return undefined;
+      }
+      return parsed.map((segment) => ({
+        foreachStepKey: segment[0] as string,
+        itemKey: segment[1] as string
+      }));
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function scopeStartsWith(scope: ScopePath, prefix: ScopePath): boolean {
+  return (
+    scope.length >= prefix.length &&
+    prefix.every(
+      (segment, index) =>
+        scope[index]?.foreachStepKey === segment.foreachStepKey &&
+        scope[index]?.itemKey === segment.itemKey
+    )
+  );
+}
+
+function withoutCompletedScopeOutputs(
+  outputs: EngineState["stepOutputs"],
+  completedScope: ScopePath
+): EngineState["stepOutputs"] {
+  return Object.fromEntries(
+    Object.entries(outputs).filter(([key]) => {
+      const scope = scopeFromOutputKey(key);
+      return !scope || !scopeStartsWith(scope, completedScope);
+    })
+  );
+}
+
 function currentScope(state: EngineState): ScopePath {
   let scope: ScopePath = [];
   for (const frame of state.foreachStack) {
@@ -542,6 +614,11 @@ function completeItem(
   terminal: TerminalStep,
   deps: EngineDependencies
 ): EngineTransition {
+  const completedScope = currentScope(state);
+  const retainedStepOutputs = withoutCompletedScopeOutputs(
+    state.stepOutputs,
+    completedScope
+  );
   if (terminal.status === "rejected" || terminal.status === "uncertain") {
     const rejected = terminal.status === "rejected";
     return {
@@ -551,6 +628,7 @@ function completeItem(
           status: terminal.status,
           cursor: undefined,
           active: undefined,
+          stepOutputs: retainedStepOutputs,
           error: {
             code:
               terminal.errorCode ??
@@ -618,6 +696,7 @@ function completeItem(
             stepKey: foreach.routes.stopped
           },
           foreachStack: parentStack,
+          stepOutputs: retainedStepOutputs,
           previousOutput: aggregate(updated) as unknown as JsonValue
         },
         state.revision
@@ -637,6 +716,7 @@ function completeItem(
             stepKey: foreach.routes.stopped
           },
           foreachStack: parentStack,
+          stepOutputs: retainedStepOutputs,
           previousOutput: aggregate(updated) as unknown as JsonValue
         },
         state.revision
@@ -657,6 +737,7 @@ function completeItem(
             stepKey: foreach.body.entry
           },
           foreachStack: [...parentStack, nextFrame],
+          stepOutputs: retainedStepOutputs,
           previousOutput: null
         },
         state.revision
@@ -679,7 +760,7 @@ function completeItem(
         foreachStack: parentStack,
         previousOutput: summary,
         stepOutputs: {
-          ...state.stepOutputs,
+          ...retainedStepOutputs,
           [outputKey(parentScope, foreach.key)]: summary
         }
       },

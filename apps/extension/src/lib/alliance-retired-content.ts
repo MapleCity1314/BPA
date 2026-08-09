@@ -1,4 +1,6 @@
 import {
+  DOUDIAN_ALLIANCE_NODE_ERROR_CODES,
+  DoudianAllianceError,
   advanceBuyinRetiredProductsPage,
   assertBuyinDashboardPage,
   assertBuyinPromotePage,
@@ -14,11 +16,13 @@ import {
   openDoudianAlliancePromoteEntry,
   openDoudianShopSwitcher,
   readBuyinRetiredProducts,
+  readDoudianHeaderShopIdentity,
   readDoudianHeaderShopName,
   resetDoudianShopSwitcherScroll,
   scrollDoudianShopSwitcher,
   selectDoudianAllianceShop,
   type AllianceShop,
+  type DoudianAllianceNodeErrorCode,
   type RetiredProductsPage
 } from "@bpa/adapter-doudian";
 
@@ -57,6 +61,22 @@ export type AllianceRetiredStageResult =
       readonly page: RetiredProductsPage;
     };
 
+export function allianceRetiredErrorPayload(error: unknown): {
+  readonly code: DoudianAllianceNodeErrorCode;
+  readonly message: string;
+} {
+  const candidate =
+    error instanceof DoudianAllianceError ? error.code : undefined;
+  const code =
+    candidate &&
+    DOUDIAN_ALLIANCE_NODE_ERROR_CODES.has(
+      candidate as DoudianAllianceNodeErrorCode
+    )
+      ? (candidate as DoudianAllianceNodeErrorCode)
+      : "ALLIANCE_STAGE_FAILED";
+  return { code, message: `Doudian alliance content error: ${code}` };
+}
+
 function waitForChange(maxWaitMs: number, doc: Document): Promise<void> {
   return new Promise((resolve) => {
     let settled = false;
@@ -84,20 +104,31 @@ function waitForChange(maxWaitMs: number, doc: Document): Promise<void> {
   });
 }
 
+function assertNotCancelled(isCancelled: () => boolean): void {
+  if (isCancelled()) {
+    throw new DoudianAllianceError("COMMAND_CANCELLED");
+  }
+}
+
 async function waitUntil<T>(
   read: () => T,
   timeoutMs: number,
   errorCode: string,
-  doc: Document
+  doc: Document,
+  isCancelled: () => boolean
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
+    assertNotCancelled(isCancelled);
     try {
-      return read();
+      const result = read();
+      assertNotCancelled(isCancelled);
+      return result;
     } catch (error) {
       lastError = error;
       await waitForChange(250, doc);
+      assertNotCancelled(isCancelled);
     }
   }
   if (
@@ -106,37 +137,46 @@ async function waitUntil<T>(
   ) {
     throw lastError;
   }
-  throw new Error(errorCode);
+  throw new DoudianAllianceError(errorCode);
 }
 
 function normalize(value: string): string {
   return value.normalize("NFKC").replace(/\s+/gu, "");
 }
 
-async function ensureShopDialog(doc: Document): Promise<void> {
+async function ensureShopDialog(
+  doc: Document,
+  isCancelled: () => boolean
+): Promise<void> {
+  assertNotCancelled(isCancelled);
   try {
     discoverDoudianAllianceShops(doc);
     return;
   } catch {
+    assertNotCancelled(isCancelled);
     openDoudianShopSwitcher(doc);
   }
   await waitUntil(
     () => discoverDoudianAllianceShops(doc),
     8_000,
     "SHOP_SWITCH_DIALOG_TIMEOUT",
-    doc
+    doc,
+    isCancelled
   );
 }
 
 async function discoverAllShops(
   doc: Document,
-  currentShopName: string
+  currentShopName: string,
+  isCancelled: () => boolean
 ): Promise<readonly AllianceShop[]> {
+  assertNotCancelled(isCancelled);
   if (resetDoudianShopSwitcherScroll(doc)) {
     await waitForChange(250, doc);
   }
   const shops = new Map<string, AllianceShop>();
   for (let pass = 0; pass < 100; pass += 1) {
+    assertNotCancelled(isCancelled);
     for (const shop of discoverDoudianAllianceShops(doc)) {
       const key = shop.id
         ? `id:${shop.id}`
@@ -147,37 +187,41 @@ async function discoverAllShops(
         (existing.name !== shop.name ||
           existing.status !== shop.status)
       ) {
-        throw new Error("SHOP_IDENTITY_DRIFT");
+        throw new DoudianAllianceError("SHOP_IDENTITY_DRIFT");
       }
       shops.set(key, shop);
     }
     const hasMore = scrollDoudianShopSwitcher(doc);
     if (!hasMore) break;
-    if (pass === 99) throw new Error("SHOP_LIST_INCOMPLETE");
+    if (pass === 99) throw new DoudianAllianceError("SHOP_LIST_INCOMPLETE");
     await waitForChange(450, doc);
+    assertNotCancelled(isCancelled);
   }
   const sameName = [...shops.values()].filter(
     (shop) => normalize(shop.name) === normalize(currentShopName)
   );
   if (sameName.length === 0) {
-    throw new Error("CURRENT_SHOP_NOT_IN_LIST");
+    throw new DoudianAllianceError("CURRENT_SHOP_NOT_IN_LIST");
   }
   if (sameName.length > 1) {
-    throw new Error("SHOP_IDENTITY_AMBIGUOUS");
+    throw new DoudianAllianceError("SHOP_IDENTITY_AMBIGUOUS");
   }
   return [...shops.values()];
 }
 
 async function selectShopAcrossVirtualList(
   doc: Document,
-  shop: AllianceShop
+  shop: AllianceShop,
+  isCancelled: () => boolean
 ): Promise<void> {
+  assertNotCancelled(isCancelled);
   if (filterDoudianShopSwitcher(doc, shop.name)) {
     await waitUntil(
       () => selectDoudianAllianceShop(doc, shop),
       8_000,
       "SHOP_TARGET_TIMEOUT",
-      doc
+      doc,
+      isCancelled
     );
     return;
   }
@@ -186,6 +230,7 @@ async function selectShopAcrossVirtualList(
   }
   let lastError: unknown;
   for (let pass = 0; pass < 100; pass += 1) {
+    assertNotCancelled(isCancelled);
     try {
       selectDoudianAllianceShop(doc, shop);
       return;
@@ -194,23 +239,27 @@ async function selectShopAcrossVirtualList(
     }
     const hasMore = scrollDoudianShopSwitcher(doc);
     if (!hasMore) break;
-    if (pass === 99) throw new Error("SHOP_LIST_INCOMPLETE");
+    if (pass === 99) throw new DoudianAllianceError("SHOP_LIST_INCOMPLETE");
     await waitForChange(450, doc);
+    assertNotCancelled(isCancelled);
   }
   if (lastError instanceof Error) throw lastError;
-  throw new Error("SHOP_TARGET_TIMEOUT");
+  throw new DoudianAllianceError("SHOP_TARGET_TIMEOUT");
 }
 
 export async function executeAllianceRetiredStage(
   request: AllianceRetiredStageRequest,
   doc: Document = document,
-  pageUrl: string = location.href
+  pageUrl: string = location.href,
+  isCancelled: () => boolean = () => false
 ): Promise<AllianceRetiredStageResult> {
+  assertNotCancelled(isCancelled);
   if (request.stage === "discover-shops") {
     assertDoudianProductListPage(pageUrl);
     const currentShopName = readDoudianHeaderShopName(doc);
-    await ensureShopDialog(doc);
-    const shops = await discoverAllShops(doc, currentShopName);
+    await ensureShopDialog(doc, isCancelled);
+    const shops = await discoverAllShops(doc, currentShopName, isCancelled);
+    assertNotCancelled(isCancelled);
     closeDoudianShopSwitcher(doc);
     return { stage: request.stage, shops, currentShopName };
   }
@@ -228,20 +277,26 @@ export async function executeAllianceRetiredStage(
       }
       return { stage: request.stage, shopName: current };
     }
-    await ensureShopDialog(doc);
-    await selectShopAcrossVirtualList(doc, request.shop);
+    await ensureShopDialog(doc, isCancelled);
+    await selectShopAcrossVirtualList(doc, request.shop, isCancelled);
     const shopName = await waitUntil(
       () => {
         const observed = readDoudianHeaderShopName(doc);
         if (normalize(observed) !== normalize(request.shop.name)) {
-          throw new Error("SHOP_SWITCH_NOT_CONFIRMED");
+          throw new DoudianAllianceError("SHOP_SWITCH_NOT_CONFIRMED");
         }
         return observed;
       },
       15_000,
       "SHOP_SWITCH_NOT_CONFIRMED",
-      doc
+      doc,
+      isCancelled
     );
+    assertNotCancelled(isCancelled);
+    const identity = readDoudianHeaderShopIdentity(doc);
+    if (!request.shop.id || identity.id !== request.shop.id) {
+      throw new DoudianAllianceError("SHOP_IDENTITY_MISMATCH");
+    }
     return { stage: request.stage, shopName };
   }
   if (request.stage === "open-promotion") {
@@ -251,7 +306,8 @@ export async function executeAllianceRetiredStage(
       () => openDoudianAlliancePromoteEntry(doc),
       8_000,
       "ALLIANCE_PROMOTION_ENTRY_TIMEOUT",
-      doc
+      doc,
+      isCancelled
     );
     return { stage: request.stage };
   }
@@ -261,7 +317,8 @@ export async function executeAllianceRetiredStage(
       () => openBuyinProductPromotion(doc),
       8_000,
       "BUYIN_PRODUCT_PROMOTION_ENTRY_TIMEOUT",
-      doc
+      doc,
+      isCancelled
     );
     return { stage: request.stage };
   }
@@ -269,15 +326,18 @@ export async function executeAllianceRetiredStage(
     assertBuyinPromotePage(pageUrl);
     let dismissedDialogs = 0;
     for (let pass = 0; pass < 5; pass += 1) {
+      assertNotCancelled(isCancelled);
       if (!dismissTopBuyinPromotionDialog(doc)) break;
       dismissedDialogs += 1;
       await waitForChange(500, doc);
+      assertNotCancelled(isCancelled);
     }
     await waitUntil(
       () => openBuyinRetiredProducts(doc),
       8_000,
       "RETIRED_PRODUCTS_ENTRY_TIMEOUT",
-      doc
+      doc,
+      isCancelled
     );
     return { stage: request.stage, dismissedDialogs };
   }
@@ -286,20 +346,46 @@ export async function executeAllianceRetiredStage(
     () => readBuyinRetiredProducts(doc),
     15_000,
     "RETIRED_PRODUCTS_PAGE_TIMEOUT",
-    doc
+    doc,
+    isCancelled
   );
   if (
     normalize(page.shop.name) !== normalize(request.expectedShop.name) ||
     (request.expectedShop.id &&
       page.shop.id !== request.expectedShop.id)
   ) {
-    throw new Error("SHOP_IDENTITY_MISMATCH");
+    throw new DoudianAllianceError("SHOP_IDENTITY_MISMATCH");
   }
-  const products = [...page.products];
-  const treatmentIds = new Set(
-    products.map((product) => product.treatmentId)
-  );
+  const products: RetiredProductsPage["products"][number][] = [];
+  const productsByTreatmentId = new Map<
+    string,
+    RetiredProductsPage["products"][number]
+  >();
+  const addProduct = (
+    product: RetiredProductsPage["products"][number]
+  ): void => {
+    const existing = productsByTreatmentId.get(product.treatmentId);
+    if (existing) {
+      if (
+        existing.productId !== product.productId ||
+        existing.title !== product.title ||
+        existing.status !== product.status ||
+        existing.processedAt !== product.processedAt ||
+        existing.reason !== product.reason
+      ) {
+        throw new DoudianAllianceError("RETIRED_PRODUCT_ROW_CHANGED");
+      }
+      return;
+    }
+    productsByTreatmentId.set(product.treatmentId, product);
+    products.push(product);
+    if (products.length > 50) {
+      throw new DoudianAllianceError("RETIRED_PRODUCT_LIMIT_EXCEEDED");
+    }
+  };
+  for (const product of page.products) addProduct(product);
   for (let pageIndex = 1; pageIndex <= 100; pageIndex += 1) {
+    assertNotCancelled(isCancelled);
     const previousSignature = page.products
       .map((product) => product.treatmentId)
       .join("\u0000");
@@ -311,27 +397,25 @@ export async function executeAllianceRetiredStage(
           .map((product) => product.treatmentId)
           .join("\u0000");
         if (signature === previousSignature) {
-          throw new Error("RETIRED_PRODUCTS_PAGE_LOADING");
+          throw new DoudianAllianceError("RETIRED_PRODUCTS_PAGE_LOADING");
         }
         return observed;
       },
       15_000,
       "RETIRED_PRODUCTS_PAGINATION_TIMEOUT",
-      doc
+      doc,
+      isCancelled
     );
     if (
       normalize(nextPage.shop.name) !==
-      normalize(request.expectedShop.name)
+        normalize(request.expectedShop.name) ||
+      (request.expectedShop.id &&
+        nextPage.shop.id !== request.expectedShop.id)
     ) {
-      throw new Error("SHOP_IDENTITY_MISMATCH");
+      throw new DoudianAllianceError("SHOP_IDENTITY_MISMATCH");
     }
     for (const product of nextPage.products) {
-      if (treatmentIds.has(product.treatmentId)) continue;
-      treatmentIds.add(product.treatmentId);
-      products.push(product);
-    }
-    if (products.length > 500) {
-      throw new Error("RETIRED_PRODUCT_LIMIT_EXCEEDED");
+      addProduct(product);
     }
     page = {
       ...nextPage,
@@ -339,7 +423,7 @@ export async function executeAllianceRetiredStage(
       products: [...products]
     };
     if (pageIndex === 100 && advanceBuyinRetiredProductsPage(doc)) {
-      throw new Error("RETIRED_PRODUCTS_PAGE_LIMIT_EXCEEDED");
+      throw new DoudianAllianceError("RETIRED_PRODUCTS_PAGE_LIMIT_EXCEEDED");
     }
   }
   return { stage: request.stage, page };
