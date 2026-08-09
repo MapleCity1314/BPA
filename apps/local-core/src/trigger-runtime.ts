@@ -84,14 +84,7 @@ export class TriggerRuntime {
           ? { browserFencingToken:browserLease.fencingToken }
           : {})
       });
-      const workflowInput = {
-        ...input.trigger.spec.input,
-        trigger:{
-          id:input.trigger.spec.id,version:input.trigger.spec.version,
-          kind:input.trigger.spec.kind,occurrenceKey:input.occurrenceKey,
-          ...(input.dataset ? { dataset:input.dataset } : {})
-        }
-      };
+      const workflowInput = input.trigger.spec.input;
       run = this.createRun(input.trigger,workflowInput,triggerRunId);
     } catch (error) {
       if (browserLease && browserInstanceId) {

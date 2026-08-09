@@ -8,8 +8,8 @@
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- Git 基线：截至 2026-08-09，PR #2–#18 均已在 required checks 通过后进入 `main`；
-  最新基线为 PR #18 merge commit `3262b0465de1`。阶段 0 结构收敛、资源观测、清退商品
+- Git 基线：截至 2026-08-09，PR #2–#19 均已在 required checks 通过后进入 `main`；
+  最新基线为 PR #19 merge commit `353b5a2ef236`。阶段 0 结构收敛、资源观测、清退商品
   Mac 目标约束、爆款图片来源闭包校验和体验分候选均已进入主线。
 - GitHub `main` 已启用管理员同样受约束的 Branch Protection：必须走 Pull Request、
   与主线同步、解决 review conversation，并通过 macOS、Windows、性能、双架构发布、
@@ -264,15 +264,23 @@ typecheck 已通过；生产已部署精确 RC，现场 schema、索引和查询
 `rejected`、`uncertain`、`cancelled`、`failed` 终态。该修复已通过 10 项 required checks
 并进入主线，但尚未部署；库存仍由原生产控制面运行。
 
-2026-08-09 后续本机候选增加 Schema v19 与 Trigger 浏览器控制租约：声明
+2026-08-09 PR #19 已增加 Schema v19 与 Trigger 浏览器控制租约：声明
 `browserInstanceId` 的 Trigger Run 在整个 Workflow 生命周期同时持有业务并发租约和
 `browser-instance:<id>` 租约，后者 fencing token 随 Trigger Run 持久化并在每次 tick
 续租；Workflow Run 的创建与 Trigger Run 关联在同一 SQLite 事务提交，启动中断不会留下
 可执行的孤儿 Run。清退、库存、体验分即使使用不同业务并发键，只要绑定同一个受管浏览器
 实例就不能重叠；浏览器被库存或 Recovery Session 占用时 occurrence 明确 `skipped`，不会排队或
 启动新 Chrome。丢失浏览器租约时 Trigger fail-closed，且不能释放后来控制者的租约。
-三工作流本机 fixture 已覆盖占用、跳过、终态释放和接管；该候选尚未进入主线或部署，
+三工作流本机 fixture 已覆盖占用、跳过、终态释放和接管；该层已进入主线但尚未部署，
 也不等于三条真实页面 E2E 已完成。
+
+后续本机正式资产 E2E 发现 Trigger 曾把内部 occurrence 元数据注入 Workflow 业务输入，
+导致声明 `additionalProperties: false` 的清退、体验分和库存 Workflow 在 Run 创建前全部
+被阻断。当前候选已移除这项输入污染：occurrence 与 Dataset 血缘只保留在不可变
+Trigger Run，Workflow 只接收其已冻结业务输入。候选同时用同一 Browser Session 依次
+走通清退商品 `2.0.1`、体验分 `1.0.1`、库存 `1.0.0` 的 Trigger、资源绑定、IR2、Provider、
+终态与租约释放，并把普通单店失败改为 `collect` 后聚合为 `uncertain + partial`；登录、
+验证码和风控的 `rejected` 仍立即终止。该测试不启动 Chrome，不等于真实登录页 E2E。
 
 2026-08-09 只读生产复核显示最新自然周期于 11:54（Asia/Shanghai）成功终止：13/13
 店完成，库存 319/319 持久化、失败 0，四类共 52 个步骤均为终态；当前有效租约和运行中

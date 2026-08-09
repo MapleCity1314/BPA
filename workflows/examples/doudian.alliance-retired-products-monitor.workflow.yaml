@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: doudian.alliance-retired-products-monitor
-  version: 2.0.0
+  version: 2.0.1
   title: 抖店精选联盟逐店清退商品巡检
   description: 枚举店铺后由 Workflow 逐店调用 Adapter Node，按店铺形成检查点并聚合完整性；调度时间不属于本 Workflow。
 spec:
@@ -83,7 +83,7 @@ spec:
         itemKey: ${item.key}
         maxItems: 100
         maxDuration: 8h
-        onItemError: stop
+        onItemError: collect
         body:
           kind: sequence
           steps:

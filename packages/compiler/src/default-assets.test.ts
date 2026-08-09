@@ -213,13 +213,28 @@ describe("published default asset sources", () => {
     const scanShops = alliancePlan.steps.scan_shops;
     expect(scanShops?.kind).toBe("foreach");
     if (scanShops?.kind !== "foreach") throw new Error("fixture changed");
-    expect(scanShops.onItemError).toBe("stop");
+    expect(scanShops.onItemError).toBe("collect");
     const scanShop = scanShops.body.steps.scan_shop;
     expect(scanShop?.kind).toBe("call");
     if (scanShop?.kind !== "call") throw new Error("fixture changed");
     expect(scanShops.body.steps[scanShop.routes.rejected]).toMatchObject({
       kind: "terminal",
       status: "rejected"
+    });
+
+    const experienceMonitor = loadYaml<WorkflowDefinitionV1Alpha3>(
+      "workflows/examples/doudian.experience-score.daily.workflow.yaml"
+    );
+    const experiencePlan = compileCanonicalWorkflow(experienceMonitor,catalog);
+    const collectShops = experiencePlan.steps.collect_shops;
+    expect(collectShops?.kind).toBe("foreach");
+    if (collectShops?.kind !== "foreach") throw new Error("fixture changed");
+    expect(collectShops.onItemError).toBe("collect");
+    const readSnapshot = collectShops.body.steps.read_snapshot;
+    expect(readSnapshot?.kind).toBe("call");
+    if (readSnapshot?.kind !== "call") throw new Error("fixture changed");
+    expect(collectShops.body.steps[readSnapshot.routes.rejected]).toMatchObject({
+      kind:"terminal",status:"rejected"
     });
 
     const doudianWorkflow = loadYaml<WorkflowDefinitionV1Alpha3>(
