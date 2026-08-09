@@ -45,6 +45,7 @@ interface LeaseRecord {
 export interface ConsoleHostOptions {
   backend: ControlBackend;
   staticRoot: string;
+  accessMode?: "operator" | "viewer";
   now?: () => number;
   tokenBytes?: () => Uint8Array;
   idleTimeoutMs?: number;
@@ -447,9 +448,34 @@ function sanitizeDownloadName(value: string): string {
   return safe || "bpa-download";
 }
 
+function viewerDashboard(
+  dashboard: Awaited<ReturnType<ControlBackend["getDashboard"]>>
+): Awaited<ReturnType<ControlBackend["getDashboard"]>> {
+  return {
+    ...dashboard,
+    components: dashboard.components.map(
+      ({ technicalDetails: _technicalDetails, ...component }) => component
+    ),
+    browserSessions: [],
+    recoverySessions: []
+  };
+}
+
+function viewerRun(
+  run: Awaited<ReturnType<ControlBackend["getRun"]>>
+): Awaited<ReturnType<ControlBackend["getRun"]>> {
+  return {
+    ...run,
+    timeline: run.timeline.map(
+      ({ technicalDetails: _technicalDetails, ...entry }) => entry
+    )
+  };
+}
+
 export async function startConsoleHost(
   options: ConsoleHostOptions
 ): Promise<ConsoleHostHandle> {
+  const accessMode = options.accessMode ?? "operator";
   const now = options.now ?? Date.now;
   const tokenBytes = options.tokenBytes ?? (() => randomBytes(32));
   const logError =
@@ -543,7 +569,7 @@ export async function startConsoleHost(
             "Set-Cookie",
             `${SESSION_COOKIE}=${sessionToken}; HttpOnly; SameSite=Strict; Path=/`
           );
-          writeJson(response, 200, { csrfToken, idleTimeoutMs });
+          writeJson(response, 200, { csrfToken, idleTimeoutMs, accessMode });
           return;
         }
 
@@ -551,14 +577,29 @@ export async function startConsoleHost(
           const session = getSession(request);
           writeJson(response, 200, {
             csrfToken: session.csrfToken,
-            idleTimeoutMs
+            idleTimeoutMs,
+            accessMode
           });
           return;
         }
 
+        if (accessMode === "viewer" && request.method !== "GET") {
+          getSession(request);
+          throw new HttpError(
+            403,
+            "VIEWER_READ_ONLY",
+            "当前会话只能查看运行结果，不能执行操作。"
+          );
+        }
+
         if (request.method === "GET" && path === "/api/dashboard") {
           getSession(request);
-          writeJson(response, 200, await options.backend.getDashboard());
+          const dashboard = await options.backend.getDashboard();
+          writeJson(
+            response,
+            200,
+            accessMode === "viewer" ? viewerDashboard(dashboard) : dashboard
+          );
           return;
         }
         if (request.method === "GET" && path === "/api/workflows") {
@@ -620,16 +661,23 @@ export async function startConsoleHost(
         const runMatch = /^\/api\/runs\/([^/]+)$/.exec(path);
         if (request.method === "GET" && runMatch) {
           getSession(request);
+          const run = await options.backend.getRun(
+            decodeURIComponent(runMatch[1]!)
+          );
           writeJson(
             response,
             200,
-            await options.backend.getRun(decodeURIComponent(runMatch[1]!))
+            accessMode === "viewer" ? viewerRun(run) : run
           );
           return;
         }
         if (request.method === "GET" && path === "/api/tasks") {
           getSession(request);
-          writeJson(response, 200, await options.backend.listTasks());
+          writeJson(
+            response,
+            200,
+            accessMode === "viewer" ? [] : await options.backend.listTasks()
+          );
           return;
         }
         const taskMatch = /^\/api\/tasks\/([^/]+)\/submit$/.exec(path);
@@ -767,6 +815,13 @@ export async function startConsoleHost(
         const downloadMatch = /^\/api\/downloads\/([^/]+)$/.exec(path);
         if (request.method === "GET" && downloadMatch) {
           getSession(request);
+          if (accessMode === "viewer") {
+            throw new HttpError(
+              403,
+              "VIEWER_DOWNLOAD_FORBIDDEN",
+              "远程只读会话尚未获得文件下载授权。"
+            );
+          }
           const download = await options.backend.getDownload(
             decodeURIComponent(downloadMatch[1]!)
           );

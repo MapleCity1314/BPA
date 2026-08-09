@@ -15,6 +15,15 @@ const appRoot =
 
 const socketPath =
   process.env.BPA_SOCKET?.trim() || resolveControlSocketPath();
+const configuredAccessMode = process.env.BPA_CONSOLE_ACCESS_MODE?.trim();
+if (
+  configuredAccessMode !== undefined &&
+  configuredAccessMode !== "operator" &&
+  configuredAccessMode !== "viewer"
+) {
+  throw new Error("BPA_CONSOLE_ACCESS_MODE must be operator or viewer");
+}
+const accessMode = configuredAccessMode ?? "operator";
 const controlClient = new ControlClient(
   new UnixSocketControlTransport(socketPath, {
     runtime: { name: "bpa-console-host", version: "0.6.0" },
@@ -28,7 +37,8 @@ const handle = await startConsoleHost({
       : {}),
     stagingUploader: new UnixSocketStagingUploader()
   }),
-  staticRoot: appRoot
+  staticRoot: appRoot,
+  accessMode
 });
 
 process.stdout.write(`${handle.launchUrl}\n`);

@@ -1,6 +1,10 @@
 export type AttentionLevel = "normal" | "attention" | "action";
 export type HealthStatus = "healthy" | "degraded" | "unavailable";
 
+export interface ConsoleSession {
+  accessMode: "operator" | "viewer";
+}
+
 export interface ConsoleLaunchHandle {
   readonly launchUrl: string;
   close(): Promise<void>;

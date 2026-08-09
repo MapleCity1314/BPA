@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type {
+  ConsoleSession,
   DashboardSnapshot,
   DownloadView,
   EvidenceLineageView,
@@ -52,6 +53,9 @@ export function App({ api }: { api: OperatorConsoleApi }) {
   const [lineage, setLineage] = useState<EvidenceLineageView>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [accessMode, setAccessMode] = useState<ConsoleSession["accessMode"]>(
+    "operator"
+  );
   const [darkTheme, setDarkTheme] = useState(() => {
     const saved = window.localStorage.getItem("bpa-operator-theme");
     return saved
@@ -75,7 +79,7 @@ export function App({ api }: { api: OperatorConsoleApi }) {
     let active = true;
     void (async () => {
       try {
-        await api.initializeSession();
+        const session = await api.initializeSession();
         const [nextDashboard, nextWorkflows, nextTasks, nextDownloads] =
           await Promise.all([
             api.getDashboard(),
@@ -84,6 +88,7 @@ export function App({ api }: { api: OperatorConsoleApi }) {
             api.listDownloads()
           ]);
         if (!active) return;
+        setAccessMode(session.accessMode);
         setDashboard(nextDashboard);
         setWorkflows(nextWorkflows);
         setTasks(nextTasks);
@@ -146,6 +151,17 @@ export function App({ api }: { api: OperatorConsoleApi }) {
 
   if (!dashboard) return null;
 
+  const visibleNavigation =
+    accessMode === "viewer"
+      ? navigation.filter((item) => item.id === "overview" || item.id === "reports")
+      : navigation;
+  const visibleAdvancedNavigation =
+    accessMode === "viewer"
+      ? advancedNavigation.filter((item) =>
+          ["diagnostics", "runs", "evidence"].includes(item.id)
+        )
+      : advancedNavigation;
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -157,7 +173,7 @@ export function App({ api }: { api: OperatorConsoleApi }) {
           </div>
         </div>
         <nav aria-label="主要功能">
-          {navigation.map((item) => (
+          {visibleNavigation.map((item) => (
             <button
               aria-current={view === item.id ? "page" : undefined}
               key={item.id}
@@ -184,7 +200,7 @@ export function App({ api }: { api: OperatorConsoleApi }) {
         </button>
         {advancedOpen ? (
           <nav aria-label="高级功能" className="advanced-navigation">
-            {advancedNavigation.map((item) => (
+            {visibleAdvancedNavigation.map((item) => (
               <button
                 aria-current={view === item.id ? "page" : undefined}
                 key={item.id}
@@ -200,8 +216,12 @@ export function App({ api }: { api: OperatorConsoleApi }) {
         <div className="sidebar-foot">
           <span className="health-dot health-healthy" />
           <div>
-            <strong>仅本机可访问</strong>
-            <small>安全会话将在闲置后结束</small>
+            <strong>{accessMode === "viewer" ? "只读查看" : "本机操作"}</strong>
+            <small>
+              {accessMode === "viewer"
+                ? "运行与浏览器操作只在 Mac 执行"
+                : "安全会话将在闲置后结束"}
+            </small>
           </div>
           <button
             aria-label={darkTheme ? "切换到浅色主题" : "切换到深色主题"}
@@ -217,12 +237,12 @@ export function App({ api }: { api: OperatorConsoleApi }) {
         <header className="topbar">
           <div>
             <p className="eyebrow">
-              {advancedNavigation.some((item) => item.id === view)
+              {visibleAdvancedNavigation.some((item) => item.id === view)
                 ? "高级视图"
                 : "BPA 工作台"}
             </p>
             <h1>
-              {[...navigation, ...advancedNavigation].find(
+              {[...visibleNavigation, ...visibleAdvancedNavigation].find(
                 (item) => item.id === view
               )?.label}
             </h1>

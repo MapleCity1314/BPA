@@ -1,6 +1,7 @@
 import type {
   CreateRunInput,
   CreateRunResult,
+  ConsoleSession,
   DashboardSnapshot,
   DatasetImportResult,
   DesignModeGrantInput,
@@ -20,7 +21,7 @@ import type {
 } from "@bpa/operator-console-contracts";
 
 export interface OperatorConsoleApi {
-  initializeSession(): Promise<void>;
+  initializeSession(): Promise<ConsoleSession>;
   getDashboard(): Promise<DashboardSnapshot>;
   listWorkflows(): Promise<WorkflowSummary[]>;
   createRun(input: CreateRunInput): Promise<CreateRunResult>;
@@ -57,6 +58,7 @@ export interface OperatorConsoleApi {
 
 interface SessionResponse {
   csrfToken: string;
+  accessMode: ConsoleSession["accessMode"];
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -100,7 +102,7 @@ export class HttpOperatorConsoleApi implements OperatorConsoleApi {
     );
   }
 
-  async initializeSession(): Promise<void> {
+  async initializeSession(): Promise<ConsoleSession> {
     const fragment = new URLSearchParams(window.location.hash.slice(1));
     const launchToken = fragment.get("token");
     let session: SessionResponse;
@@ -117,6 +119,7 @@ export class HttpOperatorConsoleApi implements OperatorConsoleApi {
       session = await this.#request<SessionResponse>("/api/session");
     }
     this.#csrfToken = session.csrfToken;
+    return { accessMode: session.accessMode };
   }
 
   getDashboard() {

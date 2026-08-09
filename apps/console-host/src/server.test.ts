@@ -5,7 +5,9 @@ import { join } from "node:path";
 import type {
   ControlBackend,
   CreateRunInput,
+  DashboardSnapshot,
   DesignModeGrantInput,
+  RunView,
   StartRecoverySessionInput,
   StagingLeaseRequest,
   StagedDatasetImportInput,
@@ -120,8 +122,7 @@ class RecordingBackend implements ControlBackend {
     })
   );
 
-  async getDashboard() {
-    return {
+  readonly getDashboard = vi.fn(async (): Promise<DashboardSnapshot> => ({
       attention: "normal" as const,
       headline: "运行正常",
       runtimeVersion: "0.4.0",
@@ -131,27 +132,22 @@ class RecordingBackend implements ControlBackend {
       recoverySessions: [],
       activeRunCount: 0,
       pendingTaskCount: 0
-    };
-  }
+    }));
 
   async listWorkflows() {
     return [];
   }
 
-  async getRun(runId: string) {
-    return {
+  readonly getRun = vi.fn(async (runId: string): Promise<RunView> => ({
       id: runId,
       workflowTitle: "检查",
       status: "running" as const,
       businessSummary: "正在运行",
       startedAt: "2026-07-30T00:00:00.000Z",
       timeline: []
-    };
-  }
+    }));
 
-  async listTasks() {
-    return [];
-  }
+  readonly listTasks = vi.fn(async () => []);
 
   async getEvidenceLineage(runId: string) {
     return { runId, sources: [], evidence: [], assets: [] };
@@ -215,6 +211,7 @@ async function launch(
     backend?: RecordingBackend;
     now?: () => number;
     idleTimeoutMs?: number;
+    accessMode?: "operator" | "viewer";
   } = {}
 ) {
   const backend = options.backend ?? new RecordingBackend();
@@ -222,6 +219,7 @@ async function launch(
     backend,
     staticRoot: await fixtureRoot(),
     tokenBytes: tokenSource(),
+    ...(options.accessMode ? { accessMode: options.accessMode } : {}),
     ...(options.now ? { now: options.now } : {}),
     ...(options.idleTimeoutMs ? { idleTimeoutMs: options.idleTimeoutMs } : {})
   });
@@ -235,8 +233,11 @@ async function launch(
     }
   });
   const cookie = exchange.headers.get("set-cookie")?.split(";")[0] ?? "";
-  const session = (await exchange.json()) as { csrfToken: string };
-  return { backend, handle, exchange, cookie, csrf: session.csrfToken };
+  const session = (await exchange.json()) as {
+    csrfToken: string;
+    accessMode: "operator" | "viewer";
+  };
+  return { backend, handle, exchange, cookie, csrf: session.csrfToken, session };
 }
 
 describe("Console Host security boundary", () => {
@@ -440,6 +441,112 @@ describe("Console Host security boundary", () => {
     });
     expect(pathAttempt.status).toBe(400);
     expect(backend.createStagingLease).not.toHaveBeenCalled();
+  });
+
+  it("keeps viewer sessions read-only at the HTTP boundary", async () => {
+    const backend = new RecordingBackend();
+    backend.getDashboard.mockResolvedValueOnce({
+      attention: "normal",
+      headline: "运行正常",
+      runtimeVersion: "0.6.0",
+      components: [{
+        id: "core",
+        label: "Core",
+        status: "healthy",
+        summary: "正常",
+        technicalDetails: "socket=/private/core.sock"
+      }],
+      browserSessions: [{
+        id: "browser-1",
+        label: "Chrome",
+        status: "ready",
+        origin: "https://fxg.jinritemai.com",
+        authenticated: true,
+        lastSeenAt: "2030-01-01T00:00:00.000Z"
+      }],
+      alerts: [],
+      recoverySessions: [],
+      activeRunCount: 0,
+      pendingTaskCount: 0
+    });
+    const { handle, cookie, csrf, session } = await launch({
+      backend,
+      accessMode: "viewer"
+    });
+    expect(session).toMatchObject({ accessMode: "viewer" });
+
+    const dashboard = await fetch(`${handle.origin}/api/dashboard`, {
+      headers: { Cookie: cookie }
+    });
+    expect(dashboard.status).toBe(200);
+    const dashboardBody = await dashboard.json();
+    expect(dashboardBody).toMatchObject({
+      components: [{ id: "core", label: "Core", status: "healthy", summary: "正常" }],
+      browserSessions: [],
+      recoverySessions: []
+    });
+    expect(JSON.stringify(dashboardBody)).not.toContain("socket=/private/core.sock");
+
+    backend.getRun.mockResolvedValueOnce({
+      id: "run-1",
+      workflowTitle: "检查",
+      status: "failed",
+      businessSummary: "需要处理",
+      startedAt: "2030-01-01T00:00:00.000Z",
+      completedAt: "2030-01-01T00:01:00.000Z",
+      timeline: [{
+        id: "step-1",
+        at: "2030-01-01T00:00:30.000Z",
+        title: "读取失败",
+        summary: "页面暂不可用",
+        state: "failed",
+        technicalDetails: "profile=/private/browser-profile"
+      }]
+    });
+    const inspectedRun = await fetch(`${handle.origin}/api/runs/run-1`, {
+      headers: { Cookie: cookie }
+    });
+    const runBody = await inspectedRun.json();
+    expect(runBody).toMatchObject({
+      id: "run-1",
+      timeline: [{ summary: "页面暂不可用" }]
+    });
+    expect(JSON.stringify(runBody)).not.toContain("/private/browser-profile");
+
+    const run = await fetch(`${handle.origin}/api/runs`, {
+      method: "POST",
+      headers: {
+        Cookie: cookie,
+        Origin: handle.origin,
+        "X-BPA-CSRF-Token": csrf,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        workflowId: "forbidden",
+        workflowVersion: "1.0.0",
+        inputs: {},
+        resourceBindings: {}
+      })
+    });
+    expect(run.status).toBe(403);
+    expect(await run.json()).toMatchObject({
+      error: { code: "VIEWER_READ_ONLY" }
+    });
+    expect(backend.createRun).not.toHaveBeenCalled();
+
+    const tasks = await fetch(`${handle.origin}/api/tasks`, {
+      headers: { Cookie: cookie }
+    });
+    expect(await tasks.json()).toEqual([]);
+    expect(backend.listTasks).not.toHaveBeenCalled();
+
+    const download = await fetch(`${handle.origin}/api/downloads/download-1`, {
+      headers: { Cookie: cookie }
+    });
+    expect(download.status).toBe(403);
+    expect(await download.json()).toMatchObject({
+      error: { code: "VIEWER_DOWNLOAD_FORBIDDEN" }
+    });
   });
 
   it("requires CSRF and a closed Design Mode page-binding shape", async () => {
