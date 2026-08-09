@@ -1470,5 +1470,14 @@ export const migrations: Migration[] = [
           browser_instance_id, profile_id, state, expires_at
         );
     `
+  },
+  {
+    version: 19,
+    sql: `
+      ALTER TABLE trigger_runs ADD COLUMN browser_fencing_token INTEGER
+        CHECK (
+          browser_fencing_token IS NULL OR browser_fencing_token >= 1
+        );
+    `
   }
 ];

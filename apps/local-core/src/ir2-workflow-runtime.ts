@@ -158,7 +158,8 @@ export class Ir2WorkflowRuntime {
     plan: ExecutionPlan,
     input: JsonValue,
     startMetadata?: JsonValue,
-    bindResources?: (runId: string) => ResourceBindingSnapshot
+    bindResources?: (runId: string) => ResourceBindingSnapshot,
+    triggerRunId?: string
   ): RunRecord {
     const runId = this.#id();
     const resourceBindingSnapshot = bindResources?.(runId);
@@ -194,6 +195,7 @@ export class Ir2WorkflowRuntime {
         createdAt: timestamp
       },
       checkpoint: this.#checkpoint(transition.state, timestamp),
+      ...(triggerRunId ? { triggerRunId } : {}),
       ...(resourceBindingSnapshot
         ? { resourceBindingSnapshot }
         : {}),

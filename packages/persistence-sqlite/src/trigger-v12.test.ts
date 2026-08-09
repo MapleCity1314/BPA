@@ -110,12 +110,13 @@ describe("Trigger and Browser Control Lease persistence",() => {
         DROP TABLE attention_deliveries;
         DROP TABLE attention_records;
         DROP TABLE trigger_spec_versions;
-        DELETE FROM schema_migrations WHERE version IN (15, 16, 17, 18);
+        ALTER TABLE trigger_runs DROP COLUMN browser_fencing_token;
+        DELETE FROM schema_migrations WHERE version IN (15, 16, 17, 18, 19);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path });
-      expect(upgraded.health().schemaVersion).toBe(18);
+      expect(upgraded.health().schemaVersion).toBe(19);
       expect(upgraded.getTriggerSpecVersion(spec.id,spec.version)).toEqual(spec);
       expect(upgraded.listTriggerRuns(spec.id)).toEqual([
         expect.objectContaining({

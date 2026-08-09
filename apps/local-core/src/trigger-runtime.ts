@@ -13,6 +13,11 @@ const ACTIVE_TRIGGER_STATES = new Set([
   "due","lease_acquired","run_created","running"
 ]);
 
+interface TriggerControlLeases {
+  readonly trigger: BrowserControlLeaseRecord;
+  readonly browser?: BrowserControlLeaseRecord;
+}
+
 export interface TriggerFireInput {
   readonly trigger: TriggerSpecRecord;
   readonly occurrenceKey: string;
@@ -22,7 +27,11 @@ export interface TriggerFireInput {
 export class TriggerRuntime {
   constructor(
     readonly persistence: Persistence,
-    readonly createRun: (trigger: TriggerSpecRecord, input: unknown) => RunRecord,
+    readonly createRun: (
+      trigger: TriggerSpecRecord,
+      input: unknown,
+      triggerRunId: string
+    ) => RunRecord,
     readonly clock: () => Date = () => new Date()
   ) {}
 
@@ -39,20 +48,42 @@ export class TriggerRuntime {
       createdAt:now,updatedAt:now
     });
     if (claimed.status === "duplicate") return claimed.record;
-    const lease = this.persistence.acquireTriggerLease({
+    const triggerLease = this.persistence.acquireTriggerLease({
       concurrencyKey:input.trigger.spec.concurrencyKey,
       ownerId:triggerRunId,now,ttlSeconds:LEASE_TTL_SECONDS
     });
-    if (!lease) {
+    if (!triggerLease) {
       return this.persistence.updateTriggerRun({
         triggerRunId,status:"skipped",updatedAt:now,
         diagnostic:"Another active Trigger Run owns the concurrency lease."
       });
     }
-    this.persistence.updateTriggerRun({
-      triggerRunId,status:"lease_acquired",updatedAt:now,fencingToken:lease.fencingToken
-    });
+    const browserInstanceId = input.trigger.spec.browserInstanceId;
+    const browserLease = browserInstanceId
+      ? this.persistence.acquireBrowserControlLease({
+          resourceId:this.browserResourceId(browserInstanceId),
+          ownerId:triggerRunId,now,ttlSeconds:LEASE_TTL_SECONDS
+        })
+      : undefined;
+    if (browserInstanceId && !browserLease) {
+      this.persistence.releaseTriggerLease({
+        concurrencyKey:input.trigger.spec.concurrencyKey,
+        ownerId:triggerRunId,fencingToken:triggerLease.fencingToken,releasedAt:now
+      });
+      return this.persistence.updateTriggerRun({
+        triggerRunId,status:"skipped",updatedAt:now,
+        diagnostic:"Another active controller owns the browser instance lease."
+      });
+    }
+    let run: RunRecord;
     try {
+      this.persistence.updateTriggerRun({
+        triggerRunId,status:"lease_acquired",updatedAt:now,
+        fencingToken:triggerLease.fencingToken,
+        ...(browserLease
+          ? { browserFencingToken:browserLease.fencingToken }
+          : {})
+      });
       const workflowInput = {
         ...input.trigger.spec.input,
         trigger:{
@@ -61,20 +92,34 @@ export class TriggerRuntime {
           ...(input.dataset ? { dataset:input.dataset } : {})
         }
       };
-      const run = this.createRun(input.trigger,workflowInput);
-      return this.persistence.updateTriggerRun({
-        triggerRunId,status:"run_created",updatedAt:now,workflowRunId:run.id
-      });
+      run = this.createRun(input.trigger,workflowInput,triggerRunId);
     } catch (error) {
+      if (browserLease && browserInstanceId) {
+        this.persistence.releaseBrowserControlLease({
+          resourceId:this.browserResourceId(browserInstanceId),
+          ownerId:triggerRunId,fencingToken:browserLease.fencingToken,releasedAt:now
+        });
+      }
       this.persistence.releaseTriggerLease({
         concurrencyKey:input.trigger.spec.concurrencyKey,
-        ownerId:triggerRunId,fencingToken:lease.fencingToken,releasedAt:now
+        ownerId:triggerRunId,fencingToken:triggerLease.fencingToken,releasedAt:now
       });
       return this.persistence.updateTriggerRun({
         triggerRunId,status:"blocked",updatedAt:now,
         diagnostic:error instanceof Error ? error.message : String(error)
       });
     }
+    const linked = this.persistence.getTriggerRun(triggerRunId);
+    if (
+      !linked ||
+      linked.status !== "run_created" ||
+      linked.workflowRunId !== run.id
+    ) {
+      throw new Error(
+        `Workflow Run was not atomically linked to Trigger Run: ${triggerRunId}`
+      );
+    }
+    return linked;
   }
 
   tick(): void {
@@ -114,18 +159,26 @@ export class TriggerRuntime {
         });
         continue;
       }
-      const lease = this.findOrRenewLease(trigger,triggerRun,now);
-      if (!lease) {
+      const control = this.findOrRenewLeases(trigger,triggerRun,now);
+      if ("diagnostic" in control) {
         this.persistence.updateTriggerRun({
           triggerRunId:triggerRun.triggerRunId,status:"failed",updatedAt:now,
-          diagnostic:"Trigger concurrency lease was lost."
+          diagnostic:control.diagnostic
         });
         continue;
       }
-      if (!triggerRun.workflowRunId) continue;
+      if (!triggerRun.workflowRunId) {
+        this.finish(
+          trigger,triggerRun,control.leases,"failed",now,
+          "Workflow Run was not created before reconciliation."
+        );
+        continue;
+      }
       const run = this.persistence.getRun(triggerRun.workflowRunId);
       if (!run) {
-        this.finish(trigger,triggerRun,lease,"failed",now,"Workflow Run is missing.");
+        this.finish(
+          trigger,triggerRun,control.leases,"failed",now,"Workflow Run is missing."
+        );
         continue;
       }
       if (["created","validated","queued","running","waiting_browser","waiting_assistance","waiting_human","paused","compensating"].includes(run.status)) {
@@ -149,32 +202,60 @@ export class TriggerRuntime {
             throw new Error(`Unsupported Workflow terminal: ${run.status}`);
         }
       })();
-      this.finish(trigger,triggerRun,lease,status,now);
+      this.finish(trigger,triggerRun,control.leases,status,now);
     }
   }
 
-  private findOrRenewLease(
+  private findOrRenewLeases(
     trigger: TriggerSpecDefinition,
     triggerRun: TriggerRunRecord,
     now: string
-  ): BrowserControlLeaseRecord | undefined {
-    if (triggerRun.fencingToken !== undefined) {
-      return this.persistence.renewTriggerLease({
+  ): { readonly leases: TriggerControlLeases } | { readonly diagnostic: string } {
+    const triggerLease = triggerRun.fencingToken === undefined
+      ? undefined
+      : this.persistence.renewTriggerLease({
         concurrencyKey:trigger.concurrencyKey,
         ownerId:triggerRun.triggerRunId,fencingToken:triggerRun.fencingToken,
         now,ttlSeconds:LEASE_TTL_SECONDS
       });
+    if (!triggerLease) {
+      this.releaseBrowserLease(trigger,triggerRun,now);
+      return { diagnostic:"Trigger concurrency lease was lost." };
     }
-    return this.persistence.acquireTriggerLease({
-      concurrencyKey:trigger.concurrencyKey,
-      ownerId:triggerRun.triggerRunId,now,ttlSeconds:LEASE_TTL_SECONDS
+    if (!trigger.browserInstanceId) {
+      return { leases:{ trigger:triggerLease } };
+    }
+    if (triggerRun.browserFencingToken === undefined) {
+      this.persistence.releaseTriggerLease({
+        concurrencyKey:trigger.concurrencyKey,
+        ownerId:triggerRun.triggerRunId,
+        fencingToken:triggerLease.fencingToken,
+        releasedAt:now
+      });
+      return { diagnostic:"Browser instance lease token is missing." };
+    }
+    const browserLease = this.persistence.renewBrowserControlLease({
+      resourceId:this.browserResourceId(trigger.browserInstanceId),
+      ownerId:triggerRun.triggerRunId,
+      fencingToken:triggerRun.browserFencingToken,
+      now,ttlSeconds:LEASE_TTL_SECONDS
     });
+    if (!browserLease) {
+      this.persistence.releaseTriggerLease({
+        concurrencyKey:trigger.concurrencyKey,
+        ownerId:triggerRun.triggerRunId,
+        fencingToken:triggerLease.fencingToken,
+        releasedAt:now
+      });
+      return { diagnostic:"Browser instance lease was lost." };
+    }
+    return { leases:{ trigger:triggerLease,browser:browserLease } };
   }
 
   private finish(
     trigger: TriggerSpecDefinition,
     triggerRun: TriggerRunRecord,
-    lease: BrowserControlLeaseRecord,
+    leases: TriggerControlLeases,
     status: "complete" | "rejected" | "failed" | "cancelled" | "uncertain",
     now: string,
     diagnostic?: string
@@ -183,9 +264,37 @@ export class TriggerRuntime {
       triggerRunId:triggerRun.triggerRunId,status,updatedAt:now,
       ...(diagnostic ? { diagnostic } : {})
     });
+    if (leases.browser && trigger.browserInstanceId) {
+      this.persistence.releaseBrowserControlLease({
+        resourceId:this.browserResourceId(trigger.browserInstanceId),
+        ownerId:triggerRun.triggerRunId,
+        fencingToken:leases.browser.fencingToken,
+        releasedAt:now
+      });
+    }
     this.persistence.releaseTriggerLease({
       concurrencyKey:trigger.concurrencyKey,
-      ownerId:triggerRun.triggerRunId,fencingToken:lease.fencingToken,releasedAt:now
+      ownerId:triggerRun.triggerRunId,
+      fencingToken:leases.trigger.fencingToken,
+      releasedAt:now
     });
+  }
+
+  private releaseBrowserLease(
+    trigger: TriggerSpecDefinition,
+    triggerRun: TriggerRunRecord,
+    releasedAt: string
+  ): void {
+    if (!trigger.browserInstanceId || triggerRun.browserFencingToken === undefined) return;
+    this.persistence.releaseBrowserControlLease({
+      resourceId:this.browserResourceId(trigger.browserInstanceId),
+      ownerId:triggerRun.triggerRunId,
+      fencingToken:triggerRun.browserFencingToken,
+      releasedAt
+    });
+  }
+
+  private browserResourceId(browserInstanceId: string): string {
+    return `browser-instance:${browserInstanceId}`;
   }
 }

@@ -145,7 +145,7 @@ export class LocalCoreService {
     this.datasets = new PackagingDatasetService(persistence);
     this.triggers = new TriggerRuntime(
       persistence,
-      (trigger,input) => {
+      (trigger,input,triggerRunId) => {
         this.#assertRuntimeAvailable();
         const resolved = this.#resolveWorkflowResources(
           trigger.spec.workflow.id,
@@ -157,7 +157,8 @@ export class LocalCoreService {
           trigger.spec.workflow.version,
           input,
           resolved.resourceBindings ?? {},
-          `trigger:${trigger.spec.id}`
+          `trigger:${trigger.spec.id}`,
+          triggerRunId
         ) as RunRecord;
       }
     );
@@ -1426,7 +1427,8 @@ export class LocalCoreService {
     workflowVersion: string,
     input: unknown,
     resourceBindings: unknown,
-    actor: string
+    actor: string,
+    triggerRunId?: string
   ): unknown {
     const artifact = this.persistence.getPublished(
       "workflow",
@@ -1478,7 +1480,8 @@ export class LocalCoreService {
           actor,
           resourceSlots: Object.keys(plan.resourceSlots ?? {}).sort()
         },
-        bindResources
+        bindResources,
+        triggerRunId
       );
     }
     if (
