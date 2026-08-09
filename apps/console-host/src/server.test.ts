@@ -575,13 +575,22 @@ describe("Console Host security boundary", () => {
       fileName: "/Users/operator/private/report.json",
       sizeBytes: 12,
       createdAt: "2030-01-01T00:00:00.000Z"
+    }, {
+      id: "download-2",
+      runId: "run-1",
+      kind: "reference_pack",
+      title: "参考材料",
+      fileName: "C:\\Users\\operator\\private\\reference.zip",
+      sizeBytes: 24,
+      createdAt: "2030-01-01T00:00:01.000Z"
     }]);
     const downloads = await fetch(`${handle.origin}/api/downloads`, {
       headers: { Cookie: cookie }
     });
-    expect(await downloads.json()).toEqual([expect.objectContaining({
-      fileName: "_Users_operator_private_report.json"
-    })]);
+    expect(await downloads.json()).toEqual([
+      expect.objectContaining({ fileName: "report.json" }),
+      expect.objectContaining({ fileName: "reference.zip" })
+    ]);
 
     const run = await fetch(`${handle.origin}/api/runs`, {
       method: "POST",

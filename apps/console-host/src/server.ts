@@ -444,7 +444,8 @@ function mimeType(path: string): string {
 }
 
 function sanitizeDownloadName(value: string): string {
-  const safe = value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 180);
+  const leafName = value.split(/[\\/]/u).at(-1) ?? "";
+  const safe = leafName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 180);
   return safe || "bpa-download";
 }
 
