@@ -367,7 +367,7 @@ describe("local control socket", () => {
       sendControlRequest(socketPath, "doctor")
     ).resolves.toMatchObject({
       status: "ok",
-      persistence: { adapter: "sqlite", schemaVersion: 22 }
+      persistence: { adapter: "sqlite", schemaVersion: 23 }
     });
   });
 

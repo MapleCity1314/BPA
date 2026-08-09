@@ -1170,7 +1170,6 @@ export interface TriggerStore {
     status: TriggerAttemptStatus;
     updatedAt: string;
     terminalOutcome?: TriggerTerminalOutcome;
-    workflowRunId?: string;
     fencingToken?: number;
     browserFencingToken?: number;
     diagnostic?: string;

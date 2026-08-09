@@ -13,6 +13,7 @@ import type {
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createTerminalAttentionDelivery } from "./attention-delivery.js";
+import { LocalCoreService } from "./control.js";
 import { TriggerRuntime } from "./trigger-runtime.js";
 
 const base: TriggerSpecDefinition = {
@@ -212,6 +213,190 @@ function schedule(
 }
 
 describe("deterministic Trigger Runtime", () => {
+  it("scopes pre-Run failures and triggered post-Run failure or partial attention by app", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    let current = new Date("2026-08-05T00:00:00.000Z");
+    const inventory = store.putTriggerSpec({
+      spec: base,
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    store.putTriggerSpec({
+      spec: {
+        ...base,
+        version: "2.0.0",
+        appId: "inventory-monitor-next",
+        workflow: { id: "inventory.refresh", version: "2.0.0" }
+      },
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    const other = store.putTriggerSpec({
+      spec: {
+        ...base,
+        id: "other-app.manual",
+        appId: "other-app",
+        concurrencyKey: "other-app:manual"
+      },
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    store.claimTriggerOccurrence({
+      occurrenceId: "occurrence:inventory-pre-run-failed",
+      triggerId: base.id,
+      triggerVersion: base.version,
+      occurrenceKey: "manual:pre-run-failed",
+      scheduledAt: current.toISOString(),
+      status: "pending",
+      attemptCount: 0,
+      revision: 0,
+      createdAt: current.toISOString(),
+      updatedAt: current.toISOString()
+    });
+    store.finishTriggerOccurrenceWithAttention({
+      occurrenceId: "occurrence:inventory-pre-run-failed",
+      expectedRevision: 0,
+      outcome: "failed",
+      updatedAt: current.toISOString(),
+      attention: {
+        sourceRef: {
+          kind: "trigger-occurrence",
+          occurrenceId: "occurrence:inventory-pre-run-failed"
+        },
+        deliveryPolicy: "dashboard-only",
+        item: projectTerminalTriggerOccurrenceAttention({
+          occurrenceId: "occurrence:inventory-pre-run-failed",
+          outcome: "failed",
+          updatedAt: current.toISOString()
+        }),
+        state: "open",
+        revision: 0
+      }
+    });
+
+    const engine = runtime(store, () => current);
+    const terminalizeTriggeredRun = (
+      trigger: typeof inventory,
+      requestKey: string,
+      status: "failed" | "uncertain"
+    ): string => {
+      current = new Date(current.getTime() + 1_000);
+      const fired = engine.fire({
+        trigger,
+        occurrenceKey: `manual:${requestKey}`
+      });
+      const run = store.getRun(fired.attempt!.workflowRunId!)!;
+      current = new Date(current.getTime() + 1_000);
+      finishRun(store, run, status, current.toISOString());
+      engine.tick();
+      return `run-terminal:${run.id}`;
+    };
+    const failedId = terminalizeTriggeredRun(
+      inventory,
+      "inventory-run-failed",
+      "failed"
+    );
+    const partialId = terminalizeTriggeredRun(
+      inventory,
+      "inventory-run-partial",
+      "uncertain"
+    );
+    const otherId = terminalizeTriggeredRun(other, "other-run-failed", "failed");
+
+    current = new Date(current.getTime() + 1_000);
+    const standaloneRun: RunRecord = {
+      id: "run:standalone-failed",
+      workflowId: base.workflow.id,
+      workflowVersion: base.workflow.version,
+      workflowDigest: "sha256:test",
+      status: "running",
+      revision: 0,
+      input: {},
+      createdAt: current.toISOString(),
+      updatedAt: current.toISOString()
+    };
+    store.createRun({
+      run: standaloneRun,
+      event: {
+        id: randomUUID(),
+        runId: standaloneRun.id,
+        sequence: 1,
+        type: "RUN_CREATED",
+        payload: {},
+        occurredAt: current.toISOString()
+      }
+    });
+    current = new Date(current.getTime() + 1_000);
+    finishRun(store, standaloneRun, "failed", current.toISOString());
+
+    const inventoryAttention = store.queryAttention({
+      appIds: ["inventory-monitor"],
+      limit: 20
+    });
+    expect(inventoryAttention).toMatchObject({ total: 3, truncated: false });
+    expect(inventoryAttention.records.map((record) => record.item.id)).toEqual(
+      expect.arrayContaining([
+        "trigger-occurrence-terminal:occurrence:inventory-pre-run-failed",
+        failedId,
+        partialId
+      ])
+    );
+    expect(inventoryAttention.records.map((record) => record.item.id)).not.toEqual(
+      expect.arrayContaining([otherId, "run-terminal:run:standalone-failed"])
+    );
+    expect(store.queryAttention({
+      sourceKinds: ["workflow-run"],
+      appIds: ["inventory-monitor"],
+      limit: 20
+    })).toMatchObject({
+      total: 2,
+      records: expect.arrayContaining([
+        expect.objectContaining({ item: expect.objectContaining({ id: failedId }) }),
+        expect.objectContaining({ item: expect.objectContaining({ id: partialId }) })
+      ])
+    });
+    expect(store.queryAttention({
+      appIds: ["other-app"],
+      limit: 20
+    })).toMatchObject({
+      total: 1,
+      records: [expect.objectContaining({
+        item: expect.objectContaining({ id: otherId })
+      })]
+    });
+    const service = new LocalCoreService(store);
+    const controlResponse = service.handle({
+      id: "inventory-attention",
+      method: "attention.list",
+      params: { states: ["open"], appIds: ["inventory-monitor"], limit: 20 }
+    });
+    expect(controlResponse).toMatchObject({
+      ok: true,
+      result: {
+        total: 3,
+        truncated: false
+      }
+    });
+    const controlItems = (controlResponse.result as { items: unknown[] }).items;
+    expect(controlItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "trigger-occurrence-terminal:occurrence:inventory-pre-run-failed",
+        sourceRef: expect.objectContaining({ kind: "trigger-occurrence" })
+      }),
+      expect.objectContaining({
+        id: failedId,
+        sourceRef: expect.objectContaining({ kind: "workflow-run" }),
+        runStatus: "failed"
+      }),
+      expect.objectContaining({
+        id: partialId,
+        sourceRef: expect.objectContaining({ kind: "workflow-run" }),
+        runStatus: "uncertain"
+      })
+    ]));
+    store.close();
+  });
+
   it("deduplicates one Manual request and atomically reconciles its terminal Run", () => {
     const store = new SqlitePersistence({ path: ":memory:" });
     const trigger = store.putTriggerSpec({

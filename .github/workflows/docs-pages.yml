@@ -15,17 +15,6 @@ on:
       - "pnpm-workspace.yaml"
       - ".github/workflows/docs-pages.yml"
   pull_request:
-    paths:
-      - "apps/docs/**"
-      - "docs/**"
-      - "CONTRIBUTING.md"
-      - "SECURITY.md"
-      - "packages/schemas/schema/**"
-      - "packages/gateway-core/src/protocol.test.ts"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - ".github/workflows/docs-pages.yml"
   workflow_dispatch:
 
 permissions:

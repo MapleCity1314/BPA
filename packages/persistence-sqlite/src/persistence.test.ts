@@ -444,6 +444,15 @@ describe("recoverable execution persistence", () => {
       idempotencyPolicy:"request_key" as const,retryPolicy:"none" as const
     };
     store.putTriggerSpec({ spec,actor:"test",occurredAt:timestamp });
+    store.putTriggerSpec({
+      spec:{
+        ...spec,
+        version:"2.0.0",
+        workflow:{ id:"test.workflow",version:"2.0.0" }
+      },
+      actor:"test",
+      occurredAt:timestamp
+    });
     const occurrenceId = "trigger-occurrence:atomic-link";
     store.claimTriggerOccurrence({
       occurrenceId,triggerId:spec.id,triggerVersion:spec.version,
@@ -473,6 +482,7 @@ describe("recoverable execution persistence", () => {
       attemptId,status:"running",workflowRunId:run.id,revision:2,
       fencingToken:1,browserFencingToken:1
     });
+    expect(store.getTriggerSpec(spec.id)?.spec.version).toBe("2.0.0");
     store.close();
   });
 
@@ -492,7 +502,104 @@ describe("recoverable execution persistence", () => {
     expect(store.getRunPlanSnapshot(run.id)).toBeUndefined();
     expect(store.getEngineCheckpoint(run.id)).toBeUndefined();
     expect(store.listEvents(run.id)).toEqual([]);
+
+    const spec = {
+      apiVersion:"bpa.trigger/v1alpha2" as const,
+      id:"inventory.identity-link",version:"1.0.0",appId:"inventory-monitor",
+      kind:"manual" as const,
+      workflow:{ id:"test.workflow",version:"1.0.0" },enabled:true,
+      inputSchemaVersion:"test/1",input:{},concurrencyKey:"inventory:identity",
+      idempotencyPolicy:"request_key" as const,retryPolicy:"none" as const
+    };
+    store.putTriggerSpec({ spec,actor:"test",occurredAt:timestamp });
+    const occurrenceId = "trigger-occurrence:identity-link";
+    const attemptId = "trigger-attempt:identity-link";
+    store.claimTriggerOccurrence({
+      occurrenceId,triggerId:spec.id,triggerVersion:spec.version,
+      occurrenceKey:"manual:identity",scheduledAt:timestamp,status:"pending",
+      attemptCount:0,revision:0,createdAt:timestamp,updatedAt:timestamp
+    });
+    store.createTriggerAttempt({
+      attemptId,occurrenceId,expectedOccurrenceRevision:0,createdAt:timestamp
+    });
+    store.updateTriggerAttempt({
+      attemptId,expectedRevision:0,status:"running",updatedAt:timestamp
+    });
+    for (const mismatch of [
+      { id:"run-wrong-workflow",workflowId:"wrong.workflow",workflowVersion:"1.0.0" },
+      { id:"run-wrong-version",workflowId:"test.workflow",workflowVersion:"2.0.0" }
+    ]) {
+      const mismatchedRun:RunRecord = {
+        ...run,
+        id:mismatch.id,
+        workflowId:mismatch.workflowId,
+        workflowVersion:mismatch.workflowVersion
+      };
+      expect(() => store.createRecoverableRun({
+        run:mismatchedRun,
+        planSnapshot:{ ...planSnapshot(mismatchedRun.id),runId:mismatchedRun.id },
+        checkpoint:checkpoint(mismatchedRun.id),
+        event:event(mismatchedRun.id,1,"RUN_CREATED"),
+        triggerAttemptId:attemptId
+      })).toThrow("Trigger Attempt workflow does not match Run");
+      expect(store.getRun(mismatchedRun.id)).toBeUndefined();
+    }
+    expect(store.getTriggerAttempt(attemptId)?.workflowRunId).toBeUndefined();
     store.close();
+  });
+
+  it("forbids two cross-app Trigger Attempts from owning one Workflow Run", () => {
+    const directory = mkdtempSync(join(tmpdir(),"bpa-trigger-run-owner-"));
+    const path = join(directory,"bpa.sqlite3");
+    try {
+      const store = new SqlitePersistence({ path });
+      const createAttempt = (appId:string,suffix:string) => {
+        const spec = {
+          apiVersion:"bpa.trigger/v1alpha2" as const,
+          id:`${appId}.manual`,version:"1.0.0",appId,
+          kind:"manual" as const,
+          workflow:{ id:"test.workflow",version:"1.0.0" },enabled:true,
+          inputSchemaVersion:"test/1",input:{},concurrencyKey:`${appId}:manual`,
+          idempotencyPolicy:"request_key" as const,retryPolicy:"none" as const
+        };
+        store.putTriggerSpec({ spec,actor:"test",occurredAt:timestamp });
+        const occurrenceId = `trigger-occurrence:${suffix}`;
+        const attemptId = `trigger-attempt:${suffix}`;
+        store.claimTriggerOccurrence({
+          occurrenceId,triggerId:spec.id,triggerVersion:spec.version,
+          occurrenceKey:`manual:${suffix}`,scheduledAt:timestamp,status:"pending",
+          attemptCount:0,revision:0,createdAt:timestamp,updatedAt:timestamp
+        });
+        store.createTriggerAttempt({
+          attemptId,occurrenceId,expectedOccurrenceRevision:0,createdAt:timestamp
+        });
+        store.updateTriggerAttempt({
+          attemptId,expectedRevision:0,status:"running",updatedAt:timestamp
+        });
+        return attemptId;
+      };
+      const inventoryAttempt = createAttempt("inventory-monitor","inventory");
+      const otherAttempt = createAttempt("other-app","other");
+      const linkedRun:RunRecord = {
+        id:"run-cross-app-owner",workflowId:"test.workflow",
+        workflowVersion:"1.0.0",workflowDigest:"sha256:workflow",
+        status:"created",revision:0,input:{},createdAt:timestamp,updatedAt:timestamp
+      };
+      store.createRecoverableRun({
+        run:linkedRun,planSnapshot:planSnapshot(linkedRun.id),
+        checkpoint:checkpoint(linkedRun.id),event:event(linkedRun.id,1,"RUN_CREATED"),
+        triggerAttemptId:inventoryAttempt
+      });
+      const raw = new Database(path);
+      expect(() => raw.prepare(
+        "UPDATE trigger_attempts SET workflow_run_id=? WHERE attempt_id=?"
+      ).run(linkedRun.id,otherAttempt)).toThrow(/UNIQUE constraint failed/u);
+      raw.close();
+      expect(store.getTriggerAttempt(otherAttempt)?.workflowRunId).toBeUndefined();
+      store.close();
+    } finally {
+      rmSync(directory,{ recursive:true,force:true });
+    }
   });
 
   it("rolls back run, plan and event together on an injected crash", () => {
@@ -1695,6 +1802,113 @@ describe("dataset and decision persistence", () => {
 });
 
 describe("append-only migrations", () => {
+  it("keeps migration v20 immutable and upgrades v22 to the v23 ownership index", () => {
+    expect(migrationChecksum(migrations[19]!)).toBe(
+      "ea98c627836ed4b303cbcd3beb8059b6bac93fcd78818288bd1132883f232656"
+    );
+    const directory = mkdtempSync(join(tmpdir(),"bpa-migration-v23-"));
+    const databasePath = join(directory,"bpa.sqlite3");
+    try {
+      const seeded = new SqlitePersistence({ path:databasePath });
+      seeded.close();
+      const v22 = new Database(databasePath);
+      v22.exec(`
+        DROP INDEX trigger_attempts_workflow_run;
+        DELETE FROM schema_migrations WHERE version=23;
+      `);
+      v22.close();
+
+      const upgraded = new SqlitePersistence({ path:databasePath });
+      expect(upgraded.health().schemaVersion).toBe(23);
+      upgraded.close();
+      const inspected = new Database(databasePath,{ readonly:true });
+      expect(inspected.prepare(
+        `SELECT sql FROM sqlite_master
+         WHERE type='index' AND name='trigger_attempts_workflow_run'`
+      ).get()).toMatchObject({
+        sql:expect.stringContaining("WHERE workflow_run_id IS NOT NULL")
+      });
+      inspected.close();
+    } finally {
+      rmSync(directory,{ recursive:true,force:true });
+    }
+  });
+
+  it("rolls back v23 when v22 contains duplicate non-null Workflow Run owners", () => {
+    const directory = mkdtempSync(join(tmpdir(),"bpa-migration-v23-duplicate-"));
+    const databasePath = join(directory,"bpa.sqlite3");
+    try {
+      const store = new SqlitePersistence({ path:databasePath });
+      const createAttempt = (appId:string,suffix:string) => {
+        const spec = {
+          apiVersion:"bpa.trigger/v1alpha2" as const,
+          id:`${appId}.migration-owner`,version:"1.0.0",appId,
+          kind:"manual" as const,
+          workflow:{ id:"test.workflow",version:"1.0.0" },enabled:true,
+          inputSchemaVersion:"test/1",input:{},
+          concurrencyKey:`${appId}:migration-owner`,
+          idempotencyPolicy:"request_key" as const,retryPolicy:"none" as const
+        };
+        store.putTriggerSpec({ spec,actor:"test",occurredAt:timestamp });
+        const occurrenceId = `trigger-occurrence:migration-${suffix}`;
+        const attemptId = `trigger-attempt:migration-${suffix}`;
+        store.claimTriggerOccurrence({
+          occurrenceId,triggerId:spec.id,triggerVersion:spec.version,
+          occurrenceKey:`manual:${suffix}`,scheduledAt:timestamp,status:"pending",
+          attemptCount:0,revision:0,createdAt:timestamp,updatedAt:timestamp
+        });
+        store.createTriggerAttempt({
+          attemptId,occurrenceId,expectedOccurrenceRevision:0,createdAt:timestamp
+        });
+        store.updateTriggerAttempt({
+          attemptId,expectedRevision:0,status:"running",updatedAt:timestamp
+        });
+        return attemptId;
+      };
+      const inventoryAttempt = createAttempt("inventory-monitor","inventory");
+      const otherAttempt = createAttempt("other-app","other");
+      const run:RunRecord = {
+        id:"run-migration-duplicate-owner",workflowId:"test.workflow",
+        workflowVersion:"1.0.0",workflowDigest:"sha256:workflow",
+        status:"created",revision:0,input:{},createdAt:timestamp,updatedAt:timestamp
+      };
+      store.createRecoverableRun({
+        run,planSnapshot:planSnapshot(run.id),checkpoint:checkpoint(run.id),
+        event:event(run.id,1,"RUN_CREATED"),triggerAttemptId:inventoryAttempt
+      });
+      store.close();
+
+      const v22 = new Database(databasePath);
+      v22.exec(`
+        DROP INDEX trigger_attempts_workflow_run;
+        DELETE FROM schema_migrations WHERE version=23;
+      `);
+      v22.prepare(
+        "UPDATE trigger_attempts SET workflow_run_id=? WHERE attempt_id=?"
+      ).run(run.id,otherAttempt);
+      v22.close();
+
+      expect(() => new SqlitePersistence({ path:databasePath })).toThrow(
+        /UNIQUE constraint failed/u
+      );
+      const inspected = new Database(databasePath,{ readonly:true });
+      expect(inspected.prepare(
+        "SELECT MAX(version) AS version FROM schema_migrations"
+      ).get()).toEqual({ version:22 });
+      expect(inspected.prepare(
+        `SELECT name FROM sqlite_master
+         WHERE type='index' AND name='trigger_attempts_workflow_run'`
+      ).get()).toBeUndefined();
+      expect(inspected.prepare(
+        `SELECT COUNT(*) AS count FROM trigger_attempts
+         WHERE workflow_run_id=?`
+      ).get(run.id)).toEqual({ count:2 });
+      inspected.close();
+    } finally {
+      rmSync(directory,{ recursive:true,force:true });
+    }
+  });
+
   it("indexes the Core hot polling queries", () => {
     const directory = mkdtempSync(join(tmpdir(), "bpa-hot-poll-indexes-"));
     const databasePath = join(directory, "bpa.sqlite3");
@@ -1770,7 +1984,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(22);
+      expect(store.health().schemaVersion).toBe(23);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1890,12 +2104,12 @@ describe("append-only migrations", () => {
         DROP TABLE attention_deliveries;
         DROP TABLE attention_records;
         DELETE FROM schema_migrations
-        WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22);
+        WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(22);
+      expect(upgraded.health().schemaVersion).toBe(23);
       expect(upgraded.getAssistanceTask(task.task.taskId)).toEqual(task);
       expect(
         upgraded.getAssistanceRequestResult("not-recorded")
@@ -1920,7 +2134,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(22);
+      expect(store.health().schemaVersion).toBe(23);
       expect(store.getAssistanceRequestResult("not-recorded")).toBeUndefined();
       store.close();
     } finally {
@@ -1942,7 +2156,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(22);
+      expect(store.health().schemaVersion).toBe(23);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -2041,12 +2255,12 @@ describe("append-only migrations", () => {
         DROP TABLE attention_deliveries;
         DROP TABLE attention_records;
         DELETE FROM schema_migrations
-        WHERE version IN (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22);
+        WHERE version IN (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(22);
+      expect(upgraded.health().schemaVersion).toBe(23);
       expect(
         upgraded.createWorkflowDraft({
           draftId: "v5-upgraded-draft",
@@ -2087,7 +2301,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(22);
+      expect(store.health().schemaVersion).toBe(23);
       expect(store.getWorkflowDraft("not-created")).toBeUndefined();
       store.close();
     } finally {
@@ -2100,7 +2314,7 @@ describe("append-only migrations", () => {
     const databasePath = join(directory, "bpa.sqlite3");
     try {
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(22);
+      expect(store.health().schemaVersion).toBe(23);
       store.close();
       const raw = new Database(databasePath);
       raw
