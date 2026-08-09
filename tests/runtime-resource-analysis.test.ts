@@ -75,10 +75,27 @@ function sample(
               externalBytes: 10_000,
               arrayBuffersBytes: 5_000
             },
+            eventLoop: {
+              resolutionMs: 20,
+              sampleCount: 59,
+              minimumMs: 19.8,
+              maximumMs: 44.2,
+              meanMs: 20.4,
+              p50Ms: 20.1,
+              p95Ms: 21.5,
+              p99Ms: 30.2
+            },
             browserGateway: {
               connectionCount: 1,
               readySessionCount: 1,
               pendingCancelRequestCount: 0,
+              queue: {
+                pendingBrowserOutbox: 1,
+                queuedCommands: 2,
+                inFlightCommands: 1,
+                terminalResultsPendingApplication: 0,
+                totalPending: 4
+              },
               pageProbes: {
                 active: 0,
                 capacity: 32,
@@ -176,6 +193,7 @@ describe("runtime resource analysis", () => {
     expect(result.conclusionGate.phaseZeroResourceMeasurementComplete).toBe(false);
     expect(result.conclusionGate.blockers).toEqual([
       "core_pid_changed",
+      "core_resident_metrics_not_measured",
       "sqlite_page_cache_not_measured"
     ]);
   });
@@ -214,6 +232,7 @@ describe("runtime resource analysis", () => {
       phaseZeroResourceMeasurementComplete: false
     });
     expect(result.conclusionGate.blockers).toEqual([
+      "core_resident_metrics_not_measured",
       "sqlite_page_cache_not_measured"
     ]);
   });
@@ -252,6 +271,7 @@ describe("runtime resource analysis", () => {
       status: "measured",
       measuredSamples: 2,
       missingSamples: 0,
+      eventLoopObserved: true,
       browserGateway: {
         pageProbeCapacity: [32],
         pageProbeTtlMs: [10_000],
@@ -266,6 +286,18 @@ describe("runtime resource analysis", () => {
       }
     });
     expect(result.coreResident.process.heapUsedBytes.change).toBe(4096);
+    expect(result.coreResident.eventLoop).toMatchObject({
+      resolutionMs: [20],
+      sampleCount: { start: 59, end: 59 },
+      p99Ms: { maximum: 30.2 }
+    });
+    expect(result.coreResident.browserGateway.queue).toMatchObject({
+      pendingBrowserOutbox: { start: 1, end: 1 },
+      queuedCommands: { start: 2, end: 2 },
+      inFlightCommands: { start: 1, end: 1 },
+      terminalResultsPendingApplication: { start: 0, end: 0 },
+      totalPending: { start: 4, end: 4 }
+    });
     expect(result.sqlite.pageCache.runtimeIdentities).toEqual(["0.6.0-test"]);
     expect(result.conclusionGate).toMatchObject({
       windowComplete: true,
@@ -276,6 +308,7 @@ describe("runtime resource analysis", () => {
       inventoryMonitorPidStable: true,
       chromeProfileComplete: true,
       nodeAndChromeMeasurable: true,
+      coreResidentMeasurable: true,
       sqlitePageCacheMeasurable: true,
       phaseZeroResourceMeasurementComplete: true,
       blockers: []
@@ -288,6 +321,97 @@ describe("runtime resource analysis", () => {
       runtimeIdentities: ["0.6.0-test"],
       runtimeIdentityExpected: true,
       runtimeIdentityStable: true
+    });
+  });
+
+  it("fails the phase-zero gate when Gateway queue totals drift", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-analysis-"));
+    const input = join(root, "samples.jsonl");
+    const first = sample("2026-08-05T00:00:00.000Z", 10, 100, 4096);
+    const last = sample("2026-08-06T00:00:00.000Z", 10, 120, 8192);
+    for (const fixture of [first, last]) {
+      const metrics = fixture.coreMetrics as Record<string, any>;
+      metrics.browserGateway.queue.totalPending = 99;
+    }
+    writeFileSync(
+      input,
+      `${JSON.stringify(first)}\n${JSON.stringify(last)}\n`
+    );
+
+    const result = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          script,
+          "--input",
+          input,
+          "--expected-interval-seconds",
+          "43200"
+        ],
+        { encoding: "utf8" }
+      )
+    );
+
+    expect(result.coreResident).toMatchObject({
+      status: "not_measured",
+      measuredSamples: 0,
+      missingSamples: 2
+    });
+    expect(result.conclusionGate).toMatchObject({
+      coreResidentMeasurable: false,
+      sqlitePageCacheMeasurable: true,
+      phaseZeroResourceMeasurementComplete: false,
+      blockers: ["core_resident_metrics_not_measured"]
+    });
+  });
+
+  it("does not treat a window without event-loop observations as measured", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-analysis-"));
+    const input = join(root, "samples.jsonl");
+    const first = sample("2026-08-05T00:00:00.000Z", 10, 100, 4096);
+    const last = sample("2026-08-06T00:00:00.000Z", 10, 120, 8192);
+    for (const fixture of [first, last]) {
+      const metrics = fixture.coreMetrics as Record<string, any>;
+      metrics.eventLoop = {
+        resolutionMs: 20,
+        sampleCount: 0,
+        minimumMs: 0,
+        maximumMs: 0,
+        meanMs: 0,
+        p50Ms: 0,
+        p95Ms: 0,
+        p99Ms: 0
+      };
+    }
+    writeFileSync(
+      input,
+      `${JSON.stringify(first)}\n${JSON.stringify(last)}\n`
+    );
+
+    const result = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          script,
+          "--input",
+          input,
+          "--expected-interval-seconds",
+          "43200"
+        ],
+        { encoding: "utf8" }
+      )
+    );
+
+    expect(result.coreResident).toMatchObject({
+      status: "not_measured",
+      measuredSamples: 2,
+      missingSamples: 0,
+      eventLoopObserved: false
+    });
+    expect(result.conclusionGate).toMatchObject({
+      coreResidentMeasurable: false,
+      phaseZeroResourceMeasurementComplete: false,
+      blockers: ["core_resident_metrics_not_measured"]
     });
   });
 
@@ -520,6 +644,7 @@ describe("runtime resource analysis", () => {
       "core_pid_changed",
       "core_runtime_identity_missing",
       "core_runtime_identity_changed",
+      "core_resident_metrics_not_measured",
       "sqlite_page_cache_not_measured"
     ]);
   });

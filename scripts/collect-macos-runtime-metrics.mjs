@@ -163,6 +163,12 @@ function safeInteger(value, minimum = 0) {
   return Number.isSafeInteger(value) && value >= minimum;
 }
 
+function safeNumber(value, minimum = 0) {
+  return (
+    typeof value === "number" && Number.isFinite(value) && value >= minimum
+  );
+}
+
 function coreMetrics(path) {
   if (!path) return null;
   let document;
@@ -178,13 +184,15 @@ function coreMetrics(path) {
   }
   const sqlite = document?.sqlite;
   const processMetrics = document?.process;
+  const eventLoop = document?.eventLoop;
   const browserGateway = document?.browserGateway;
+  const gatewayQueue = browserGateway?.queue;
   const pageProbes = browserGateway?.pageProbes;
   const extension = browserGateway?.extension;
   const pacingReservations = extension?.pacingReservations;
   const extensionProbes = extension?.probes;
   const valid =
-    document?.schema === "bpa.core-runtime-metrics/1" &&
+    document?.schema === "bpa.core-runtime-metrics/2" &&
     Number.isFinite(Date.parse(document.sampledAt)) &&
     safeInteger(document.pid, 1) &&
     (document.runtimeIdentity === null ||
@@ -197,10 +205,35 @@ function coreMetrics(path) {
     processMetrics.heapUsedBytes <= processMetrics.heapTotalBytes &&
     safeInteger(processMetrics?.externalBytes) &&
     safeInteger(processMetrics?.arrayBuffersBytes) &&
+    eventLoop?.resolutionMs === 20 &&
+    safeInteger(eventLoop?.sampleCount) &&
+    safeNumber(eventLoop?.minimumMs) &&
+    safeNumber(eventLoop?.maximumMs) &&
+    safeNumber(eventLoop?.meanMs) &&
+    safeNumber(eventLoop?.p50Ms) &&
+    safeNumber(eventLoop?.p95Ms) &&
+    safeNumber(eventLoop?.p99Ms) &&
+    eventLoop.minimumMs <= eventLoop.maximumMs &&
+    eventLoop.minimumMs <= eventLoop.meanMs &&
+    eventLoop.meanMs <= eventLoop.maximumMs &&
+    eventLoop.minimumMs <= eventLoop.p50Ms &&
+    eventLoop.p50Ms <= eventLoop.p95Ms &&
+    eventLoop.p95Ms <= eventLoop.p99Ms &&
+    eventLoop.p99Ms <= eventLoop.maximumMs &&
     safeInteger(browserGateway?.connectionCount) &&
     safeInteger(browserGateway?.readySessionCount) &&
     browserGateway.readySessionCount <= browserGateway.connectionCount &&
     safeInteger(browserGateway?.pendingCancelRequestCount) &&
+    safeInteger(gatewayQueue?.pendingBrowserOutbox) &&
+    safeInteger(gatewayQueue?.queuedCommands) &&
+    safeInteger(gatewayQueue?.inFlightCommands) &&
+    safeInteger(gatewayQueue?.terminalResultsPendingApplication) &&
+    safeInteger(gatewayQueue?.totalPending) &&
+    gatewayQueue.totalPending ===
+      gatewayQueue.pendingBrowserOutbox +
+        gatewayQueue.queuedCommands +
+        gatewayQueue.inFlightCommands +
+        gatewayQueue.terminalResultsPendingApplication &&
     safeInteger(pageProbes?.active) &&
     safeInteger(pageProbes?.capacity, 1) &&
     pageProbes.active <= pageProbes.capacity &&
@@ -251,11 +284,29 @@ function coreMetrics(path) {
       externalBytes: processMetrics.externalBytes,
       arrayBuffersBytes: processMetrics.arrayBuffersBytes
     },
+    eventLoop: {
+      resolutionMs: eventLoop.resolutionMs,
+      sampleCount: eventLoop.sampleCount,
+      minimumMs: eventLoop.minimumMs,
+      maximumMs: eventLoop.maximumMs,
+      meanMs: eventLoop.meanMs,
+      p50Ms: eventLoop.p50Ms,
+      p95Ms: eventLoop.p95Ms,
+      p99Ms: eventLoop.p99Ms
+    },
     browserGateway: {
       connectionCount: browserGateway.connectionCount,
       readySessionCount: browserGateway.readySessionCount,
       pendingCancelRequestCount:
         browserGateway.pendingCancelRequestCount,
+      queue: {
+        pendingBrowserOutbox: gatewayQueue.pendingBrowserOutbox,
+        queuedCommands: gatewayQueue.queuedCommands,
+        inFlightCommands: gatewayQueue.inFlightCommands,
+        terminalResultsPendingApplication:
+          gatewayQueue.terminalResultsPendingApplication,
+        totalPending: gatewayQueue.totalPending
+      },
       pageProbes: {
         active: pageProbes.active,
         capacity: pageProbes.capacity,

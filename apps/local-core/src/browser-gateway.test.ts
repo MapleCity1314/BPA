@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LocalWorkflowEngine } from "./compatibility/local-workflow-engine.js";
 import {
   DEFAULT_BPA_EXTENSION_ID,
@@ -46,6 +46,97 @@ describe("local browser gateway", () => {
     expect(observationCoversFrozenRevision(1,1)).toBe(true);
     expect(observationCoversFrozenRevision(2,1)).toBe(true);
     expect(observationCoversFrozenRevision(1,2)).toBe(false);
+  });
+
+  it("reports only the browser gateway queues with an exact total", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    vi.spyOn(persistence, "listPendingEngineOutbox").mockReturnValue([
+      {
+        id: "browser-outbox",
+        topic: "browser.command.requested",
+        aggregateId: "run-1",
+        payload: {},
+        createdAt: "2026-08-10T00:00:00.000Z"
+      },
+      {
+        id: "business-outbox",
+        topic: "runtime.invoke",
+        aggregateId: "run-1",
+        payload: {},
+        createdAt: "2026-08-10T00:00:00.000Z"
+      }
+    ]);
+    vi.spyOn(persistence, "listPendingGatewayCommands").mockReturnValue([
+      {
+        id: "queued",
+        nodeExecutionId: "node-queued",
+        commandSeq: 1,
+        idempotencyKey: "idempotency-queued",
+        fencingToken: 1,
+        state: "queued",
+        payload: {},
+        createdAt: "2026-08-10T00:00:00.000Z",
+        updatedAt: "2026-08-10T00:00:00.000Z"
+      },
+      {
+        id: "delivered",
+        nodeExecutionId: "node-delivered",
+        commandSeq: 2,
+        idempotencyKey: "idempotency-delivered",
+        fencingToken: 1,
+        state: "delivered",
+        payload: {},
+        createdAt: "2026-08-10T00:00:00.000Z",
+        updatedAt: "2026-08-10T00:00:00.000Z"
+      },
+      {
+        id: "accepted",
+        nodeExecutionId: "node-accepted",
+        commandSeq: 3,
+        idempotencyKey: "idempotency-accepted",
+        fencingToken: 1,
+        state: "accepted",
+        payload: {},
+        createdAt: "2026-08-10T00:00:00.000Z",
+        updatedAt: "2026-08-10T00:00:00.000Z"
+      }
+    ]);
+    vi.spyOn(
+      persistence,
+      "listGatewayCommandsNeedingApplication"
+    ).mockReturnValue([
+      {
+        id: "terminal",
+        nodeExecutionId: "node-terminal",
+        commandSeq: 4,
+        idempotencyKey: "idempotency-terminal",
+        fencingToken: 1,
+        state: "terminal",
+        payload: {},
+        result: {},
+        createdAt: "2026-08-10T00:00:00.000Z",
+        updatedAt: "2026-08-10T00:00:00.000Z"
+      }
+    ]);
+    const gateway = new LocalBrowserGateway(
+      persistence,
+      new LocalWorkflowEngine(persistence),
+      {
+        keyId: "core-queue-key",
+        privateKey,
+        publicKey,
+        publicKeySpkiBase64: exportPublicKeySpkiBase64(publicKey)
+      }
+    );
+    expect(gateway.status().resourceUsage.queue).toEqual({
+      pendingBrowserOutbox: 1,
+      queuedCommands: 1,
+      inFlightCommands: 2,
+      terminalResultsPendingApplication: 1,
+      totalPending: 5
+    });
+    persistence.close();
   });
 
   it("rejects a Bridge build that does not match the installed Runtime", () => {
