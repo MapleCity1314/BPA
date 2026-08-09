@@ -17,6 +17,7 @@ import { projectTerminalRunAttention } from "@bpa/attention-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { resolveLocalIpcEndpoint } from "@bpa/platform-runtime";
+import { RuntimeProviderRegistry } from "@bpa/node-runtime";
 import { createTerminalAttentionDelivery } from "./attention-delivery.js";
 import {
   LocalControlServer,
@@ -369,6 +370,61 @@ describe("local control socket", () => {
       status: "ok",
       persistence: { adapter: "sqlite", schemaVersion: 25 }
     });
+  });
+
+  it("disposes registered Runtime Providers with the Core service", async () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const providers = new RuntimeProviderRegistry();
+    let disposed = 0;
+    providers.register({
+      id: "test-resident-provider",
+      supports: () => false,
+      invoke: async () => ({
+        status: "succeeded",
+        output: null,
+        evidence: [],
+        riskSignals: []
+      }),
+      dispose: () => {
+        disposed += 1;
+      }
+    });
+    const service = new LocalCoreService(
+      persistence,
+      undefined,
+      providers
+    );
+
+    await service.dispose();
+    await service.dispose();
+
+    expect(disposed).toBe(1);
+    persistence.close();
+  });
+
+  it("closes resident Control connections before stopping", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "bpa-control-stop-"));
+    const socketPath = controlEndpoint(directory);
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const service = new LocalCoreService(persistence);
+    const server = new LocalControlServer(socketPath, service);
+    await server.start();
+    const socket = createConnection(socketPath);
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("error", reject);
+    });
+
+    const closed = new Promise<void>((resolve) => {
+      socket.once("close", () => resolve());
+    });
+    await server.stop();
+    await closed;
+
+    expect(socket.destroyed).toBe(true);
+    await service.dispose();
+    persistence.close();
+    await rm(directory, { recursive: true, force: true });
   });
 
   it("reserves Trigger Attempt lease owner identities for the Runtime", () => {

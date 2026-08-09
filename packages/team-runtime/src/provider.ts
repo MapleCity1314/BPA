@@ -48,7 +48,7 @@ export class TeamRuntimeProvider implements RuntimeProvider {
     this.client.cancel(invocationId, fencingToken);
   }
 
-  stop(): void {
+  dispose(): void {
     this.client.stop();
   }
 }

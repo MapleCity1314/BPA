@@ -177,6 +177,9 @@ function coreMetrics(path) {
     };
   }
   const sqlite = document?.sqlite;
+  const processMetrics = document?.process;
+  const browserGateway = document?.browserGateway;
+  const pageProbes = browserGateway?.pageProbes;
   const valid =
     document?.schema === "bpa.core-runtime-metrics/1" &&
     Number.isFinite(Date.parse(document.sampledAt)) &&
@@ -185,6 +188,20 @@ function coreMetrics(path) {
       (typeof document.runtimeIdentity === "string" &&
         document.runtimeIdentity.length > 0 &&
         document.runtimeIdentity.length <= 200)) &&
+    safeInteger(processMetrics?.rssBytes) &&
+    safeInteger(processMetrics?.heapTotalBytes) &&
+    safeInteger(processMetrics?.heapUsedBytes) &&
+    processMetrics.heapUsedBytes <= processMetrics.heapTotalBytes &&
+    safeInteger(processMetrics?.externalBytes) &&
+    safeInteger(processMetrics?.arrayBuffersBytes) &&
+    safeInteger(browserGateway?.connectionCount) &&
+    safeInteger(browserGateway?.readySessionCount) &&
+    browserGateway.readySessionCount <= browserGateway.connectionCount &&
+    safeInteger(browserGateway?.pendingCancelRequestCount) &&
+    safeInteger(pageProbes?.active) &&
+    safeInteger(pageProbes?.capacity, 1) &&
+    pageProbes.active <= pageProbes.capacity &&
+    safeInteger(pageProbes?.ttlMs, 1) &&
     sqlite?.measurement === "same_connection_db_status64" &&
     safeInteger(sqlite.configuredCacheBytes) &&
     safeInteger(sqlite.pageSizeBytes, 1) &&
@@ -198,6 +215,24 @@ function coreMetrics(path) {
     sampledAt: document.sampledAt,
     pid: document.pid,
     runtimeIdentity: document.runtimeIdentity,
+    process: {
+      rssBytes: processMetrics.rssBytes,
+      heapTotalBytes: processMetrics.heapTotalBytes,
+      heapUsedBytes: processMetrics.heapUsedBytes,
+      externalBytes: processMetrics.externalBytes,
+      arrayBuffersBytes: processMetrics.arrayBuffersBytes
+    },
+    browserGateway: {
+      connectionCount: browserGateway.connectionCount,
+      readySessionCount: browserGateway.readySessionCount,
+      pendingCancelRequestCount:
+        browserGateway.pendingCancelRequestCount,
+      pageProbes: {
+        active: pageProbes.active,
+        capacity: pageProbes.capacity,
+        ttlMs: pageProbes.ttlMs
+      }
+    },
     sqlite: {
       measurement: sqlite.measurement,
       configuredCacheBytes: sqlite.configuredCacheBytes,

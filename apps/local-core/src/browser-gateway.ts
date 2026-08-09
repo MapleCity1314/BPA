@@ -41,6 +41,7 @@ import {
   type BrowserEvidenceAcknowledgement,
   type BrowserEvidenceReceiver
 } from "./browser-evidence.js";
+import { PageProbeRegistry } from "./page-probe-registry.js";
 
 type Message = BrowserProtocolMessage & {
   payload: Record<string, unknown>;
@@ -61,6 +62,16 @@ export interface BrowserGatewayStatus {
   browserInstanceId?: string;
   extensionId: string;
   capabilityCount: number;
+  resourceUsage: {
+    connectionCount: number;
+    readySessionCount: number;
+    pendingCancelRequestCount: number;
+    pageProbes: {
+      active: number;
+      capacity: number;
+      ttlMs: number;
+    };
+  };
   lastError?: string;
 }
 
@@ -206,7 +217,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
   readonly #extensionId: string;
   readonly #connections = new Map<string, BrowserConnection>();
   #attachedOrder = 0;
-  readonly #pageProbeRequestedAt = new Map<string, number>();
+  readonly #pageProbes = new PageProbeRegistry();
 
   constructor(
     readonly persistence: BrowserGatewayPersistence,
@@ -253,6 +264,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
         observedAt: disconnectedAt,
         reasonCode: "BROWSER_BRIDGE_DISCONNECTED"
       });
+      this.#pageProbes.forgetPrefix(`${connection.session.id}:`);
     }
     this.#connections.delete(connection.id);
   }
@@ -260,18 +272,28 @@ export class LocalBrowserGateway implements RuntimeProvider {
   status(): BrowserGatewayStatus {
     const primary =
       this.#primaryConnection() ?? this.#primaryConnection(false);
+    const readySessionCount = [...this.#connections.values()].filter(
+      (connection) => connection.session?.ready
+    ).length;
     return {
       connected: this.#connections.size > 0,
       ready: Boolean(primary?.session?.ready),
-      activeSessionCount: [...this.#connections.values()].filter(
-        (connection) => connection.session?.ready
-      ).length,
+      activeSessionCount: readySessionCount,
       ...(primary?.session ? { sessionId: primary.session.id } : {}),
       ...(primary?.session
         ? { browserInstanceId: primary.session.browserInstanceId }
         : {}),
       extensionId: this.#extensionId,
       capabilityCount: primary?.session?.capabilities.length ?? 0,
+      resourceUsage: {
+        connectionCount: this.#connections.size,
+        readySessionCount,
+        pendingCancelRequestCount: [...this.#connections.values()].reduce(
+          (total, connection) => total + connection.cancelRequests.size,
+          0
+        ),
+        pageProbes: this.#pageProbes.usage()
+      },
       ...(primary?.lastError ? { lastError: primary.lastError } : {})
     };
   }
@@ -283,6 +305,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
     windowId?: number;
     origin: string;
     timeoutMs?: number;
+    requestId?: string;
   }): { requestId: string; deadline: string } {
     const connection = [...this.#connections.values()].find(
       (candidate) =>
@@ -291,27 +314,46 @@ export class LocalBrowserGateway implements RuntimeProvider {
         candidate.session.browserInstanceId === input.browserInstanceId
     );
     if (!connection) throw new Error("BROWSER_BRIDGE_DISCONNECTED");
-    const requestId = randomUUID();
+    const requestId = input.requestId ?? randomUUID();
+    const reservedHere = input.requestId === undefined;
+    if (reservedHere) {
+      const reservation = this.#pageProbes.reserve(
+        `${input.sessionId}:${input.tabId}`,
+        requestId,
+        Date.now()
+      );
+      if (reservation === "throttled") {
+        throw new Error("PAGE_PROBE_THROTTLED");
+      }
+      if (reservation === "capacity_exceeded") {
+        throw new Error("PAGE_PROBE_CAPACITY_EXCEEDED");
+      }
+    }
     const deadline = new Date(
       Date.now() + Math.min(10_000, Math.max(500, input.timeoutMs ?? 5_000))
     ).toISOString();
-    this.#sendMessage(
-      connection,
-      "page.probe.request",
-      {
-        request_id: requestId,
-        tab_ref: {
-          browser_instance_id: input.browserInstanceId,
-          tab_id: input.tabId,
-          ...(input.windowId === undefined
-            ? {}
-            : { window_id: input.windowId }),
-          origin: input.origin
+    try {
+      this.#sendMessage(
+        connection,
+        "page.probe.request",
+        {
+          request_id: requestId,
+          tab_ref: {
+            browser_instance_id: input.browserInstanceId,
+            tab_id: input.tabId,
+            ...(input.windowId === undefined
+              ? {}
+              : { window_id: input.windowId }),
+            origin: input.origin
+          },
+          deadline
         },
-        deadline
-      },
-      `trace-page-probe-${requestId}`
-    );
+        `trace-page-probe-${requestId}`
+      );
+    } catch (error) {
+      if (reservedHere) this.#pageProbes.complete(requestId);
+      throw error;
+    }
     return { requestId, deadline };
   }
 
@@ -477,6 +519,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
           this.dispatchPending();
           break;
         case "page.probe.result":
+          this.#pageProbes.complete(String(candidate.payload.request_id));
           break;
         case "command.ack":
           this.#handleCommandAck(connection, candidate);
@@ -630,6 +673,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
   }
 
   tick(at = new Date()): { timedOut: number; dispatched: number } {
+    this.#pageProbes.prune(at.getTime());
     this.recoverCancellations();
     this.recoverTerminalResults();
     let timedOut = 0;
@@ -1545,18 +1589,26 @@ export class LocalBrowserGateway implements RuntimeProvider {
     }
     const key = `${sessionId}:${tabId}`;
     const now = Date.now();
-    if (now - (this.#pageProbeRequestedAt.get(key) ?? 0) < 1_000) {
+    const requestId = randomUUID();
+    const reservation = this.#pageProbes.reserve(key, requestId, now);
+    if (reservation === "throttled") {
       return true;
     }
-    this.#pageProbeRequestedAt.set(key, now);
-    this.requestPageProbe({
-      sessionId,
-      browserInstanceId: page.browserInstanceId,
-      tabId: page.tabId,
-      ...(page.windowId === undefined ? {} : { windowId: page.windowId }),
-      origin: page.origin,
-      timeoutMs: 5_000
-    });
+    if (reservation === "capacity_exceeded") return false;
+    try {
+      this.requestPageProbe({
+        sessionId,
+        browserInstanceId: page.browserInstanceId,
+        tabId: page.tabId,
+        ...(page.windowId === undefined ? {} : { windowId: page.windowId }),
+        origin: page.origin,
+        timeoutMs: 5_000,
+        requestId
+      });
+    } catch (error) {
+      this.#pageProbes.complete(requestId);
+      throw error;
+    }
     return true;
   }
 

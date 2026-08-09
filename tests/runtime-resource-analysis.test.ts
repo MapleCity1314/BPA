@@ -68,6 +68,23 @@ function sample(
             sampledAt: metricsSampledAt,
             pid,
             runtimeIdentity: "0.6.0-test",
+            process: {
+              rssBytes: rssKiB * 1024,
+              heapTotalBytes: 80_000,
+              heapUsedBytes: cacheUsedBytes,
+              externalBytes: 10_000,
+              arrayBuffersBytes: 5_000
+            },
+            browserGateway: {
+              connectionCount: 1,
+              readySessionCount: 1,
+              pendingCancelRequestCount: 0,
+              pageProbes: {
+                active: 0,
+                capacity: 32,
+                ttlMs: 10_000
+              }
+            },
             sqlite: {
               measurement: "same_connection_db_status64",
               configuredCacheBytes: 16_384_000,
@@ -213,6 +230,16 @@ describe("runtime resource analysis", () => {
     );
     expect(result.sqlite.pageCache.status).toBe("measured");
     expect(result.sqlite.pageCache.actualBytes.change).toBe(4096);
+    expect(result.coreResident).toMatchObject({
+      status: "measured",
+      measuredSamples: 2,
+      missingSamples: 0,
+      browserGateway: {
+        pageProbeCapacity: [32],
+        pageProbeTtlMs: [10_000]
+      }
+    });
+    expect(result.coreResident.process.heapUsedBytes.change).toBe(4096);
     expect(result.sqlite.pageCache.runtimeIdentities).toEqual(["0.6.0-test"]);
     expect(result.conclusionGate).toMatchObject({
       windowComplete: true,

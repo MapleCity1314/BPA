@@ -223,15 +223,23 @@ Schema 降级描述成可恢复旧二进制，也不得复制登录态。
    创建临时页前拒绝超过上限，并把当前归属页数量写入脱敏运行指标。
 4. **有界内存结构**：Extension 的 pacing/cancel/probe generation 集合与 Core 的 page
    probe 请求表必须有 TTL、容量上限和 size 指标；24 小时窗口前先通过增长反例。
+   本代码候选已关闭 Core 子项：page probe 表为 32 项、10 秒 TTL，完成、断线和超时均
+   回收，迟到响应不能清除同页新请求，容量满时 fail-closed。Extension pacing/cancel/probe
+   generation 的 TTL、容量和指标仍未完成。
 5. **单连接重连**：Extension 到 Native Host 的 connect 需要 generation/in-flight guard、
    有上限退避和旧 Port 回调隔离；覆盖 onDisconnect 与连接异常同时发生的对抗测试。
 6. **并行 lane 决策**：第一版不实现 provider 并行。若后续引入，必须按 provider/资源声明
    有界并发，SQLite 写、同 Dataset/Run 终态与同外部 Effect 仍串行，不开通自由 Promise 并发。
 7. **进程退出所有权**：Core 必须跟踪并关闭 Control Socket 的现有长连接；Node Runtime
    Registry 必须 dispose Team Worker。否则 launchd 更新可能等待 Native Host，或遗留 worker。
+   本代码候选已实现这两项并覆盖反向 dispose、重复关闭、多个失败聚合和 resident socket
+   关闭反例；尚未部署，不能替代公司 Mac 的孤儿进程检查。
 8. **采样可见性**：现有采集器还不统计 Native Host、Team Worker、短命 Node 子进程、
    V8 heap、event-loop lag、标签页、Gateway 队列和常驻 Map size。常驻灰度前必须补这些角色
    指标和 Run terminal 后 15 分钟 quiescence marker。
+   本代码候选已把 Core V8 process memory、Browser Gateway 连接/ready Session、pending
+   cancel 和 page probe size/capacity/TTL 纳入原子白名单快照、采集器与分析结果；其余角色、
+   event-loop lag、标签页、Gateway 队列和 quiescence 仍未完成。
 9. **入口清退**：旧 source/tsx launchd、Inventory Scheduler 模式与签名闭包 Core 不能并存。
    灰度前选定签名闭包为唯一 Core；legacy recovery 仍会按步骤启动短命 Node 子进程，只有
    正式库存 Workflow 接管后，per-step Node spawn 才能归零。

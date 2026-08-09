@@ -8,9 +8,10 @@
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- Git 基线：截至 2026-08-10，PR #2–#31 均已在 required checks 通过后进入 `main`；
-  最新基线为 PR #31 merge commit `a54be4e514d8632301b1fe6abf1c702b486147f6`。阶段 0 结构收敛、资源观测、单浏览器常驻候选、
-  爆款图片来源闭包校验、体验分事实链和清退商品 Mac Runtime 候选均已进入主线。
+- Git 基线：截至 2026-08-10，PR #2–#32 均已在 required checks 通过后进入 `main`；
+  最新基线为 PR #32 merge commit `706261f0f1ea5e29f3664fc75de9bd37987c4d5b`。阶段 0 结构收敛、资源观测、单浏览器常驻候选、
+  爆款图片 Evidence→CAS→人工策展→内部参考包纵切、体验分事实链和清退商品 Mac Runtime
+  候选均已进入主线。
 - GitHub `main` 已启用管理员同样受约束的 Branch Protection：必须走 Pull Request、
   与主线同步、解决 review conversation，并通过 macOS、Windows、性能、双架构发布、
   可复现性和 WorkBuddy 交付共 10 个 required checks；禁止 force-push 和删除主线。
@@ -33,9 +34,14 @@
 2026-08-09 的仓库只读审计已把“常驻 Core + 单共享 Chrome”收敛为灰度候选，而非提前
 改写 normative 结论。当前资产证明库存 Chrome 使用一个 KeepAlive Profile，不是每任务
 新建 Chrome；Team Worker 首次调用后单例复用；但 legacy inventory production-cycle 仍会
-按步骤启动短命 Node/tsx 子进程，Native Host/Team Worker 退出所有权、Extension 重连、
-标签页硬上限和常驻 Map 清理仍有工程缺口。现有 24 小时采样也不含这些子进程、标签页、
-V8 heap、event-loop lag 与 Gateway 容量指标。本机当前没有 BPA launchd/进程，因此这只是
+按步骤启动短命 Node/tsx 子进程。本代码候选已让 Runtime Provider Registry 反向 dispose
+Team Worker，Control Server 停止前主动关闭全部长连接，并把 Core page probe 表固定为
+32 项、10 秒 TTL、迟到响应不可清除新请求。
+Core 的原子资源快照和 24 小时分析结果现可记录 V8 process memory、Browser Gateway 连接、
+取消请求与 page probe 占用。Extension 重连、标签页创建前硬上限、Extension
+pacing/cancel/probe generation 集合、Native Host/Team Worker/短命进程、event-loop lag、
+标签页数、Gateway 队列和 quiescence 仍是工程缺口。本机当前没有 BPA launchd/进程，
+因此这只是
 仓库形态审计，不能当作公司 Mac 当前进程事实。灰度候选、预算与停止线见阶段 1 计划。
 
 ## 2. 阶段状态板

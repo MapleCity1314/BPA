@@ -84,6 +84,7 @@ export interface RuntimeProvider {
     signal: AbortSignal
   ): Promise<RuntimeOutcome>;
   cancel?(invocationId: string, fencingToken: number): Promise<void>;
+  dispose?(): void | Promise<void>;
 }
 
 export interface RuntimeBrowserSessionResolver {
@@ -236,8 +237,12 @@ export class BuiltinRuntimeProvider implements RuntimeProvider {
 
 export class RuntimeProviderRegistry {
   readonly #providers = new Map<string, RuntimeProvider>();
+  #disposed = false;
 
   register(provider: RuntimeProvider): void {
+    if (this.#disposed) {
+      throw new Error("Runtime provider registry is disposed");
+    }
     const id = provider.id.trim();
     if (id.length === 0) {
       throw new Error("Runtime provider id must not be empty");
@@ -271,6 +276,23 @@ export class RuntimeProviderRegistry {
 
   list(): readonly string[] {
     return [...this.#providers.keys()].sort();
+  }
+
+  async dispose(): Promise<void> {
+    if (this.#disposed) return;
+    this.#disposed = true;
+    const errors: unknown[] = [];
+    for (const provider of [...this.#providers.values()].reverse()) {
+      try {
+        await provider.dispose?.();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Runtime provider disposal failed");
+    }
   }
 }
 

@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { SqliteResourceMetrics } from "@bpa/persistence-sqlite";
+import type { BrowserGatewayStatus } from "./browser-gateway.js";
 
 export const RUNTIME_RESOURCE_METRICS_SCHEMA =
   "bpa.core-runtime-metrics/1";
@@ -19,6 +20,14 @@ export interface RuntimeResourceMetricsSnapshot {
   sampledAt: string;
   pid: number;
   runtimeIdentity: string | null;
+  process: {
+    rssBytes: number;
+    heapTotalBytes: number;
+    heapUsedBytes: number;
+    externalBytes: number;
+    arrayBuffersBytes: number;
+  };
+  browserGateway: BrowserGatewayStatus["resourceUsage"];
   sqlite: SqliteResourceMetrics & {
     measurement: "same_connection_db_status64";
   };
@@ -31,14 +40,25 @@ export function writeRuntimeResourceMetrics(
     now?: () => Date;
     processId?: number;
     runtimeIdentity?: string | null;
+    processMemoryUsage?: () => NodeJS.MemoryUsage;
+    browserGateway: BrowserGatewayStatus["resourceUsage"];
     temporaryIdFactory?: () => string;
-  } = {}
+  }
 ): RuntimeResourceMetricsSnapshot {
+  const memory = (options.processMemoryUsage ?? process.memoryUsage)();
   const snapshot: RuntimeResourceMetricsSnapshot = {
     schema: RUNTIME_RESOURCE_METRICS_SCHEMA,
     sampledAt: (options.now ?? (() => new Date()))().toISOString(),
     pid: options.processId ?? process.pid,
     runtimeIdentity: options.runtimeIdentity ?? null,
+    process: {
+      rssBytes: memory.rss,
+      heapTotalBytes: memory.heapTotal,
+      heapUsedBytes: memory.heapUsed,
+      externalBytes: memory.external,
+      arrayBuffersBytes: memory.arrayBuffers
+    },
+    browserGateway: options.browserGateway,
     sqlite: {
       measurement: "same_connection_db_status64",
       ...metrics

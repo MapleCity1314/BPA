@@ -118,6 +118,50 @@ describe("runtime provider registry", () => {
     expect(() => registry.resolve("team", node)).toThrow("does not support");
   });
 
+  it("disposes providers in reverse registration order exactly once", async () => {
+    const disposed: string[] = [];
+    const registry = new RuntimeProviderRegistry();
+    registry.register({
+      ...provider("first"),
+      dispose: () => {
+        disposed.push("first");
+      }
+    });
+    registry.register({
+      ...provider("second"),
+      dispose: async () => {
+        disposed.push("second");
+      }
+    });
+
+    await registry.dispose();
+    await registry.dispose();
+
+    expect(disposed).toEqual(["second", "first"]);
+    expect(() => registry.register(provider("late"))).toThrow(
+      "registry is disposed"
+    );
+  });
+
+  it("attempts every provider disposal and reports all failures", async () => {
+    const disposed: string[] = [];
+    const registry = new RuntimeProviderRegistry();
+    for (const id of ["first", "second"]) {
+      registry.register({
+        ...provider(id),
+        dispose: () => {
+          disposed.push(id);
+          throw new Error(`${id}-failed`);
+        }
+      });
+    }
+
+    await expect(registry.dispose()).rejects.toMatchObject({
+      errors: [expect.any(Error), expect.any(Error)]
+    });
+    expect(disposed).toEqual(["second", "first"]);
+  });
+
   it("validates frozen Resource Bindings before provider dispatch", async () => {
     let calls = 0;
     const registry = new RuntimeProviderRegistry();

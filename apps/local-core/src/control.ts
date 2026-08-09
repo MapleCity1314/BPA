@@ -185,6 +185,7 @@ export class LocalCoreService {
   readonly recoverySessions: RecoverySessionService;
   readonly #resourceBindings: RuntimeResourceBindingService;
   readonly #trustedEvidence: TrustedEvidenceQueryService;
+  readonly #runtimeProviders: RuntimeProviderRegistry;
 
   constructor(
     readonly persistence: Persistence,
@@ -274,6 +275,7 @@ export class LocalCoreService {
     this.#resourceBindings = new RuntimeResourceBindingService(persistence);
     this.#trustedEvidence = new TrustedEvidenceQueryService(persistence);
     const providers = runtimeProviders ?? new RuntimeProviderRegistry();
+    this.#runtimeProviders = providers;
     if (!providers.list().includes("builtin")) {
       providers.register(new BuiltinRuntimeProvider());
     }
@@ -532,6 +534,10 @@ export class LocalCoreService {
         ? {}
         : { title: String(params.title) })
     });
+  }
+
+  async dispose(): Promise<void> {
+    await this.#runtimeProviders.dispose();
   }
 
   async #dispatchAssistance(
@@ -2307,6 +2313,7 @@ function mapLegacyErrorCode(response: ControlResponse): ControlErrorCode {
 
 export class LocalControlServer {
   #server: Server | undefined;
+  readonly #sockets = new Set<Socket>();
 
   constructor(
     readonly socketPath: string,
@@ -2319,6 +2326,7 @@ export class LocalControlServer {
       rmSync(this.socketPath, { force: true });
     }
     const server = createServer((socket) => {
+      this.#sockets.add(socket);
       let nativeConnectionId: string | undefined;
       let negotiatedControl:
         | {
@@ -2578,6 +2586,7 @@ export class LocalControlServer {
           });
       });
       socket.once("close", () => {
+        this.#sockets.delete(socket);
         if (nativeConnectionId) {
           this.service.browserGateway?.detach(nativeConnectionId);
         }
@@ -2598,10 +2607,12 @@ export class LocalControlServer {
   async stop(): Promise<void> {
     const server = this.#server;
     if (!server) return;
+    for (const socket of this.#sockets) socket.destroy();
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve()))
     );
     this.#server = undefined;
+    this.#sockets.clear();
     if (!isWindowsNamedPipe(this.socketPath)) {
       rmSync(this.socketPath, { force: true });
     }
