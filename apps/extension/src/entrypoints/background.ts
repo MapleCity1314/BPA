@@ -73,6 +73,7 @@ import {
   type ManagedTabAdmission
 } from "../lib/managed-tab-lifecycle";
 import { NativeConnectionSupervisor } from "../lib/native-connection-supervisor";
+import { measureProfileTabCount } from "../lib/profile-tab-usage";
 import {
   EXTENSION_RUNTIME_LIMITS,
   ExtensionRuntimeResourceRegistry
@@ -1636,6 +1637,9 @@ export default defineBackground(() => {
         break;
       }
       case "heartbeat.ping": {
+        const profileTabs = await measureProfileTabCount(() =>
+          browser.tabs.query({})
+        );
         const usage = runtimeResources.usage();
         const managedTabUsage = managedTabs.usage();
         send(
@@ -1651,6 +1655,7 @@ export default defineBackground(() => {
                 cancellation_stop_barriers: cancellationStopBarriers.size,
                 observed_tabs: observedTabs.size,
                 observation_capacity: EXTENSION_RUNTIME_LIMITS.observations,
+                profile_tabs: profileTabs,
                 managed_tabs: managedTabUsage.active,
                 managed_tab_reservations: managedTabUsage.reserved,
                 managed_tab_capacity: managedTabUsage.capacity,
