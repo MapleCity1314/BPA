@@ -31,7 +31,7 @@ function canonicalJson(value: unknown): string {
 }
 
 describe("extension capability manifest", () => {
-  it("locks the v2 experience capability to Runtime and Extension 0.6.1", () => {
+  it("locks the inventory v2 capability to Runtime and Extension 0.6.2", () => {
     for (const path of [
       "package.json",
       "apps/cli/package.json",
@@ -46,16 +46,21 @@ describe("extension capability manifest", () => {
       const packageJson = JSON.parse(
         readFileSync(new URL(path,repoRoot),"utf8")
       ) as { version:string };
-      expect(packageJson.version, path).toBe("0.6.1");
+      expect(packageJson.version, path).toBe("0.6.2");
     }
     expect(
       readFileSync(new URL("apps/extension/wxt.config.ts",repoRoot),"utf8")
-    ).toContain('version: "0.6.1"');
-    const adapter = parse(readFileSync(
+    ).toContain('version: "0.6.2"');
+    const experienceAdapter = parse(readFileSync(
       new URL("adapters/doudian/doudian-experience.adapter.yaml",repoRoot),
       "utf8"
     )) as { extension:{ minimumVersion:string } };
-    expect(adapter.extension.minimumVersion).toBe("0.6.1");
+    expect(experienceAdapter.extension.minimumVersion).toBe("0.6.2");
+    const inventoryAdapter = parse(readFileSync(
+      new URL("adapters/doudian/doudian-inventory.adapter.yaml",repoRoot),
+      "utf8"
+    )) as { extension:{ minimumVersion:string } };
+    expect(inventoryAdapter.extension.minimumVersion).toBe("0.6.2");
   });
 
   it("derives the complete protocol v2 report and digest from one registry", async () => {
@@ -111,6 +116,17 @@ describe("extension capability manifest", () => {
               observer_capability_id: "doudian.page"
             }
           ]
+        }),
+        expect.objectContaining({
+          node_id: "doudian.inventory.shop.activate",
+          adapter_id: "doudian-inventory",
+          adapter_version: "2.0.0",
+          versions: ["1.0.0"]
+        }),
+        expect.objectContaining({
+          node_id: "doudian.inventory.product.snapshot.read",
+          adapter_id: "doudian-inventory",
+          versions: ["2.0.0"]
         })
       ])
     );
@@ -179,19 +195,20 @@ describe("extension capability manifest", () => {
       ]
     },
     {
-      nodeId: "doudian.inventory.product.snapshot.read",
+      nodeId: "doudian.inventory.shop.activate",
       nodeVersion: "1.0.0",
       currentUrl: "https://fxg.jinritemai.com/ffa/g/list",
       grantedPermissions: [
         "browser.dom.read",
         "browser.dom.write",
-        "browser.tabs.read"
+        "browser.tabs.read",
+        "browser.tabs.navigate"
       ]
     },
     {
-      nodeId: "doudian.orders.recent.read",
-      nodeVersion: "1.2.0",
-      currentUrl: "https://fxg.jinritemai.com/ffa/morder/order/list",
+      nodeId: "doudian.inventory.product.snapshot.read",
+      nodeVersion: "2.0.0",
+      currentUrl: "https://fxg.jinritemai.com/ffa/g/list",
       grantedPermissions: [
         "browser.dom.read",
         "browser.dom.write",

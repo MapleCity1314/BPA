@@ -1,0 +1,71 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: inventory.orders.freshness.read
+  version: 1.0.0
+  title: 判定单店订单需求新鲜度
+  description: 以库存 PostgreSQL 服务端时钟判定固定两小时近期订单水位；复查时比较基线数据版本，精确区分 fresh_reused、refreshed 与 degraded。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [shop]
+  properties:
+    shop: { $ref: "#/$defs/shop" }
+    baseline: { $ref: "#/$defs/freshness" }
+  $defs:
+    shop:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: { type: string, pattern: "^[0-9]{5,30}$" }
+        name: { type: string, minLength: 2, maxLength: 80 }
+    freshness:
+      type: object
+      additionalProperties: false
+      required: [status, shop, checkedAt, maxAgeSeconds, latestObservedAt, ageSeconds, datasetId, dataVersion, source]
+      properties:
+        status: { enum: [fresh_reused, refresh_required, refreshed, degraded] }
+        shop: { $ref: "#/$defs/shop" }
+        checkedAt: { type: string, format: date-time }
+        maxAgeSeconds: { const: 7200 }
+        latestObservedAt: { type: [string, "null"], format: date-time }
+        ageSeconds: { type: [integer, "null"], minimum: 0 }
+        datasetId: { type: [string, "null"], maxLength: 500 }
+        dataVersion: { type: [string, "null"], maxLength: 500 }
+        source:
+          anyOf:
+            - { const: wdt }
+            - { type: "null" }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [status, shop, checkedAt, maxAgeSeconds, latestObservedAt, ageSeconds, datasetId, dataVersion, source]
+  properties:
+    status: { enum: [fresh_reused, refresh_required, refreshed, degraded] }
+    shop:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: { type: string, pattern: "^[0-9]{5,30}$" }
+        name: { type: string, minLength: 2, maxLength: 80 }
+    checkedAt: { type: string, format: date-time }
+    maxAgeSeconds: { const: 7200 }
+    latestObservedAt: { type: [string, "null"], format: date-time }
+    ageSeconds: { type: [integer, "null"], minimum: 0 }
+    datasetId: { type: [string, "null"], maxLength: 500 }
+    dataVersion: { type: [string, "null"], maxLength: 500 }
+    source:
+      anyOf:
+        - { const: wdt }
+        - { type: "null" }
+risk:
+  level: R0
+  permissions: [inventory.service.orders.read]
+execution:
+  timeoutDefault: 30s
+  idempotency: repeatable_read
+  cancellable: true
+errors: [INVENTORY_ORDERS_FRESHNESS_INPUT_INVALID, INVENTORY_EXTERNAL_LEASE_INVALID, INVENTORY_SERVICE_NOT_CONFIGURED, INVENTORY_SERVICE_UNAVAILABLE, INVENTORY_SERVICE_PROTOCOL_ERROR, INVENTORY_SERVICE_FAILED, SHOP_IDENTITY_MISMATCH]

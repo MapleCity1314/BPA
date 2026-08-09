@@ -1,0 +1,40 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: inventory.production-cycle.input.validate
+  version: 1.0.0
+  title: 校验库存生产周期固定店铺清单
+  description: 在任何浏览器或库存写入前，校验固定 13 店的数字 ID 与名称均唯一，防止错误清单产生外部副作用。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [expectedShopCount, shops]
+  properties:
+    expectedShopCount: { const: 13 }
+    shops:
+      type: array
+      minItems: 13
+      maxItems: 13
+      items:
+        type: object
+        additionalProperties: false
+        required: [id, name]
+        properties:
+          id: { type: string, pattern: "^[0-9]{5,30}$" }
+          name: { type: string, minLength: 2, maxLength: 80 }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [status, shopCount]
+  properties:
+    status: { const: validated }
+    shopCount: { const: 13 }
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 5s
+  idempotency: pure
+  cancellable: true
+errors: [INVENTORY_PRODUCTION_CYCLE_INPUT_INVALID, INVENTORY_PRODUCTION_CYCLE_SHOP_COUNT_MISMATCH, INVENTORY_PRODUCTION_CYCLE_SHOP_DUPLICATE]

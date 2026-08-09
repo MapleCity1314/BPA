@@ -14,20 +14,6 @@ function implementationDigest(ref: string, implementation: string): string {
 
 export const TEAM_WORKER_HANDLER_MANIFEST = [
   {
-    ref: "ecom.sales-demand.sync@1.0.0",
-    implementationDigest: implementationDigest(
-      "ecom.sales-demand.sync@1.0.0",
-      "inventory-service-uds:mysql-demand-sync:verified-write:v1"
-    )
-  },
-  {
-    ref: "ecom.sales-demand.recent.persist@1.0.0",
-    implementationDigest: implementationDigest(
-      "ecom.sales-demand.recent.persist@1.0.0",
-      "inventory-service-uds:recent-order-whitelist:verified-write:v1"
-    )
-  },
-  {
     ref: "inventory.forecast-input.read@1.0.0",
     implementationDigest: implementationDigest(
       "inventory.forecast-input.read@1.0.0",
@@ -39,20 +25,6 @@ export const TEAM_WORKER_HANDLER_MANIFEST = [
     implementationDigest: implementationDigest(
       "inventory.forecast-input.read@1.0.1",
       "inventory-service-uds:forecast-input:quality-fallback:repeatable-read:v2"
-    )
-  },
-  {
-    ref: "inventory.forecast.persist@1.0.0",
-    implementationDigest: implementationDigest(
-      "inventory.forecast.persist@1.0.0",
-      "inventory-service-uds:forecast-persist:verified-write:v1"
-    )
-  },
-  {
-    ref: "inventory.risk.persist@1.0.0",
-    implementationDigest: implementationDigest(
-      "inventory.risk.persist@1.0.0",
-      "inventory-service-uds:risk-incident-hysteresis:verified-write:v1"
     )
   },
   {
@@ -74,13 +46,6 @@ export const TEAM_WORKER_HANDLER_MANIFEST = [
     implementationDigest: implementationDigest(
       "inventory.risk.evaluate@1.0.0",
       "inventory-balanced-shadow:p90-2h-6h-reserve-24h:freshness-gates:v2"
-    )
-  },
-  {
-    ref: "inventory.shadow.product.compute@1.0.0",
-    implementationDigest: implementationDigest(
-      "inventory.shadow.product.compute@1.0.0",
-      "inventory-product-forecast-channel-risk:hierarchical-fallback:bounded-pure:v2"
     )
   },
   {

@@ -5,12 +5,26 @@ import { isWindowsNamedPipe } from "@bpa/platform-runtime";
 import {
   InventoryServiceWriterError,
   type InventoryServiceWriter,
+  type InventoryWriteOperation,
   type LeaseFence
 } from "./inventory-data-runtime-provider.js";
 import type { JsonValue } from "@bpa/workflow-ir";
 
 const MAX_FRAME_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
+const STANDARD_WRITE_TIMEOUT_MS = 30_000;
+const SALES_SYNC_TIMEOUT_MS = 10 * 60_000;
+const FORECAST_RISK_TIMEOUT_MS = 30 * 60_000;
+
+export function inventoryWriteTimeoutMs(
+  operation: InventoryWriteOperation
+): number {
+  return operation === "inventory.shop.forecast-risk.refresh"
+    ? FORECAST_RISK_TIMEOUT_MS
+    : operation === "sales-demand.sync"
+    ? SALES_SYNC_TIMEOUT_MS
+    : STANDARD_WRITE_TIMEOUT_MS;
+}
 
 export interface ExternalDomainLeaseGrant {
   readonly domainKey: string;
@@ -57,7 +71,11 @@ interface ServiceResponse {
   readonly ok?: unknown;
   readonly id?: unknown;
   readonly result?: unknown;
-  readonly error?: { readonly code?: unknown; readonly message?: unknown };
+  readonly error?: {
+    readonly code?: unknown;
+    readonly message?: unknown;
+    readonly outcomeUncertain?: unknown;
+  };
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {
@@ -148,9 +166,10 @@ export class InventoryDomainLeaseClient
     return result === null ? undefined : this.grant(result, domainKey);
   }
 
-  async persistSnapshot(
-    input: {
-      readonly snapshot: JsonValue;
+  async write(
+    request: {
+      readonly operation: InventoryWriteOperation;
+      readonly input: JsonValue;
       readonly lease: LeaseFence;
     },
     signal: AbortSignal
@@ -158,17 +177,49 @@ export class InventoryDomainLeaseClient
     if (signal.aborted) {
       throw new InventoryServiceWriterError(
         "INVENTORY_SERVICE_UNAVAILABLE",
-        "Inventory snapshot persistence was cancelled before dispatch."
+        "Inventory write was cancelled before dispatch."
       );
     }
     try {
       return (await this.request(
-        "inventory.snapshot.persist",
+        request.operation,
         {
-          snapshot: input.snapshot,
-          lease: input.lease
+          ...(request.input as Record<string, JsonValue>),
+          lease: request.lease
         },
-        signal
+        signal,
+        this.timeoutMs === REQUEST_TIMEOUT_MS
+          ? inventoryWriteTimeoutMs(request.operation)
+          : this.timeoutMs
+      )) as JsonValue;
+    } catch (error) {
+      if (error instanceof ExternalDomainLeaseProviderError) {
+        throw new InventoryServiceWriterError(
+          error.code,
+          error.message,
+          error.transportUncertain
+        );
+      }
+      throw error;
+    }
+  }
+
+  async readOrdersFreshness(
+    input: {
+      readonly shop: JsonValue;
+      readonly baseline?: JsonValue;
+    },
+    signal: AbortSignal
+  ): Promise<JsonValue> {
+    try {
+      return (await this.request(
+        "inventory.orders.freshness.read",
+        {
+          shop:input.shop,
+          ...(input.baseline === undefined ? {} : { baseline:input.baseline })
+        },
+        signal,
+        STANDARD_WRITE_TIMEOUT_MS
       )) as JsonValue;
     } catch (error) {
       if (error instanceof ExternalDomainLeaseProviderError) {
@@ -222,7 +273,8 @@ export class InventoryDomainLeaseClient
   private request(
     operation: string,
     input: Record<string, unknown>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    requestTimeoutMs = this.timeoutMs
   ): Promise<unknown> {
     const id = `core-domain-lease:${randomUUID()}`;
     const payload = Buffer.from(
@@ -257,7 +309,7 @@ export class InventoryDomainLeaseClient
               true
             )
           ),
-        this.timeoutMs
+        requestTimeoutMs
       );
       const onAbort = (): void =>
         finish(
@@ -312,7 +364,13 @@ export class InventoryDomainLeaseClient
               typeof response.error?.message === "string"
                 ? response.error.message
                 : "Inventory service request failed";
-            finish(new ExternalDomainLeaseProviderError(code, message));
+            finish(
+              new ExternalDomainLeaseProviderError(
+                code,
+                message,
+                response.error?.outcomeUncertain === true
+              )
+            );
             return;
           }
           if (response.id !== id) {

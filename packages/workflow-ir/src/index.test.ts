@@ -379,8 +379,10 @@ describe("execution plan", () => {
     const plan = createExecutionPlan(validPlan());
     expect(executionPlanIssues(plan)).toEqual([]);
     expect(estimateMaxDepth(plan)).toBe(1);
-    // Eight top-level steps plus five possible five-step item executions.
-    expect(estimateMaxStepExecutions(plan)).toBe(33n);
+    // Longest executable path: collect, review, foreach, five two-step items,
+    // then the completed terminal. Mutually exclusive error routes are not
+    // added together.
+    expect(estimateMaxStepExecutions(plan)).toBe(14n);
   });
 
   it("requires rejected calls to target a rejected terminal directly", () => {

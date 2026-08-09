@@ -249,6 +249,26 @@ const ALLIANCE_SCAN_ERRORS = new Set<DoudianAllianceNodeErrorCode>([
   "SHOP_TARGET_INVALID"
 ]);
 
+const INVENTORY_SHOP_ACTIVATION_ERRORS = new Set<DoudianAllianceNodeErrorCode>([
+  "ALLIANCE_CONTENT_RESPONSE_TIMEOUT",
+  "AUTH_REQUIRED",
+  "BROWSER_DISCONNECTED",
+  "CAPTCHA_REQUIRED",
+  "COMMAND_CANCELLED",
+  "DEADLINE_EXCEEDED",
+  "PAGE_LOADING",
+  "PAGE_MISMATCH",
+  "PAGE_URL_INVALID",
+  "RATE_LIMITED",
+  "RISK_CONTROL",
+  "SESSION_EXPIRED",
+  "SHOP_IDENTITY_MISMATCH",
+  "SHOP_IDENTITY_UNCERTAIN",
+  "SHOP_LIST_INCOMPLETE",
+  "SHOP_SWITCH_NOT_CONFIRMED",
+  "SHOP_TARGET_INVALID"
+]);
+
 function allianceErrorResponse(
   error: unknown,
   fallbackCode: DoudianAllianceNodeErrorCode,
@@ -518,6 +538,75 @@ const scanAllianceShop: AdapterNodeHandler = async (input, context) => {
   };
 };
 
+const activateInventoryShop: AdapterNodeHandler = async (input, context) => {
+  const startedAt = Date.now();
+  let target: AllianceShop;
+  try {
+    const candidate = input.targetShop;
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new AllianceRetiredDriverError("SHOP_TARGET_INVALID");
+    }
+    const record = candidate as Record<string, unknown>;
+    if (
+      Object.keys(record).some((key) => !["id", "name"].includes(key)) ||
+      typeof record.id !== "string" ||
+      !NUMERIC_SHOP_ID.test(record.id) ||
+      typeof record.name !== "string" ||
+      record.name.trim().length < 2 ||
+      record.name.length > 200
+    ) {
+      throw new AllianceRetiredDriverError("SHOP_TARGET_INVALID");
+    }
+    target = {
+      id: record.id,
+      name: record.name.trim(),
+      status: "active",
+      statusText: "active"
+    };
+  } catch (error) {
+    return allianceErrorResponse(
+      error,
+      "SHOP_TARGET_INVALID",
+      INVENTORY_SHOP_ACTIVATION_ERRORS
+    );
+  }
+  const driver = createAllianceRetiredBrowserDriver({
+    sourceTabId: context.sourceTabId,
+    deadline: context.deadline,
+    ...(context.isCancelled ? { isCancelled: context.isCancelled } : {}),
+    ...(context.onAllianceStageStarted
+      ? { onStageStarted: context.onAllianceStageStarted }
+      : {}),
+    ...(context.onAllianceStageStopped
+      ? { onStageStopped: context.onAllianceStageStopped }
+      : {})
+  });
+  try {
+    await driver.switchShop(target);
+    const observedAt = new Date().toISOString();
+    return {
+      ok: true,
+      output: {
+        status: "complete",
+        currentShop: { id: target.id, name: target.name },
+        observedAt
+      },
+      timingObservation: {
+        readiness_wait_ms: Date.now() - startedAt,
+        stable_for_ms: 300
+      }
+    };
+  } catch (error) {
+    return allianceErrorResponse(
+      error,
+      "SHOP_SWITCH_NOT_CONFIRMED",
+      INVENTORY_SHOP_ACTIVATION_ERRORS
+    );
+  } finally {
+    await driver.cleanupShopTabs().catch(() => undefined);
+  }
+};
+
 const discoverExperienceShops: AdapterNodeHandler = async (input, context) => {
   const maxShops = Number(input.maxShops ?? 100);
   if (!Number.isSafeInteger(maxShops) || maxShops < 1 || maxShops > 100) {
@@ -615,6 +704,7 @@ const readExperienceShop: AdapterNodeHandler = async (input, context) => {
 };
 
 const handlers = new Map<string, AdapterNodeHandler>([
+  ["doudian.inventory.shop.activate", activateInventoryShop],
   ["doudian.alliance.shops.discover", discoverAllianceShops],
   ["doudian.alliance.shop.retired-products.scan", scanAllianceShop],
   ["doudian.experience.shops.discover", discoverExperienceShops],

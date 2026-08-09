@@ -1,6 +1,6 @@
 import { prepareDoudianProductList } from "./product-list-guard.js";
 
-export const DOUDIAN_INVENTORY_SNAPSHOT_VERSION = "1.0.0";
+export const DOUDIAN_INVENTORY_SNAPSHOT_VERSION = "2.0.0";
 
 export interface DoudianInventoryChannelSnapshot {
   readonly channelGoodsId: string;

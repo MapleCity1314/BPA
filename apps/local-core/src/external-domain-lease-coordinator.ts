@@ -373,11 +373,11 @@ export class ExternalDomainLeaseCoordinator {
       : undefined;
     if (attemptRun && !TERMINAL_RUN_STATES.has(attemptRun.status)) return;
     const linkedTerminalRun = run ?? attemptRun;
-    if (
-      linkedTerminalRun &&
-      linkedTerminalRun.status !== "uncertain" &&
-      lease.diagnostic !== POST_TERMINAL_RECONCILIATION
-    ) {
+    if (linkedTerminalRun &&
+      lease.diagnostic !== POST_TERMINAL_RECONCILIATION) {
+      // A provider/write reconciliation marker is not cleared merely because
+      // the remote lease can be read or released. The business effect must be
+      // verified by an explicit reconciler before another Attempt may write.
       return;
     }
     try {

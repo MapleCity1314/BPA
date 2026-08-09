@@ -19,7 +19,9 @@ import { LocalCoreService } from "./control.js";
 import type { TriggerFireResult } from "./trigger-runtime.js";
 import {
   InventoryDataRuntimeProvider,
+  InventoryServiceWriterError,
   type InventoryServiceWriter,
+  type InventoryWriteOperation,
   type LeaseFence
 } from "./inventory-data-runtime-provider.js";
 import type {
@@ -30,6 +32,19 @@ import type {
 const root = new URL("../../../",import.meta.url);
 const observedAt = "2026-08-09T08:00:00.000Z";
 const browserInstanceId = "doudian-company-main";
+const inventoryShops = Array.from({ length:13 },(_,index) => ({
+  id:String(10_001 + index),name:`测试店铺${index + 1}`
+}));
+const inventoryNodeAssets = [
+  "nodes/core/doudian.inventory.shop.activate.node.yaml",
+  "nodes/core/doudian.inventory.product.snapshot.read@2.0.0.node.yaml",
+  "nodes/core/inventory.orders.freshness.read.node.yaml",
+  "nodes/core/ecom.sales-demand.sync@2.0.0.node.yaml",
+  "nodes/core/inventory.snapshot.persist.node.yaml",
+  "nodes/core/inventory.shop.forecast-risk.refresh.node.yaml",
+  "nodes/core/inventory.production-cycle.input.validate.node.yaml",
+  "nodes/core/inventory.production-cycle.aggregate.node.yaml"
+] as const;
 
 function source(path:string):unknown {
   return parse(readFileSync(new URL(path,root),"utf8"));
@@ -111,6 +126,8 @@ function experienceSnapshot(
 }
 
 class FixtureProvider implements RuntimeProvider {
+  private activeInventoryShop = { id:"10001",name:"测试店铺1" };
+
   constructor(
     readonly id:string,
     readonly invocations:string[],
@@ -134,6 +151,9 @@ class FixtureProvider implements RuntimeProvider {
         readonly status:"active" | "blocked";
         readonly statusText:string;
       }>;
+      readonly failedShopId?:string;
+    },
+    readonly inventory?:{
       readonly failedShopId?:string;
     }
   ) {}
@@ -258,48 +278,61 @@ class FixtureProvider implements RuntimeProvider {
       case "doudian.shop.context.read":
         return success({
           supported:true,
-          shop:{ id:"10001",name:"测试店铺",identity_confirmed:true },
+          shop:{ id:"10001",name:"测试店铺1",identity_confirmed:true },
           tab_ref:{
             browser_instance_id:browserInstanceId,tab_id:42,window_id:7,
             origin:"https://fxg.jinritemai.com"
           },
           page_epoch:"tab-42:1:doudian"
         });
+      case "doudian.inventory.shop.activate": {
+        const target = object(input.targetShop);
+        this.activeInventoryShop = {
+          id:String(target.id),name:String(target.name)
+        };
+        return success({
+          status:"complete",currentShop:this.activeInventoryShop,observedAt
+        });
+      }
       case "doudian.product.scope.collect": {
+        const productId = String(80_000 + Number(this.activeInventoryShop.id) - 10_000);
         const product = {
-          id:"80001",title:"测试库存商品",
-          editorUrl:"https://fxg.jinritemai.com/ffa/g/create?product_id=80001"
+          id:productId,title:`${this.activeInventoryShop.name}库存商品`,
+          editorUrl:`https://fxg.jinritemai.com/ffa/g/create?product_id=${productId}`
         };
         return success({
           status:"complete",collectorVersion:"1.1.0",
           fingerprint:{
-            shopId:"10001",shopName:"测试店铺",filters:{},
+            shopId:this.activeInventoryShop.id,shopName:this.activeInventoryShop.name,filters:{},
             statusTab:{ id:"selling",label:"售卖中" },digest:"abcdef12"
           },
           expectedCount:1,scanRounds:1,products:[product],inspectionQueue:[product],
           restore:{
             listUrl:"https://fxg.jinritemai.com/ffa/g/list",page:1,scrollTop:0,
-            shopId:"10001",shopName:"测试店铺",scopeDigest:"abcdef12",
+            shopId:this.activeInventoryShop.id,shopName:this.activeInventoryShop.name,scopeDigest:"abcdef12",
             required:true
           },
           diagnostics:[]
         });
       }
       case "doudian.inventory.product.snapshot.read":
+        if (object(input.shop).id === this.inventory?.failedShopId) {
+          return {
+            status:"failed",
+            error:{ code:"FIXTURE_INVENTORY_READ_FAILED",message:"Fixture failure",retryable:false },
+            evidence:[],riskSignals:[]
+          };
+        }
         return success({
-          status:"complete",snapshotVersion:"1.0.0",observedAt,
+          status:"complete",snapshotVersion:"2.0.0",observedAt,
           shop:input.shop,
-          product:{ id:"80001",title:"测试库存商品",totalStock:12 },
+          product:{ ...object(input.product),totalStock:12 },
           skus:[{
             platformSkuId:"70001",merchantCode:"TEST-001",currentStock:12,
             occupiedStock:2,unoccupiedStock:10,
             channels:[{ channelGoodsId:"60001",stock:4 }]
           }],
           diagnostics:[],formMutations:0
-        });
-      case "inventory.snapshot.persist":
-        return success({
-          snapshotId:"snapshot:80001",envelope:{ persisted:true }
         });
       default:
         throw new Error(`Unexpected fixture Node: ${invocation.node.id}`);
@@ -308,19 +341,58 @@ class FixtureProvider implements RuntimeProvider {
 }
 
 class InventoryFixtureWriter implements InventoryServiceWriter {
-  readonly calls:Array<{ snapshot:JsonValue;lease:LeaseFence }> = [];
+  readonly calls:Array<{
+    operation:InventoryWriteOperation;input:JsonValue;lease:LeaseFence
+  }> = [];
 
-  constructor(readonly invocations:string[]) {}
+  constructor(
+    readonly invocations:string[],
+    readonly uncertainForecastShopId?:string
+  ) {}
 
-  async persistSnapshot(input:{
-    readonly snapshot:JsonValue;
+  async write(request:{
+    readonly operation:InventoryWriteOperation;
+    readonly input:JsonValue;
     readonly lease:LeaseFence;
   }):Promise<JsonValue> {
-    this.invocations.push("inventory.snapshot.persist");
-    this.calls.push(structuredClone(input));
+    this.invocations.push(request.operation);
+    this.calls.push(structuredClone(request));
+    const input = object(request.input);
+    if (request.operation === "inventory.snapshot.persist") {
+      const snapshot = object(input.snapshot);
+      const product = object(snapshot.product);
+      return {
+        snapshotId:`snapshot:${String(product.id)}`,
+        envelope:{ persisted:true }
+      };
+    }
+    if (request.operation === "inventory.shop.forecast-risk.refresh") {
+      if (String(object(input.shop).id) === this.uncertainForecastShopId) {
+        throw new InventoryServiceWriterError(
+          "INVENTORY_SERVICE_UNAVAILABLE",
+          "Fixture transport outcome is unknown.",
+          true
+        );
+      }
+      const attempted = Number(input.persistedSnapshots);
+      return {
+        status:"complete",attemptedProducts:attempted,completedProducts:attempted,
+        partialProducts:0,failedProducts:0,
+        forecastWrites:{ attempted,persisted:attempted },
+        riskWrites:{ attempted,persisted:attempted },
+        severities:{ normal:attempted,warning:0,critical:0,unknown:0 }
+      };
+    }
+    return { status:"succeeded",syncRunId:"sync:fixture",processed:1 };
+  }
+
+  async readOrdersFreshness(input:{ readonly shop:JsonValue }):Promise<JsonValue> {
     return {
-      snapshotId:"snapshot:80001",
-      envelope:{ persisted:true }
+      status:"fresh_reused",shop:input.shop,
+      checkedAt:observedAt,maxAgeSeconds:7200,
+      latestObservedAt:observedAt,ageSeconds:0,
+      datasetId:`sales-demand-staged:${String(object(input.shop).id)}`,
+      dataVersion:"staged-v1",source:"wdt"
     };
   }
 }
@@ -383,10 +455,11 @@ function publish(
   assetType:string,
   path:string
 ):void {
-  expect(service.handle({
+  const response = service.handle({
     id:`publish:${path}`,method:"asset.publish",
     params:{ assetType,content:source(path),actor:"test" }
-  }),path).toMatchObject({ ok:true });
+  });
+  if (!response.ok) throw new Error(`${path}: ${JSON.stringify(response)}`);
 }
 
 function seedBrowser(
@@ -403,7 +476,7 @@ function seedBrowser(
   store.openBrowserSession({
     session:{
       id:"session-doudian",browserInstanceId,
-      extensionId:"extension-doudian",extensionVersion:"0.6.1",
+      extensionId:"extension-doudian",extensionVersion:"0.6.2",
       protocolVersion:"2.0.0",incomingSeq:0,outgoingSeq:0,
       lastAckedCommandSeq:0,capabilityDigest:`sha256:${"a".repeat(64)}`,
       resumeTokenDigest:`sha256:${"b".repeat(64)}`,
@@ -460,6 +533,49 @@ function seedExperienceBrowser(store:SqlitePersistence):void {
       id:"doudian.experience.shop.snapshot.read",version:"2.0.0",riskLevel:"R1",
       permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
       adapterId:"doudian-experience",adapterVersion:"2.0.0"
+    }
+  ]);
+}
+
+function publishInventory(service:LocalCoreService):void {
+  for (const path of [
+    "nodes/core/control.noop.node.yaml",
+    "nodes/core/doudian.shop.context.read@1.3.0.node.yaml",
+    "nodes/core/doudian.product.scope.collect@1.1.0.node.yaml",
+    "nodes/core/doudian.product.scope.restore.node.yaml",
+    "nodes/core/doudian.product.editor.open@1.1.0.node.yaml",
+    "nodes/core/doudian.editor.priority-items.inspect@1.1.0.node.yaml",
+    ...inventoryNodeAssets
+  ]) publish(service,"node",path);
+  publish(service,"adapter","adapters/doudian/doudian.adapter.yaml");
+  publish(service,"adapter","adapters/doudian/doudian-inventory.adapter.yaml");
+  publish(
+    service,"workflow",
+    "workflows/examples/doudian.inventory.production-cycle.workflow.yaml"
+  );
+}
+
+function seedInventoryBrowser(store:SqlitePersistence):void {
+  seedBrowser(store,[
+    {
+      id:"doudian.shop.context.read",version:"1.3.0",riskLevel:"R0",
+      permissions:["browser.dom.read","browser.tabs.read"],
+      adapterId:"doudian",adapterVersion:"1.2.0"
+    },
+    {
+      id:"doudian.product.scope.collect",version:"1.1.0",riskLevel:"R0",
+      permissions:["browser.dom.read","browser.tabs.read"],
+      adapterId:"doudian",adapterVersion:"1.2.0"
+    },
+    {
+      id:"doudian.inventory.shop.activate",version:"1.0.0",riskLevel:"R1",
+      permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
+      adapterId:"doudian-inventory",adapterVersion:"2.0.0"
+    },
+    {
+      id:"doudian.inventory.product.snapshot.read",version:"2.0.0",riskLevel:"R1",
+      permissions:["browser.dom.read","browser.dom.write","browser.tabs.read"],
+      adapterId:"doudian-inventory",adapterVersion:"2.0.0"
     }
   ]);
 }
@@ -522,7 +638,7 @@ async function runTrigger(
     throw new Error(`Trigger did not create a Run: ${JSON.stringify(fired)}`);
   }
   const triggerAttempt = triggerResult.attempt;
-  for (let turn = 0;turn < 80;turn += 1) {
+  for (let turn = 0;turn < 400;turn += 1) {
     await service.ir2Runtime.drainOnce();
     const status = store.getRun(triggerAttempt.workflowRunId!)?.status;
     if (["succeeded","failed","rejected","uncertain","cancelled"].includes(String(status))) {
@@ -569,6 +685,7 @@ describe("local Doudian business Workflow acceptance",() => {
     );
 
     const nodeAssets = [
+      "nodes/core/control.noop.node.yaml",
       "nodes/core/doudian.alliance.shops.discover.node.yaml",
       "nodes/core/doudian.alliance.shop.retired-products.scan.node.yaml",
       "nodes/core/doudian.alliance.shop.retired-products.fact.persist.node.yaml",
@@ -588,9 +705,7 @@ describe("local Doudian business Workflow acceptance",() => {
       "nodes/core/doudian.product.editor.open@1.1.0.node.yaml",
       "nodes/core/doudian.editor.priority-items.inspect.node.yaml",
       "nodes/core/doudian.editor.priority-items.inspect@1.1.0.node.yaml",
-      "nodes/core/doudian.inventory.product.snapshot.read.node.yaml",
-      "nodes/core/doudian.orders.recent.read.node.yaml",
-      "nodes/core/inventory.snapshot.persist.node.yaml"
+      ...inventoryNodeAssets
     ];
     for (const path of nodeAssets) publish(service,"node",path);
     for (const path of [
@@ -602,7 +717,7 @@ describe("local Doudian business Workflow acceptance",() => {
     for (const path of [
       "workflows/examples/doudian.alliance-retired-products-monitor.workflow.yaml",
       "workflows/examples/doudian.experience-score.daily.workflow.yaml",
-      "workflows/examples/doudian.inventory.snapshot.refresh.workflow.yaml"
+      "workflows/examples/doudian.inventory.production-cycle.workflow.yaml"
     ]) publish(service,"workflow",path);
 
     seedBrowser(store,[
@@ -637,9 +752,14 @@ describe("local Doudian business Workflow acceptance",() => {
         adapterId:"doudian",adapterVersion:"1.2.0"
       },
       {
-        id:"doudian.inventory.product.snapshot.read",version:"1.0.0",riskLevel:"R1",
+        id:"doudian.inventory.shop.activate",version:"1.0.0",riskLevel:"R1",
+        permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
+        adapterId:"doudian-inventory",adapterVersion:"2.0.0"
+      },
+      {
+        id:"doudian.inventory.product.snapshot.read",version:"2.0.0",riskLevel:"R1",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read"],
-        adapterId:"doudian-inventory",adapterVersion:"1.0.0"
+        adapterId:"doudian-inventory",adapterVersion:"2.0.0"
       }
     ]);
 
@@ -731,12 +851,15 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const inventory = await runTrigger(service,store,{
       id:"doudian-inventory-local",appId:"inventory-monitor",
-      workflowId:"doudian.inventory.snapshot.refresh",workflowVersion:"2.0.0",
-      workflowInput:{ shopId:"10001",shopName:"测试店铺" },
+      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.0",
+      workflowInput:{ expectedShopCount:13,shops:inventoryShops },
       externalDomainLease:true
     });
     expect(inventory).toMatchObject({
-      run:{ status:"succeeded",output:{ shop:{ id:"10001",name:"测试店铺" } } },
+      run:{
+        status:"succeeded",
+        output:{ cycle:{ status:"complete",coverage:{ succeededShops:13 } } }
+      },
       triggerOccurrence:{ status:"terminal",terminalOutcome:"complete" },
       triggerAttempt:{
         status:"terminal",terminalOutcome:"complete",browserFencingToken:3
@@ -745,22 +868,154 @@ describe("local Doudian business Workflow acceptance",() => {
     expect(store.listBrowserControlLeases(new Date().toISOString())).toEqual([]);
     expect(store.listBrowserSessions({ limit:10 }).records).toHaveLength(1);
     expect(store.listBrowserPageObservations({ limit:10 })).toHaveLength(1);
-    expect(inventoryWriter.calls).toMatchObject([{
-      lease:{
-        leaseKey:"inventory-production-cycle",
-        holderId:expect.stringMatching(/^trigger-attempt:/u),
-        fencingToken:7
+    expect(inventoryWriter.calls).toHaveLength(26);
+    expect(inventoryWriter.calls.every(({ lease }) =>
+      lease.leaseKey === "inventory-production-cycle" &&
+      /^trigger-attempt:/u.test(lease.holderId) &&
+      lease.fencingToken === 7
+    )).toBe(true);
+    expect(invocations.filter((id) => id === "doudian.inventory.shop.activate")).toHaveLength(14);
+    expect(invocations.filter((id) => id === "doudian.product.scope.collect")).toHaveLength(13);
+    expect(invocations.filter((id) => id === "doudian.inventory.product.snapshot.read")).toHaveLength(13);
+    store.close();
+  });
+
+  it("keeps prior inventory receipts visible and raises Workflow Attention when one shop is partial",async () => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    const providers = new RuntimeProviderRegistry();
+    const invocations:string[] = [];
+    providers.register(new FixtureProvider(
+      "browser",invocations,undefined,undefined,undefined,
+      { failedShopId:"10007" }
+    ));
+    const inventoryWriter = new InventoryFixtureWriter(invocations);
+    const inventoryLeaseProvider = new InventoryFixtureDomainLeaseProvider();
+    providers.register(new InventoryDataRuntimeProvider(store,inventoryWriter));
+    const service = new LocalCoreService(
+      store,undefined,providers,undefined,undefined,undefined,
+      [inventoryLeaseProvider]
+    );
+    publishInventory(service);
+    seedInventoryBrowser(store);
+
+    const result = await runTrigger(service,store,{
+      id:"doudian-inventory-partial",appId:"inventory-monitor",
+      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.0",
+      workflowInput:{ expectedShopCount:13,shops:inventoryShops },
+      externalDomainLease:true
+    });
+
+    expect(result).toMatchObject({
+      run:{
+        status:"uncertain",
+        output:{
+          cycle:{
+            status:"partial",
+            coverage:{ succeededShops:13,partialShops:1 },
+            inventory:{ attemptedProducts:13,persistedProducts:12,failedProducts:1 }
+          }
+        }
+      },
+      triggerOccurrence:{ status:"terminal",terminalOutcome:"uncertain" },
+      triggerAttempt:{ status:"terminal",terminalOutcome:"uncertain" }
+    });
+    expect(
+      inventoryWriter.calls.filter(({ operation }) =>
+        operation === "inventory.snapshot.persist"
+      )
+    ).toHaveLength(12);
+    expect(store.getAttention(`run-terminal:${result.run.id}`)).toMatchObject({
+      sourceRef:{ kind:"workflow-run",runId:result.run.id },
+      item:{ source:"runtime",kind:"blocking",groupKey:"uncertain" }
+    });
+    expect(store.listBrowserControlLeases(new Date().toISOString())).toEqual([]);
+    expect(store.listExternalDomainLeases()).toMatchObject([
+      { runId:result.run.id,state:"released" }
+    ]);
+    store.close();
+  });
+
+  it("rejects a duplicate 13-shop configuration before browser or inventory effects",async () => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    const providers = new RuntimeProviderRegistry();
+    const invocations:string[] = [];
+    providers.register(new FixtureProvider("browser",invocations));
+    const inventoryWriter = new InventoryFixtureWriter(invocations);
+    const inventoryLeaseProvider = new InventoryFixtureDomainLeaseProvider();
+    providers.register(new InventoryDataRuntimeProvider(store,inventoryWriter));
+    const service = new LocalCoreService(
+      store,undefined,providers,undefined,undefined,undefined,
+      [inventoryLeaseProvider]
+    );
+    publishInventory(service);
+    seedInventoryBrowser(store);
+    const shops = inventoryShops.map((shop,index) =>
+      index === 12 ? { ...shop,id:inventoryShops[0]!.id } : shop
+    );
+
+    const result = await runTrigger(service,store,{
+      id:"doudian-inventory-duplicate",appId:"inventory-monitor",
+      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.0",
+      workflowInput:{ expectedShopCount:13,shops },
+      externalDomainLease:true
+    });
+
+    expect(result).toMatchObject({
+      run:{ status:"rejected" },
+      triggerOccurrence:{ status:"terminal",terminalOutcome:"rejected" },
+      triggerAttempt:{ status:"terminal",terminalOutcome:"rejected" }
+    });
+    expect(invocations).toEqual([]);
+    expect(inventoryWriter.calls).toEqual([]);
+    expect(store.listBrowserControlLeases(new Date().toISOString())).toEqual([]);
+    expect(store.listExternalDomainLeases()).toMatchObject([
+      { runId:result.run.id,state:"released" }
+    ]);
+    store.close();
+  });
+
+  it("keeps persisted snapshot counts visible when forecast-risk outcome becomes uncertain",async () => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    const providers = new RuntimeProviderRegistry();
+    const invocations:string[] = [];
+    providers.register(new FixtureProvider("browser",invocations));
+    const inventoryWriter = new InventoryFixtureWriter(invocations,"10007");
+    const inventoryLeaseProvider = new InventoryFixtureDomainLeaseProvider();
+    providers.register(new InventoryDataRuntimeProvider(store,inventoryWriter));
+    const service = new LocalCoreService(
+      store,undefined,providers,undefined,undefined,undefined,
+      [inventoryLeaseProvider]
+    );
+    publishInventory(service);
+    seedInventoryBrowser(store);
+
+    const result = await runTrigger(service,store,{
+      id:"doudian-inventory-forecast-uncertain",appId:"inventory-monitor",
+      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.0",
+      workflowInput:{ expectedShopCount:13,shops:inventoryShops },
+      externalDomainLease:true
+    });
+
+    expect(result.run).toMatchObject({
+      status:"uncertain",
+      output:{
+        cycle:{
+          status:"partial",
+          reason:"forecast-risk-outcome-uncertain",
+          shop:{ id:"10007" },
+          snapshots:{ attempted:1,persisted:1,failed:0,unresolved:0 }
+        },
+        sourceRestore:{ status:"not_attempted" }
       }
-    }]);
-    expect(invocations).toEqual([
-      "doudian.alliance.shops.discover",
-      "doudian.alliance.shop.retired-products.scan",
-      "doudian.experience.shops.discover",
-      "doudian.experience.shop.snapshot.read",
-      "doudian.shop.context.read",
-      "doudian.product.scope.collect",
-      "doudian.inventory.product.snapshot.read",
-      "inventory.snapshot.persist"
+    });
+    expect(inventoryWriter.calls.filter(({ operation }) =>
+      operation === "inventory.snapshot.persist"
+    )).toHaveLength(7);
+    expect(store.getAttention(`run-terminal:${result.run.id}`)).toMatchObject({
+      item:{ source:"runtime",kind:"blocking",groupKey:"uncertain" }
+    });
+    expect(store.listExternalDomainLeases()).toMatchObject([
+      { runId:result.run.id,state:"reconciliation_required" }
     ]);
     store.close();
   });

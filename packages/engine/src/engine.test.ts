@@ -719,8 +719,42 @@ describe("deterministic IR2 engine", () => {
       }
     });
     expect(stopped.state.status).toBe("uncertain");
+    expect(stopped.state.output).toBeUndefined();
     expect(stopped.effects).toEqual([]);
     expect(stopped.state.cursor).toBeUndefined();
+  });
+
+  it("retains controlled output from an uncertain terminal inside foreach", () => {
+    const plan = planWithForeach();
+    const foreach = plan.steps.items;
+    if (foreach?.kind !== "foreach") throw new Error("fixture changed");
+    const terminal = foreach.body.steps.item_uncertain;
+    if (terminal?.kind !== "terminal") throw new Error("fixture changed");
+    (foreach.body.steps as unknown as Record<string,typeof terminal>)
+      .item_uncertain = {
+        ...terminal,
+        output:{ kind:"literal",value:{ retainedFacts:3 } }
+      };
+    const engine = new DeterministicWorkflowEngine(plan,dependencies());
+    const waiting = engine.start("run-uncertain-output",{
+      items:[{ id:"a" }]
+    });
+    const active = waiting.state.active;
+    if (active?.kind !== "call") throw new Error("fixture changed");
+    const stopped = engine.acceptRuntimeOutcome({
+      state:waiting.state,
+      invocationId:active.invocation.invocationId,
+      fencingToken:1,
+      outcome:{
+        status:"uncertain",
+        error:{ code:"OUTCOME_UNKNOWN",message:"Unknown",retryable:false },
+        evidence:[],riskSignals:[]
+      }
+    });
+    expect(stopped.state).toMatchObject({
+      status:"uncertain",
+      output:{ retainedFacts:3 }
+    });
   });
 
   it("preserves the exact error code of a top-level uncertain terminal", () => {

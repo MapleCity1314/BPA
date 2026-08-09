@@ -263,7 +263,8 @@ Attention；当前证据仍属于 Node/Provider/Runtime fixture 与本机门禁�
 
 - 公司 Mac mini 已有正式 launchd 生产入口和 13 店恢复成功的交接记录；
 - 已有订单、库存、预测、风险和控制租约的分层事实；
-- 当前实现仍高度依赖 `apps/inventory-monitor`，尚未完成产品 Workflow/Trigger 收敛；
+- 现网仍由 `apps/inventory-monitor` 的 serialized production cycle 控制；本代码候选已形成
+  正式 13 店 Workflow，但尚未部署、未接管生产；
 - 交接成功是历史证据，每次生产操作前仍需重新只读核验。
 
 2026-08-06 的只读 Trigger 审计进一步确认：完整 13 店周期仍由 launchd 和
@@ -352,17 +353,32 @@ Attempt。远端 grant、TriggerAttempt 与 Workflow Run 绑定后，`inventory.
 只从 Run 绑定的可信上下文注入库存 UDS；PostgreSQL 每个库存写事务在同一连接先以
 `SELECT ... FOR UPDATE` 校验 owner、token 和数据库时钟，再提交幂等账本与业务事实，关闭
 了“先校验、后换事务写入”的 stale-owner 窗口。租约丢失或写入响应不确定时 Run 进入
-`uncertain + reconciliation_required`，不得自动重试；Run 终态后按“远端 release → 本地
-released → Attempt/Occurrence terminal”收口。Core 重启后必须先远端 read 验证同一 owner
-和 token，才能恢复派发；Core 时钟跳变不能延长 PostgreSQL 租期。
+`uncertain + reconciliation_required`，不得自动重试；业务写入对账未完成时，本地租约和
+Attempt 保持阻断，不能只因远端 lease 可释放就让下一轮接管。Core 重启后必须先远端 read
+验证同一 owner 和 token，才能恢复派发；Core 时钟跳变不能延长 PostgreSQL 租期。
 
-这一候选目前只完成单店库存 snapshot 纵切与本机 fixture E2E，不包含 13 店 orders、
-forecast、risk 顶层编排，也没有部署到公司 Mac。旧 `refresh-once` 和已停用 scheduler 的
-源码、测试、launchd 入口已按无兼容层原则删除；现网 serialized `production-cycle.ts`
-仍保留到正式 13 店 Workflow、真实登录 canary 与无中断切换完成。多分片
-`sales-demand.sync` 仍可能在部分 chunk 已提交后才失去租约，因此在替换 Team 写入路径并
-把该情况统一为 uncertain/reconciliation 之前，不得纳入新 Trigger，也不得声称库存正式化
-已经完成。
+本代码候选现已完成固定 13 店的正式
+`doudian.inventory.production-cycle@1.0.0`：店铺 ID 与名称在任何浏览器/库存写入前做唯一性
+校验；一个 Run、一个 Browser Slot、一个外部 PostgreSQL lease 串行完成切店、WDT 订单
+新鲜度、逐商品快照事实、店级预测/风险批处理和源店恢复。首版每店最多 250 个商品，已知
+真实单店记录为 86；Compiler 最坏执行步数为 9,889，仍低于 10,000，251 条失败关闭。
+普通商品失败保留已持久事实并形成 `partial + uncertain`；预测/风险写入结果不确定时，Run
+输出明确带出已持久化快照计数并进入对账阻断，不会显示“无数据”。
+
+库存服务候选同步升级为 WDT-only staged publication：订单 chunk 只写 staging，最终在同一
+fenced PostgreSQL 事务中 promote canonical facts、发布
+`sales-demand-staged:<shopId>`、推进 watermark 并完成 sync；失败且成功清理 staging 时是
+确定性 degraded，提交或清理结果未知才进入 reconciliation。旧 v5 订单事实和 watermark
+物理归档到 `legacy` schema，新预测只读取带 `publicationProtocol=staged-v1` 的发布版本。
+当前本机 fixture 已覆盖 13 店完整周期、单店部分失败、重复清单零副作用和预测写入不确定，
+但没有真实 PostgreSQL/MySQL/登录 Chrome 证明，也没有部署到公司 Mac。
+
+现网 serialized `production-cycle.ts` 与其 launchd 入口仍保留到真实 canary 和无中断切换；
+这不是“双控制面可并跑”的许可。启用新 Trigger 前必须在同一维护窗口停用并只读确认旧
+launchd、进程、活动周期和有效 `inventory-production-cycle` lease 全为空；新链路验收后再按
+无兼容层原则删除旧执行路径。库存面板异常已能通过 Workflow Attention 展示，但正式
+Workflow 的成功周期历史仍未替换 legacy `ops.collection_run/step` 视图，因此也属于部署前
+门禁。
 
 Schema v22 已随 PR #24 把体验分的“已持久化”从聚合文案改成可审计事实：每店页面读取后，
 由 Core 内 `experience-data` Provider 立即写入 Run 级不可变 Operational Fact；业务日固定

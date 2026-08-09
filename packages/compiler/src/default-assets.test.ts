@@ -23,6 +23,7 @@ import {
   MemoryNodeCatalog,
   type CatalogResolver
 } from "./index.js";
+import { estimateMaxStepExecutions } from "@bpa/workflow-ir";
 
 const root = new URL("../../../", import.meta.url);
 
@@ -236,6 +237,54 @@ describe("published default asset sources", () => {
     expect(collectShops.body.steps[readSnapshot.routes.rejected]).toMatchObject({
       kind:"terminal",status:"rejected"
     });
+
+    const inventoryCycle = loadYaml<WorkflowDefinitionV1Alpha3>(
+      "workflows/examples/doudian.inventory.production-cycle.workflow.yaml"
+    );
+    const inventoryPlan = compileCanonicalWorkflow(inventoryCycle, catalog);
+    expect(estimateMaxStepExecutions(inventoryPlan)).toBe(9_889n);
+    expect(estimateMaxStepExecutions(inventoryPlan)).toBeLessThan(10_000n);
+    const processInventoryShops = inventoryPlan.steps.process_shops;
+    expect(processInventoryShops?.kind).toBe("foreach");
+    if (processInventoryShops?.kind !== "foreach") {
+      throw new Error("inventory production cycle fixture changed");
+    }
+    const collectInventorySnapshots =
+      processInventoryShops.body.steps.collect_snapshots;
+    expect(collectInventorySnapshots?.kind).toBe("foreach");
+    if (collectInventorySnapshots?.kind !== "foreach") {
+      throw new Error("inventory snapshot collection fixture changed");
+    }
+    expect(collectInventorySnapshots.limits.maxItems).toBe(250);
+    const belowRequiredBudget = structuredClone(inventoryCycle);
+    belowRequiredBudget.spec.limits.maxStepExecutions = 9_888;
+    expect(() =>
+      compileCanonicalWorkflow(belowRequiredBudget, catalog)
+    ).toThrow(/9889 exceeds maxStepExecutions 9888/);
+
+    const forecastRiskNode = nodeMap.get(
+      "inventory.shop.forecast-risk.refresh@1.0.0"
+    );
+    if (!forecastRiskNode) throw new Error("forecast-risk Node is missing");
+    const validateForecastRiskInput = compileDataValidator(
+      forecastRiskNode.inputSchema
+    );
+    expect(
+      validateForecastRiskInput({
+        shop: { id: "10461048", name: "库存验收店" },
+        attemptedSnapshots: 251,
+        persistedSnapshots: 251,
+        failedSnapshots: 0,
+        unresolvedSnapshots: 0,
+        snapshotReceipts: Array.from({ length: 251 }, (_, index) => ({
+          itemKey: String(10000 + index),
+          output: {
+            productId: String(10000 + index),
+            snapshotId: `snapshot:${index}`
+          }
+        }))
+      })
+    ).toBe(false);
 
     const doudianWorkflow = loadYaml<WorkflowDefinitionV1Alpha3>(
       "workflows/examples/doudian.shop-context-observe.workflow.yaml"

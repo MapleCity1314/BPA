@@ -1,0 +1,81 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: inventory.shop.forecast-risk.refresh
+  version: 1.0.0
+  title: 批量刷新单店库存预测与风险
+  description: 对当前店铺本 Run 已验证的最多 250 个库存快照批量读取固定订单版本、计算并持久化预测与风险，向 Workflow 仅返回有界计数与严重度汇总；已知单店实证最大商品数为 86，当前容量保留到 250，超限必须失败关闭。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [shop, attemptedSnapshots, persistedSnapshots, failedSnapshots, unresolvedSnapshots, snapshotReceipts]
+  properties:
+    shop:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: { type: string, pattern: "^[0-9]{5,30}$" }
+        name: { type: string, minLength: 2, maxLength: 80 }
+    attemptedSnapshots: { type: integer, minimum: 0, maximum: 250 }
+    persistedSnapshots: { type: integer, minimum: 0, maximum: 250 }
+    failedSnapshots: { type: integer, minimum: 0, maximum: 250 }
+    unresolvedSnapshots: { type: integer, minimum: 0, maximum: 250 }
+    snapshotReceipts:
+      type: array
+      maxItems: 250
+      items:
+        type: object
+        additionalProperties: false
+        required: [itemKey, output]
+        properties:
+          itemKey: { type: string, pattern: "^[0-9]{5,30}$" }
+          output:
+            type: object
+            additionalProperties: false
+            required: [productId, snapshotId]
+            properties:
+              productId: { type: string, pattern: "^[0-9]{5,30}$" }
+              snapshotId: { type: string, minLength: 1, maxLength: 500 }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [status, attemptedProducts, completedProducts, partialProducts, failedProducts, forecastWrites, riskWrites, severities]
+  properties:
+    status: { enum: [complete, partial] }
+    attemptedProducts: { type: integer, minimum: 0, maximum: 250 }
+    completedProducts: { type: integer, minimum: 0, maximum: 250 }
+    partialProducts: { type: integer, minimum: 0, maximum: 250 }
+    failedProducts: { type: integer, minimum: 0, maximum: 250 }
+    forecastWrites:
+      type: object
+      additionalProperties: false
+      required: [attempted, persisted]
+      properties:
+        attempted: { type: integer, minimum: 0 }
+        persisted: { type: integer, minimum: 0 }
+    riskWrites:
+      type: object
+      additionalProperties: false
+      required: [attempted, persisted]
+      properties:
+        attempted: { type: integer, minimum: 0, maximum: 250 }
+        persisted: { type: integer, minimum: 0, maximum: 250 }
+    severities:
+      type: object
+      additionalProperties: false
+      required: [normal, warning, critical, unknown]
+      properties:
+        normal: { type: integer, minimum: 0, maximum: 250 }
+        warning: { type: integer, minimum: 0, maximum: 250 }
+        critical: { type: integer, minimum: 0, maximum: 250 }
+        unknown: { type: integer, minimum: 0, maximum: 250 }
+risk:
+  level: R1
+  permissions: [inventory.service.forecast-risk.write]
+execution:
+  timeoutDefault: 30m
+  idempotency: verified_write
+  cancellable: true
+errors: [INVENTORY_FORECAST_RISK_INPUT_INVALID, INVENTORY_EXTERNAL_LEASE_INVALID, INVENTORY_SERVICE_NOT_CONFIGURED, INVENTORY_SERVICE_UNAVAILABLE, INVENTORY_SERVICE_PROTOCOL_ERROR, INVENTORY_SERVICE_FAILED, INVENTORY_FORECAST_RISK_RESULT_INVALID, INVENTORY_SHOP_FORECAST_RISK_PARTIAL_COMMIT, LEASE_FENCE_INVALID, SCHEDULER_LEASE_LOST]

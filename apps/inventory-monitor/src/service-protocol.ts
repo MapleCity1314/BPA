@@ -1,15 +1,14 @@
 import { randomBytes } from "node:crypto";
 import { chmod, unlink } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
-import type { DemandForecast, InventoryRiskEvaluation } from "@bpa/inventory-domain";
 import { isWindowsNamedPipe } from "@bpa/platform-runtime";
 import type { MysqlSalesDemandSync } from "./mysql-source.js";
 import type {
   InventoryRepository,
   LeaseFence,
-  PersistableDoudianSnapshot,
-  PersistableRecentOrders
+  PersistableDoudianSnapshot
 } from "./repository.js";
+import { refreshShopForecastRisk } from "./shop-forecast-risk-refresh.js";
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const DOMAIN_LEASE_KEY = "inventory-production-cycle";
@@ -22,13 +21,83 @@ const OPERATIONS = [
   "domain-lease.release",
   "domain-lease.read",
   "sales-demand.sync",
-  "sales-demand.recent.persist",
   "inventory.snapshot.persist",
+  "inventory.orders.freshness.read",
   "inventory.forecast-input.read",
-  "inventory.forecast.persist",
-  "inventory.risk.persist"
+  "inventory.shop.forecast-risk.refresh"
 ] as const;
 type Operation = (typeof OPERATIONS)[number];
+
+const WRITE_OPERATIONS = new Set<Operation>([
+  "sales-demand.sync",
+  "inventory.snapshot.persist",
+  "inventory.shop.forecast-risk.refresh"
+]);
+
+class InventoryServiceOperationError extends Error {
+  constructor(
+    readonly code: string,
+    readonly outcomeUncertain: boolean
+  ) {
+    super(code);
+  }
+}
+
+function rawErrorCode(error: unknown): string {
+  if (
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    (/^[A-Z][A-Z0-9_]{1,99}$/u.test(error.code) ||
+      /^[A-Z0-9]{5}$/u.test(error.code))
+  ) {
+    return error.code;
+  }
+  const first = error instanceof Error
+    ? error.message.split(/[:\s]/u)[0]
+    : "INVENTORY_SERVICE_FAILED";
+  return first && (
+    /^[A-Z][A-Z0-9_]{1,99}$/u.test(first) ||
+    /^[A-Z0-9]{5}$/u.test(first)
+  )
+    ? first
+    : "INVENTORY_SERVICE_FAILED";
+}
+
+function transportFailure(error: unknown, code: string): boolean {
+  const transportCodes = new Set([
+    "ETIMEDOUT",
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "EPIPE",
+    "PROTOCOL_CONNECTION_LOST",
+    "PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR",
+    "57P01",
+    "57P02",
+    "57P03"
+  ]);
+  if (transportCodes.has(code)) return true;
+  const message = error instanceof Error ? error.message : "";
+  return /timed?\s*out|timeout|connection\s+(?:lost|reset|terminated)|socket\s+hang\s+up/iu.test(
+    message
+  );
+}
+
+function operationError(
+  operation: Operation,
+  error: unknown
+): InventoryServiceOperationError {
+  if (error instanceof InventoryServiceOperationError) return error;
+  const code = rawErrorCode(error);
+  return new InventoryServiceOperationError(
+    code,
+    code === "SCHEDULER_LEASE_LOST" ||
+      code === "SALES_DEMAND_PARTIAL_COMMIT" ||
+      code === "INVENTORY_SHOP_FORECAST_RISK_PARTIAL_COMMIT" ||
+      (WRITE_OPERATIONS.has(operation) && transportFailure(error, code))
+  );
+}
 
 interface ServiceRequest {
   readonly id: string;
@@ -48,6 +117,14 @@ function text(value: unknown, label: string, maximum = 500): string {
     throw new Error(`${label} is invalid`);
   }
   return value.trim();
+}
+
+function nullableText(
+  value: unknown,
+  label: string,
+  maximum = 500
+): string | null {
+  return value === null ? null : text(value,label,maximum);
 }
 
 function lease(value: unknown): LeaseFence {
@@ -158,15 +235,21 @@ export class InventoryServiceProtocol {
       settled = true;
       void this.handle(frame)
         .then((result) => response(socket, result))
-        .catch((error) =>
+        .catch((error) => {
+          const classified = error instanceof InventoryServiceOperationError
+            ? error
+            : new InventoryServiceOperationError(rawErrorCode(error), false);
           response(socket, {
             ok: false,
             error: {
-              code: error instanceof Error ? error.message.split(/[:\s]/u)[0] : "INVENTORY_SERVICE_FAILED",
-              message: error instanceof Error ? error.message.slice(0, 1_000) : String(error).slice(0, 1_000)
+              code: classified.code,
+              message: `Inventory service operation failed: ${classified.code}`,
+              ...(classified.outcomeUncertain
+                ? { outcomeUncertain: true }
+                : {})
             }
-          })
-        );
+          });
+        });
     };
     socket.on("data", (chunk: Buffer) => {
       if (settled) return;
@@ -208,14 +291,13 @@ export class InventoryServiceProtocol {
     if (!OPERATIONS.includes(operation)) throw new Error("OPERATION_NOT_ALLOWED");
     const input = record(parsed.input, "request.input");
     const writeFence = operation === "sales-demand.sync" ||
-      operation === "sales-demand.recent.persist" ||
       operation === "inventory.snapshot.persist" ||
-      operation === "inventory.forecast.persist" ||
-      operation === "inventory.risk.persist"
+      operation === "inventory.shop.forecast-risk.refresh"
       ? lease(input.lease)
       : undefined;
-    let result: unknown;
-    if (operation === "health.read") {
+    try {
+      let result: unknown;
+      if (operation === "health.read") {
       result = await this.repository.health();
     } else if (operation === "domain-lease.acquire") {
       result = await this.repository.acquireDomainLease({
@@ -262,37 +344,59 @@ export class InventoryServiceProtocol {
       const snapshot = record(input.snapshot,"snapshot") as unknown as PersistableDoudianSnapshot;
       const configuredShop = this.configuredShop(snapshot.shop.id, snapshot.shop.name);
       result = await this.repository.persistSnapshot({ ...snapshot,shop:configuredShop },writeFence!);
-    } else if (operation === "sales-demand.recent.persist") {
-      if (this.configuredShops.length === 0) throw new Error("SHOP_IDENTITY_NOT_CONFIGURED");
-      const snapshot = record(input.snapshot,"snapshot") as unknown as PersistableRecentOrders;
-      const configuredShop = this.configuredShop(snapshot.shop.id, snapshot.shop.name);
-      result = await this.repository.persistRecentOrders({ ...snapshot,shop:configuredShop },writeFence!);
+    } else if (operation === "inventory.orders.freshness.read") {
+      const requestedShop = record(input.shop,"shop");
+      const shop = this.configuredShop(
+        text(requestedShop.id,"shop.id",200),
+        text(requestedShop.name,"shop.name",200)
+      );
+      const baseline = input.baseline === undefined
+        ? undefined
+        : record(input.baseline,"baseline");
+      const baselineStatus = baseline?.status;
+      if (baseline &&
+        !["fresh_reused","refresh_required","refreshed","degraded"]
+          .includes(String(baselineStatus))) {
+        throw new Error("ORDERS_FRESHNESS_BASELINE_INVALID");
+      }
+      result = await this.repository.ordersFreshness({
+        shop,
+        ...(baseline ? { baseline:{
+          status:baselineStatus as
+            | "fresh_reused" | "refresh_required" | "refreshed" | "degraded",
+          datasetId:nullableText(baseline.datasetId,"baseline.datasetId"),
+          dataVersion:nullableText(baseline.dataVersion,"baseline.dataVersion")
+        } } : {})
+      });
     } else if (operation === "inventory.forecast-input.read") {
       result = await this.repository.forecastInputs({
         shopId: text(input.shopId, "shopId", 200),
         productId: text(input.productId, "productId", 200),
         asOf: text(input.asOf, "asOf", 100)
       });
-    } else if (operation === "inventory.forecast.persist") {
-      result = {
-        forecastId: await this.repository.persistForecast({
-          shopId: text(input.shopId, "shopId", 200),
-          productId: text(input.productId, "productId", 200),
-          platformSkuId: text(input.platformSkuId, "platformSkuId", 200),
-          merchantCode: text(input.merchantCode, "merchantCode", 200),
-          sourceDataset: record(input.sourceDataset, "sourceDataset") as { id: string; version: string },
-          forecast: record(input.forecast, "forecast") as unknown as DemandForecast
-        },writeFence!)
-      };
     } else {
-      result = await this.repository.persistRisk({
-        snapshotId: text(input.snapshotId, "snapshotId", 500),
-        shopId: text(input.shopId, "shopId", 200),
-        productId: text(input.productId, "productId", 200),
-        evaluation: record(input.evaluation, "evaluation") as unknown as InventoryRiskEvaluation
-      },writeFence!);
+      const requestedShop = record(input.shop,"shop");
+      const shop = this.configuredShop(
+        text(requestedShop.id,"shop.id",200),
+        text(requestedShop.name,"shop.name",200)
+      );
+      result = await refreshShopForecastRisk({
+        shop,
+        attemptedSnapshots:Number(input.attemptedSnapshots),
+        persistedSnapshots:Number(input.persistedSnapshots),
+        failedSnapshots:Number(input.failedSnapshots),
+        unresolvedSnapshots:Number(input.unresolvedSnapshots),
+        snapshotReceipts:Array.isArray(input.snapshotReceipts)
+          ? input.snapshotReceipts
+          : (() => { throw new Error("INVENTORY_FORECAST_RISK_INPUT_INVALID"); })(),
+        lease:writeFence!,
+        repository:this.repository
+      });
+      }
+      return { ok: true, id, result };
+    } catch (error) {
+      throw operationError(operation, error);
     }
-    return { ok: true, id, result };
   }
 }
 

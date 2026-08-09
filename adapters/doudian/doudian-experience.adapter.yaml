@@ -9,17 +9,17 @@ platform: doudian
 origins:
   - https://fxg.jinritemai.com
 extension:
-  minimumVersion: 0.6.1
+  minimumVersion: 0.6.2
 capabilities:
   - nodeId: doudian.experience.shops.discover
     nodeVersions: [2.0.0]
     handlerId: doudian.experience.shops.discover
     handlerVersion: 2.0.0
-    implementationDigest: sha256:3f21c632920f94b234bfaeb7b3954d2f9a01caa71269e089fc865a868beb0bf0
+    implementationDigest: sha256:64f13cb858967ccc1fd077495b6f46d164510b327fb88f6f18e2ae71d0cf3b22
     permissions: [browser.dom.read, browser.dom.write, browser.tabs.read, browser.tabs.navigate]
   - nodeId: doudian.experience.shop.snapshot.read
     nodeVersions: [2.0.0]
     handlerId: doudian.experience.shop.snapshot.read
     handlerVersion: 2.0.0
-    implementationDigest: sha256:3f21c632920f94b234bfaeb7b3954d2f9a01caa71269e089fc865a868beb0bf0
+    implementationDigest: sha256:64f13cb858967ccc1fd077495b6f46d164510b327fb88f6f18e2ae71d0cf3b22
     permissions: [browser.dom.read, browser.dom.write, browser.tabs.read, browser.tabs.navigate]

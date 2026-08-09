@@ -1,0 +1,126 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: inventory.production-cycle.aggregate
+  version: 1.0.0
+  title: 汇总库存生产周期完整性
+  description: 以受控店铺配置和 foreach 中已验证写入的确定性回执汇总订单、库存、预测与风险覆盖；部分持久化始终保留为 partial，不得报告无数据。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [expectedShopCount, configuredShops, sourceShop, foreachOutcome]
+  properties:
+    expectedShopCount: { const: 13 }
+    configuredShops:
+      type: array
+      minItems: 13
+      maxItems: 13
+      items: { $ref: "#/$defs/shop" }
+    sourceShop: { $ref: "#/$defs/shop" }
+    foreachOutcome: { type: object }
+  $defs:
+    shop:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: { type: string, pattern: "^[0-9]{5,30}$" }
+        name: { type: string, minLength: 2, maxLength: 80 }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [status, observedAt, sourceShop, coverage, orders, inventory, risk, shops, attentionRequired]
+  properties:
+    status: { enum: [complete, complete_degraded, partial, failed] }
+    observedAt: { type: string, format: date-time }
+    sourceShop: { $ref: "#/$defs/shop" }
+    coverage:
+      type: object
+      additionalProperties: false
+      required: [expectedShops, configuredShops, attemptedShops, succeededShops, failedShops, unresolvedShops, canaryPassedShops, usableInventoryShops, blockedShops, partialShops]
+      properties:
+        expectedShops: { type: integer, minimum: 1, maximum: 13 }
+        configuredShops: { type: integer, minimum: 1, maximum: 13 }
+        attemptedShops: { type: integer, minimum: 0, maximum: 13 }
+        succeededShops: { type: integer, minimum: 0, maximum: 13 }
+        failedShops: { type: integer, minimum: 0, maximum: 13 }
+        unresolvedShops: { type: integer, minimum: 0, maximum: 13 }
+        canaryPassedShops: { type: integer, minimum: 0, maximum: 13 }
+        usableInventoryShops: { type: integer, minimum: 0, maximum: 13 }
+        blockedShops: { type: integer, minimum: 0, maximum: 13 }
+        partialShops: { type: integer, minimum: 0, maximum: 13 }
+    orders:
+      type: object
+      additionalProperties: false
+      required: [freshReusedShops, refreshedShops, fallbackShops, degradedShops]
+      properties:
+        freshReusedShops: { type: integer, minimum: 0, maximum: 13 }
+        refreshedShops: { type: integer, minimum: 0, maximum: 13 }
+        fallbackShops: { type: integer, minimum: 0, maximum: 13 }
+        degradedShops: { type: integer, minimum: 0, maximum: 13 }
+    inventory:
+      type: object
+      additionalProperties: false
+      required: [discoveredProducts, attemptedProducts, persistedProducts, failedProducts, skippedProducts]
+      properties:
+        discoveredProducts: { type: integer, minimum: 0 }
+        attemptedProducts: { type: integer, minimum: 0 }
+        persistedProducts: { type: integer, minimum: 0 }
+        failedProducts: { type: integer, minimum: 0 }
+        skippedProducts: { type: integer, minimum: 0 }
+    risk:
+      type: object
+      additionalProperties: false
+      required: [attemptedProducts, succeededProducts, degradedProducts, normalProducts, warningProducts, criticalProducts, unknownProducts]
+      properties:
+        attemptedProducts: { type: integer, minimum: 0 }
+        succeededProducts: { type: integer, minimum: 0 }
+        degradedProducts: { type: integer, minimum: 0 }
+        normalProducts: { type: integer, minimum: 0 }
+        warningProducts: { type: integer, minimum: 0 }
+        criticalProducts: { type: integer, minimum: 0 }
+        unknownProducts: { type: integer, minimum: 0 }
+    shops:
+      type: array
+      maxItems: 13
+      items:
+        type: object
+        additionalProperties: false
+        required: [shop, status, ordersStatus, inventoryStatus, riskStatus, discoveredProducts, attemptedProducts, persistedProducts, failedProducts, skippedProducts]
+        properties:
+          shop: { $ref: "#/$defs/shop" }
+          status: { enum: [complete, degraded, partial, blocked] }
+          ordersStatus: { enum: [fresh_reused, refreshed, degraded] }
+          inventoryStatus: { enum: [complete, partial, blocked] }
+          riskStatus: { enum: [complete, degraded, not_run] }
+          discoveredProducts: { type: integer, minimum: 0 }
+          attemptedProducts: { type: integer, minimum: 0 }
+          persistedProducts: { type: integer, minimum: 0 }
+          failedProducts: { type: integer, minimum: 0 }
+          skippedProducts: { type: integer, minimum: 0 }
+    attentionRequired: { type: boolean }
+    operationalAttentionMarker:
+      type: object
+      additionalProperties: false
+      required: [version, kind, code]
+      properties:
+        version: { const: "1" }
+        kind: { const: business-finding }
+        code: { enum: [inventory-production-cycle-degraded, inventory-risk-finding] }
+  $defs:
+    shop:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: { type: string, pattern: "^[0-9]{5,30}$" }
+        name: { type: string, minLength: 2, maxLength: 80 }
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 30s
+  idempotency: repeatable_read
+  cancellable: true
+errors: [INVENTORY_PRODUCTION_CYCLE_INPUT_INVALID, INVENTORY_PRODUCTION_CYCLE_SHOP_COUNT_MISMATCH, INVENTORY_PRODUCTION_CYCLE_SHOP_DUPLICATE, INVENTORY_PRODUCTION_CYCLE_OUTCOME_INVALID]
