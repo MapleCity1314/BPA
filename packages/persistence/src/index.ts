@@ -295,6 +295,53 @@ export interface AttentionDeliveryRecord {
   completedAt?: string;
 }
 
+export type RecoverySessionState =
+  | "issued"
+  | "active"
+  | "completed"
+  | "expired"
+  | "revoked"
+  | "invalidated";
+
+export interface RecoverySessionRecord {
+  id: string;
+  attentionId: string;
+  revision: number;
+  state: RecoverySessionState;
+  requestedBy: string;
+  browserSessionId: string;
+  browserInstanceId: string;
+  profileId: string;
+  tabId: number;
+  origin: string;
+  initialPageEpoch: string;
+  leaseResourceId: string;
+  leaseOwnerId: string;
+  leaseFencingToken: number;
+  issuedAt: string;
+  expiresAt: string;
+  updatedAt: string;
+  activatedAt?: string;
+  completedAt?: string;
+  completionPageEpoch?: string;
+  terminalReason?: string;
+}
+
+export interface IssueRecoverySessionInput {
+  id: string;
+  attentionId: string;
+  requestedBy: string;
+  browserSessionId: string;
+  browserInstanceId: string;
+  profileId: string;
+  tabId: number;
+  origin: string;
+  initialPageEpoch: string;
+  tokenDigest: string;
+  issuedAt: string;
+  expiresAt: string;
+}
+
 export interface CreateRunInput {
   run: RunRecord;
   event: ExecutionEventRecord;
@@ -802,6 +849,41 @@ export interface AttentionDeliveryStore {
   expireAttentionDeliveryLeases(input: {
     now: string;
   }): number;
+}
+
+export interface RecoverySessionStore {
+  issueRecoverySession(input: IssueRecoverySessionInput): RecoverySessionRecord;
+  getRecoverySession(id: string): RecoverySessionRecord | undefined;
+  listRecoverySessions(input: {
+    states?: readonly RecoverySessionState[];
+    limit: number;
+  }): RecoverySessionRecord[];
+  activateRecoverySession(input: {
+    id: string;
+    expectedRevision: number;
+    tokenDigest: string;
+    actor: string;
+    activatedAt: string;
+  }): RecoverySessionRecord;
+  completeRecoverySession(input: {
+    id: string;
+    expectedRevision: number;
+    actor: string;
+    completedAt: string;
+    completionPageEpoch: string;
+  }): RecoverySessionRecord;
+  terminateRecoverySession(input: {
+    id: string;
+    expectedRevision: number;
+    nextState: "revoked" | "invalidated";
+    actor: string;
+    occurredAt: string;
+    reason: string;
+  }): RecoverySessionRecord;
+  expireRecoverySessions(input: {
+    now: string;
+    actor: string;
+  }): RecoverySessionRecord[];
 }
 
 export interface AuditRecord {
@@ -1348,6 +1430,7 @@ export interface Persistence
     ExecutionStore,
     AttentionStore,
     AttentionDeliveryStore,
+    RecoverySessionStore,
     WorkflowAuthoringStore,
     AuthoringStore,
     SourceAssetStore,
@@ -1433,6 +1516,7 @@ export interface Persistence
 }
 
 export class RevisionConflictError extends Error {}
+export class RecoverySessionConflictError extends Error {}
 export class ArtifactConflictError extends Error {}
 export class StaleFencingTokenError extends Error {}
 export class WorkflowDraftConflictError extends Error {}

@@ -47,15 +47,14 @@ Workflow terminal fact
 
 ## 4. 第二层：持久 Attention 与 Delivery Outbox
 
-Schema v16 已新增第一个平台事实；Schema v17 候选继续增加平台级投递状态机，不把飞书
-逻辑塞进 Workflow：
+Schema v16 与 v17 已进入主线，平台级投递状态机不把飞书逻辑塞进 Workflow：
 
 - `attention_record`：稳定 ID、Run/Node 身份、分类、严重度、创建时间、确认状态和确认人。
 - `attention_delivery`：Attention ID、Channel、幂等键、请求摘要、投递状态、效果确认和
   `uncertain` 原因。
 
 `attention_record` 已实现 open/acknowledged、revision CAS、确认审计、重启恢复和 Operator
-Console 的“已知晓”动作。Schema v17 候选要求问题终态必须在同一事务写入一条 pending
+Console 的“已知晓”动作。Schema v17 要求问题终态必须在同一事务写入一条 pending
 `attention_delivery`；缺少任一事实时终态整体回滚。Delivery 通过 revision CAS 领取，记录
 attempt、短租约、明确成功、明确失败或 `uncertain`；投递中的租约过期直接落为
 `DELIVERY_LEASE_EXPIRED`，不得自动重复发送。Operator Console 同时显示投递状态、次数和
@@ -92,6 +91,20 @@ attempt、短租约、明确成功、明确失败或 `uncertain`；投递中的�
 
 Recovery Session 不暴露 DevTools、文件系统、任意 URL 导航或凭证导出；风控仍然可以
 拒绝恢复，且拒绝结果继续进入 Attention。
+
+Schema v18 候选已实现其中的持久安全内核：只允许 open、blocking、authentication
+Attention 创建 Session；一次性令牌只返回一次，SQLite 仅保存 SHA-256 摘要；Session
+精确绑定 Browser Session、`browserInstanceId`、当前托管 Profile、Tab、HTTPS Origin
+和初始 `pageEpoch`，有效期限制为 1–15 分钟。创建 Session 与取得
+`browser-instance:<id>` 控制租约位于同一事务，因此已有 Workflow 占用时不会创建恢复
+会话，恢复期间新 Workflow 也无法取得同一浏览器实例。激活只接受原始 `pageEpoch`；
+完成时必须由同一 Session/Instance/Profile/Tab/Origin 的新鲜 Page Observation 证明
+`ready + authenticated`，然后释放租约并记录审计。令牌不能重复激活，过期、撤销、绑定
+漂移均为终态；完成恢复不会改写旧 Run 或自动确认 Attention。
+
+该候选尚未开放 Console Host 路由、手机远程画面或浏览器操作协议，也未部署。下一层只
+允许固定的“查看同一标签页、提交键鼠输入、完成/撤销”能力；任意导航、DevTools、文件
+选择和剪贴板导出继续禁止。
 
 ## 6. 多工作流共用 Chrome 的性能形态
 

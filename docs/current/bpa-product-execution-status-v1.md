@@ -8,8 +8,8 @@
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- Git 基线：截至 2026-08-09，PR #2–#15 均已在 required checks 通过后进入 `main`；
-  最新基线为 PR #15 merge commit `e6c3f59eebdf`。阶段 0 结构收敛、资源观测、清退商品
+- Git 基线：截至 2026-08-09，PR #2–#16 均已在 required checks 通过后进入 `main`；
+  最新基线为 PR #16 merge commit `5eab19a80644`。阶段 0 结构收敛、资源观测、清退商品
   Mac 目标约束、爆款图片来源闭包校验和体验分候选均已进入主线。
 - GitHub `main` 已启用管理员同样受约束的 Branch Protection：必须走 Pull Request、
   与主线同步、解决 review conversation，并通过 macOS、Windows、性能、双架构发布、
@@ -30,7 +30,7 @@
 | 阶段 | 状态 | 当前最重要缺口 | 退出证据 |
 | --- | --- | --- | --- |
 | 0 稳住上阵 | **进行中** | 结构收敛与生产热轮询修复已完成；24 小时资源曲线最终报告与 Core 7 天稳定性尚未验收 | 24 小时三类资源曲线、Core 7 天稳定 |
-| 1 无人值守 | 未开始 | 登录失效恢复、失败推送、统一控制台、固定 Trigger 覆盖 | 无 SSH 认证恢复、100% 失败推送、AI 触发占比持续降至零 |
+| 1 无人值守 | **开发中** | Recovery Session 控制台/远程通道、通知生产验收、固定 Trigger 覆盖 | 无 SSH 认证恢复、100% 失败推送、AI 触发占比持续降至零 |
 | 2 造流程易用 | 未开始 | Web 校正界面、截图/元素候选回传、非技术用户验收 | 非技术同事独立完成真实流程发布 |
 | 3 通用能力 | 未开始 | HTTP Request、File Write、JSON Transform、导出、自愈 | 不写 Adapter 覆盖主要通用需求 |
 | 4 外部交付 | 未开始 | 单机安装、license、多用户权限 | 签名闭包安装、升级、回滚和权限验收 |
@@ -39,8 +39,9 @@
 风控、`rejected`、`failed` 与 `uncertain` 呈现在统一 Operator Console。Schema v16 将
 Attention 与终态写入同一事务，增加 open/acknowledged、revision CAS、确认审计和重启恢复；
 缺少 Attention 的问题终态会整体回滚。Schema v17 Delivery Outbox、保守投递状态机和面板
-对账已进入主线；独立飞书通知 Adapter 与严格 `0600` 配置加载正在候选分支实现，尚未配置
-真实 Channel。手机推送生产验收与远程 Recovery Session 仍未完成，不能据此宣称无人值守成立。
+对账已进入主线；独立飞书通知 Adapter 与严格 `0600` 配置加载也已通过 PR #16 进入主线，
+但尚未配置真实 Channel。Schema v18 Recovery Session 持久状态机正在候选分支开发；手机
+推送生产验收、控制台远程操作通道和公司 Mac 灰度仍未完成，不能据此宣称无人值守成立。
 实施顺序与共享 Chrome 资源边界见
 `docs/plans/bpa-stage-one-unattended-operations-v0.1.md`。
 

@@ -1418,5 +1418,57 @@ export const migrations: Migration[] = [
       CREATE INDEX attention_deliveries_state_updated
         ON attention_deliveries(state, updated_at, delivery_id);
     `
+  },
+  {
+    version: 18,
+    sql: `
+      CREATE TABLE recovery_sessions (
+        recovery_session_id TEXT PRIMARY KEY,
+        attention_id TEXT NOT NULL UNIQUE
+          REFERENCES attention_records(attention_id) ON DELETE RESTRICT,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        state TEXT NOT NULL CHECK (state IN (
+          'issued', 'active', 'completed', 'expired', 'revoked', 'invalidated'
+        )),
+        requested_by TEXT NOT NULL,
+        browser_session_id TEXT NOT NULL
+          REFERENCES browser_sessions(id) ON DELETE RESTRICT,
+        browser_instance_id TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        tab_id INTEGER NOT NULL CHECK (tab_id >= 0),
+        origin TEXT NOT NULL,
+        initial_page_epoch TEXT NOT NULL,
+        token_digest TEXT NOT NULL,
+        lease_resource_id TEXT NOT NULL,
+        lease_owner_id TEXT NOT NULL,
+        lease_fencing_token INTEGER NOT NULL CHECK (lease_fencing_token >= 1),
+        issued_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        activated_at TEXT,
+        completed_at TEXT,
+        completion_page_epoch TEXT,
+        terminal_reason TEXT,
+        CHECK (expires_at > issued_at),
+        CHECK (
+          (state = 'issued' AND activated_at IS NULL AND completed_at IS NULL)
+          OR
+          (state = 'active' AND activated_at IS NOT NULL AND completed_at IS NULL)
+          OR
+          (state = 'completed' AND activated_at IS NOT NULL
+            AND completed_at IS NOT NULL AND completion_page_epoch IS NOT NULL)
+          OR
+          (state IN ('expired', 'revoked', 'invalidated')
+            AND completed_at IS NULL AND terminal_reason IS NOT NULL)
+        )
+      ) STRICT;
+
+      CREATE INDEX recovery_sessions_state_expiry
+        ON recovery_sessions(state, expires_at, recovery_session_id);
+      CREATE INDEX recovery_sessions_browser_profile
+        ON recovery_sessions(
+          browser_instance_id, profile_id, state, expires_at
+        );
+    `
   }
 ];
