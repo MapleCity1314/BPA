@@ -226,8 +226,10 @@ Schema 降级描述成可恢复旧二进制，也不得复制登录态。
    本代码候选已关闭 Core 子项：page probe 表为 32 项、10 秒 TTL，完成、断线和超时均
    回收，迟到响应不能清除同页新请求，容量满时 fail-closed。Extension pacing/cancel/probe
    generation 的 TTL、容量和指标仍未完成。
-5. **单连接重连**：Extension 到 Native Host 的 connect 需要 generation/in-flight guard、
-   有上限退避和旧 Port 回调隔离；覆盖 onDisconnect 与连接异常同时发生的对抗测试。
+5. **单连接重连**：本代码候选已为 Extension 到 Native Host 的 connect 增加
+   generation/in-flight guard、2–30 秒有界退避、握手完成后才重置退避、旧 Port 回调隔离，
+   并覆盖 disconnect 与连接异常不会重复排程；尚未完成真实 Native Host/Chrome 重连 E2E，
+   因此不能作为公司 Mac 稳定性证据。
 6. **并行 lane 决策**：第一版不实现 provider 并行。若后续引入，必须按 provider/资源声明
    有界并发，SQLite 写、同 Dataset/Run 终态与同外部 Effect 仍串行，不开通自由 Promise 并发。
 7. **进程退出所有权**：Core 必须跟踪并关闭 Control Socket 的现有长连接；Node Runtime
