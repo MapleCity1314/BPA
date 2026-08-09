@@ -277,7 +277,12 @@ export function App({ api }: { api: OperatorConsoleApi }) {
           />
         ) : null}
         {view === "tasks" ? (
-          <TaskCenter api={api} tasks={tasks} onCompleted={reloadTasks} />
+          <TaskCenter
+            api={api}
+            alerts={dashboard.alerts}
+            tasks={tasks}
+            onCompleted={reloadTasks}
+          />
         ) : null}
         {view === "datasets" ? <DatasetImport api={api} /> : null}
         {view === "evidence" ? (

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  AttentionView,
   BrowserSessionView,
   ControlBackend,
   CreateRunInput,
@@ -35,6 +36,7 @@ export const CONSOLE_CONTROL_METHODS = {
   taskList: "assistance.task.list",
   taskClaim: "assistance.task.claim",
   taskSubmit: "assistance.task.submit",
+  attentionList: "attention.list",
   stagingLeaseCreate: "staging.lease.create",
   datasetImportStaged: "dataset.import.staged",
   evidenceLineageGet: "evidence.lineage.get",
@@ -331,27 +333,33 @@ export class UdsControlBackend implements ControlBackend {
   async getDashboard(): Promise<DashboardSnapshot> {
     const observedAt = this.#now().toISOString();
     try {
-      const [doctorValue, taskValue, pageValue] = await Promise.all([
-        this.#client.request<unknown>(CONSOLE_CONTROL_METHODS.doctor),
-        this.#client
-          .request<unknown>(CONSOLE_CONTROL_METHODS.taskList, {
-            statuses: [
-              "queued",
-              "claimed",
-              "processing",
-              "awaiting_human"
-            ],
-            modes: ["human_confirm", "human_action"],
-            limit: 100
-          })
-          .catch(() => []),
-        this.#client
-          .request<unknown>(
-            CONSOLE_CONTROL_METHODS.browserPageObservationList,
-            { limit: 200 }
-          )
-          .catch(() => [])
-      ]);
+      const [doctorValue, taskValue, pageValue, attentionValue] =
+        await Promise.all([
+          this.#client.request<unknown>(CONSOLE_CONTROL_METHODS.doctor),
+          this.#client
+            .request<unknown>(CONSOLE_CONTROL_METHODS.taskList, {
+              statuses: [
+                "queued",
+                "claimed",
+                "processing",
+                "awaiting_human"
+              ],
+              modes: ["human_confirm", "human_action"],
+              limit: 100
+            })
+            .catch(() => []),
+          this.#client
+            .request<unknown>(
+              CONSOLE_CONTROL_METHODS.browserPageObservationList,
+              { limit: 200 }
+            )
+            .catch(() => []),
+          this.#client
+            .request<unknown>(CONSOLE_CONTROL_METHODS.attentionList, {
+              limit: 100
+            })
+            .catch(() => [])
+        ]);
       const doctor = record(doctorValue) ?? {};
       const persistence = record(doctor.persistence) ?? {};
       const browser = record(doctor.browser) ?? {};
@@ -419,10 +427,44 @@ export class UdsControlBackend implements ControlBackend {
               ]
             : [];
       const pendingTaskCount = records(taskValue).length;
+      const alerts: AttentionView[] = records(attentionValue).flatMap((item) => {
+        const id = text(item.id);
+        const kind = text(item.kind);
+        if (
+          !id ||
+          ![
+            "information",
+            "review",
+            "action",
+            "approval",
+            "blocking"
+          ].includes(kind)
+        ) {
+          return [];
+        }
+        return [
+          {
+            id,
+            ...(text(item.runId) ? { runId: text(item.runId) } : {}),
+            kind: kind as AttentionView["kind"],
+            title: text(item.title, "任务需要处理"),
+            reason: text(item.reason, "任务没有确定完成。"),
+            requestedAction: text(
+              item.requestedAction,
+              "查看运行记录后再决定是否重新发起。"
+            ),
+            createdAt: safeTimestamp(item.createdAt, observedAt)
+          }
+        ];
+      });
       return {
         attention:
           !boolean(persistence.writable) || !browserReady
             ? "action"
+            : alerts.some((item) =>
+                ["action", "approval", "blocking"].includes(item.kind)
+              )
+              ? "action"
             : pendingTaskCount > 0
               ? "attention"
               : "normal",
@@ -431,6 +473,8 @@ export class UdsControlBackend implements ControlBackend {
             ? "业务数据暂时不可写"
             : !browserReady
               ? "请连接并准备 Chrome"
+              : alerts.length > 0
+                ? `发现 ${alerts.length} 项运行问题`
               : pendingTaskCount > 0
                 ? `有 ${pendingTaskCount} 项等待处理`
                 : "系统运行正常",
@@ -472,6 +516,7 @@ export class UdsControlBackend implements ControlBackend {
           }
         ],
         browserSessions,
+        alerts,
         activeRunCount: 0,
         pendingTaskCount
       };
@@ -489,6 +534,7 @@ export class UdsControlBackend implements ControlBackend {
           }
         ],
         browserSessions: [],
+        alerts: [],
         activeRunCount: 0,
         pendingTaskCount: 0
       };

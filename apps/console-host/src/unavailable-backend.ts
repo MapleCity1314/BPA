@@ -27,6 +27,7 @@ export class UnavailableControlBackend implements ControlBackend {
         }
       ],
       browserSessions: [],
+      alerts: [],
       activeRunCount: 0,
       pendingTaskCount: 0
     };

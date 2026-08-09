@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -106,6 +107,71 @@ afterEach(async () => {
 });
 
 describe("local control socket", () => {
+  it("lists durable terminal attention with sanitized login guidance", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const service = new LocalCoreService(persistence);
+    const createdAt = "2026-08-09T06:00:00.000Z";
+    const run = persistence.createRun({
+      run: {
+        id: "run-login-alert",
+        workflowId: "doudian.inventory.refresh",
+        workflowVersion: "1.0.0",
+        workflowDigest: "sha256:test",
+        status: "running",
+        revision: 0,
+        input: {},
+        createdAt,
+        updatedAt: createdAt
+      },
+      event: {
+        id: randomUUID(),
+        runId: "run-login-alert",
+        sequence: 1,
+        type: "RUN_CREATED",
+        payload: {},
+        occurredAt: createdAt
+      }
+    });
+    persistence.commitRunTransition({
+      runId: run.id,
+      expectedRevision: run.revision,
+      nextStatus: "rejected",
+      currentNodeKey: "collect",
+      event: {
+        id: randomUUID(),
+        runId: run.id,
+        sequence: 2,
+        type: "RUNTIME_RESULT_APPLIED",
+        payload: {
+          errorCode: "SESSION_EXPIRED",
+          message: "private browser diagnostic"
+        },
+        occurredAt: "2026-08-09T06:01:00.000Z"
+      }
+    });
+
+    const response = service.handle({
+      id: "attention-list",
+      method: "attention.list",
+      params: { limit: 20 }
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: [
+        {
+          id: "run-terminal:run-login-alert",
+          runId: "run-login-alert",
+          groupKey: "authentication",
+          kind: "blocking",
+          attemptedActions: []
+        }
+      ]
+    });
+    expect(JSON.stringify(response)).not.toContain("private browser diagnostic");
+    persistence.close();
+  });
+
   it("rejects new Runs while a Runtime upgrade holds maintenance", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bpa-maintenance-"));
     const maintenancePath = join(directory, "runtime-maintenance.lock");

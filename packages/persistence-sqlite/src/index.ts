@@ -72,6 +72,7 @@ import {
   type RetentionJobRecord,
   type RunRecord,
   type RunPlanSnapshotRecord,
+  type RunStatus,
   type RunTransitionInput,
   type SaveCandidateBundleInput,
   type ResourceAuthentication,
@@ -5111,6 +5112,34 @@ export class SqlitePersistence implements Persistence {
       .prepare("SELECT * FROM workflow_runs WHERE id = ?")
       .get(id) as SqlRow | undefined;
     return row ? this.#readRun(row) : undefined;
+  }
+
+  listRuns(input: {
+    statuses?: readonly RunStatus[];
+    limit: number;
+  }): RunRecord[] {
+    const requestedLimit = Number.isSafeInteger(input.limit)
+      ? input.limit
+      : 100;
+    const limit = Math.min(Math.max(requestedLimit, 1), 200);
+    const statuses = [...new Set(input.statuses ?? [])];
+    const rows = (statuses.length === 0
+      ? this.#db
+          .prepare(
+            `SELECT * FROM workflow_runs
+             ORDER BY updated_at DESC, id
+             LIMIT ?`
+          )
+          .all(limit)
+      : this.#db
+          .prepare(
+            `SELECT * FROM workflow_runs
+             WHERE status IN (${statuses.map(() => "?").join(",")})
+             ORDER BY updated_at DESC, id
+             LIMIT ?`
+          )
+          .all(...statuses, limit)) as SqlRow[];
+    return rows.map((row) => this.#readRun(row));
   }
 
   getNodeExecution(id: string): NodeExecutionRecord | undefined {

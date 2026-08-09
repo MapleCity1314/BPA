@@ -78,6 +78,7 @@ class RecordingBackend implements ControlBackend {
       runtimeVersion: "0.4.0",
       components: [],
       browserSessions: [],
+      alerts: [],
       activeRunCount: 0,
       pendingTaskCount: 0
     };
