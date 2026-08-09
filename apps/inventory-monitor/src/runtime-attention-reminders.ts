@@ -44,8 +44,38 @@ function publicReminderId(attentionId: string): string {
 
 function projectReminder(value: unknown): InventoryPanelReminder | undefined {
   const item = record(value);
-  if (!item || item.deliveryPolicy !== "dashboard-only") return undefined;
-  if (record(item.sourceRef)?.kind !== "trigger-occurrence") return undefined;
+  const sourceRef = record(item?.sourceRef);
+  if (!item || !sourceRef) return undefined;
+  const sourceKind = sourceRef.kind;
+  const sourceRunId = boundedString(sourceRef.runId,512);
+  const itemRunId = boundedString(item.runId,512);
+  const runStatus = boundedString(item.runStatus,32);
+  const isSucceededBusinessFinding = runStatus === "succeeded" &&
+    item.source === "business-rule" &&
+    item.kind === "action" &&
+    item.blocking === false &&
+    boundedString(item.groupKey,160)?.startsWith("business-finding:") === true;
+  const isUnsuccessfulRunAttention =
+    ["rejected","uncertain","failed"].includes(runStatus ?? "");
+  const sourceReferenceIsValid = sourceKind === "trigger-occurrence"
+    ? Boolean(boundedString(sourceRef.occurrenceId,512)) &&
+      item.runId === undefined &&
+      item.runStatus === undefined &&
+      item.deliveryPolicy === "dashboard-only" &&
+      item.deliveryState === "not-requested" &&
+      item.deliveryAttempt === 0
+    : sourceKind === "workflow-run"
+      ? Boolean(sourceRunId) &&
+        itemRunId === sourceRunId &&
+        item.deliveryPolicy === "operator-notification" &&
+        ["pending","delivering","delivered","failed","uncertain"].includes(
+          String(item.deliveryState)
+        ) &&
+        Number.isSafeInteger(item.deliveryAttempt) &&
+        Number(item.deliveryAttempt) >= 0 &&
+        (isSucceededBusinessFinding || isUnsuccessfulRunAttention)
+      : false;
+  if (!sourceReferenceIsValid) return undefined;
   const id = boundedString(item.id, 512);
   const title = boundedString(item.title, 160);
   const detail = boundedString(item.reason, 500);
@@ -61,9 +91,7 @@ function projectReminder(value: unknown): InventoryPanelReminder | undefined {
     !createdAt ||
     !Number.isFinite(Date.parse(createdAt)) ||
     !["information", "review", "action", "approval", "blocking"].includes(kind) ||
-    item.state !== "open" ||
-    item.deliveryState !== "not-requested" ||
-    item.deliveryAttempt !== 0
+    item.state !== "open"
   ) {
     return undefined;
   }
@@ -86,7 +114,6 @@ export function createRuntimeAttentionReminderProvider(
       "attention.list",
       {
         states:["open"],
-        sourceKind:"trigger-occurrence",
         appIds:["inventory-monitor"],
         limit:ATTENTION_LIMIT
       },

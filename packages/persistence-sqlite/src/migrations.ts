@@ -1856,5 +1856,13 @@ export const migrations: Migration[] = [
           ) ON DELETE RESTRICT
       ) STRICT;
     `
+  },
+  {
+    version: 23,
+    sql: `
+      CREATE UNIQUE INDEX trigger_attempts_workflow_run
+        ON trigger_attempts(workflow_run_id)
+        WHERE workflow_run_id IS NOT NULL;
+    `
   }
 ];

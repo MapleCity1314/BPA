@@ -1736,6 +1736,40 @@ export class SqlitePersistence implements Persistence {
       assistanceTasks?: readonly AssistanceTaskRecord[];
     }
   ): RunRecord {
+    if (input.triggerAttemptId) {
+      const attempt = this.getTriggerAttempt(input.triggerAttemptId);
+      const occurrence = attempt
+        ? this.getTriggerOccurrence(attempt.occurrenceId)
+        : undefined;
+      if (
+        !attempt ||
+        attempt.status !== "running" ||
+        attempt.workflowRunId ||
+        !occurrence ||
+        occurrence.status !== "running"
+      ) {
+        throw new Error(
+          `Trigger Attempt is not ready for atomic Run creation: ${input.triggerAttemptId}`
+        );
+      }
+      const pinnedSpec = this.getTriggerSpecVersion(
+        occurrence.triggerId,
+        occurrence.triggerVersion
+      );
+      if (!pinnedSpec) {
+        throw new Error(
+          `Pinned TriggerSpec is missing for atomic Run creation: ${input.triggerAttemptId}`
+        );
+      }
+      if (
+        pinnedSpec.workflow.id !== input.run.workflowId ||
+        pinnedSpec.workflow.version !== input.run.workflowVersion
+      ) {
+        throw new Error(
+          `Trigger Attempt workflow does not match Run: ${input.triggerAttemptId}`
+        );
+      }
+    }
     return this.#db.transaction(() => {
       if (
         input.event.runId !== input.run.id ||
@@ -1783,8 +1817,25 @@ export class SqlitePersistence implements Persistence {
           `UPDATE trigger_attempts
            SET workflow_run_id=?,updated_at=?,revision=revision+1
            WHERE attempt_id=? AND status='running'
-             AND workflow_run_id IS NULL`
-        ).run(input.run.id,input.run.createdAt,input.triggerAttemptId);
+             AND workflow_run_id IS NULL
+             AND EXISTS (
+               SELECT 1
+               FROM trigger_occurrences occurrence
+               INNER JOIN trigger_spec_versions version
+                 ON version.trigger_id=occurrence.trigger_id
+                AND version.trigger_version=occurrence.trigger_version
+               WHERE occurrence.occurrence_id=trigger_attempts.occurrence_id
+                 AND occurrence.status='running'
+                 AND json_extract(version.spec_json,'$.workflow.id')=?
+                 AND json_extract(version.spec_json,'$.workflow.version')=?
+             )`
+        ).run(
+          input.run.id,
+          input.run.createdAt,
+          input.triggerAttemptId,
+          input.run.workflowId,
+          input.run.workflowVersion
+        );
         if (linked.changes !== 1) {
           throw new Error(
             `Trigger Attempt is not ready for atomic Run creation: ${input.triggerAttemptId}`
@@ -5819,7 +5870,6 @@ export class SqlitePersistence implements Persistence {
     status: TriggerAttemptStatus;
     updatedAt: string;
     terminalOutcome?: TriggerTerminalOutcome;
-    workflowRunId?: string;
     fencingToken?: number;
     browserFencingToken?: number;
     diagnostic?: string;
@@ -5844,15 +5894,14 @@ export class SqlitePersistence implements Persistence {
     const result = this.#db.prepare(
       `UPDATE trigger_attempts
        SET status=?,terminal_outcome=?,updated_at=?,revision=revision+1,
-           workflow_run_id=COALESCE(?,workflow_run_id),
            fencing_token=COALESCE(?,fencing_token),
            browser_fencing_token=COALESCE(?,browser_fencing_token),
            diagnostic=COALESCE(?,diagnostic)
        WHERE attempt_id=? AND revision=? AND status=?`
     ).run(
       input.status,input.terminalOutcome ?? null,input.updatedAt,
-      input.workflowRunId ?? null,input.fencingToken ?? null,
-      input.browserFencingToken ?? null,input.diagnostic ?? null,
+      input.fencingToken ?? null,input.browserFencingToken ?? null,
+      input.diagnostic ?? null,
       input.attemptId,input.expectedRevision,current.status
     );
     if (result.changes !== 1) {
@@ -6249,30 +6298,52 @@ export class SqlitePersistence implements Persistence {
     }
     if (appIds.length > 0) {
       conditions.push(
-        `attention.source_type='trigger-occurrence'
-         AND json_extract(version.spec_json,'$.appId') IN (
-           ${appIds.map(() => "?").join(",")}
-         )`
+        `(
+          (
+            attention.source_type='trigger-occurrence'
+            AND EXISTS (
+              SELECT 1
+              FROM trigger_occurrences occurrence
+              INNER JOIN trigger_spec_versions version
+                ON version.trigger_id=occurrence.trigger_id
+               AND version.trigger_version=occurrence.trigger_version
+              WHERE occurrence.occurrence_id=attention.trigger_occurrence_id
+                AND json_extract(version.spec_json,'$.appId') IN (
+                  ${appIds.map(() => "?").join(",")}
+                )
+            )
+          )
+          OR
+          (
+            attention.source_type='workflow-run'
+            AND EXISTS (
+              SELECT 1
+              FROM trigger_attempts attempt
+              INNER JOIN trigger_occurrences occurrence
+                ON occurrence.occurrence_id=attempt.occurrence_id
+              INNER JOIN trigger_spec_versions version
+                ON version.trigger_id=occurrence.trigger_id
+               AND version.trigger_version=occurrence.trigger_version
+              WHERE attempt.workflow_run_id=attention.workflow_run_id
+                AND json_extract(version.spec_json,'$.appId') IN (
+                  ${appIds.map(() => "?").join(",")}
+                )
+            )
+          )
+        )`
       );
-      parameters.push(...appIds);
+      parameters.push(...appIds,...appIds);
     }
-    const joins = appIds.length > 0
-      ? `LEFT JOIN trigger_occurrences occurrence
-           ON occurrence.occurrence_id=attention.trigger_occurrence_id
-         LEFT JOIN trigger_spec_versions version
-           ON version.trigger_id=occurrence.trigger_id
-          AND version.trigger_version=occurrence.trigger_version`
-      : "";
     const predicate = conditions.length > 0
       ? `WHERE ${conditions.join(" AND ")}`
       : "";
     const total = Number((this.#db.prepare(
       `SELECT COUNT(*) AS count FROM attention_records attention
-       ${joins} ${predicate}`
+       ${predicate}`
     ).get(...parameters) as { count:number }).count);
     const rows = this.#db.prepare(
       `SELECT attention.* FROM attention_records attention
-       ${joins} ${predicate}
+       ${predicate}
        ORDER BY attention.created_at DESC,attention.attention_id
        LIMIT ?`
     ).all(...parameters,input.limit) as SqlRow[];
