@@ -207,7 +207,7 @@ export class UnixSocketControlTransport implements ControlTransport {
     this.#negotiate = options.negotiate ?? true;
     this.#runtime = options.runtime ?? {
       name: "bpa-control-client",
-      version: "0.6.0"
+      version: "0.6.1"
     };
     this.#features = options.features ?? [];
   }

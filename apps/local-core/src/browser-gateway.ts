@@ -1229,6 +1229,50 @@ export class LocalBrowserGateway implements RuntimeProvider {
     ).map((resource) => resource.binding);
     const frozenPage =
       frozenBindings.length === 1 ? frozenBindings[0] : undefined;
+    const adapterRef = (() => {
+      if (!definition.adapter) return undefined;
+      const closure = this.persistence.getRunPlanSnapshot(
+        invocation.identity.runId
+      )?.planJson.artifactClosure.entries;
+      const candidates = (closure ?? []).filter(
+        (entry) =>
+          entry.kind === "adapter" &&
+          entry.id === definition.adapter!.id &&
+          definition.adapter!.versions.includes(entry.version)
+      );
+      if (candidates.length !== 1) {
+        throw new Error(
+          `Browser Node adapter closure is not exact: ${invocation.node.id}@${invocation.node.version}`
+        );
+      }
+      const candidate = candidates[0]!;
+      const published = this.persistence.getPublished(
+        "adapter",
+        candidate.id,
+        candidate.version
+      );
+      if (!published || published.digest !== candidate.digest) {
+        throw new Error(
+          `Published browser Adapter missing or drifted: ${candidate.id}@${candidate.version}`
+        );
+      }
+      const minimumExtensionVersion = (
+        published.content as {
+          extension?: { minimumVersion?: unknown };
+        }
+      ).extension?.minimumVersion;
+      if (typeof minimumExtensionVersion !== "string") {
+        throw new Error(
+          `Browser Adapter extension floor is missing: ${candidate.id}@${candidate.version}`
+        );
+      }
+      return {
+        id: candidate.id,
+        version: candidate.version,
+        digest: candidate.digest,
+        minimum_extension_version: minimumExtensionVersion
+      };
+    })();
     const payload = {
       command_seq: commandSeq,
       run_id: invocation.identity.runId,
@@ -1243,6 +1287,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
         id: invocation.node.id,
         version: invocation.node.version
       },
+      ...(adapterRef ? { adapter_ref: adapterRef } : {}),
       input: invocation.input,
       ...((definition.execution as { timingPolicy?: unknown } | undefined)
         ?.timingPolicy === undefined
@@ -1562,6 +1607,31 @@ export class LocalBrowserGateway implements RuntimeProvider {
     const snapshot =
       this.persistence.getRunResourceBindingSnapshot(runId);
     if (!snapshot) return [];
+    const payload = command.payload as {
+      tab_ref?: {
+        browser_instance_id?: unknown;
+        tab_id?: unknown;
+        origin?: unknown;
+      };
+      page_epoch?: unknown;
+    };
+    if (
+      payload.tab_ref &&
+      typeof payload.tab_ref.browser_instance_id === "string" &&
+      Number.isSafeInteger(payload.tab_ref.tab_id)
+    ) {
+      const bindings = Object.values(snapshot.bindings).filter(
+        (binding) =>
+          binding.browserInstanceId === payload.tab_ref!.browser_instance_id &&
+          binding.tabId === payload.tab_ref!.tab_id &&
+          (typeof payload.tab_ref!.origin !== "string" ||
+            binding.origin === payload.tab_ref!.origin) &&
+          (typeof payload.page_epoch !== "string" ||
+            binding.pageEpoch === payload.page_epoch)
+      );
+      if (bindings.length !== 1) return undefined;
+      return [bindings[0]!.sessionId];
+    }
     const checkpoint = this.persistence.getEngineCheckpoint(runId);
     const state = checkpoint?.state as
       | {
@@ -1669,6 +1739,13 @@ export class LocalBrowserGateway implements RuntimeProvider {
       permissions: string[];
       risk_level: RiskLevel;
     };
+    const adapterRef = payload.adapter_ref as
+      | {
+          id?: unknown;
+          version?: unknown;
+          minimum_extension_version?: unknown;
+        }
+      | undefined;
     return (
       connection.session?.capabilities.some(
         (capability) =>
@@ -1677,7 +1754,17 @@ export class LocalBrowserGateway implements RuntimeProvider {
           capability.riskLevel === grant.risk_level &&
           grant.permissions.every((permission) =>
             capability.permissions.includes(permission)
-          )
+          ) &&
+          (adapterRef === undefined ||
+            (typeof adapterRef.id === "string" &&
+              typeof adapterRef.version === "string" &&
+              typeof adapterRef.minimum_extension_version === "string" &&
+              capability.adapterId === adapterRef.id &&
+              capability.adapterVersion === adapterRef.version &&
+              compareExtensionVersions(
+                connection.session!.extensionVersion,
+                adapterRef.minimum_extension_version
+              ) >= 0))
       ) ?? false
     );
   }

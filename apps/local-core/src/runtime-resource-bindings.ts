@@ -1,9 +1,11 @@
 import type {
   BrowserObservationStore,
-  BrowserPageObservationRecord
+  BrowserPageObservationRecord,
+  RegistryStore
 } from "@bpa/persistence";
 import type { ObservedBrowserSession } from "@bpa/resource-binding";
 import type {
+  ArtifactRef,
   BrowserResourceRequirementSnapshot,
   ExecutionPlan,
   ResourceBindingRef,
@@ -31,6 +33,48 @@ export interface BrowserResourceResolution {
 
 const MAX_OBSERVATION_AGE_MS = 30_000;
 
+type BrowserCallRequirement = {
+  readonly node: ArtifactRef & { readonly kind:"node" };
+  readonly adapters: readonly (ArtifactRef & { readonly kind:"adapter" })[];
+};
+
+function callsForSlot(
+  steps: ExecutionPlan["steps"],
+  slotName: string
+): BrowserCallRequirement[] {
+  const calls: BrowserCallRequirement[] = [];
+  for (const step of Object.values(steps)) {
+    if (step.kind === "foreach") {
+      calls.push(...callsForSlot(step.body.steps,slotName));
+      continue;
+    }
+    if (
+      step.kind === "call" &&
+      step.resourceMappings &&
+      Object.values(step.resourceMappings).some(
+        (mapping) => mapping.slotName === slotName
+      )
+    ) {
+      calls.push({
+        node:step.node,
+        adapters:step.dependencies?.adapters ?? []
+      });
+    }
+  }
+  return calls;
+}
+
+function compareVersions(left:string,right:string):number {
+  const parse = (value:string) => value.split(".").map((part) => Number(part));
+  const leftParts = parse(left);
+  const rightParts = parse(right);
+  for (let index = 0; index < 3; index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
 function authenticationSatisfies(
   required: BrowserResourceRequirementSnapshot["authentication"],
   observed: BrowserPageObservationRecord["authentication"]
@@ -43,7 +87,36 @@ function authenticationSatisfies(
 }
 
 export class RuntimeResourceBindingService {
-  constructor(private readonly persistence: BrowserObservationStore) {}
+  constructor(
+    private readonly persistence: BrowserObservationStore & RegistryStore
+  ) {}
+
+  private capabilitySupportsCall(
+    capability:ReturnType<BrowserObservationStore["listBrowserCapabilities"]>[number],
+    call:BrowserCallRequirement,
+    extensionVersion:string
+  ):boolean {
+    if (
+      capability.nodeId !== call.node.id ||
+      capability.nodeVersion !== call.node.version
+    ) return false;
+    if (call.adapters.length === 0) return true;
+    if (call.adapters.length !== 1) return false;
+    const adapter = call.adapters[0]!;
+    if (
+      capability.adapterId !== adapter.id ||
+      capability.adapterVersion !== adapter.version
+    ) return false;
+    const published = this.persistence.getPublished(
+      "adapter",adapter.id,adapter.version
+    );
+    if (!published || published.digest !== adapter.digest) return false;
+    const minimumVersion = (published.content as {
+      extension?:{ minimumVersion?:unknown };
+    }).extension?.minimumVersion;
+    return typeof minimumVersion === "string" &&
+      compareVersions(extensionVersion,minimumVersion) >= 0;
+  }
 
   resolveForPlan(
     plan: ExecutionPlan,
@@ -85,14 +158,7 @@ export class RuntimeResourceBindingService {
 
     for (const slotName of slotNames) {
       const requirement = slots[slotName]!;
-      const requiredNodes = Object.values(plan.steps).flatMap((step) => {
-        if (step.kind !== "call" || !step.resourceMappings) return [];
-        return Object.values(step.resourceMappings).some(
-          (mapping) => mapping.slotName === slotName
-        )
-          ? [step.node]
-          : [];
-      });
+      const requiredCalls = callsForSlot(plan.steps,slotName);
       const candidates = instanceSessions.flatMap((session) => {
         const capabilities = this.persistence.listBrowserCapabilities(
           session.id
@@ -107,11 +173,11 @@ export class RuntimeResourceBindingService {
         ) {
           return [];
         }
-        const nodeCapabilities = requiredNodes.map((node) =>
+        const nodeCapabilities = requiredCalls.map((call) =>
           capabilities.find(
-            (capability) =>
-              capability.nodeId === node.id &&
-              capability.nodeVersion === node.version
+            (capability) => this.capabilitySupportsCall(
+              capability,call,session.extensionVersion
+            )
           )
         );
         if (nodeCapabilities.some((capability) => !capability)) return [];
@@ -336,29 +402,22 @@ export class RuntimeResourceBindingService {
           `Browser Session lacks capabilities for ${slotName}: ${missingCapabilities.join(", ")}`
         );
       }
-      const requiredNodes = Object.values(plan.steps).flatMap((step) => {
-        if (step.kind !== "call" || !step.resourceMappings) return [];
-        return Object.values(step.resourceMappings).some(
-          (mapping) => mapping.slotName === slotName
-        )
-          ? [step.node]
-          : [];
-      });
+      const requiredCalls = callsForSlot(plan.steps,slotName);
       const reportedNodes = this.persistence.listBrowserCapabilities(
         sessionId
       );
-      const missingNodes = requiredNodes.filter(
-        (node) =>
+      const missingNodes = requiredCalls.filter(
+        (call) =>
           !reportedNodes.some(
-            (reported) =>
-              reported.nodeId === node.id &&
-              reported.nodeVersion === node.version
+            (reported) => this.capabilitySupportsCall(
+              reported,call,session.extensionVersion
+            )
           )
       );
       if (missingNodes.length > 0) {
         throw new Error(
           `BROWSER_NODE_CAPABILITY_MISSING:${slotName}:${missingNodes
-            .map((node) => `${node.id}@${node.version}`)
+            .map((call) => `${call.node.id}@${call.node.version}`)
             .join(",")}`
         );
       }

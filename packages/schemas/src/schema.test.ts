@@ -209,7 +209,16 @@ describe("timing and risk schemas", () => {
         pollIntervalMs: 200
       }
     };
+    command.payload.adapter_ref = {
+      id: "doudian-experience",
+      version: "2.0.0",
+      digest: `sha256:${"a".repeat(64)}`,
+      minimum_extension_version: "0.6.1"
+    };
     expect(validateBrowserProtocolMessage(command)).toBe(true);
+    command.payload.adapter_ref.untrusted = true;
+    expect(validateBrowserProtocolMessage(command)).toBe(false);
+    delete command.payload.adapter_ref.untrusted;
 
     const result = structuredClone(
       examples.find((example) => example.type === "command.result")!

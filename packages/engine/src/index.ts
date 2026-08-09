@@ -896,18 +896,22 @@ function drive(
           cursor: undefined,
           active: undefined,
           output,
-          ...(["rejected", "failed"].includes(step.status)
+          ...(["rejected", "failed", "uncertain"].includes(step.status)
             ? {
                 error: {
                   code:
                     step.errorCode ??
                     (step.status === "rejected"
                       ? "WORKFLOW_REJECTED"
-                      : "WORKFLOW_FAILED"),
+                      : step.status === "uncertain"
+                        ? "WORKFLOW_UNCERTAIN"
+                        : "WORKFLOW_FAILED"),
                   message:
                     step.status === "rejected"
                       ? "Workflow reached a rejected terminal."
-                      : "Workflow reached a failed terminal."
+                      : step.status === "uncertain"
+                        ? "Workflow reached an uncertain terminal."
+                        : "Workflow reached a failed terminal."
                 }
               }
             : {})

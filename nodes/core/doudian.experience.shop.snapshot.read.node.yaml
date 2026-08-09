@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha2
 kind: Node
 metadata:
   id: doudian.experience.shop.snapshot.read
-  version: 1.0.0
+  version: 2.0.0
   title: 读取单店抖店体验分快照
   description: 在同一受管标签页内切店、读取三维体验分并恢复源店铺，不创建额外 Chrome 实例。
 runtime: browser
@@ -18,6 +18,14 @@ inputSchema:
       type: object
       additionalProperties: false
       required: [key, name, status, statusText]
+      allOf:
+        - if:
+            properties: { status: { const: active } }
+            required: [status]
+          then:
+            required: [id]
+            properties:
+              id: { type: string, pattern: "^[0-9]{5,30}$" }
       properties:
         key: { type: string, minLength: 3, maxLength: 120 }
         id: { type: string, pattern: "^[0-9]{5,30}$" }
@@ -52,10 +60,10 @@ resources:
 execution:
   timeoutDefault: 4m
   idempotency: repeatable_read
-  retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED, EXPERIENCE_PAGE_TIMEOUT]
+  retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED, EXPERIENCE_PAGE_TIMEOUT, EXPERIENCE_CONTENT_RESPONSE_TIMEOUT]
   cancellable: true
   timingPolicy:
     rateLimit: { scope: authentication_context, minIntervalMs: 1000, maxQueueMs: 10000 }
-errors: [AUTH_REQUIRED, CAPTCHA_REQUIRED, RISK_CONTROL, SESSION_EXPIRED, PAGE_CONTEXT_CHANGED, PAGE_MISMATCH, EXPERIENCE_PAGE_LOADING, EXPERIENCE_PAGE_TIMEOUT, EXPERIENCE_CONTENT_RESPONSE_TIMEOUT, EXPERIENCE_TOTAL_SCORE_MISSING, EXPERIENCE_DIMENSION_INCOMPLETE, SHOP_IDENTITY_UNCERTAIN, SHOP_IDENTITY_MISMATCH, SHOP_CONTEXT_RESTORE_FAILED, DEADLINE_EXCEEDED, COMMAND_CANCELLED]
+errors: [AUTH_REQUIRED, BROWSER_DISCONNECTED, CAPTCHA_REQUIRED, COMMAND_CANCELLED, DEADLINE_EXCEEDED, EXPERIENCE_CONTENT_RESPONSE_TIMEOUT, EXPERIENCE_DIMENSION_INCOMPLETE, EXPERIENCE_PAGE_TIMEOUT, EXPERIENCE_SNAPSHOT_MISSING, EXPERIENCE_STAGE_FAILED, EXPERIENCE_TOTAL_SCORE_MISSING, PAGE_LOADING, PAGE_MISMATCH, PAGE_URL_INVALID, RISK_CONTROL, SESSION_EXPIRED, SHOP_CONTEXT_RESTORE_FAILED, SHOP_IDENTITY_MISMATCH, SHOP_IDENTITY_UNCERTAIN]
 evidence: { required: [result, error] }
-adapter: { id: doudian-experience, versions: [1.0.0] }
+adapter: { id: doudian-experience, versions: [2.0.0] }

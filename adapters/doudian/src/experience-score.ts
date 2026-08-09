@@ -5,7 +5,49 @@ const EXPERIENCE_PATH = "/ffa/eco/experience-score";
 const SCORE_PATTERN = /(-?\d+(?:\.\d+)?)\s*分/u;
 const NUMBER_PATTERN = /-?\d+(?:\.\d+)?/u;
 
-export const DOUDIAN_EXPERIENCE_ADAPTER_VERSION = "1.0.0";
+export const DOUDIAN_EXPERIENCE_ADAPTER_VERSION = "2.0.0";
+
+export type DoudianExperienceErrorCode =
+  | "EXPERIENCE_DIMENSION_INCOMPLETE"
+  | "EXPERIENCE_TOTAL_SCORE_MISSING"
+  | "PAGE_LOADING"
+  | "PAGE_MISMATCH"
+  | "PAGE_URL_INVALID"
+  | "SHOP_IDENTITY_MISMATCH"
+  | "SHOP_IDENTITY_UNCERTAIN";
+
+export class DoudianExperienceError extends Error {
+  constructor(
+    readonly code: DoudianExperienceErrorCode,
+    message: string,
+    readonly detail?: Readonly<Record<string, string>>
+  ) {
+    super(message);
+    this.name = "DoudianExperienceError";
+  }
+}
+
+export interface DoudianExperienceErrorPayload {
+  readonly code: DoudianExperienceErrorCode | "EXPERIENCE_STAGE_FAILED";
+  readonly message: string;
+  readonly detail?: Readonly<Record<string, string>>;
+}
+
+export function doudianExperienceErrorPayload(
+  error: unknown
+): DoudianExperienceErrorPayload {
+  if (error instanceof DoudianExperienceError) {
+    return {
+      code: error.code,
+      message: error.message,
+      ...(error.detail ? { detail: error.detail } : {})
+    };
+  }
+  return {
+    code: "EXPERIENCE_STAGE_FAILED",
+    message: "体验分页面读取失败。"
+  };
+}
 
 export interface ExperienceShop {
   readonly id?: string;
@@ -65,10 +107,13 @@ const DIMENSIONS = [
     label: "商品体验",
     scoreLabels: ["商品体验得分"],
     metrics: [
-      "商品综合评分",
-      "商品品质退货率",
-      "近30天物流签收订单中因商品品质原因产生的订单数",
-      "近30日物流签收订单量"
+      { key: "goods.composite_rating", label: "商品综合评分" },
+      { key: "goods.quality_return_rate", label: "商品品质退货率" },
+      {
+        key: "goods.quality_issue_orders_30d",
+        label: "近30天物流签收订单中因商品品质原因产生的订单数"
+      },
+      { key: "goods.signed_orders_30d", label: "近30日物流签收订单量" }
     ]
   },
   {
@@ -76,13 +121,25 @@ const DIMENSIONS = [
     label: "物流体验",
     scoreLabels: ["物流体验得分"],
     metrics: [
-      "揽收时长平均",
-      "运单配送时效达成率",
-      "发货物流品退率",
-      "近30天达成配送线路时效要求的运单数",
-      "近30天应达成配送线路时效要求运单数",
-      "近30天支付订单中首次因物流品质原因售后的订单数",
-      "近30天支付订单数"
+      { key: "logistics.pickup_duration_average", label: "揽收时长平均" },
+      { key: "logistics.delivery_sla_rate", label: "运单配送时效达成率" },
+      {
+        key: "logistics.quality_return_rate",
+        label: "发货物流品退率"
+      },
+      {
+        key: "logistics.delivery_sla_met_waybills_30d",
+        label: "近30天达成配送线路时效要求的运单数"
+      },
+      {
+        key: "logistics.delivery_sla_expected_waybills_30d",
+        label: "近30天应达成配送线路时效要求运单数"
+      },
+      {
+        key: "logistics.first_quality_after_sale_orders_30d",
+        label: "近30天支付订单中首次因物流品质原因售后的订单数"
+      },
+      { key: "logistics.paid_orders_30d", label: "近30天支付订单数" }
     ]
   },
   {
@@ -90,16 +147,43 @@ const DIMENSIONS = [
     label: "服务体验",
     scoreLabels: ["服务体验得分"],
     metrics: [
-      "飞鸽平均响应时长",
-      "售后平均审核时长",
-      "飞鸽会话不满意率",
-      "平台求助率",
-      "近30天退款成功售后单的售后审核总时长",
-      "近30天退款成功售后单数",
-      "近30天消费者评价人工客服为不满意（1-3星）的会话数",
-      "近30天有人工客服评价会话数",
-      "近30天消费者升级求助平台订单数",
-      "近30天消费者求助商家订单数"
+      {
+        key: "service.im_response_duration_average",
+        label: "飞鸽平均响应时长"
+      },
+      {
+        key: "service.after_sale_review_duration_average",
+        label: "售后平均审核时长"
+      },
+      {
+        key: "service.im_dissatisfaction_rate",
+        label: "飞鸽会话不满意率"
+      },
+      { key: "service.platform_assistance_rate", label: "平台求助率" },
+      {
+        key: "service.refund_review_duration_total_30d",
+        label: "近30天退款成功售后单的售后审核总时长"
+      },
+      {
+        key: "service.refund_after_sale_orders_30d",
+        label: "近30天退款成功售后单数"
+      },
+      {
+        key: "service.dissatisfied_agent_sessions_30d",
+        label: "近30天消费者评价人工客服为不满意（1-3星）的会话数"
+      },
+      {
+        key: "service.rated_agent_sessions_30d",
+        label: "近30天有人工客服评价会话数"
+      },
+      {
+        key: "service.platform_escalation_orders_30d",
+        label: "近30天消费者升级求助平台订单数"
+      },
+      {
+        key: "service.merchant_assistance_orders_30d",
+        label: "近30天消费者求助商家订单数"
+      }
     ]
   }
 ] as const;
@@ -127,19 +211,15 @@ function stableHash(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-function safeKey(value: string): string {
-  return `metric-${stableHash(compactText(value))}`;
-}
-
 function parsedPageUrl(pageUrl: string): URL {
   let url: URL;
   try {
     url = new URL(pageUrl);
   } catch {
-    throw new Error("PAGE_URL_INVALID");
+    throw new DoudianExperienceError("PAGE_URL_INVALID", "体验分页地址无效。");
   }
   if (url.origin !== DOUDIAN_ORIGIN || url.pathname !== EXPERIENCE_PATH) {
-    throw new Error("PAGE_MISMATCH");
+    throw new DoudianExperienceError("PAGE_MISMATCH", "当前页面不是抖店体验分页。");
   }
   return url;
 }
@@ -181,7 +261,11 @@ function rawMetricValue(text: string, label: string): string {
   return withoutMeta.slice(0, 200);
 }
 
-function metricFromBlock(label: string, text: string): ExperienceMetric {
+function metricFromBlock(
+  key: string,
+  label: string,
+  text: string
+): ExperienceMetric {
   const score = scoreFromBlock(text);
   const weightMatch = /(?:权重|x)\s*(-?\d+(?:\.\d+)?)\s*%/iu.exec(text);
   const ratioMatch = /(-?[\d,]+)\s*[／/]\s*(-?[\d,]+)/u.exec(text);
@@ -201,7 +285,7 @@ function metricFromBlock(label: string, text: string): ExperienceMetric {
         ? finiteNumber(plain[0])
         : rawValue || null;
   return {
-    key: safeKey(label),
+    key,
     label,
     rawValue,
     value,
@@ -245,22 +329,44 @@ export function readDoudianExperienceSnapshot(
   const url = parsedPageUrl(pageUrl);
   const text = bodyText(doc);
   if (!compactText(text).includes("商家体验分")) {
-    throw new Error("EXPERIENCE_PAGE_LOADING");
+    throw new DoudianExperienceError("PAGE_LOADING", "体验分页仍在加载。");
   }
-  const identity = readDoudianVisibleShopIdentity(doc);
-  if (!identity.identityConfirmed) throw new Error("SHOP_IDENTITY_UNCERTAIN");
+  let identity: ReturnType<typeof readDoudianVisibleShopIdentity>;
+  try {
+    identity = readDoudianVisibleShopIdentity(doc);
+  } catch (error) {
+    if (error instanceof Error && error.message === "PAGE_LOADING") {
+      throw new DoudianExperienceError("PAGE_LOADING", "体验分页仍在加载。");
+    }
+    throw new DoudianExperienceError(
+      "SHOP_IDENTITY_UNCERTAIN",
+      "无法确认当前体验分页的店铺身份。"
+    );
+  }
+  if (!identity.identityConfirmed) {
+    throw new DoudianExperienceError(
+      "SHOP_IDENTITY_UNCERTAIN",
+      "无法确认当前体验分页的店铺身份。"
+    );
+  }
   const shopId = actualShopId(doc, identity.id);
   if (
     compactText(identity.name) !== compactText(expectedShop.name) ||
     (expectedShop.id && shopId !== expectedShop.id)
   ) {
-    throw new Error("SHOP_IDENTITY_MISMATCH");
+    throw new DoudianExperienceError(
+      "SHOP_IDENTITY_MISMATCH",
+      "当前体验分页店铺与目标店铺不一致。"
+    );
   }
   const noScore = /(?:暂无体验分|订单达到30单后.*展示体验分|订单不足30单)/u.test(text);
   const totalBlock = bestBlock(doc, "我的体验分");
   const total = scoreFromBlock(totalBlock);
   if (!noScore && total.value === null) {
-    throw new Error("EXPERIENCE_TOTAL_SCORE_MISSING");
+    throw new DoudianExperienceError(
+      "EXPERIENCE_TOTAL_SCORE_MISSING",
+      "体验分总分缺失。"
+    );
   }
   const ordersMatch = /近30天有效订单数\s*[：:]?\s*([\d,]+)/u.exec(text);
   const industryMatch = /考核行业\s*[：:]?\s*([^\s]{1,80})/u.exec(text);
@@ -269,12 +375,18 @@ export function readDoudianExperienceSnapshot(
     ? []
     : DIMENSIONS.map((definition) => {
         const score = scoreFromBlock(bestBlock(doc, definition.scoreLabels[0]));
-        const metrics = definition.metrics.flatMap((label) => {
-          const block = bestBlock(doc, label);
-          return block ? [metricFromBlock(label, block)] : [];
+        const metrics = definition.metrics.flatMap((metric) => {
+          const block = bestBlock(doc, metric.label);
+          return block
+            ? [metricFromBlock(metric.key, metric.label, block)]
+            : [];
         });
         if (score.value === null || metrics.length === 0) {
-          throw new Error(`EXPERIENCE_DIMENSION_INCOMPLETE:${definition.key}`);
+          throw new DoudianExperienceError(
+            "EXPERIENCE_DIMENSION_INCOMPLETE",
+            `体验分维度数据不完整：${definition.label}。`,
+            { dimension: definition.key }
+          );
         }
         return {
           key: definition.key,

@@ -2,46 +2,73 @@ apiVersion: bpa/v1alpha2
 kind: Node
 metadata:
   id: doudian.experience.daily.aggregate
-  version: 1.0.0
+  version: 2.0.0
   title: 聚合抖店每日体验分结果
-  description: 聚合逐店运行输出，保留完整、无分、失败与跳过数量，不把部分成功压成无数据。
-runtime: browser
+  description: 由 Core 读取当前 Run 已持久化的单店事实并结合 foreach 结果计算完整、部分或失败状态；不信任浏览器传回的聚合结论。
+runtime: engine_builtin
 inputSchema:
   type: object
   additionalProperties: false
-  required: [foreachOutcome]
+  required: [foreachOutcome, discoveredShops, discoveredCount, collectableCount]
   properties:
     foreachOutcome: { type: object }
+    discoveredShops:
+      type: array
+      minItems: 1
+      maxItems: 100
+      items:
+        type: object
+        additionalProperties: false
+        required: [key, name, status, statusText]
+        allOf:
+          - if:
+              properties: { status: { const: active } }
+              required: [status]
+            then:
+              required: [id]
+              properties:
+                id: { type: string, pattern: "^[0-9]{5,30}$" }
+        properties:
+          key: { type: string, minLength: 3, maxLength: 120 }
+          id: { type: string, pattern: "^[0-9]{5,30}$" }
+          name: { type: string, minLength: 2, maxLength: 80 }
+          status: { enum: [active, blocked] }
+          statusText: { type: string, minLength: 1, maxLength: 200 }
+    discoveredCount: { type: integer, minimum: 1, maximum: 100 }
+    collectableCount: { type: integer, minimum: 0, maximum: 100 }
 outputSchema:
   type: object
   additionalProperties: false
-  required: [status, businessDate, observedAt, discoveredCount, attemptedCount, persistedCount, failedCount, skippedCount, snapshots, foreachOutcome]
+  required: [status, businessDate, observedAt, discoveredCount, collectableCount, attemptedCount, persistedCount, failedCount, skippedCount, factRefs, foreachOutcome]
   properties:
     status: { enum: [complete, partial, failed] }
     businessDate: { type: string, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
     observedAt: { type: string, format: date-time }
     discoveredCount: { type: integer, minimum: 0, maximum: 100 }
+    collectableCount: { type: integer, minimum: 0, maximum: 100 }
     attemptedCount: { type: integer, minimum: 0, maximum: 100 }
     persistedCount: { type: integer, minimum: 0, maximum: 100 }
     failedCount: { type: integer, minimum: 0, maximum: 100 }
     skippedCount: { type: integer, minimum: 0, maximum: 100 }
-    snapshots: { type: array, maxItems: 100, items: { type: object } }
+    factRefs:
+      type: array
+      maxItems: 100
+      items:
+        type: object
+        additionalProperties: false
+        required: [factKey, businessDate, subjectId, recordDigest]
+        properties:
+          factKey: { type: string, minLength: 1, maxLength: 500 }
+          businessDate: { type: string, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+          subjectId: { type: string, pattern: "^[0-9]{5,30}$" }
+          recordDigest: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
     foreachOutcome: { type: object }
 risk:
   level: R0
-  permissions: [browser.dom.read, browser.tabs.read]
-  domains: [https://fxg.jinritemai.com]
-resources:
-  browser:
-    kind: browser
-    capabilities: [browser.dom.read, browser.tabs.read]
-    allowedOrigins: [https://fxg.jinritemai.com]
-    authentication: authenticated
-    purpose: 绑定同一运行资源以聚合已形成检查点的逐店结果
+  permissions: [experience.fact.read]
 execution:
   timeoutDefault: 10s
   idempotency: repeatable_read
   cancellable: true
-errors: [DOUDIAN_EXPERIENCE_OUTCOME_INVALID]
+errors: [DOUDIAN_EXPERIENCE_OUTCOME_INVALID, EXPERIENCE_FACT_PERMISSION_MISMATCH, EXPERIENCE_FACT_SCOPE_MISMATCH, EXPERIENCE_FACT_DUPLICATE, EXPERIENCE_FACT_STORE_FAILED]
 evidence: { required: [result, error] }
-adapter: { id: doudian-experience, versions: [1.0.0] }

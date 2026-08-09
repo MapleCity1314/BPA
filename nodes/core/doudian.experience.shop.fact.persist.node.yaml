@@ -1,0 +1,162 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: doudian.experience.shop.fact.persist
+  version: 1.0.0
+  title: 持久化单店体验分事实
+  description: 按运行内稳定调用身份幂等保存一个已验证的单店体验分快照；重试不得生成第二条事实，也不得覆盖冲突内容。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [snapshot]
+  properties:
+    snapshot:
+      type: object
+      additionalProperties: false
+      required: [status, shop, observedAt, sourceUpdatedAt, summary, dimensions, evidence, diagnostics, formMutations]
+      allOf:
+        - if:
+            properties: { status: { const: complete } }
+            required: [status]
+          then:
+            properties:
+              dimensions: { type: array, minItems: 3, maxItems: 3 }
+              summary:
+                type: object
+                properties: { totalScore: { type: number } }
+          else:
+            properties:
+              dimensions: { type: array, maxItems: 0 }
+              summary:
+                type: object
+                properties: { totalScore: { type: "null" } }
+      properties:
+        status: { enum: [complete, no_score] }
+        shop:
+          type: object
+          additionalProperties: false
+          required: [id, name]
+          properties:
+            id: { type: string, pattern: "^[0-9]{5,30}$" }
+            name: { type: string, minLength: 2, maxLength: 80 }
+        observedAt: { type: string, format: date-time }
+        sourceUpdatedAt: { type: [string, "null"], format: date-time }
+        summary:
+          type: object
+          additionalProperties: false
+          required: [totalScore, totalScoreRaw, level, industry, orders30d, orders30dRaw]
+          properties:
+            totalScore: { type: [number, "null"] }
+            totalScoreRaw: { type: [string, "null"], maxLength: 200 }
+            level: { type: [string, "null"], maxLength: 80 }
+            industry: { type: [string, "null"], maxLength: 80 }
+            orders30d: { type: [number, "null"], minimum: 0 }
+            orders30dRaw: { type: [string, "null"], maxLength: 80 }
+        dimensions:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            additionalProperties: false
+            required: [key, label, score, scoreRaw, metrics]
+            properties:
+              key: { enum: [goods, logistics, service] }
+              label: { type: string, minLength: 1, maxLength: 80 }
+              score: { type: [number, "null"] }
+              scoreRaw: { type: [string, "null"], maxLength: 200 }
+              metrics:
+                type: array
+                minItems: 1
+                maxItems: 100
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [key, label, rawValue, value, unit, score, scoreRaw, weight, weightRaw, numerator, denominator, change, note]
+                  properties:
+                    key:
+                      enum:
+                        - goods.composite_rating
+                        - goods.quality_return_rate
+                        - goods.quality_issue_orders_30d
+                        - goods.signed_orders_30d
+                        - logistics.pickup_duration_average
+                        - logistics.delivery_sla_rate
+                        - logistics.quality_return_rate
+                        - logistics.delivery_sla_met_waybills_30d
+                        - logistics.delivery_sla_expected_waybills_30d
+                        - logistics.first_quality_after_sale_orders_30d
+                        - logistics.paid_orders_30d
+                        - service.im_response_duration_average
+                        - service.after_sale_review_duration_average
+                        - service.im_dissatisfaction_rate
+                        - service.platform_assistance_rate
+                        - service.refund_review_duration_total_30d
+                        - service.refund_after_sale_orders_30d
+                        - service.dissatisfied_agent_sessions_30d
+                        - service.rated_agent_sessions_30d
+                        - service.platform_escalation_orders_30d
+                        - service.merchant_assistance_orders_30d
+                    label: { type: string, minLength: 1, maxLength: 200 }
+                    rawValue: { type: string, maxLength: 200 }
+                    value:
+                      anyOf:
+                        - { type: number }
+                        - { type: string, maxLength: 200 }
+                        - { type: "null" }
+                    unit: { type: [string, "null"], maxLength: 40 }
+                    score: { type: [number, "null"] }
+                    scoreRaw: { type: [string, "null"], maxLength: 200 }
+                    weight: { type: [number, "null"] }
+                    weightRaw: { type: [string, "null"], maxLength: 200 }
+                    numerator: { type: [number, "null"] }
+                    denominator: { type: [number, "null"] }
+                    change:
+                      anyOf:
+                        - { type: number }
+                        - { type: string, maxLength: 200 }
+                        - { type: "null" }
+                    note: { type: [string, "null"], maxLength: 500 }
+        evidence:
+          type: object
+          additionalProperties: false
+          required: [pageUrl, capturedAt, structuredSnapshotRef]
+          properties:
+            pageUrl: { type: string, format: uri, maxLength: 1000 }
+            capturedAt: { type: string, format: date-time }
+            structuredSnapshotRef: { type: string, pattern: "^inline:[a-f0-9]{8}$" }
+        diagnostics: { type: array, maxItems: 100, items: { type: string, maxLength: 500 } }
+        formMutations: { const: 0 }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [status, businessDate, shop, observedAt, factRef, recordDigest, inserted]
+  properties:
+    status: { enum: [complete, no_score] }
+    businessDate: { type: string, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+    shop:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: { type: string, pattern: "^[0-9]{5,30}$" }
+        name: { type: string, minLength: 2, maxLength: 80 }
+    observedAt: { type: string, format: date-time }
+    factRef:
+      type: object
+      additionalProperties: false
+      required: [factKey, businessDate, subjectId]
+      properties:
+        factKey: { type: string, minLength: 1, maxLength: 500 }
+        businessDate: { type: string, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+        subjectId: { type: string, pattern: "^[0-9]{5,30}$" }
+    recordDigest: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+    inserted: { type: boolean }
+risk:
+  level: R1
+  permissions: [experience.fact.write]
+execution:
+  timeoutDefault: 30s
+  idempotency: verified_write
+  cancellable: true
+errors: [EXPERIENCE_FACT_INVALID, EXPERIENCE_FACT_PERMISSION_MISMATCH, EXPERIENCE_FACT_SCOPE_MISMATCH, EXPERIENCE_FACT_IDEMPOTENCY_CONFLICT, EXPERIENCE_FACT_FENCE_INVALID, EXPERIENCE_FACT_STORE_FAILED]

@@ -15,7 +15,10 @@ vi.mock("./alliance-retired-background.js", () => ({
   createAllianceRetiredBrowserDriver: () => shopDriver
 }));
 
-import { createExperienceScoreBrowserDriver } from "./experience-score-background.js";
+import {
+  createExperienceScoreBrowserDriver,
+  ExperienceScoreDriverError
+} from "./experience-score-background.js";
 
 const sourceShop = {
   id: "12345678",
@@ -100,5 +103,102 @@ describe("experience-score single-tab browser driver", () => {
     expect(shopDriver.switchShop).toHaveBeenNthCalledWith(1, targetShop);
     expect(shopDriver.switchShop).toHaveBeenNthCalledWith(2, sourceShop);
     expect(shopDriver.cleanupShopTabs).toHaveBeenCalledOnce();
+  });
+
+  it("keeps incomplete-dimension context in detail without creating a dynamic code", async () => {
+    sendMessage
+      .mockReset()
+      .mockResolvedValueOnce({ riskSignals: [] })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: {
+          code: "EXPERIENCE_DIMENSION_INCOMPLETE",
+          message: "体验分维度数据不完整：商品体验。",
+          detail: { dimension: "goods" }
+        }
+      });
+    const driver = createExperienceScoreBrowserDriver({
+      sourceTabId: 42,
+      deadline: new Date(Date.now() + 60_000).toISOString()
+    });
+
+    await expect(driver.collectShop(targetShop, sourceShop)).rejects.toMatchObject({
+      code: "EXPERIENCE_DIMENSION_INCOMPLETE",
+      detail: { dimension: "goods" }
+    });
+  });
+
+  it.each([
+    {
+      label: "tabs update",
+      prepare: () => update.mockRejectedValueOnce(new Error("raw tab failure"))
+    },
+    {
+      label: "sendMessage",
+      prepare: () =>
+        sendMessage.mockReset().mockRejectedValueOnce(new Error("raw port failure"))
+    }
+  ])("maps $label failures to the declared browser code", async ({ prepare }) => {
+    prepare();
+    const driver = createExperienceScoreBrowserDriver({
+      sourceTabId: 42,
+      deadline: new Date(Date.now() + 60_000).toISOString()
+    });
+
+    await expect(driver.collectShop(targetShop, sourceShop)).rejects.toEqual(
+      expect.objectContaining<Partial<ExperienceScoreDriverError>>({
+        code: "BROWSER_DISCONNECTED",
+        message: "浏览器标签页或内容脚本暂不可用。"
+      })
+    );
+  });
+
+  it("maps an unrecognized content response code to the fixed stage fallback", async () => {
+    sendMessage
+      .mockReset()
+      .mockResolvedValueOnce({ riskSignals: [] })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: {
+          code: "EXPERIENCE_DIMENSION_INCOMPLETE:goods",
+          message: "raw content error"
+        }
+      });
+    const driver = createExperienceScoreBrowserDriver({
+      sourceTabId: 42,
+      deadline: new Date(Date.now() + 60_000).toISOString()
+    });
+
+    await expect(driver.collectShop(targetShop, sourceShop)).rejects.toMatchObject({
+      code: "EXPERIENCE_STAGE_FAILED",
+      message: "体验分页面读取失败。"
+    });
+  });
+
+  it("drops unrecognized dimension detail from a fixed dimension error", async () => {
+    sendMessage
+      .mockReset()
+      .mockResolvedValueOnce({ riskSignals: [] })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: {
+          code: "EXPERIENCE_DIMENSION_INCOMPLETE",
+          message: "raw content error",
+          detail: { dimension: "secret-dynamic-dimension" }
+        }
+      });
+    const driver = createExperienceScoreBrowserDriver({
+      sourceTabId: 42,
+      deadline: new Date(Date.now() + 60_000).toISOString()
+    });
+
+    const failure = await driver.collectShop(targetShop, sourceShop).catch(
+      (error: unknown) => error
+    );
+    expect(failure).toMatchObject({
+      code: "EXPERIENCE_DIMENSION_INCOMPLETE",
+      message: "体验分维度数据不完整。"
+    });
+    expect(failure).toHaveProperty("detail", undefined);
   });
 });

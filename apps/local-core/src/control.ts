@@ -87,12 +87,13 @@ import {
 } from "./authoring-service.js";
 import { PackagingDatasetService } from "./dataset-service.js";
 import { DatasetRuntimeProvider } from "./dataset-runtime-provider.js";
+import { ExperienceDataRuntimeProvider } from "./experience-data-runtime-provider.js";
 import { PACKAGING_DATASET_PROFILE } from "@bpa/packaging-dataset";
 import {
   TEAM_WORKER_CODE_DIGEST,
   TEAM_WORKER_HANDLER_REFS
 } from "../../team-worker/src/manifest.js";
-import type { JsonValue } from "@bpa/workflow-ir";
+import type { ExecutionPlan, JsonValue } from "@bpa/workflow-ir";
 import { RuntimeResourceBindingService } from "./runtime-resource-bindings.js";
 import { TrustedEvidenceQueryService } from "./trusted-evidence-queries.js";
 import {
@@ -107,6 +108,26 @@ import { RecoverySessionService } from "./recovery-session.js";
 export const CONTROL_MAX_MESSAGE_BYTES = 512 * 1024;
 
 type PublishedNodeDefinition = NodeDefinition | NodeDefinitionV1Alpha2;
+
+function planUsesBrowser(plan: ExecutionPlan): boolean {
+  const stepsUseBrowser = (
+    steps: ExecutionPlan["steps"]
+  ): boolean =>
+    Object.values(steps).some(
+      (step) =>
+        (step.kind === "call" && step.providerId === "browser") ||
+        (step.kind === "foreach" && stepsUseBrowser(step.body.steps))
+    );
+  return stepsUseBrowser(plan.steps);
+}
+
+function isExperienceDataNode(id: string, version: string): boolean {
+  return (
+    (id === "doudian.experience.shop.fact.persist" && version === "1.0.0") ||
+    (id === "doudian.experience.daily.aggregate" && version === "2.0.0") ||
+    (id === "doudian.experience.daily.dataset.prepare" && version === "1.0.0")
+  );
+}
 
 export interface ControlRequest {
   id: string;
@@ -161,6 +182,27 @@ export class LocalCoreService {
           `trigger:${trigger.spec.id}`,
           triggerAttemptId
         ) as RunRecord;
+      },
+      (runId, reason) => {
+        const run = this.persistence.getRun(runId);
+        if (!run) throw new Error(`Workflow Run is missing: ${runId}`);
+        if (
+          !this.persistence.getRunPlanSnapshot(runId) ||
+          !this.persistence.getEngineCheckpoint(runId)
+        ) {
+          throw new Error(
+            `Triggered Workflow Run is not recoverable IR2: ${runId}`
+          );
+        }
+        const cancelled = this.ir2Runtime.cancel(
+          runId,
+          `trigger-runtime:${reason}`
+        ).run;
+        this.browserGateway?.requestCancel(
+          runId,
+          "TRIGGER_CONTROL_LEASE_LOST"
+        );
+        return cancelled;
       }
     );
     this.#resourceBindings = new RuntimeResourceBindingService(persistence);
@@ -174,6 +216,9 @@ export class LocalCoreService {
     }
     if (!providers.list().includes("dataset")) {
       providers.register(new DatasetRuntimeProvider(this.datasets));
+    }
+    if (!providers.list().includes("experience-data")) {
+      providers.register(new ExperienceDataRuntimeProvider(persistence));
     }
     if (!providers.list().includes("team")) {
       const packagedWorker = resolve(
@@ -1542,6 +1587,7 @@ export class LocalCoreService {
         artifact.content,
         this.#ir2Catalog()
       );
+      this.#assertBrowserControlContext(plan, triggerAttemptId);
       const bindResources = this.#resourceBindings.prepare(
         plan,
         resourceBindings,
@@ -1575,6 +1621,11 @@ export class LocalCoreService {
       );
     }
     const compiled = compileWorkflow(artifact.content, this.#nodeCatalog());
+    if (
+      Object.values(compiled.nodes).some((node) => node.runtime === "browser")
+    ) {
+      throw new Error("MANUAL_BROWSER_RUN_REQUIRES_TRIGGER");
+    }
     const run = this.engine.start(compiled, safeInput);
     this.browserGateway?.dispatchPending();
     return run;
@@ -1586,6 +1637,15 @@ export class LocalCoreService {
       existsSync(this.runtimeMaintenancePath)
     ) {
       throw new Error("BPA_RUNTIME_MAINTENANCE");
+    }
+  }
+
+  #assertBrowserControlContext(
+    plan: ExecutionPlan,
+    triggerAttemptId?: string
+  ): void {
+    if (planUsesBrowser(plan) && !triggerAttemptId) {
+      throw new Error("MANUAL_BROWSER_RUN_REQUIRES_TRIGGER");
     }
   }
 
@@ -1788,6 +1848,7 @@ export class LocalCoreService {
     if (prepared.node.risk.level === "R1" && !input.confirmed) {
       throw new Error("R1 SingleNodeRun requires explicit human confirmation");
     }
+    this.#assertBrowserControlContext(prepared.plan);
     const bindResources = this.#resourceBindings.prepare(
       prepared.plan,
       input.resourceBindings,
@@ -1890,7 +1951,9 @@ export class LocalCoreService {
           providerId:
             id === "dataset.records.read"
               ? "dataset"
-              : definition.runtime.replace(/^engine_/, ""),
+              : isExperienceDataNode(id, version)
+                ? "experience-data"
+                : definition.runtime.replace(/^engine_/, ""),
           adapters: adapter
             ? [
                 {
@@ -2146,7 +2209,7 @@ export class LocalControlServer {
               const hello = parseControlHelloRequest(message);
               const response = negotiateControlHello(hello, {
                 supportedApplicationProtocols: [CONTROL_PROTOCOL_VERSION],
-                runtime: { name: "bpa-core", version: "0.6.0" },
+                runtime: { name: "bpa-core", version: "0.6.1" },
                 maxFrameBytes: CONTROL_V1_MAX_MESSAGE_BYTES,
                 features: [
                   "control_error_isolation",

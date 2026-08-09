@@ -355,7 +355,7 @@ describe("local browser gateway", () => {
               }
             ],
             adapter_id: "doudian",
-            adapter_version: "1.1.0"
+            adapter_version: "1.2.0"
           }
         ],
         features: ["page_observation_v2", "exact_tab_binding_v2", "active_page_probe_v1"],
@@ -379,27 +379,41 @@ describe("local browser gateway", () => {
       revision: 1,
       observedAt: new Date().toISOString()
     });
-    const resourceBindings = {
-      doudian_page: {
-        sessionId,
-        browserInstanceId: "browser-test",
-        tabId: 42,
-        observationRevision: 1
-      }
-    };
-    const started = service.handle({
-      id: "run",
-      method: "run.create",
+    expect(service.handle({
+      id: "browser-trigger-put",
+      method: "trigger.put",
       params: {
-        workflowId: "doudian.shop-context-observe",
-        workflowVersion: "2.0.0",
-        input: {},
-        resourceBindings,
-        actor: "test"
+        actor: "test",
+        spec: {
+          apiVersion: "bpa.trigger/v1alpha2",
+          id: "browser-gateway-test",
+          version: "1.0.0",
+          appId: "browser-gateway-test",
+          kind: "manual",
+          workflow: {
+            id: "doudian.shop-context-observe",
+            version: "2.0.0"
+          },
+          enabled: true,
+          inputSchemaVersion: "browser-gateway-test/1",
+          input: {},
+          concurrencyKey: "doudian-account:browser-gateway-test",
+          browserInstanceId: "browser-test",
+          idempotencyPolicy: "request_key",
+          retryPolicy: "none"
+        }
       }
+    })).toMatchObject({ ok: true });
+    const started = service.handle({
+      id: "browser-trigger-fire",
+      method: "trigger.fire",
+      params: { id: "browser-gateway-test", requestKey: "success" }
     });
     expect(started.ok).toBe(true);
-    const runId = (started.result as { id: string }).id;
+    const runId = String(
+      (started.result as { attempt: { workflowRunId: string } }).attempt
+        .workflowRunId
+    );
     expect(persistence.getRun(runId)?.status).toBe("waiting_browser");
     const firstDrain = service.ir2Runtime.drainOnce();
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -591,19 +605,17 @@ describe("local browser gateway", () => {
         .listEvents(runId)
         .filter((event) => event.type === "RUNTIME_RESULT_APPLIED")
     ).toHaveLength(1);
+    service.triggers.tick();
 
     const riskRun = service.handle({
-      id: "risk-run",
-      method: "run.create",
-      params: {
-        workflowId: "doudian.shop-context-observe",
-        workflowVersion: "2.0.0",
-        input: {},
-        resourceBindings,
-        actor: "test"
-      }
+      id: "risk-trigger-fire",
+      method: "trigger.fire",
+      params: { id: "browser-gateway-test", requestKey: "risk" }
     });
-    const riskRunId = (riskRun.result as { id: string }).id;
+    const riskRunId = String(
+      (riskRun.result as { attempt: { workflowRunId: string } }).attempt
+        .workflowRunId
+    );
     const riskDrain = service.ir2Runtime.drainOnce();
     await new Promise<void>((resolve) => setImmediate(resolve));
     const riskCommand = outgoing

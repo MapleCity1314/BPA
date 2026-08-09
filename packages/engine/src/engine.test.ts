@@ -652,6 +652,28 @@ describe("deterministic IR2 engine", () => {
     expect(stopped.state.cursor).toBeUndefined();
   });
 
+  it("preserves the exact error code of a top-level uncertain terminal", () => {
+    const source = planWithForeach();
+    const uncertain = source.steps.uncertain;
+    if (!uncertain || uncertain.kind !== "terminal") {
+      throw new Error("fixture changed");
+    }
+    const engine = new DeterministicWorkflowEngine({
+      ...source,
+      entry:"uncertain",
+      steps:{
+        ...source.steps,
+        uncertain:{
+          ...uncertain,errorCode:"DISCOVERY_IDENTITY_UNCERTAIN"
+        }
+      }
+    },dependencies());
+    expect(engine.start("run-terminal-uncertain",{}).state).toMatchObject({
+      status:"uncertain",
+      error:{ code:"DISCOVERY_IDENTITY_UNCERTAIN" }
+    });
+  });
+
   it("stops immediately on rejected outcomes without weakening the reason", () => {
     const engine = new DeterministicWorkflowEngine(
       planWithForeach(),

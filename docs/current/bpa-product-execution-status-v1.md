@@ -287,7 +287,7 @@ IANA timezone、固定 anchor 与 on-time window；`skip`、`run_once`、
 同到期 Workflow 的 fixture 已证明释放后继续串行。活动 Occurrence/Attempt 查询没有最近
 200 条截断，Attempt 与 Occurrence 终态在同一 SQLite 事务提交。该层尚未部署。
 
-当前 Schema v21 候选把 pre-Run `blocked/failed/missed/skipped` 终态与
+Schema v21 已随 PR #23 进入主线，把 pre-Run `blocked/failed/missed/skipped` 终态与
 `dashboard-only` Attention 放在同一 SQLite 事务；没有 Workflow Run 的 Attempt 只允许
 以 `blocked/failed` 终止，旧版 Workflow 被 Trigger 调用时在创建 Run 前即安全阻断。库存
 指挥台只通过 Core UDS 读取属于 `inventory-monitor` 的开放 Trigger Attention，不确认、
@@ -296,7 +296,7 @@ IANA timezone、固定 anchor 与 on-time window；`skip`、`run_once`、
 同时把 Attention 查询失败视为 action、把 information/review 视为 attention，并对 Viewer
 使用固定脱敏文案。Schema 20 的旧 Attention、Delivery 或 Recovery Session 任一非空时，
 Schema 21 明确拒绝升级并保持数据库原样；正式部署前必须先导出、退役并完成空库门禁。
-该候选仍只完成代码与本机测试，尚未合并或部署，因此生产库存面板当前还看不到这些提醒。
+该层已通过完整门禁但尚未部署，因此生产库存面板当前还看不到这些提醒。
 
 对抗审查后，候选已升为不兼容旧计划形状的 `bpa.trigger/v1alpha2`：旧 Schema 19 库中
 只要仍存在 TriggerSpec 或 Trigger Run，Schema 20 升级就明确拒绝并保持数据库原样，不能
@@ -310,9 +310,31 @@ Core 竞态下错误释放有效控制权。正式部署前仍必须完成旧控
 导致声明 `additionalProperties: false` 的清退、体验分和库存 Workflow 在 Run 创建前全部
 被阻断。当前候选已移除这项输入污染：occurrence 与 Dataset 血缘只保留在不可变
 Trigger Run，Workflow 只接收其已冻结业务输入。候选同时用同一 Browser Session 依次
-走通清退商品 `2.0.1`、体验分 `1.0.1`、库存 `1.0.0` 的 Trigger、资源绑定、IR2、Provider、
+走通清退商品 `2.0.1`、体验分 `2.0.0`、库存 `1.0.0` 的 Trigger、资源绑定、IR2、Provider、
 终态与租约释放，并把普通单店失败改为 `collect` 后聚合为 `uncertain + partial`；登录、
 验证码和风控的 `rejected` 仍立即终止。该测试不启动 Chrome，不等于真实登录页 E2E。
+
+当前 Schema v22 候选把体验分的“已持久化”从聚合文案改成可审计事实：每店页面读取后，
+由 Core 内 `experience-data` Provider 立即写入 Run 级不可变 Operational Fact；业务日固定
+来自 TriggerOccurrence 的计划时间，人工 Run 则固定来自 Run 创建时间。`no_score` 是成功
+事实，停用店铺是正常跳过，普通店铺失败在已有事实时形成 `partial + uncertain`。完整与
+部分结果都先准备不可变发布意图，再与 Run、checkpoint、审计和 lineage 在同一 SQLite
+事务中发布 `doudian-experience-daily` Dataset；零事实、登录/验证码/风控拒绝、取消或发布
+标记丢失均不发布。Trigger 或浏览器租约丢失时，Runtime 必须先把已关联 Workflow Run
+持久取消并请求浏览器侧取消，再收口 Attempt/Occurrence，防止失去控制权的旧 Run 继续
+写事实。旧 Extension 体验分聚合能力已删除，浏览器只负责读取页面快照。
+
+体验分 Adapter、店铺发现 Node 与单店快照 Node 已升到 `2.0.0` 并清退旧源码执行路径；
+对应 Runtime/Extension 发行身份整体升为 `0.6.1`，Adapter minimumVersion 同步锁定。
+DatasetVersion 目前以内嵌 schema/normalization 形成整体摘要，不生成伪造的
+dataset_profile closure ref；正式版本化 dataset_profile 的发布与闭包解析仍是部署前门禁。
+
+这一层当前只有代码、fixture、故障注入和本机离线 E2E 证据；完整仓库门禁、GitHub 合并、
+真实登录页逐店验证、公司 Mac 灰度与生产 Dataset 仍待确认。质量感知的
+`latest complete/latest attempt` 视图尚未实现，因此不得把该 Dataset 接入 Dataset Trigger，
+也不得在 Console 中称其为“最新体验分”。正式 `dataset_profile` 资产及其覆盖 record
+schema 与规范化语义的 digest 也尚未发布；当前候选不把进程内常量伪装成 IR2 已发布
+闭包，该资产是后续发布和灰度部署的硬门禁。
 
 2026-08-09 只读生产复核显示最新自然周期于 11:54（Asia/Shanghai）成功终止：13/13
 店完成，库存 319/319 持久化、失败 0，四类共 52 个步骤均为终态；当前有效租约和运行中

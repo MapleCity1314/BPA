@@ -11,6 +11,7 @@ import {
   DesignModeGrantConflictError,
   EvidenceConflictError,
   EvidenceOwnershipError,
+  OperationalFactConflictError,
   RecoverySessionConflictError,
   RevisionConflictError,
   StaleFencingTokenError,
@@ -68,11 +69,16 @@ import {
   type JsonValue,
   type NodeExecutionRecord,
   type OpenBrowserSessionInput,
+  type OperationalDatasetCoverage,
+  type OperationalDatasetPublicationLineage,
+  type OperationalExecutionContext,
+  type OperationalFactRecord,
   type NodeTransitionInput,
   type OutboxMessage,
   type PageSnapshotDefinition,
   type Persistence,
   type PublishArtifactInput,
+  type PreparedOperationalDatasetPublication,
   type RetentionJobRecord,
   type RecoverySessionRecord,
   type RecoverySessionState,
@@ -121,6 +127,7 @@ import {
   formatValidationErrors,
   validateAuthoringSession,
   validateCandidateBundle,
+  validateDataset,
   validatePageSnapshot,
   validateScenarioSpec
 } from "@bpa/schemas";
@@ -218,6 +225,95 @@ function assertTimestamp(value: string, label: string): void {
   if (!Number.isFinite(Date.parse(value))) {
     throw new Error(`${label} must be a timestamp`);
   }
+}
+
+function assertBusinessDate(value: string): void {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
+    throw new Error("businessDate must use YYYY-MM-DD");
+  }
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (
+    !Number.isFinite(parsed.valueOf()) ||
+    parsed.toISOString().slice(0, 10) !== value
+  ) {
+    throw new Error("businessDate must be a real calendar date");
+  }
+}
+
+function businessDateAt(timestamp: string, timeZone: string): string {
+  assertTimestamp(timestamp, "business date anchor");
+  if (!timeZone.trim()) {
+    throw new Error("businessTimeZone must not be empty");
+  }
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(new Date(timestamp));
+  } catch {
+    throw new Error("businessTimeZone must be an IANA time zone");
+  }
+  const field = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  const value = `${field("year")}-${field("month")}-${field("day")}`;
+  assertBusinessDate(value);
+  return value;
+}
+
+function assertSemver(value: string, label: string): void {
+  if (
+    !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$/u.test(
+      value
+    )
+  ) {
+    throw new Error(`${label} must be a SemVer version`);
+  }
+}
+
+function assertOperationalCoverage(
+  quality: "complete" | "partial",
+  coverage: OperationalDatasetCoverage,
+  factCount: number
+): void {
+  for (const [key, value] of Object.entries(coverage)) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error(`Operational Dataset coverage.${key} is invalid`);
+    }
+  }
+  if (
+    coverage.skipped !== coverage.discovered - coverage.collectable ||
+    coverage.attempted !== coverage.collectable ||
+    coverage.persisted + coverage.failed !== coverage.attempted ||
+    coverage.discovered !== coverage.attempted + coverage.skipped ||
+    coverage.persisted !== factCount
+  ) {
+    throw new Error("Operational Dataset coverage counts do not conserve");
+  }
+  if (
+    quality === "complete" &&
+    (coverage.failed !== 0 || coverage.persisted !== coverage.collectable)
+  ) {
+    throw new Error("Complete Operational Dataset has incomplete coverage");
+  }
+  if (
+    quality === "partial" &&
+    (coverage.persisted === 0 || coverage.failed === 0)
+  ) {
+    throw new Error("Partial Operational Dataset requires mixed coverage");
+  }
+}
+
+function operationalFactKey(input: {
+  namespace: string;
+  runId: string;
+  businessDate: string;
+  subjectId: string;
+  schemaVersion: string;
+}): string {
+  return `fact:${digest(input).slice("sha256:".length)}`;
 }
 
 function assertDigest(value: string, label: string): void {
@@ -1705,6 +1801,12 @@ export class SqlitePersistence implements Persistence {
     }
   ): RunRecord {
     return this.#db.transaction(() => {
+      this.#assertOperationalDatasetPublicationMarker(
+        input.runId,
+        input.output,
+        input.operationalDatasetPublicationIntentId,
+        input.nextStatus
+      );
       if (
         input.checkpoint.runId !== input.runId ||
         input.event.runId !== input.runId ||
@@ -1748,6 +1850,16 @@ export class SqlitePersistence implements Persistence {
         );
       }
       this.#commitAttentionForTerminal(input);
+      if (
+        (input.nextStatus === "succeeded" || input.nextStatus === "uncertain") &&
+        input.operationalDatasetPublicationIntentId
+      ) {
+        this.#publishPreparedOperationalDataset(
+          input.runId,
+          input.nextStatus,
+          input.operationalDatasetPublicationIntentId
+        );
+      }
       this.#inject("recoverable_transition.after_state");
       for (const task of input.assistanceTasks ?? []) {
         if (task.task.runId !== input.runId) {
@@ -1817,6 +1929,12 @@ export class SqlitePersistence implements Persistence {
 
   commitRunTransition(input: RunTransitionInput): RunRecord {
     return this.#db.transaction(() => {
+      this.#assertOperationalDatasetPublicationMarker(
+        input.runId,
+        input.output,
+        input.operationalDatasetPublicationIntentId,
+        input.nextStatus
+      );
       const updatedAt = now();
       const result = this.#db
         .prepare(
@@ -1839,6 +1957,16 @@ export class SqlitePersistence implements Persistence {
         );
       }
       this.#commitAttentionForTerminal(input);
+      if (
+        (input.nextStatus === "succeeded" || input.nextStatus === "uncertain") &&
+        input.operationalDatasetPublicationIntentId
+      ) {
+        this.#publishPreparedOperationalDataset(
+          input.runId,
+          input.nextStatus,
+          input.operationalDatasetPublicationIntentId
+        );
+      }
       this.#insertEvent(input.event);
       return this.getRun(input.runId)!;
     })();
@@ -2590,6 +2718,387 @@ export class SqlitePersistence implements Persistence {
       ...(row.consumed_at == null
         ? {}
         : { appliedAt: String(row.consumed_at) })
+    };
+  }
+
+  putOperationalFact(input: {
+    namespace: string;
+    businessTimeZone: string;
+    subjectId: string;
+    schemaVersion: string;
+    record: JsonValue;
+    observedAt: string;
+    persistedAt: string;
+    executionContext: OperationalExecutionContext;
+  }): {
+    status: "accepted" | "duplicate";
+    fact: OperationalFactRecord;
+  } {
+    assertAuthoringId(input.namespace, "operational fact namespace");
+    assertAuthoringId(input.subjectId, "operational fact subjectId");
+    if (!input.businessTimeZone.trim()) {
+      throw new Error("businessTimeZone must not be empty");
+    }
+    assertSemver(input.schemaVersion, "operational fact schemaVersion");
+    assertTimestamp(input.observedAt, "operational fact observedAt");
+    assertTimestamp(input.persistedAt, "operational fact persistedAt");
+    assertJsonCompatible(input.record, "operational fact record");
+    const recordObject =
+      input.record !== null &&
+      typeof input.record === "object" &&
+      !Array.isArray(input.record)
+        ? (input.record as Readonly<Record<string, JsonValue>>)
+        : undefined;
+    if (recordObject?.id !== input.subjectId) {
+      throw new Error(
+        "Operational fact record.id must equal the stable subjectId"
+      );
+    }
+    const runId = input.executionContext.identity.runId;
+    return this.#db.transaction(() => {
+      this.#assertActiveOperationalExecutionContext(
+        runId,
+        input.executionContext
+      );
+      this.#assertActiveTriggerOwnership(runId);
+      const sealed = this.#db
+        .prepare(
+          `SELECT 1 FROM operational_dataset_publication_intents
+           WHERE run_id = ?
+           UNION ALL
+           SELECT 1 FROM operational_dataset_publication_lineage
+           WHERE run_id = ? LIMIT 1`
+        )
+        .get(runId, runId);
+      if (sealed) {
+        throw new StaleFencingTokenError(
+          `Operational facts are sealed for Run ${runId}`
+        );
+      }
+      const businessAnchorAt = this.#operationalBusinessAnchor(runId);
+      const businessDate = businessDateAt(
+        businessAnchorAt,
+        input.businessTimeZone
+      );
+      if (
+        recordObject.businessDate !== undefined &&
+        recordObject.businessDate !== businessDate
+      ) {
+        throw new Error(
+          "Operational fact record.businessDate conflicts with the Run anchor"
+        );
+      }
+      const record: JsonValue = { ...recordObject, businessDate };
+      const factKey = operationalFactKey({
+        namespace: input.namespace,
+        runId,
+        businessDate,
+        subjectId: input.subjectId,
+        schemaVersion: input.schemaVersion
+      });
+      const recordDigest = digest(record);
+      const existing = this.getOperationalFact(factKey);
+      if (existing) {
+        if (existing.recordDigest !== recordDigest) {
+          throw new OperationalFactConflictError(
+            `Operational fact ${factKey} already has different content`
+          );
+        }
+        return { status: "duplicate" as const, fact: existing };
+      }
+      this.#db
+        .prepare(
+          `INSERT INTO operational_facts(
+            fact_key, namespace, run_id, business_date, business_time_zone,
+            business_anchor_at, subject_id,
+            schema_version, record_digest, record_json, invocation_id,
+            node_json, scope_path_json, iteration_key, step_key, attempt,
+            idempotency_key, fencing_token, observed_at, persisted_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          factKey,
+          input.namespace,
+          runId,
+          businessDate,
+          input.businessTimeZone,
+          businessAnchorAt,
+          input.subjectId,
+          input.schemaVersion,
+          recordDigest,
+          json(record),
+          input.executionContext.invocationId,
+          json(input.executionContext.node),
+          json(input.executionContext.identity.scopePath),
+          input.executionContext.identity.iterationKey,
+          input.executionContext.identity.stepKey,
+          input.executionContext.identity.attempt,
+          input.executionContext.idempotencyKey,
+          input.executionContext.fencingToken,
+          input.observedAt,
+          input.persistedAt
+        );
+      return {
+        status: "accepted" as const,
+        fact: this.getOperationalFact(factKey)!
+      };
+    })();
+  }
+
+  getOperationalFact(factKey: string): OperationalFactRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM operational_facts WHERE fact_key = ?")
+      .get(factKey) as SqlRow | undefined;
+    return row ? this.#readOperationalFact(row) : undefined;
+  }
+
+  listOperationalFactsForRun(runId: string): OperationalFactRecord[] {
+    return (
+      this.#db
+        .prepare(
+          `SELECT * FROM operational_facts
+           WHERE run_id = ?
+           ORDER BY business_date, subject_id, fact_key`
+        )
+        .all(runId) as SqlRow[]
+    ).map((row) => this.#readOperationalFact(row));
+  }
+
+  getOperationalBusinessContext(
+    runId: string,
+    businessTimeZone: string
+  ): { businessDate: string; anchorAt: string } {
+    const anchorAt = this.#operationalBusinessAnchor(runId);
+    return {
+      businessDate: businessDateAt(anchorAt, businessTimeZone),
+      anchorAt
+    };
+  }
+
+  prepareOperationalDatasetPublication(input: {
+    publicationIntentId: string;
+    runId: string;
+    stagingId: string;
+    dataset: DatasetVersionDefinition;
+    factKeys: readonly string[];
+    audit: AuditRecord;
+    quality: "complete" | "partial";
+    coverage: OperationalDatasetCoverage;
+    executionContext: OperationalExecutionContext;
+    preparedAt: string;
+  }): PreparedOperationalDatasetPublication {
+    assertAuthoringId(
+      input.publicationIntentId,
+      "operational Dataset publicationIntentId"
+    );
+    if (input.executionContext.identity.runId !== input.runId) {
+      throw new Error("Dataset publication intent belongs to a different Run");
+    }
+    assertTimestamp(input.preparedAt, "dataset publication preparedAt");
+    assertTimestamp(input.audit.occurredAt, "dataset publication audit time");
+    assertSemver(input.dataset.metadata.version, "Dataset version");
+    assertSchema(
+      validateDataset(input.dataset),
+      validateDataset.errors,
+      "Operational Dataset"
+    );
+    if (input.factKeys.length === 0) {
+      throw new Error("Operational Dataset requires at least one fact");
+    }
+    const distinctFactKeys = new Set(input.factKeys);
+    if (distinctFactKeys.size !== input.factKeys.length) {
+      throw new Error("Operational Dataset factKeys must be unique");
+    }
+    return this.#db.transaction(() => {
+      this.#assertActiveOperationalExecutionContext(
+        input.runId,
+        input.executionContext
+      );
+      this.#assertActiveTriggerOwnership(input.runId);
+      const facts = input.factKeys.map((factKey) => {
+        const fact = this.getOperationalFact(factKey);
+        if (!fact || fact.runId !== input.runId) {
+          throw new Error(
+            `Operational Dataset fact does not belong to Run ${input.runId}: ${factKey}`
+          );
+        }
+        return fact;
+      });
+      const records = facts.map((fact) => fact.record);
+      const businessDates = new Set(facts.map((fact) => fact.businessDate));
+      const namespaces = new Set(facts.map((fact) => fact.namespace));
+      const timeZones = new Set(facts.map((fact) => fact.businessTimeZone));
+      const schemaVersions = new Set(facts.map((fact) => fact.schemaVersion));
+      if (
+        businessDates.size !== 1 ||
+        namespaces.size !== 1 ||
+        timeZones.size !== 1 ||
+        schemaVersions.size !== 1
+      ) {
+        throw new Error(
+          "Operational Dataset facts must share namespace, businessDate, time zone and schemaVersion"
+        );
+      }
+      const businessDate = facts[0]!.businessDate;
+      assertOperationalCoverage(
+        input.quality,
+        input.coverage,
+        facts.length
+      );
+      if (
+        input.dataset.recordCount !== records.length ||
+        input.dataset.recordsDigest !== digest(records)
+      ) {
+        throw new Error(
+          "Operational Dataset count or digest does not match selected facts"
+        );
+      }
+      const expectedStaging: DatasetStagingRecord = {
+        stagingId: input.stagingId,
+        profileId: input.dataset.profile.id,
+        profileVersion: input.dataset.profile.version,
+        sourceDigest: input.dataset.source.digest,
+        state: "validated",
+        validationReport: {
+          valid: true,
+          source: "operational-facts",
+          runId: input.runId,
+          businessDate,
+          quality: input.quality,
+          coverage: { ...input.coverage },
+          factCount: facts.length,
+          recordsDigest: input.dataset.recordsDigest
+        },
+        createdAt: input.preparedAt,
+        updatedAt: input.preparedAt
+      };
+      const staging = this.getDatasetStaging(input.stagingId);
+      if (!staging) {
+        this.stageDataset(expectedStaging);
+      } else if (
+        canonicalJson(staging) !== canonicalJson(expectedStaging)
+      ) {
+        throw new OperationalFactConflictError(
+          `Dataset staging ${input.stagingId} has different content`
+        );
+      }
+      this.#inject("operational_dataset_prepare.after_staging");
+      const existing = this.getPreparedOperationalDatasetPublication(
+        input.runId
+      );
+      if (existing) {
+        if (
+          existing.publicationIntentId !== input.publicationIntentId ||
+          existing.stagingId !== input.stagingId ||
+          canonicalJson(existing.dataset) !== canonicalJson(input.dataset) ||
+          canonicalJson(existing.factKeys) !== canonicalJson(input.factKeys) ||
+          canonicalJson(existing.audit) !== canonicalJson(input.audit) ||
+          existing.quality !== input.quality ||
+          canonicalJson(existing.coverage) !== canonicalJson(input.coverage)
+        ) {
+          throw new OperationalFactConflictError(
+            `Run ${input.runId} already has a different Dataset publication intent`
+          );
+        }
+        return existing;
+      }
+      this.#db
+        .prepare(
+          `INSERT INTO operational_dataset_publication_intents(
+            run_id, publication_intent_id, staging_id, dataset_id,
+            dataset_version, dataset_json, audit_json, quality,
+            business_date, coverage_json, invocation_id,
+            execution_context_json, prepared_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          input.runId,
+          input.publicationIntentId,
+          input.stagingId,
+          input.dataset.metadata.id,
+          input.dataset.metadata.version,
+          json(input.dataset),
+          json(input.audit),
+          input.quality,
+          businessDate,
+          json(input.coverage),
+          input.executionContext.invocationId,
+          json(input.executionContext),
+          input.preparedAt
+        );
+      const insertFact = this.#db.prepare(
+        `INSERT INTO operational_dataset_publication_intent_facts(
+          run_id, fact_key, ordinal
+        ) VALUES (?, ?, ?)`
+      );
+      input.factKeys.forEach((factKey, ordinal) => {
+        insertFact.run(input.runId, factKey, ordinal);
+      });
+      this.#inject("operational_dataset_prepare.after_intent");
+      return this.getPreparedOperationalDatasetPublication(input.runId)!;
+    })();
+  }
+
+  getPreparedOperationalDatasetPublication(
+    runId: string
+  ): PreparedOperationalDatasetPublication | undefined {
+    const row = this.#db
+      .prepare(
+        "SELECT * FROM operational_dataset_publication_intents WHERE run_id = ?"
+      )
+      .get(runId) as SqlRow | undefined;
+    if (!row) return undefined;
+    const factRows = this.#db
+      .prepare(
+        `SELECT fact_key
+         FROM operational_dataset_publication_intent_facts
+         WHERE run_id = ? ORDER BY ordinal`
+      )
+      .all(runId) as Array<{ fact_key: string }>;
+    return {
+      publicationIntentId: String(row.publication_intent_id),
+      runId,
+      stagingId: String(row.staging_id),
+      dataset: parseJson(row.dataset_json) as DatasetVersionDefinition,
+      factKeys: factRows.map((fact) => fact.fact_key),
+      audit: parseJson(row.audit_json) as AuditRecord,
+      quality: row.quality as "complete" | "partial",
+      businessDate: String(row.business_date),
+      coverage: parseJson(row.coverage_json) as OperationalDatasetCoverage,
+      preparedBy: parseJson(
+        row.execution_context_json
+      ) as OperationalExecutionContext,
+      preparedAt: String(row.prepared_at)
+    };
+  }
+
+  getOperationalDatasetPublicationLineage(
+    datasetId: string,
+    datasetVersion: string
+  ): OperationalDatasetPublicationLineage | undefined {
+    const row = this.#db
+      .prepare(
+        `SELECT * FROM operational_dataset_publication_lineage
+         WHERE dataset_id = ? AND dataset_version = ?`
+      )
+      .get(datasetId, datasetVersion) as SqlRow | undefined;
+    if (!row) return undefined;
+    const facts = this.#db
+      .prepare(
+        `SELECT fact_key FROM operational_dataset_publication_facts
+         WHERE dataset_id = ? AND dataset_version = ? ORDER BY ordinal`
+      )
+      .all(datasetId, datasetVersion) as Array<{ fact_key: string }>;
+    return {
+      runId: String(row.run_id),
+      datasetId,
+      datasetVersion,
+      terminalStatus: row.terminal_status as "succeeded" | "uncertain",
+      quality: row.quality as "complete" | "partial",
+      businessDate: String(row.business_date),
+      coverage: parseJson(row.coverage_json) as OperationalDatasetCoverage,
+      factKeys: facts.map((fact) => fact.fact_key),
+      publishedAt: String(row.published_at)
     };
   }
 
@@ -7517,6 +8026,333 @@ export class SqlitePersistence implements Persistence {
         row.private_state_json
       ) as AssistanceTaskRecord["privateState"]
     };
+  }
+
+  #assertActiveOperationalExecutionContext(
+    runId: string,
+    context: OperationalExecutionContext
+  ): void {
+    const run = this.getRun(runId);
+    if (
+      !run ||
+      ["succeeded", "rejected", "failed", "cancelled", "uncertain"].includes(
+        run.status
+      )
+    ) {
+      throw new StaleFencingTokenError(
+        `Operational execution Run is not active: ${runId}`
+      );
+    }
+    const checkpoint = this.getEngineCheckpoint(runId);
+    const state = checkpoint?.state as
+      | {
+          runId?: unknown;
+          status?: unknown;
+          active?: {
+            kind?: unknown;
+            invocation?: {
+              invocationId?: unknown;
+              node?: unknown;
+              identity?: {
+                runId?: unknown;
+                scopePath?: unknown;
+                iterationKey?: unknown;
+                stepKey?: unknown;
+                attempt?: unknown;
+              };
+              idempotencyKey?: unknown;
+              fencingToken?: unknown;
+            };
+          };
+        }
+      | undefined;
+    const invocation =
+      state?.active?.kind === "call"
+        ? state.active.invocation
+        : undefined;
+    const identity = invocation?.identity;
+    if (
+      state?.runId !== runId ||
+      state.status !== "waiting_runtime" ||
+      invocation?.invocationId !== context.invocationId ||
+      identity?.runId !== runId ||
+      context.identity.runId !== runId ||
+      canonicalJson(invocation?.node) !== canonicalJson(context.node) ||
+      canonicalJson(identity?.scopePath) !==
+        canonicalJson(context.identity.scopePath) ||
+      identity?.iterationKey !== context.identity.iterationKey ||
+      identity?.stepKey !== context.identity.stepKey ||
+      identity?.attempt !== context.identity.attempt ||
+      invocation?.idempotencyKey !== context.idempotencyKey ||
+      invocation?.fencingToken !== context.fencingToken ||
+      !Number.isSafeInteger(context.identity.attempt) ||
+      context.identity.attempt < 1 ||
+      !Number.isSafeInteger(context.fencingToken) ||
+      context.fencingToken < 1
+    ) {
+      throw new StaleFencingTokenError(
+        `Operational execution context is stale for Run ${runId}`
+      );
+    }
+  }
+
+  #assertActiveTriggerOwnership(runId: string): void {
+    const rows = this.#db
+      .prepare(
+        `SELECT
+           attempts.attempt_id, attempts.status AS attempt_status,
+           attempts.fencing_token, attempts.browser_fencing_token,
+           occurrences.status AS occurrence_status,
+           occurrences.trigger_id, occurrences.trigger_version
+         FROM trigger_attempts attempts
+         INNER JOIN trigger_occurrences occurrences
+           ON occurrences.occurrence_id = attempts.occurrence_id
+         WHERE attempts.workflow_run_id = ?`
+      )
+      .all(runId) as SqlRow[];
+    if (rows.length === 0) return;
+    if (rows.length !== 1) {
+      throw new StaleFencingTokenError(
+        `Run ${runId} has ambiguous Trigger ownership`
+      );
+    }
+    const row = rows[0]!;
+    const attemptId = String(row.attempt_id);
+    const triggerToken = Number(row.fencing_token);
+    if (
+      row.attempt_status !== "running" ||
+      row.occurrence_status !== "running" ||
+      !attemptId.startsWith("trigger-attempt:") ||
+      !Number.isSafeInteger(triggerToken) ||
+      triggerToken < 1
+    ) {
+      throw new StaleFencingTokenError(
+        `Trigger Attempt is not active for Run ${runId}`
+      );
+    }
+    const spec = this.getTriggerSpecVersion(
+      String(row.trigger_id),
+      String(row.trigger_version)
+    );
+    if (!spec) {
+      throw new StaleFencingTokenError(
+        `Trigger version is missing for Run ${runId}`
+      );
+    }
+    const nowValue = this.#clock().toISOString();
+    const triggerLease = this.#db
+      .prepare(
+        `SELECT 1 FROM trigger_leases
+         WHERE concurrency_key = ? AND owner_id = ? AND fencing_token = ?
+           AND expires_at > ?`
+      )
+      .get(spec.concurrencyKey, attemptId, triggerToken, nowValue);
+    if (!triggerLease) {
+      throw new StaleFencingTokenError(
+        `Trigger concurrency lease was lost for Run ${runId}`
+      );
+    }
+    if (spec.browserInstanceId) {
+      const browserToken = Number(row.browser_fencing_token);
+      const browserLease =
+        Number.isSafeInteger(browserToken) && browserToken >= 1
+          ? this.#db
+              .prepare(
+                `SELECT 1 FROM browser_control_leases
+                 WHERE resource_id = ? AND owner_id = ? AND fencing_token = ?
+                   AND expires_at > ?`
+              )
+              .get(
+                `browser-instance:${spec.browserInstanceId}`,
+                attemptId,
+                browserToken,
+                nowValue
+              )
+          : undefined;
+      if (!browserLease) {
+        throw new StaleFencingTokenError(
+          `Browser control lease was lost for Run ${runId}`
+        );
+      }
+    }
+  }
+
+  #operationalBusinessAnchor(runId: string): string {
+    const occurrenceRows = this.#db
+      .prepare(
+        `SELECT occurrences.scheduled_at
+         FROM trigger_attempts attempts
+         INNER JOIN trigger_occurrences occurrences
+           ON occurrences.occurrence_id = attempts.occurrence_id
+         WHERE attempts.workflow_run_id = ?`
+      )
+      .all(runId) as Array<{ scheduled_at: string }>;
+    if (occurrenceRows.length > 1) {
+      throw new StaleFencingTokenError(
+        `Run ${runId} has ambiguous business date anchors`
+      );
+    }
+    if (occurrenceRows[0]) return occurrenceRows[0].scheduled_at;
+    const run = this.getRun(runId);
+    if (!run) throw new Error(`Run not found: ${runId}`);
+    return run.createdAt;
+  }
+
+  #readOperationalFact(row: SqlRow): OperationalFactRecord {
+    return {
+      factKey: String(row.fact_key),
+      namespace: String(row.namespace),
+      runId: String(row.run_id),
+      businessDate: String(row.business_date),
+      businessTimeZone: String(row.business_time_zone),
+      businessAnchorAt: String(row.business_anchor_at),
+      subjectId: String(row.subject_id),
+      schemaVersion: String(row.schema_version),
+      record: parseJson(row.record_json) as JsonValue,
+      recordDigest: String(row.record_digest),
+      invocationId: String(row.invocation_id),
+      node: parseJson(row.node_json) as OperationalExecutionContext["node"],
+      identity: {
+        runId: String(row.run_id),
+        scopePath: parseJson(row.scope_path_json) as OperationalFactRecord["identity"]["scopePath"],
+        iterationKey: String(row.iteration_key),
+        stepKey: String(row.step_key),
+        attempt: Number(row.attempt)
+      },
+      idempotencyKey: String(row.idempotency_key),
+      fencingToken: Number(row.fencing_token),
+      observedAt: String(row.observed_at),
+      persistedAt: String(row.persisted_at)
+    };
+  }
+
+  #assertOperationalDatasetPublicationMarker(
+    runId: string,
+    output: unknown,
+    publicationIntentId: string | undefined,
+    nextStatus: RunStatus
+  ): void {
+    const record =
+      output !== null && typeof output === "object" && !Array.isArray(output)
+        ? (output as Record<string, unknown>)
+        : undefined;
+    const outputMarker = record?.operationalDatasetPublicationIntentId;
+    if (publicationIntentId === undefined) {
+      if (outputMarker !== undefined) {
+        throw new Error(
+          "Operational Dataset publication marker must be passed explicitly"
+        );
+      }
+      if (
+        nextStatus === "succeeded" &&
+        this.getPreparedOperationalDatasetPublication(runId)
+      ) {
+        throw new Error(
+          "Succeeded Run with a prepared Operational Dataset requires its publication marker"
+        );
+      }
+      return;
+    }
+    if (nextStatus !== "succeeded" && nextStatus !== "uncertain") {
+      throw new Error(
+        "Operational Dataset publication marker requires a publishable terminal Run"
+      );
+    }
+    if (outputMarker !== publicationIntentId) {
+      throw new Error(
+        "Operational Dataset publication marker must match terminal output"
+      );
+    }
+  }
+
+  #publishPreparedOperationalDataset(
+    runId: string,
+    terminalStatus: "succeeded" | "uncertain",
+    publicationIntentId: string
+  ): void {
+    const prepared = this.getPreparedOperationalDatasetPublication(runId);
+    if (!prepared || prepared.publicationIntentId !== publicationIntentId) {
+      throw new RevisionConflictError(
+        `Operational Dataset publication intent does not match Run ${runId}`
+      );
+    }
+    this.#assertActiveTriggerOwnership(runId);
+    if (prepared.quality === "partial" && terminalStatus !== "uncertain") {
+      throw new Error("Partial Operational Dataset requires uncertain Run");
+    }
+    const facts = prepared.factKeys.map((factKey) => {
+      const fact = this.getOperationalFact(factKey);
+      if (!fact || fact.runId !== runId) {
+        throw new Error(
+          `Prepared Operational Dataset lost Run fact ${factKey}`
+        );
+      }
+      return fact;
+    });
+    const records = facts.map((fact) => fact.record);
+    if (
+      records.length === 0 ||
+      prepared.dataset.recordCount !== records.length ||
+      prepared.dataset.recordsDigest !== digest(records) ||
+      new Set(facts.map((fact) => fact.businessDate)).size !== 1 ||
+      facts[0]?.businessDate !== prepared.businessDate
+    ) {
+      throw new Error("Prepared Operational Dataset facts changed");
+    }
+    assertOperationalCoverage(
+      prepared.quality,
+      prepared.coverage,
+      records.length
+    );
+    this.publishDataset({
+      stagingId: prepared.stagingId,
+      expectedState: "validated",
+      dataset: prepared.dataset,
+      normalizedRecords: records,
+      audit: prepared.audit
+    });
+    this.#inject("operational_dataset_publication.after_dataset");
+    this.#db
+      .prepare(
+        `INSERT INTO operational_dataset_publication_lineage(
+          dataset_id, dataset_version, run_id, terminal_status, quality,
+          business_date, coverage_json, published_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        prepared.dataset.metadata.id,
+        prepared.dataset.metadata.version,
+        runId,
+        terminalStatus,
+        prepared.quality,
+        prepared.businessDate,
+        json(prepared.coverage),
+        prepared.audit.occurredAt
+      );
+    const insertFact = this.#db.prepare(
+      `INSERT INTO operational_dataset_publication_facts(
+        dataset_id, dataset_version, fact_key, ordinal
+      ) VALUES (?, ?, ?, ?)`
+    );
+    prepared.factKeys.forEach((factKey, ordinal) => {
+      insertFact.run(
+        prepared.dataset.metadata.id,
+        prepared.dataset.metadata.version,
+        factKey,
+        ordinal
+      );
+    });
+    const consumed = this.#db
+      .prepare(
+        "DELETE FROM operational_dataset_publication_intents WHERE run_id = ?"
+      )
+      .run(runId);
+    if (consumed.changes !== 1) {
+      throw new RevisionConflictError(
+        `Operational Dataset intent changed for Run ${runId}`
+      );
+    }
+    this.#inject("operational_dataset_publication.after_lineage");
   }
 
   #readDatasetStaging(row: SqlRow): DatasetStagingRecord {

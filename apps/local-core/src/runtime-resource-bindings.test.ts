@@ -4,6 +4,13 @@ import type { ExecutionPlan } from "@bpa/workflow-ir";
 import { RuntimeResourceBindingService } from "./runtime-resource-bindings.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
+const adapterDigest = `sha256:${"c".repeat(64)}`;
+const adapterRef = {
+  kind: "adapter" as const,
+  id: "fictional-site",
+  version: "2.0.0",
+  digest: adapterDigest
+};
 
 function plan(
   allowedOrigins = ["https://example.com"],
@@ -35,10 +42,13 @@ function plan(
   };
 }
 
-function planWithBrowserCall(): ExecutionPlan {
+function planWithBrowserCall(withAdapter = false): ExecutionPlan {
   const source = plan();
   return {
     ...source,
+    artifactClosure: withAdapter
+      ? { entries: [adapterRef] }
+      : source.artifactClosure,
     entry: "read",
     steps: {
       read: {
@@ -52,21 +62,28 @@ function planWithBrowserCall(): ExecutionPlan {
         },
         resourceMappings: {
           page: { slotName: "source" }
-        }
+        },
+        ...(withAdapter
+          ? { dependencies: { adapters: [adapterRef], policies: [], datasetProfiles: [] } }
+          : {})
       },
       ...source.steps
     }
   } as unknown as ExecutionPlan;
 }
 
-function database(): SqlitePersistence {
+function database(options: {
+  extensionVersion?: string;
+  adapterId?: string;
+  adapterVersion?: string;
+} = {}): SqlitePersistence {
   const persistence = new SqlitePersistence({ path: ":memory:" });
   persistence.openBrowserSession({
     session: {
       id: "session",
       browserInstanceId: "browser",
       extensionId: "extension",
-      extensionVersion: "0.4.0",
+      extensionVersion: options.extensionVersion ?? "0.4.0",
       protocolVersion: "1.0.0",
       incomingSeq: 0,
       outgoingSeq: 0,
@@ -91,8 +108,12 @@ function database(): SqlitePersistence {
           observerCapabilityId: "test.page"
         }
       ],
-      adapterId: "fictional-site",
-      adapterVersion: "1.0.0"
+      ...(options.adapterId === ""
+        ? {}
+        : { adapterId: options.adapterId ?? "fictional-site" }),
+      ...(options.adapterVersion === ""
+        ? {}
+        : { adapterVersion: options.adapterVersion ?? "1.0.0" })
     }
   ]);
   persistence.upsertBrowserPageObservation({
@@ -112,6 +133,17 @@ function database(): SqlitePersistence {
     observedAt: new Date().toISOString()
   });
   return persistence;
+}
+
+function publishAdapter(persistence: SqlitePersistence): void {
+  persistence.publish({
+    assetType: "adapter",
+    assetId: adapterRef.id,
+    version: adapterRef.version,
+    digest: adapterRef.digest,
+    content: { extension: { minimumVersion: "0.6.1" } },
+    actor: "test"
+  });
 }
 
 const selection = {
@@ -297,5 +329,47 @@ describe("RuntimeResourceBindingService", () => {
       service.prepare(planWithBrowserCall(), selection, "operator")
     ).toThrow("BROWSER_NODE_CAPABILITY_MISSING");
     persistence.close();
+  });
+
+  it("requires exact Adapter identity and its minimum Extension version", () => {
+    const exact = database({
+      extensionVersion: "0.6.1",
+      adapterVersion: "2.0.0"
+    });
+    publishAdapter(exact);
+    expect(
+      new RuntimeResourceBindingService(exact).prepare(
+        planWithBrowserCall(true),
+        selection,
+        "operator"
+      )
+    ).toBeTypeOf("function");
+    exact.close();
+
+    for (const persistence of [
+      database({
+        extensionVersion: "0.6.1",
+        adapterId: "",
+        adapterVersion: ""
+      }),
+      database({
+        extensionVersion: "0.6.1",
+        adapterVersion: "1.0.0"
+      }),
+      database({
+        extensionVersion: "0.6.0",
+        adapterVersion: "2.0.0"
+      })
+    ]) {
+      publishAdapter(persistence);
+      expect(() =>
+        new RuntimeResourceBindingService(persistence).prepare(
+          planWithBrowserCall(true),
+          selection,
+          "operator"
+        )
+      ).toThrow("BROWSER_NODE_CAPABILITY_MISSING:source:browser.read@1.0.0");
+      persistence.close();
+    }
   });
 });

@@ -199,9 +199,7 @@ describe("Local Core IR2 control integration", () => {
     ).toMatchObject({
       ok: false,
       error: {
-        message: expect.stringContaining(
-          "must cover the exact Workflow resource slots"
-        )
+        message: "MANUAL_BROWSER_RUN_REQUIRES_TRIGGER"
       }
     });
     persistence.openBrowserSession({
@@ -244,6 +242,13 @@ describe("Local Core IR2 control integration", () => {
       revision: 1,
       observedAt: new Date().toISOString(),
     });
+    const occupiedLease = persistence.acquireBrowserControlLease({
+      resourceId: "browser-instance:browser-test",
+      ownerId: "trigger-attempt:occupied",
+      now: new Date().toISOString(),
+      ttlSeconds: 300
+    });
+    expect(occupiedLease).toBeDefined();
     const created = service.handle({
       id: "create-resource-run",
       method: "run.create",
@@ -263,38 +268,19 @@ describe("Local Core IR2 control integration", () => {
       }
     });
     expect(created).toMatchObject({
-      ok: true,
-      result: {
-        workflowId: resourceWorkflow.metadata.id,
-        status: "waiting_browser"
-      }
+      ok: false,
+      error: { message: "MANUAL_BROWSER_RUN_REQUIRES_TRIGGER" }
     });
-    const runId = (created.result as { id: string }).id;
-    expect(persistence.getRunResourceBindingSnapshot(runId)).toMatchObject({
-      snapshotVersion: "bpa.resource-binding/1",
-      runId,
-      resourceSlots: resourceWorkflow.spec.resourceSlots,
-      bindings: {
-        source: {
-          sessionId: "session-resource",
-          browserInstanceId: "browser-test",
-          tabId: 42,
-          origin: "https://example.com",
-          pathname: "/source",
-          pageEpoch: "tab-42:1:test",
-          authentication: "authenticated",
-          approvedBy: "operator"
-        }
-      }
-    });
-    expect(
-      persistence.getBrowserPageObservation("session-resource", 42)
-    ).toMatchObject({
-      revision: 1,
-      observationState: "ready",
-      origin: "https://example.com",
-      authentication: "authenticated"
-    });
+    expect(persistence.listRuns({ limit: 20 })).toEqual([]);
+    expect(persistence.listPendingEngineOutbox()).toEqual([]);
+    expect(persistence.listPendingGatewayCommands()).toEqual([]);
+    expect(persistence.listBrowserControlLeases(new Date().toISOString())).toEqual([
+      expect.objectContaining({
+        resourceId: "browser-instance:browser-test",
+        ownerId: "trigger-attempt:occupied",
+        fencingToken: occupiedLease!.fencingToken
+      })
+    ]);
     persistence.close();
   });
 
@@ -454,7 +440,7 @@ describe("Local Core IR2 control integration", () => {
     persistence.close();
   });
 
-  it("runs one resource-bearing Node only with an exact Browser Session binding", () => {
+  it("requires a Trigger control context for a browser-bound standalone Node", () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
     persistence.publish({
       assetType: "node",
@@ -504,6 +490,13 @@ describe("Local Core IR2 control integration", () => {
       revision: 1,
       observedAt: new Date().toISOString(),
     });
+    const occupiedLease = persistence.acquireBrowserControlLease({
+      resourceId: "browser-instance:browser-test",
+      ownerId: "trigger-attempt:occupied-node",
+      now: new Date().toISOString(),
+      ttlSeconds: 300
+    });
+    expect(occupiedLease).toBeDefined();
     const service = new LocalCoreService(persistence);
     const preview = service.handle({
       id: "resource-node-preview",
@@ -561,24 +554,19 @@ describe("Local Core IR2 control integration", () => {
       }
     });
     expect(created).toMatchObject({
-      ok: true,
-      result: { status: "waiting_browser" }
+      ok: false,
+      error: { message: "MANUAL_BROWSER_RUN_REQUIRES_TRIGGER" }
     });
-    const runId = (created.result as { id: string }).id;
-    expect(
-      persistence.getRunResourceBindingSnapshot(runId)
-    ).toMatchObject({
-      resourceSlots: {
-        page_session: resourceNode.resources!.page_session
-      },
-      bindings: {
-        page_session: {
-          sessionId: "session-resource-node",
-          origin: "https://example.com",
-          approvedBy: "operator"
-        }
-      }
-    });
+    expect(persistence.listRuns({ limit: 20 })).toEqual([]);
+    expect(persistence.listPendingEngineOutbox()).toEqual([]);
+    expect(persistence.listPendingGatewayCommands()).toEqual([]);
+    expect(persistence.listBrowserControlLeases(new Date().toISOString())).toEqual([
+      expect.objectContaining({
+        resourceId: "browser-instance:browser-test",
+        ownerId: "trigger-attempt:occupied-node",
+        fencingToken: occupiedLease!.fencingToken
+      })
+    ]);
     persistence.close();
   });
 

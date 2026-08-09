@@ -30,7 +30,6 @@ export type ExtensionNodeId =
   | "doudian.alliance.retired-products.aggregate"
   | "doudian.experience.shops.discover"
   | "doudian.experience.shop.snapshot.read"
-  | "doudian.experience.daily.aggregate"
   | "ecommerce.marketplace.search-results.read";
 
 export interface ExtensionCapability {
@@ -279,7 +278,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   },
   {
     nodeId: "doudian.experience.shops.discover",
-    versions: ["1.0.0"],
+    versions: ["2.0.0"],
     riskLevel: "R1",
     permissions: [
       "browser.dom.read",
@@ -294,12 +293,12 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
         observerCapabilityId: "doudian.page"
       }
     ],
-    adapter: { id: "doudian-experience", version: "1.0.0" },
+    adapter: { id: "doudian-experience", version: "2.0.0" },
     executionTarget: "background"
   },
   {
     nodeId: "doudian.experience.shop.snapshot.read",
-    versions: ["1.0.0"],
+    versions: ["2.0.0"],
     riskLevel: "R1",
     permissions: [
       "browser.dom.read",
@@ -314,22 +313,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
         observerCapabilityId: "doudian.page"
       }
     ],
-    adapter: { id: "doudian-experience", version: "1.0.0" },
-    executionTarget: "background"
-  },
-  {
-    nodeId: "doudian.experience.daily.aggregate",
-    versions: ["1.0.0"],
-    riskLevel: "R0",
-    permissions: READ_ONLY_PERMISSIONS,
-    routes: [
-      {
-        origin: DOUDIAN_ORIGIN,
-        pathnamePrefixes: ["/ffa/g/list"],
-        observerCapabilityId: "doudian.page"
-      }
-    ],
-    adapter: { id: "doudian-experience", version: "1.0.0" },
+    adapter: { id: "doudian-experience", version: "2.0.0" },
     executionTarget: "background"
   }
 ];

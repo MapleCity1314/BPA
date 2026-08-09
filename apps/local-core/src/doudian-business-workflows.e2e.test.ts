@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
-import { describe,expect,it } from "vitest";
+import { afterEach,beforeEach,describe,expect,it,vi } from "vitest";
+import { contentDigest } from "@bpa/compiler";
 import {
   RuntimeProviderRegistry,
   type RuntimeInvocation,
@@ -51,11 +52,71 @@ function foreachItems(input:JsonValue):Array<Record<string,JsonValue>> {
   });
 }
 
+function experienceSnapshot(
+  shop:Record<string,JsonValue>,
+  status:"complete" | "no_score" = "complete"
+):Record<string,unknown> {
+  const shopId = String(shop.id);
+  const metric = (
+    key:string,
+    label:string
+  ) => ({
+    key,label,rawValue:"96.5分",value:96.5,unit:"分",score:96.5,
+    scoreRaw:"得分96.5分",weight:100,weightRaw:"权重100%",
+    numerator:null,denominator:null,change:null,note:null
+  });
+  return {
+    status,
+    shop:{ id:shopId,name:String(shop.name) },
+    observedAt,sourceUpdatedAt:null,
+    summary:{
+      totalScore:status === "complete" ? 96.5 : null,
+      totalScoreRaw:status === "complete" ? "96.5分" : null,
+      level:status === "complete" ? "优秀" : null,
+      industry:"食品",orders30d:status === "complete" ? 100 : 12,
+      orders30dRaw:status === "complete" ? "100" : "12"
+    },
+    dimensions:status === "complete"
+      ? [
+          {
+            key:"goods",label:"商品体验",score:97,scoreRaw:"得分97分",
+            metrics:[metric("goods.composite_rating","商品综合评分")]
+          },
+          {
+            key:"logistics",label:"物流体验",score:96,scoreRaw:"得分96分",
+            metrics:[metric("logistics.delivery_sla_rate","运单配送时效达成率")]
+          },
+          {
+            key:"service",label:"服务体验",score:96.5,scoreRaw:"得分96.5分",
+            metrics:[metric("service.im_dissatisfaction_rate","飞鸽会话不满意率")]
+          }
+        ]
+      : [],
+    evidence:{
+      pageUrl:`https://fxg.jinritemai.com/ffa/eco/experience-score?shop_id=${shopId}&session=must-not-persist#private`,
+      capturedAt:observedAt,structuredSnapshotRef:"inline:abcdef12"
+    },
+    diagnostics:status === "no_score" ? ["EXPERIENCE_SCORE_NOT_AVAILABLE_LOW_ORDERS"] : ["PRIVATE_DIAGNOSTIC"],
+    formMutations:0
+  };
+}
+
 class FixtureProvider implements RuntimeProvider {
   constructor(
     readonly id:string,
     readonly invocations:string[],
-    readonly failedNodeId?:string
+    readonly failedNodeId?:string,
+    readonly experience?:{
+      readonly shops:ReadonlyArray<{
+        readonly key:string;
+        readonly id?:string;
+        readonly name:string;
+        readonly status:"active" | "blocked";
+        readonly statusText:string;
+      }>;
+      readonly failedShopId?:string;
+      readonly snapshotStatus?:"complete" | "no_score";
+    }
   ) {}
 
   supports(_node:ArtifactRef & { readonly kind:"node" }):boolean {
@@ -113,38 +174,47 @@ class FixtureProvider implements RuntimeProvider {
         });
       }
       case "doudian.experience.shops.discover": {
-        const shop = {
-          key:"id:10001",id:"10001",name:"测试店铺",status:"active",
+        const shops = this.experience?.shops ?? [{
+          key:"id:10001",id:"10001",name:"测试店铺",status:"active" as const,
           statusText:"经营中"
-        };
+        }];
+        if (shops.some((shop) =>
+          shop.status === "active" && !/^[0-9]{5,30}$/u.test(shop.id ?? "")
+        )) {
+          return {
+            status:"failed",
+            error:{
+              code:"SHOP_IDENTITY_UNCERTAIN",
+              message:"Active shop identity is incomplete.",
+              retryable:false
+            },
+            evidence:[],riskSignals:[]
+          };
+        }
         return success({
-          status:"complete",shops:[shop],sourceShop:shop,discoveredCount:1,
-          collectableCount:1,observedAt,diagnostics:[]
+          status:"complete",shops,sourceShop:shops[0],
+          discoveredCount:shops.length,
+          collectableCount:shops.filter((shop) => shop.status === "active").length,
+          observedAt,diagnostics:[]
         });
       }
-      case "doudian.experience.shop.snapshot.read":
-        return success({
-          status:"complete",shop:input.shop,observedAt,sourceUpdatedAt:null,
-          summary:{ totalScore:96.5,level:"优秀" },
-          dimensions:[
-            { key:"product",label:"商品体验",score:97 },
-            { key:"logistics",label:"物流体验",score:96 },
-            { key:"service",label:"服务体验",score:96.5 }
-          ],
-          evidence:{ page:"experience-score" },diagnostics:[],formMutations:0
-        });
-      case "doudian.experience.daily.aggregate": {
-        const snapshots = foreachItems(invocation.input);
-        const outcome = object(input.foreachOutcome);
-        const failedCount = Number(object(outcome.failed).count) +
-          Number(object(outcome.unresolved).count);
-        return success({
-          status:failedCount === 0 ? "complete" : snapshots.length > 0 ? "partial" : "failed",
-          businessDate:"2026-08-09",observedAt,
-          discoveredCount:Number(outcome.total),attemptedCount:Number(outcome.total),
-          persistedCount:snapshots.length,failedCount,skippedCount:0,
-          snapshots,foreachOutcome:input.foreachOutcome
-        });
+      case "doudian.experience.shop.snapshot.read": {
+        const shop = object(input.shop);
+        if (shop.status === "blocked") {
+          return success({
+            status:"skipped",shop,diagnostics:["SHOP_NOT_ACTIVE"]
+          });
+        }
+        if (shop.id === this.experience?.failedShopId) {
+          return {
+            status:"failed",
+            error:{ code:"FIXTURE_EXPERIENCE_READ_FAILED",message:"Fixture failure",retryable:false },
+            evidence:[],riskSignals:[]
+          };
+        }
+        return success(experienceSnapshot(
+          shop,this.experience?.snapshotStatus ?? "complete"
+        ));
       }
       case "doudian.shop.context.read":
         return success({
@@ -226,7 +296,7 @@ function seedBrowser(
   store.openBrowserSession({
     session:{
       id:"session-doudian",browserInstanceId,
-      extensionId:"extension-doudian",extensionVersion:"0.6.0",
+      extensionId:"extension-doudian",extensionVersion:"0.6.1",
       protocolVersion:"2.0.0",incomingSeq:0,outgoingSeq:0,
       lastAckedCommandSeq:0,capabilityDigest:`sha256:${"a".repeat(64)}`,
       resumeTokenDigest:`sha256:${"b".repeat(64)}`,
@@ -255,6 +325,36 @@ function seedBrowser(
     observationState:"ready",pageEpoch:"tab-42:1:doudian",
     observerCapabilityId:"doudian.page",revision:1,observedAt:new Date().toISOString()
   });
+}
+
+function publishExperience(service:LocalCoreService):void {
+  for (const path of [
+    "nodes/core/doudian.experience.shops.discover.node.yaml",
+    "nodes/core/doudian.experience.shop.snapshot.read.node.yaml",
+    "nodes/core/doudian.experience.shop.fact.persist.node.yaml",
+    "nodes/core/doudian.experience.daily.aggregate.node.yaml",
+    "nodes/core/doudian.experience.daily.dataset.prepare.node.yaml"
+  ]) publish(service,"node",path);
+  publish(service,"adapter","adapters/doudian/doudian-experience.adapter.yaml");
+  publish(
+    service,"workflow",
+    "workflows/examples/doudian.experience-score.daily.workflow.yaml"
+  );
+}
+
+function seedExperienceBrowser(store:SqlitePersistence):void {
+  seedBrowser(store,[
+    {
+      id:"doudian.experience.shops.discover",version:"2.0.0",riskLevel:"R1",
+      permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
+      adapterId:"doudian-experience",adapterVersion:"2.0.0"
+    },
+    {
+      id:"doudian.experience.shop.snapshot.read",version:"2.0.0",riskLevel:"R1",
+      permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
+      adapterId:"doudian-experience",adapterVersion:"2.0.0"
+    }
+  ]);
 }
 
 async function runTrigger(
@@ -314,6 +414,15 @@ async function runTrigger(
 }
 
 describe("local Doudian business Workflow acceptance",() => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(observedAt));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("runs retired products, experience score, and inventory on one bounded browser",async () => {
     const store = new SqlitePersistence({ path:":memory:" });
     const providers = new RuntimeProviderRegistry();
@@ -328,7 +437,9 @@ describe("local Doudian business Workflow acceptance",() => {
       "nodes/core/doudian.alliance.retired-products.aggregate.node.yaml",
       "nodes/core/doudian.experience.shops.discover.node.yaml",
       "nodes/core/doudian.experience.shop.snapshot.read.node.yaml",
+      "nodes/core/doudian.experience.shop.fact.persist.node.yaml",
       "nodes/core/doudian.experience.daily.aggregate.node.yaml",
+      "nodes/core/doudian.experience.daily.dataset.prepare.node.yaml",
       "nodes/core/doudian.shop.context.read.node.yaml",
       "nodes/core/doudian.shop.context.read@1.3.0.node.yaml",
       "nodes/core/doudian.product.scope.collect.node.yaml",
@@ -372,19 +483,14 @@ describe("local Doudian business Workflow acceptance",() => {
         adapterId:"doudian-alliance",adapterVersion:"1.0.0"
       },
       {
-        id:"doudian.experience.shops.discover",version:"1.0.0",riskLevel:"R1",
+        id:"doudian.experience.shops.discover",version:"2.0.0",riskLevel:"R1",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-experience",adapterVersion:"1.0.0"
+        adapterId:"doudian-experience",adapterVersion:"2.0.0"
       },
       {
-        id:"doudian.experience.shop.snapshot.read",version:"1.0.0",riskLevel:"R1",
+        id:"doudian.experience.shop.snapshot.read",version:"2.0.0",riskLevel:"R1",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-experience",adapterVersion:"1.0.0"
-      },
-      {
-        id:"doudian.experience.daily.aggregate",version:"1.0.0",riskLevel:"R0",
-        permissions:["browser.dom.read","browser.tabs.read"],
-        adapterId:"doudian-experience",adapterVersion:"1.0.0"
+        adapterId:"doudian-experience",adapterVersion:"2.0.0"
       },
       {
         id:"doudian.shop.context.read",version:"1.3.0",riskLevel:"R0",
@@ -419,7 +525,7 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const experience = await runTrigger(service,store,{
       id:"doudian-experience-local",appId:"experience-score-monitor",
-      workflowId:"doudian.experience-score.daily",workflowVersion:"1.0.1",
+      workflowId:"doudian.experience-score.daily",workflowVersion:"2.0.0",
       workflowInput:{ maxShops:100 }
     });
     expect(experience).toMatchObject({
@@ -430,6 +536,34 @@ describe("local Doudian business Workflow acceptance",() => {
       }
     });
     expect(store.listBrowserControlLeases(new Date().toISOString())).toEqual([]);
+    expect(
+      store.getRunPlanSnapshot(experience.run.id)?.planJson.artifactClosure.entries
+        .filter((entry) => entry.kind === "dataset_profile")
+    ).toEqual([]);
+    const experienceFacts = store.listOperationalFactsForRun(experience.run.id);
+    expect(experienceFacts).toHaveLength(1);
+    expect(experienceFacts[0]?.record).toMatchObject({
+      id:"10001",businessDate:"2026-08-09",status:"complete",
+      evidence:{
+        pageUrl:"https://fxg.jinritemai.com/ffa/eco/experience-score",
+        capturedAt:observedAt
+      }
+    });
+    expect(JSON.stringify(experienceFacts[0]?.record)).not.toContain("diagnostic");
+    expect(JSON.stringify(experienceFacts[0]?.record)).not.toContain("structuredSnapshotRef");
+    expect(JSON.stringify(experienceFacts[0]?.record)).not.toContain("session=");
+    const intent = object(json(experience.run.output)).operationalDatasetPublicationIntentId;
+    expect(typeof intent).toBe("string");
+    const datasetIntent = object(object(json(experience.run.output)).datasetIntent);
+    expect(store.getDataset(
+      String(datasetIntent.datasetId),String(datasetIntent.version)
+    )).toBeDefined();
+    expect(store.getOperationalDatasetPublicationLineage(
+      String(datasetIntent.datasetId),String(datasetIntent.version)
+    )).toMatchObject({
+      runId:experience.run.id,terminalStatus:"succeeded",quality:"complete",
+      coverage:{ discovered:1,collectable:1,attempted:1,persisted:1,failed:0,skipped:0 }
+    });
 
     const inventory = await runTrigger(service,store,{
       id:"doudian-inventory-local",appId:"inventory-monitor",
@@ -455,12 +589,187 @@ describe("local Doudian business Workflow acceptance",() => {
       "doudian.alliance.retired-products.aggregate",
       "doudian.experience.shops.discover",
       "doudian.experience.shop.snapshot.read",
-      "doudian.experience.daily.aggregate",
       "doudian.shop.context.read",
       "doudian.product.scope.collect",
       "doudian.inventory.product.snapshot.read",
       "inventory.snapshot.persist"
     ]);
+    store.close();
+  });
+
+  it("publishes a partial Dataset only with an uncertain terminal marker",async () => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    const providers = new RuntimeProviderRegistry();
+    const invocations:string[] = [];
+    providers.register(new FixtureProvider("browser",invocations,undefined,{
+      shops:[
+        { key:"id:10001",id:"10001",name:"测试店铺一",status:"active",statusText:"经营中" },
+        { key:"id:10002",id:"10002",name:"测试店铺二",status:"active",statusText:"经营中" }
+      ],
+      failedShopId:"10002"
+    }));
+    const service = new LocalCoreService(store,undefined,providers);
+    publishExperience(service);
+    seedExperienceBrowser(store);
+
+    const result = await runTrigger(service,store,{
+      id:"doudian-experience-partial",appId:"experience-score-monitor",
+      workflowId:"doudian.experience-score.daily",workflowVersion:"2.0.0",
+      workflowInput:{ maxShops:100 }
+    });
+
+    expect(result).toMatchObject({
+      run:{
+        status:"uncertain",
+        output:{
+          status:"partial",
+          daily:{
+            status:"partial",discoveredCount:2,collectableCount:2,
+            attemptedCount:2,persistedCount:1,failedCount:1,skippedCount:0
+          },
+          operationalDatasetPublicationIntentId:expect.any(String)
+        }
+      },
+      triggerOccurrence:{ status:"terminal",terminalOutcome:"uncertain" },
+      triggerAttempt:{ status:"terminal",terminalOutcome:"uncertain" }
+    });
+    const datasetIntent = object(object(json(result.run.output)).datasetIntent);
+    expect(store.getOperationalDatasetPublicationLineage(
+      String(datasetIntent.datasetId),String(datasetIntent.version)
+    )).toMatchObject({
+      runId:result.run.id,terminalStatus:"uncertain",quality:"partial",
+      coverage:{ discovered:2,collectable:2,attempted:2,persisted:1,failed:1,skipped:0 }
+    });
+    expect(store.listOperationalFactsForRun(result.run.id)).toHaveLength(1);
+    expect(store.getPreparedOperationalDatasetPublication(result.run.id)).toBeUndefined();
+    expect(store.listBrowserControlLeases(new Date().toISOString())).toEqual([]);
+    store.close();
+  });
+
+  it("keeps no-score facts and normal inactive skips in a complete Dataset",async () => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    const providers = new RuntimeProviderRegistry();
+    const invocations:string[] = [];
+    providers.register(new FixtureProvider("browser",invocations,undefined,{
+      shops:[
+        { key:"id:10001",id:"10001",name:"测试店铺一",status:"active",statusText:"经营中" },
+        { key:"name:测试店铺二",name:"测试店铺二",status:"blocked",statusText:"SHOP_ID_UNAVAILABLE" }
+      ],
+      snapshotStatus:"no_score"
+    }));
+    const service = new LocalCoreService(store,undefined,providers);
+    publishExperience(service);
+    seedExperienceBrowser(store);
+
+    const result = await runTrigger(service,store,{
+      id:"doudian-experience-no-score",appId:"experience-score-monitor",
+      workflowId:"doudian.experience-score.daily",workflowVersion:"2.0.0",
+      workflowInput:{ maxShops:100 }
+    });
+
+    expect(result.run).toMatchObject({
+      status:"succeeded",
+      output:{
+        status:"complete",
+        daily:{
+          status:"complete",discoveredCount:2,collectableCount:1,
+          attemptedCount:1,persistedCount:1,failedCount:0,skippedCount:1
+        },
+        operationalDatasetPublicationIntentId:expect.any(String)
+      }
+    });
+    expect(store.listOperationalFactsForRun(result.run.id)[0]?.record).toMatchObject({
+      status:"no_score",summary:{ totalScore:null },dimensions:[]
+    });
+    const datasetIntent = object(object(json(result.run.output)).datasetIntent);
+    expect(store.getOperationalDatasetPublicationLineage(
+      String(datasetIntent.datasetId),String(datasetIntent.version)
+    )).toMatchObject({
+      terminalStatus:"succeeded",quality:"complete",
+      coverage:{ discovered:2,collectable:1,attempted:1,persisted:1,failed:0,skipped:1 }
+    });
+    store.close();
+  });
+
+  it("fails discovery and publishes no Dataset when an active shop lacks a stable id",async () => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    const providers = new RuntimeProviderRegistry();
+    providers.register(new FixtureProvider("browser",[],undefined,{
+      shops:[{
+        key:"name:测试店铺",name:"测试店铺",status:"active",statusText:"经营中"
+      }]
+    }));
+    const service = new LocalCoreService(store,undefined,providers);
+    publishExperience(service);
+    seedExperienceBrowser(store);
+
+    const result = await runTrigger(service,store,{
+      id:"doudian-experience-active-no-id",appId:"experience-score-monitor",
+      workflowId:"doudian.experience-score.daily",workflowVersion:"2.0.0",
+      workflowInput:{ maxShops:100 }
+    });
+
+    expect(result.run).toMatchObject({ status:"uncertain" });
+    expect(store.getEngineCheckpoint(result.run.id)?.state).toMatchObject({
+      status:"uncertain",
+      error:{ code:"DOUDIAN_EXPERIENCE_DISCOVERY_INCOMPLETE" }
+    });
+    expect(store.listEvents(result.run.id).at(-1)).toMatchObject({
+      type:"RUNTIME_RESULT_APPLIED",
+      payload:{
+        errorCode:"SHOP_IDENTITY_UNCERTAIN",
+        error:{ code:"DOUDIAN_EXPERIENCE_DISCOVERY_INCOMPLETE" }
+      }
+    });
+    expect(store.getAttention(`run-terminal:${result.run.id}`)).toMatchObject({
+      sourceRef:{ kind:"workflow-run",runId:result.run.id },
+      item:{
+        source:"runtime",kind:"blocking",groupKey:"uncertain",
+        runId:result.run.id
+      }
+    });
+    expect(store.listOperationalFactsForRun(result.run.id)).toEqual([]);
+    expect(
+      store.getPreparedOperationalDatasetPublication(result.run.id)
+    ).toBeUndefined();
+    store.close();
+  });
+
+  it("keeps a zero-fact experience Run failed and publishes no Dataset",async () => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    const providers = new RuntimeProviderRegistry();
+    const invocations:string[] = [];
+    providers.register(new FixtureProvider("browser",invocations,undefined,{
+      shops:[
+        { key:"id:10001",id:"10001",name:"测试店铺一",status:"active",statusText:"经营中" }
+      ],
+      failedShopId:"10001"
+    }));
+    const service = new LocalCoreService(store,undefined,providers);
+    publishExperience(service);
+    seedExperienceBrowser(store);
+
+    const result = await runTrigger(service,store,{
+      id:"doudian-experience-zero",appId:"experience-score-monitor",
+      workflowId:"doudian.experience-score.daily",workflowVersion:"2.0.0",
+      workflowInput:{ maxShops:100 }
+    });
+
+    expect(result.run).toMatchObject({
+      status:"failed",
+      output:{
+        status:"failed",
+        daily:{ status:"failed",persistedCount:0,failedCount:1 }
+      }
+    });
+    expect(object(json(result.run.output)).operationalDatasetPublicationIntentId).toBeUndefined();
+    expect(store.listOperationalFactsForRun(result.run.id)).toEqual([]);
+    expect(store.getPreparedOperationalDatasetPublication(result.run.id)).toBeUndefined();
+    const wouldBeVersion =
+      `2026.8.9-run.${contentDigest(result.run.id).slice(7,39)}`;
+    expect(store.getDataset(
+      "doudian-experience-daily",wouldBeVersion
+    )).toBeUndefined();
     store.close();
   });
 

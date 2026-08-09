@@ -2,9 +2,9 @@ apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: doudian.experience-score.daily
-  version: 1.0.1
+  version: 2.0.0
   title: 抖店每日多店体验分采集
-  description: 复用一个已登录 Mac Chrome 标签页，逐店读取体验分并通过 Step 检查点保留已完成事实；不包含调度和外部投递。
+  description: 复用一个已登录 Mac Chrome 标签页逐店读取体验分，每店成功后立即幂等持久化；完整或部分结果至少含一条事实时准备终态 Dataset 发布意图。
 spec:
   riskLevel: R1
   inputSchema:
@@ -20,9 +20,11 @@ spec:
     properties:
       status: { enum: [complete, partial, failed] }
       daily: { type: object }
+      datasetIntent: { type: object }
+      operationalDatasetPublicationIntentId: { type: string, minLength: 1, maxLength: 200 }
   limits:
     maxDepth: 3
-    maxStepExecutions: 1000
+    maxStepExecutions: 1600
   resourceSlots:
     doudian_account_browser:
       kind: browser
@@ -35,7 +37,7 @@ spec:
     steps:
       - key: discover_shops
         kind: call
-        use: doudian.experience.shops.discover@1.0.0
+        use: doudian.experience.shops.discover@2.0.0
         with:
           maxShops: ${input.maxShops}
         timeout: 2m
@@ -73,7 +75,7 @@ spec:
           steps:
             - key: read_snapshot
               kind: call
-              use: doudian.experience.shop.snapshot.read@1.0.0
+              use: doudian.experience.shop.snapshot.read@2.0.0
               with:
                 shop: ${item}
                 sourceShop: ${steps.discover_shops.output.sourceShop}
@@ -82,7 +84,7 @@ spec:
               retry:
                 maxAttempts: 2
                 backoff: 2s
-                retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED, EXPERIENCE_PAGE_TIMEOUT]
+                retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED, EXPERIENCE_PAGE_TIMEOUT, EXPERIENCE_CONTENT_RESPONSE_TIMEOUT]
               handlers:
                 failure:
                   kind: sequence
@@ -105,38 +107,146 @@ spec:
                       kind: terminal
                       status: failed
                       error: { code: DOUDIAN_EXPERIENCE_SHOP_TIMEOUT, message: 当前店铺超时，保留此前已完成检查点。 }
+            - key: snapshot_persistence_gate
+              kind: decision
+              condition:
+                kind: compare
+                operator: equals
+                left:
+                  kind: binding
+                  binding: ${steps.read_snapshot.output.status}
+                right: { kind: literal, value: skipped }
+              then:
+                kind: sequence
+                steps:
+                  - key: shop_skipped
+                    kind: terminal
+                    status: succeeded
+                    output: ${steps.read_snapshot.output}
+              else:
+                kind: sequence
+                steps:
+                  - key: persist_fact
+                    kind: call
+                    use: doudian.experience.shop.fact.persist@1.0.0
+                    with:
+                      snapshot: ${steps.read_snapshot.output}
+                    timeout: 30s
+                    handlers:
+                      failure:
+                        kind: sequence
+                        steps:
+                          - key: fact_persist_failed
+                            kind: terminal
+                            status: failed
+                            error: { code: DOUDIAN_EXPERIENCE_FACT_PERSIST_FAILED, message: 当前店铺快照已读取但未形成持久化事实，禁止计入成功店铺。 }
+                      rejected:
+                        kind: sequence
+                        steps:
+                          - key: fact_persist_rejected
+                            kind: terminal
+                            status: rejected
+                            error: { code: DOUDIAN_EXPERIENCE_FACT_PERSIST_REJECTED, message: 事实写入 fencing 或权限校验失败，禁止继续写入。 }
+                      timeout:
+                        kind: sequence
+                        steps:
+                          - key: fact_persist_timeout
+                            kind: terminal
+                            status: failed
+                            error: { code: DOUDIAN_EXPERIENCE_FACT_PERSIST_TIMEOUT, message: 当前店铺事实写入超时，效果不确定且禁止自动计入成功。 }
       - key: aggregate_daily
         kind: call
-        use: doudian.experience.daily.aggregate@1.0.0
+        use: doudian.experience.daily.aggregate@2.0.0
         with:
           foreachOutcome: ${steps.collect_shops.output}
+          discoveredShops: ${steps.discover_shops.output.shops}
+          discoveredCount: ${steps.discover_shops.output.discoveredCount}
+          collectableCount: ${steps.discover_shops.output.collectableCount}
         timeout: 10s
-        resourceMappings: { browser: doudian_account_browser }
-      - key: completion_gate
+      - key: dataset_eligibility_gate
         kind: decision
         condition:
           kind: compare
-          operator: equals
-          left:
-            kind: binding
-            binding: ${steps.aggregate_daily.output.status}
-          right: { kind: literal, value: complete }
+          operator: not_equals
+          left: { kind: binding, binding: "${steps.aggregate_daily.output.status}" }
+          right: { kind: literal, value: failed }
         then:
           kind: sequence
           steps:
-            - key: complete
-              kind: terminal
-              status: succeeded
-              output:
-                status: complete
+            - key: prepare_dataset
+              kind: call
+              use: doudian.experience.daily.dataset.prepare@1.0.0
+              with:
                 daily: ${steps.aggregate_daily.output}
+              timeout: 30s
+              handlers:
+                failure:
+                  kind: sequence
+                  steps:
+                    - key: dataset_prepare_failed
+                      kind: terminal
+                      status: uncertain
+                      output:
+                        status: partial
+                        daily: ${steps.aggregate_daily.output}
+                      error: { code: DOUDIAN_EXPERIENCE_DATASET_PREPARE_FAILED, message: 单店事实已持久化，但 Dataset 发布意图未可靠形成。 }
+                rejected:
+                  kind: sequence
+                  steps:
+                    - key: dataset_prepare_rejected
+                      kind: terminal
+                      status: rejected
+                      output:
+                        status: partial
+                        daily: ${steps.aggregate_daily.output}
+                      error: { code: DOUDIAN_EXPERIENCE_DATASET_PREPARE_REJECTED, message: Dataset 完整性、权限或 fencing 校验拒绝了发布意图。 }
+                timeout:
+                  kind: sequence
+                  steps:
+                    - key: dataset_prepare_timeout
+                      kind: terminal
+                      status: uncertain
+                      output:
+                        status: partial
+                        daily: ${steps.aggregate_daily.output}
+                      error: { code: DOUDIAN_EXPERIENCE_DATASET_PREPARE_TIMEOUT, message: Dataset 发布意图准备超时；不得推断为已发布。 }
+            - key: terminal_status_gate
+              kind: decision
+              condition:
+                kind: compare
+                operator: equals
+                left: { kind: binding, binding: "${steps.aggregate_daily.output.status}" }
+                right: { kind: literal, value: complete }
+              then:
+                kind: sequence
+                steps:
+                  - key: complete
+                    kind: terminal
+                    status: succeeded
+                    output:
+                      status: complete
+                      daily: ${steps.aggregate_daily.output}
+                      datasetIntent: ${steps.prepare_dataset.output}
+                      operationalDatasetPublicationIntentId: ${steps.prepare_dataset.output.publicationIntentId}
+              else:
+                kind: sequence
+                steps:
+                  - key: partial
+                    kind: terminal
+                    status: uncertain
+                    output:
+                      status: partial
+                      daily: ${steps.aggregate_daily.output}
+                      datasetIntent: ${steps.prepare_dataset.output}
+                      operationalDatasetPublicationIntentId: ${steps.prepare_dataset.output.publicationIntentId}
+                    error: { code: DOUDIAN_EXPERIENCE_DAILY_PARTIAL, message: 已持久化店铺事实并准备部分 Dataset，但至少一个店铺失败或跳过。 }
         else:
           kind: sequence
           steps:
-            - key: incomplete
+            - key: failed
               kind: terminal
-              status: uncertain
+              status: failed
               output:
-                status: ${steps.aggregate_daily.output.status}
+                status: failed
                 daily: ${steps.aggregate_daily.output}
-              error: { code: DOUDIAN_EXPERIENCE_DAILY_INCOMPLETE, message: 至少一个店铺没有形成完整检查点，禁止报告为全量成功。 }
+              error: { code: DOUDIAN_EXPERIENCE_DAILY_FAILED, message: 没有任何店铺形成持久化事实，禁止准备 Dataset 发布意图。 }

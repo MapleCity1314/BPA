@@ -45,7 +45,7 @@ Workflow 决定流程，Node 定义单步能力，Extension Bridge 校验页面�
 
 | 范围 | 版本 / 状态 | 说明 |
 | --- | --- | --- |
-| BPA Runtime | `0.6.0` | Windows x64 RC 与低负担业务工作台进入部分实现；真实平台验收仍按当前实况单独标记 |
+| BPA Runtime | `0.6.1` | Windows x64 RC 与低负担业务工作台进入部分实现；真实平台验收仍按当前实况单独标记 |
 | Browser Protocol | `bpa.browser/1` · `1.0.0` | 已确认；双向独立序列、ACK、Resume、Cancel 与 Fencing |
 | Permission / Event / Evidence | `v1` | 稳定公共模型 |
 | Workflow / Node | Workflow `v1alpha1` / `v1alpha2` / `v1alpha3`；Node `v1alpha1` / `v1alpha2` | Alpha；v1alpha3 增加冻结 Browser Resource Slot |
