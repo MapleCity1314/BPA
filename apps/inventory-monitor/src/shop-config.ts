@@ -12,15 +12,6 @@ export function prioritizeBrowserBoundShops(
   );
 }
 
-export function schedulerShopIndexGroups(
-  shops: readonly InventoryShopConfig[]
-): { readonly bound: readonly number[]; readonly unbound: readonly number[] } {
-  return {
-    bound:shops.flatMap((shop,index) => shop.browserInstanceId ? [index] : []),
-    unbound:shops.flatMap((shop,index) => shop.browserInstanceId ? [] : [index])
-  };
-}
-
 function text(value: unknown, label: string): string {
   if (typeof value !== "string" || !value.trim() || value.length > 200) {
     throw new Error(`${label}_INVALID`);

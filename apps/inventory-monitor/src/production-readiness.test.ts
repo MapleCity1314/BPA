@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   evaluateInventoryProductionReadiness,
@@ -141,7 +141,7 @@ describe("inventory production readiness", () => {
       [
         "--import",
         "tsx",
-        resolve("apps/inventory-monitor/src/production-readiness-main.ts")
+        fileURLToPath(new URL("./production-readiness-main.ts",import.meta.url))
       ],
       { encoding: "utf8", env: environment }
     );

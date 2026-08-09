@@ -189,7 +189,7 @@ export class MysqlSalesDemandSync {
       sourceSystem: SOURCE_SYSTEM,
       shopId: input.expectedShopId ?? input.shopName,
       ...(current ? { sourceWatermark: current } : {})
-    });
+    },input.lease);
     const digest = createHash("sha256");
     let cursor = 0;
     let watermark = current ? Number(current) : 0;
@@ -200,7 +200,6 @@ export class MysqlSalesDemandSync {
     let historicalCompleteThrough = new Date(0).toISOString();
     try {
       while (true) {
-        await this.repository.assertLease(input.lease);
         const rows = await this.readPage({
           shopName: input.shopName,
           cursor,
@@ -222,7 +221,7 @@ export class MysqlSalesDemandSync {
           }
           digest.update(`${source.id}:${source.batch_id}:${source.row_hash}\n`);
         }
-        const changes = await this.repository.upsertOrderChunk(normalized);
+        const changes = await this.repository.upsertOrderChunk(normalized,input.lease);
         inserted += changes.inserted;
         updated += changes.updated;
         processed += normalized.length;
@@ -230,7 +229,7 @@ export class MysqlSalesDemandSync {
         if (rows.length < PAGE_SIZE) break;
       }
       if (processed === 0) {
-        await this.repository.completeNoChangeOrderSync(syncRunId);
+        await this.repository.completeNoChangeOrderSync(syncRunId,input.lease);
         return { status: "no_changes", syncRunId, watermark: current ?? null, processed: 0 };
       }
       const shopId = required(actualShopId, "actualShopId", 200);
@@ -245,7 +244,7 @@ export class MysqlSalesDemandSync {
         updated,
         recordCount: processed,
         historicalCompleteThrough
-      });
+      },input.lease);
       return {
         status: "succeeded",
         syncRunId,
@@ -260,7 +259,8 @@ export class MysqlSalesDemandSync {
     } catch (error) {
       await this.repository.failOrderSync(
         syncRunId,
-        error instanceof Error ? error.message : String(error)
+        error instanceof Error ? error.message : String(error),
+        input.lease
       ).catch(() => undefined);
       throw error;
     }
@@ -279,7 +279,7 @@ export class MysqlSalesDemandSync {
       sourceSystem: WDT_SOURCE_SYSTEM,
       shopId,
       ...(current ? { sourceWatermark: current } : {})
-    });
+    },input.lease);
     const digest = createHash("sha256");
     let cursor = current ? Number(current) : 0;
     let watermark = cursor;
@@ -296,7 +296,6 @@ export class MysqlSalesDemandSync {
         queryEnd:coverage.query_end_time,sourceLoadedAt:coverage.source_loaded_at
       }));
       while (true) {
-        await this.repository.assertLease(input.lease);
         const rows = await this.readWdtPage({ shopName: input.shopName,cursor });
         if (rows.length === 0) break;
         cursor = rows[rows.length - 1]!.id;
@@ -334,7 +333,7 @@ export class MysqlSalesDemandSync {
           if (sourcePeriodEnd > historicalCompleteThrough) historicalCompleteThrough = sourcePeriodEnd;
           digest.update(`${source.id}:${rowHash}\n`);
         }
-        const changes = await this.repository.upsertOrderChunk(normalized);
+        const changes = await this.repository.upsertOrderChunk(normalized,input.lease);
         inserted += changes.inserted;
         updated += changes.updated;
         processed += normalized.length;
@@ -342,7 +341,7 @@ export class MysqlSalesDemandSync {
         if (rows.length < PAGE_SIZE) break;
       }
       if (processed === 0 && (!recentObservedAt || !coverageCompleteThrough)) {
-        await this.repository.completeNoChangeOrderSync(syncRunId);
+        await this.repository.completeNoChangeOrderSync(syncRunId,input.lease);
         return { status:"no_changes",syncRunId,watermark:current ?? null,processed:0 };
       }
       const sourceDigest = `sha256:${digest.digest("hex")}`;
@@ -350,14 +349,14 @@ export class MysqlSalesDemandSync {
         syncRunId,sourceSystem:WDT_SOURCE_SYSTEM,shopId,
         watermark:String(watermark),sourceDigest,inserted,updated,
         recordCount:processed,historicalCompleteThrough
-      });
+      },input.lease);
       if (recentObservedAt) {
         await this.repository.persistRecentOrders({
           observedAt:recentObservedAt,shop:{ id:shopId,name:input.shopName },records:[],
           quality:{ completeness:1,diagnostics:[
             "Recent demand window coverage was verified from the WDT stockout API mirror."
           ] }
-        });
+        },input.lease);
       }
       return {
         status:"succeeded",syncRunId,shopId,watermark:String(watermark),
@@ -365,7 +364,7 @@ export class MysqlSalesDemandSync {
       };
     } catch (error) {
       await this.repository.failOrderSync(
-        syncRunId,error instanceof Error ? error.message : String(error)
+        syncRunId,error instanceof Error ? error.message : String(error),input.lease
       ).catch(() => undefined);
       throw error;
     }

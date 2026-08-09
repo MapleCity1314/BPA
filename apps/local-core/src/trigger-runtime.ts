@@ -3,6 +3,7 @@ import { projectTerminalTriggerOccurrenceAttention } from "@bpa/attention-core";
 import type {
   AttentionRecord,
   BrowserControlLeaseRecord,
+  ExternalDomainLeaseRecord,
   Persistence,
   RunRecord,
   TriggerAttemptRecord,
@@ -12,6 +13,7 @@ import type {
   TriggerTerminalOutcome
 } from "@bpa/persistence";
 import { RevisionConflictError } from "@bpa/persistence";
+import { ExternalDomainLeaseCoordinator } from "./external-domain-lease-coordinator.js";
 import { occurrencePageBetween } from "./schedule-calendar.js";
 
 const LEASE_TTL_SECONDS = 300;
@@ -56,10 +58,16 @@ export class TriggerRuntime {
     readonly createRun: (
       trigger: TriggerSpecRecord,
       input: unknown,
-      triggerAttemptId: string
+      triggerAttemptId: string,
+      externalDomainLeaseRequestId?: string
     ) => RunRecord,
     readonly cancelWorkflow: (runId: string, reason: string) => RunRecord,
-    readonly clock: () => Date = () => new Date()
+    readonly clock: () => Date = () => new Date(),
+    readonly externalDomainLeases?: ExternalDomainLeaseCoordinator,
+    readonly markWorkflowUncertain?: (
+      runId: string,
+      diagnostic: string
+    ) => RunRecord
   ) {}
 
   fire(input: TriggerFireInput): TriggerFireResult {
@@ -290,7 +298,53 @@ export class TriggerRuntime {
         ...this.latestAttempt(occurrence.occurrenceId)
       };
     }
-    const attemptId = `trigger-attempt:${randomUUID()}`;
+    const externalConfig = trigger.spec.externalDomainLease;
+    if (externalConfig && !this.externalDomainLeases?.hasProvider(externalConfig.providerId)) {
+      const failed = this.persistence.finishTriggerOccurrenceWithAttention({
+        occurrenceId: occurrence.occurrenceId,
+        expectedRevision: occurrence.revision,
+        outcome: "blocked",
+        diagnostic: `External domain lease provider is not configured: ${externalConfig.providerId}`,
+        updatedAt: now,
+        attention: this.triggerAttention(occurrence, "blocked", now)
+      });
+      return { occurrence: failed.occurrence };
+    }
+    const externalLease = externalConfig
+      ? this.persistence
+          .listExternalDomainLeases()
+          .find(
+            (item) =>
+              item.occurrenceId === occurrence.occurrenceId &&
+              item.state !== "released"
+          )
+      : undefined;
+    if (externalConfig && !externalLease) {
+      const ownerId = `trigger-attempt:${randomUUID()}`;
+      this.persistence.beginExternalDomainLeaseAcquisition({
+        requestId: `external-domain-lease:${randomUUID()}`,
+        providerId: externalConfig.providerId,
+        domainKey: externalConfig.resourceId,
+        occurrenceId: occurrence.occurrenceId,
+        ownerId,
+        createdAt: now
+      });
+      return { occurrence, ...this.latestAttempt(occurrence.occurrenceId) };
+    }
+    if (
+      externalLease &&
+      (externalLease.state === "acquiring" ||
+        externalLease.state === "reconciliation_required")
+    ) {
+      return { occurrence, ...this.latestAttempt(occurrence.occurrenceId) };
+    }
+    if (
+      externalLease &&
+      !this.externalDomainLeases?.canStart(externalLease.requestId)
+    ) {
+      return { occurrence, ...this.latestAttempt(occurrence.occurrenceId) };
+    }
+    const attemptId = externalLease?.ownerId ?? `trigger-attempt:${randomUUID()}`;
     const triggerLease = this.persistence.acquireTriggerLease({
       concurrencyKey: trigger.spec.concurrencyKey,
       ownerId: attemptId,
@@ -298,6 +352,13 @@ export class TriggerRuntime {
       ttlSeconds: LEASE_TTL_SECONDS
     });
     if (!triggerLease) {
+      if (externalLease) {
+        this.externalDomainLeases!.markReconciliationRequired(
+          externalLease.requestId,
+          "Local Trigger concurrency lease is busy after external acquisition."
+        );
+        return { occurrence };
+      }
       return { occurrence: this.deferOccurrence(occurrence, now) };
     }
     const browserInstanceId = trigger.spec.browserInstanceId;
@@ -316,6 +377,13 @@ export class TriggerRuntime {
         fencingToken: triggerLease.fencingToken,
         releasedAt: now
       });
+      if (externalLease) {
+        this.externalDomainLeases!.markReconciliationRequired(
+          externalLease.requestId,
+          "Local Browser instance lease is busy after external acquisition."
+        );
+        return { occurrence };
+      }
       return { occurrence: this.deferOccurrence(occurrence, now) };
     }
     let created: {
@@ -330,6 +398,12 @@ export class TriggerRuntime {
         createdAt: now
       });
     } catch (error) {
+      if (externalLease) {
+        this.externalDomainLeases!.markReconciliationRequired(
+          externalLease.requestId,
+          "Trigger Attempt creation conflicted after external lease acquisition."
+        );
+      }
       this.releaseLeases(
         trigger.spec,
         attemptId,
@@ -356,7 +430,12 @@ export class TriggerRuntime {
       updatedAt: now
     });
     try {
-      this.createRun(trigger, trigger.spec.input, attemptId);
+      this.createRun(
+        trigger,
+        trigger.spec.input,
+        attemptId,
+        externalLease?.requestId
+      );
     } catch (error) {
       const diagnostic = error instanceof Error ? error.message : String(error);
       const currentAttempt = this.persistence.getTriggerAttempt(attemptId)!;
@@ -368,22 +447,29 @@ export class TriggerRuntime {
           attempt: currentAttempt
         };
       }
-      this.persistence.finishTriggerAttempt({
-        attemptId,
-        expectedAttemptRevision: currentAttempt.revision,
-        occurrenceId: created.occurrence.occurrenceId,
-        expectedOccurrenceRevision: created.occurrence.revision,
-        outcome: "blocked",
-        diagnostic,
-        updatedAt: now,
-        attention: this.triggerAttention(created.occurrence, "blocked", now)
-      });
-      this.releaseLeases(
-        trigger.spec,
-        attemptId,
-        { trigger: triggerLease, ...(browserLease ? { browser: browserLease } : {}) },
-        now
-      );
+      if (externalLease) {
+        this.externalDomainLeases!.markReconciliationRequired(
+          externalLease.requestId,
+          "Workflow Run creation failed after external lease acquisition."
+        );
+      } else {
+        this.persistence.finishTriggerAttempt({
+          attemptId,
+          expectedAttemptRevision: currentAttempt.revision,
+          occurrenceId: created.occurrence.occurrenceId,
+          expectedOccurrenceRevision: created.occurrence.revision,
+          outcome: "blocked",
+          diagnostic,
+          updatedAt: now,
+          attention: this.triggerAttention(created.occurrence, "blocked", now)
+        });
+        this.releaseLeases(
+          trigger.spec,
+          attemptId,
+          { trigger: triggerLease, ...(browserLease ? { browser: browserLease } : {}) },
+          now
+        );
+      }
       return {
         occurrence: this.persistence.getTriggerOccurrence(
           created.occurrence.occurrenceId
@@ -443,8 +529,37 @@ export class TriggerRuntime {
         this.reconcileMissingPinnedTrigger(attempt, occurrence, now);
         continue;
       }
+      const externalLease = trigger.externalDomainLease
+        ? this.persistence
+            .listExternalDomainLeases()
+            .find((item) => item.ownerId === attempt.attemptId)
+        : undefined;
       const control = this.findOrRenewLeases(trigger, attempt, now);
       if ("diagnostic" in control) {
+        if (trigger.externalDomainLease && externalLease) {
+          this.externalDomainLeases?.markReconciliationRequired(
+            externalLease.requestId,
+            control.diagnostic
+          );
+          if (attempt.workflowRunId) {
+            try {
+              this.markWorkflowUncertain?.(
+                attempt.workflowRunId,
+                control.diagnostic
+              );
+            } catch {
+              // Keep the reconciliation blocker if the Workflow is not in a
+              // state that can be safely marked uncertain.
+            }
+          }
+          this.releaseRetainedLeases(
+            trigger,
+            attempt.attemptId,
+            control.retainedLeases,
+            now
+          );
+          continue;
+        }
         this.reconcileLostControl(
           trigger,
           attempt,
@@ -454,6 +569,35 @@ export class TriggerRuntime {
           control.retainedLeases
         );
         continue;
+      }
+      if (trigger.externalDomainLease) {
+        if (!externalLease) {
+          // The pinned Trigger requires an external fence. Keep the Attempt
+          // active and block effects until an operator reconciles the missing
+          // durable lease record; do not manufacture a terminal outcome.
+          if (attempt.workflowRunId) {
+            try {
+              this.markWorkflowUncertain?.(
+                attempt.workflowRunId,
+                "External domain lease record is missing."
+              );
+            } catch {
+              // Keep the Attempt active and effects fenced for reconciliation.
+            }
+          }
+          continue;
+        }
+        if (externalLease.state !== "bound") {
+          this.reconcileInactiveExternalLease(
+            trigger,
+            attempt,
+            occurrence,
+            control.leases,
+            externalLease,
+            now
+          );
+          continue;
+        }
       }
       if (!attempt.workflowRunId) {
         this.finishAttempt(
@@ -481,6 +625,11 @@ export class TriggerRuntime {
         continue;
       }
       if (ACTIVE_WORKFLOW_STATES.has(run.status)) continue;
+      if (externalLease?.state === "bound") {
+        // The coordinator must release the remote fence and durably record the
+        // release before the Trigger Attempt can become terminal.
+        continue;
+      }
       const outcome: TriggerTerminalOutcome = (() => {
         switch (run.status) {
           case "succeeded":
@@ -503,6 +652,73 @@ export class TriggerRuntime {
         now
       );
     }
+  }
+
+  private reconcileInactiveExternalLease(
+    trigger: TriggerSpecDefinition,
+    attempt: TriggerAttemptRecord,
+    occurrence: TriggerOccurrenceRecord,
+    leases: TriggerControlLeases,
+    externalLease: ExternalDomainLeaseRecord,
+    now: string
+  ): void {
+    if (externalLease.state !== "released") {
+      // Effects are fenced while timers may still drive the Workflow to its
+      // own uncertain terminal. Do not misclassify domain loss as cancellation.
+      if (attempt.workflowRunId) {
+        try {
+          this.markWorkflowUncertain?.(
+            attempt.workflowRunId,
+            externalLease.diagnostic ??
+              "External domain lease requires reconciliation."
+          );
+        } catch {
+          // Keep the reconciliation blocker if the Workflow cannot yet be
+          // terminalized without inventing a successful or cancelled result.
+        }
+      }
+      return;
+    }
+    if (!attempt.workflowRunId) {
+      this.finishAttempt(
+        trigger,
+        attempt,
+        occurrence,
+        leases,
+        "blocked",
+        now,
+        externalLease.diagnostic ?? "Workflow Run was not created."
+      );
+      return;
+    }
+    const run = this.persistence.getRun(attempt.workflowRunId);
+    if (!run) {
+      this.finishAttempt(
+        trigger,
+        attempt,
+        occurrence,
+        leases,
+        "failed",
+        now,
+        "Workflow Run is missing."
+      );
+      return;
+    }
+    if (ACTIVE_WORKFLOW_STATES.has(run.status)) {
+      return;
+    }
+    const current = this.persistence.getRun(run.id);
+    const outcome = current ? this.workflowTerminalOutcome(current) : undefined;
+    if (!outcome) return;
+    this.finishAttempt(
+      trigger,
+      attempt,
+      occurrence,
+      leases,
+      outcome,
+      now,
+      outcome === "cancelled" ? externalLease.diagnostic : undefined
+    );
   }
 
   private findOrRenewLeases(

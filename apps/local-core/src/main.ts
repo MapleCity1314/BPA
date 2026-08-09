@@ -105,10 +105,28 @@ const server = new LocalControlServer(
   service
 );
 let drainingIr2 = false;
+let coordinatingExternalDomainLeases = false;
 let triggerTick = 0;
 const gatewayTimer = setInterval(() => {
   try {
     browserGateway.tick();
+    if (!coordinatingExternalDomainLeases) {
+      coordinatingExternalDomainLeases = true;
+      void service.externalDomainLeases
+        .tick()
+        .catch((error: unknown) => {
+          process.stderr.write(
+            `[external-domain-lease] ${
+              error instanceof Error
+                ? error.stack ?? error.message
+                : String(error)
+            }\n`
+          );
+        })
+        .finally(() => {
+          coordinatingExternalDomainLeases = false;
+        });
+    }
     triggerTick += 1;
     if (triggerTick >= 2) {
       triggerTick = 0;

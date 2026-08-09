@@ -88,6 +88,10 @@ import {
 import { PackagingDatasetService } from "./dataset-service.js";
 import { DatasetRuntimeProvider } from "./dataset-runtime-provider.js";
 import { ExperienceDataRuntimeProvider } from "./experience-data-runtime-provider.js";
+import {
+  InventoryDataRuntimeProvider,
+  isInventoryDataNode
+} from "./inventory-data-runtime-provider.js";
 import { AllianceRetiredDataRuntimeProvider } from "./alliance-retired-data-runtime-provider.js";
 import { PACKAGING_DATASET_PROFILE } from "@bpa/packaging-dataset";
 import {
@@ -103,6 +107,11 @@ import {
 } from "./staging-transfer.js";
 import { LocalCandidateArchiveService } from "./candidate-archive-service.js";
 import { TriggerRuntime } from "./trigger-runtime.js";
+import { ExternalDomainLeaseCoordinator } from "./external-domain-lease-coordinator.js";
+import {
+  InventoryDomainLeaseClient,
+  type ExternalDomainLeaseProvider
+} from "./inventory-domain-lease-client.js";
 import { assertScheduleDefinition } from "./schedule-calendar.js";
 import { RecoverySessionService } from "./recovery-session.js";
 
@@ -162,6 +171,7 @@ export class LocalCoreService {
   readonly candidateArchives: LocalCandidateArchiveService | undefined;
   readonly datasets: PackagingDatasetService;
   readonly triggers: TriggerRuntime;
+  readonly externalDomainLeases: ExternalDomainLeaseCoordinator;
   readonly recoverySessions: RecoverySessionService;
   readonly #resourceBindings: RuntimeResourceBindingService;
   readonly #trustedEvidence: TrustedEvidenceQueryService;
@@ -172,14 +182,28 @@ export class LocalCoreService {
     runtimeProviders?: RuntimeProviderRegistry,
     readonly stagingTransfers?: StagingTransferService,
     candidateArchiveDataDirectory?: string,
-    readonly runtimeMaintenancePath?: string
+    readonly runtimeMaintenancePath?: string,
+    externalDomainLeaseProviders?: readonly ExternalDomainLeaseProvider[]
   ) {
     this.engine = new LocalWorkflowEngine(persistence);
     this.recoverySessions = new RecoverySessionService(persistence);
     this.datasets = new PackagingDatasetService(persistence);
+    const configuredExternalDomainLeaseProviders =
+      externalDomainLeaseProviders ??
+      (process.env.BPA_INVENTORY_SOCKET?.trim()
+        ? [new InventoryDomainLeaseClient(process.env.BPA_INVENTORY_SOCKET.trim())]
+        : []);
+    const inventoryServiceClient = configuredExternalDomainLeaseProviders.find(
+      (provider): provider is InventoryDomainLeaseClient =>
+        provider instanceof InventoryDomainLeaseClient
+    );
+    this.externalDomainLeases = new ExternalDomainLeaseCoordinator(
+      persistence,
+      configuredExternalDomainLeaseProviders
+    );
     this.triggers = new TriggerRuntime(
       persistence,
-      (trigger,input,triggerAttemptId) => {
+      (trigger,input,triggerAttemptId,externalDomainLeaseRequestId) => {
         this.#assertRuntimeAvailable();
         const resolved = this.#resolveWorkflowResources(
           trigger.spec.workflow.id,
@@ -192,7 +216,8 @@ export class LocalCoreService {
           input,
           resolved.resourceBindings ?? {},
           `trigger:${trigger.spec.id}`,
-          triggerAttemptId
+          triggerAttemptId,
+          externalDomainLeaseRequestId
         ) as RunRecord;
       },
       (runId, reason) => {
@@ -215,6 +240,19 @@ export class LocalCoreService {
           "TRIGGER_CONTROL_LEASE_LOST"
         );
         return cancelled;
+      },
+      undefined,
+      this.externalDomainLeases,
+      (runId, diagnostic) => {
+        const run = this.ir2Runtime.markExternalDomainLeaseUncertain(
+          runId,
+          diagnostic
+        );
+        this.browserGateway?.requestCancel(
+          runId,
+          "EXTERNAL_DOMAIN_LEASE_RECONCILIATION_REQUIRED"
+        );
+        return run;
       }
     );
     this.#resourceBindings = new RuntimeResourceBindingService(persistence);
@@ -234,6 +272,14 @@ export class LocalCoreService {
     }
     if (!providers.list().includes("alliance-retired-data")) {
       providers.register(new AllianceRetiredDataRuntimeProvider(persistence));
+    }
+    if (
+      inventoryServiceClient &&
+      !providers.list().includes("inventory-data")
+    ) {
+      providers.register(
+        new InventoryDataRuntimeProvider(persistence, inventoryServiceClient)
+      );
     }
     if (!providers.list().includes("team")) {
       const packagedWorker = resolve(
@@ -265,6 +311,8 @@ export class LocalCoreService {
       });
     }
     this.ir2Runtime = new Ir2WorkflowRuntime(persistence, providers, {
+      externalDomainLeaseCanUse: (requestId) =>
+        this.externalDomainLeases.canStart(requestId),
       resolveResourceBindingSnapshot: (runId) =>
         persistence.getRunResourceBindingSnapshot(runId),
       browserSessions: {
@@ -1562,7 +1610,8 @@ export class LocalCoreService {
     input: unknown,
     resourceBindings: unknown,
     actor: string,
-    triggerAttemptId?: string
+    triggerAttemptId?: string,
+    externalDomainLeaseRequestId?: string
   ): unknown {
     const artifact = this.persistence.getPublished(
       "workflow",
@@ -1616,7 +1665,8 @@ export class LocalCoreService {
           resourceSlots: Object.keys(plan.resourceSlots ?? {}).sort()
         },
         bindResources,
-        triggerAttemptId
+        triggerAttemptId,
+        externalDomainLeaseRequestId
       );
     }
     if (triggerAttemptId) {
@@ -1970,7 +2020,9 @@ export class LocalCoreService {
                 ? "experience-data"
                 : isAllianceRetiredDataNode(id, version)
                   ? "alliance-retired-data"
-                : definition.runtime.replace(/^engine_/, ""),
+                  : isInventoryDataNode(id, version)
+                    ? "inventory-data"
+                    : definition.runtime.replace(/^engine_/, ""),
           adapters: adapter
             ? [
                 {

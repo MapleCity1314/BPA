@@ -51,6 +51,7 @@ import type {
   ResourceBindingSnapshot
 } from "@bpa/workflow-ir";
 import { createTerminalAttentionDelivery } from "./attention-delivery.js";
+import { externalLeaseAllowsRunEffects } from "./external-domain-lease-coordinator.js";
 import {
   resolveRuntimeNodeSchemaContract,
   runtimeSchemaErrors,
@@ -67,6 +68,7 @@ export interface Ir2RuntimeOptions {
   resolveResourceBindingSnapshot?: (
     runId: string
   ) => ResourceBindingSnapshot | undefined;
+  externalDomainLeaseCanUse?: (requestId: string) => boolean;
 }
 
 export type RuntimeResultDisposition = "advanced" | "duplicate" | "stale";
@@ -167,6 +169,7 @@ export class Ir2WorkflowRuntime {
   readonly #random: () => number;
   readonly #schedule: (callback: () => void, delayMs: number) => unknown;
   readonly #cancelScheduled: (handle: unknown) => void;
+  readonly #externalDomainLeaseCanUse: (requestId: string) => boolean;
 
   constructor(
     persistence: Persistence,
@@ -191,6 +194,8 @@ export class Ir2WorkflowRuntime {
     this.#cancelScheduled =
       options.cancelScheduled ??
       ((handle) => clearTimeout(handle as NodeJS.Timeout));
+    this.#externalDomainLeaseCanUse =
+      options.externalDomainLeaseCanUse ?? (() => true);
   }
 
   start(
@@ -198,7 +203,8 @@ export class Ir2WorkflowRuntime {
     input: JsonValue,
     startMetadata?: JsonValue,
     bindResources?: (runId: string) => ResourceBindingSnapshot,
-    triggerAttemptId?: string
+    triggerAttemptId?: string,
+    externalDomainLeaseRequestId?: string
   ): RunRecord {
     const runId = this.#id();
     const resourceBindingSnapshot = bindResources?.(runId);
@@ -235,6 +241,9 @@ export class Ir2WorkflowRuntime {
       },
       checkpoint: this.#checkpoint(transition.state, timestamp),
       ...(triggerAttemptId ? { triggerAttemptId } : {}),
+      ...(externalDomainLeaseRequestId
+        ? { externalDomainLeaseRequestId }
+        : {}),
       ...(resourceBindingSnapshot
         ? { resourceBindingSnapshot }
         : {}),
@@ -325,6 +334,46 @@ export class Ir2WorkflowRuntime {
     return { disposition: "advanced", run: cancelledRun };
   }
 
+  markExternalDomainLeaseUncertain(runId: string, diagnostic: string): RunRecord {
+    const run = this.#persistence.getRun(runId);
+    const checkpoint = this.#persistence.getEngineCheckpoint(runId);
+    if (!run || !checkpoint) {
+      throw new Error(`Recoverable IR2 Run not found: ${runId}`);
+    }
+    if (["succeeded", "rejected", "failed", "cancelled", "uncertain"].includes(run.status)) {
+      return run;
+    }
+    const state = checkpoint.state as unknown as EngineState;
+    const invocation = state.active?.kind === "call"
+      ? state.active.invocation
+      : undefined;
+    if (!invocation) {
+      throw new Error(
+        `External domain lease loss cannot safely terminalize the current Workflow state: ${runId}`
+      );
+    }
+    const disposition = this.acceptRuntimeResult({
+      runId,
+      outboxId: `effect:${invocation.invocationId}`,
+      inboxMessageId:
+        `external-domain-lease-uncertain:${runId}:${checkpoint.stateRevision}`,
+      invocationId: invocation.invocationId,
+      fencingToken: invocation.fencingToken,
+      outcome: {
+        status: "uncertain",
+        error: {
+          code: "EXTERNAL_DOMAIN_LEASE_RECONCILIATION_REQUIRED",
+          message: diagnostic,
+          retryable: false
+        },
+        evidence: [],
+        riskSignals: []
+      }
+    });
+    if (disposition === "advanced") this.#requestProviderCancel(invocation);
+    return this.#persistence.getRun(runId) ?? run;
+  }
+
   async drainOnce(): Promise<number> {
     let processed = 0;
     for (const message of this.#persistence.listPendingEngineOutbox()) {
@@ -363,6 +412,15 @@ export class Ir2WorkflowRuntime {
           evidence: [],
           riskSignals: []
         };
+      } else if (
+        !externalLeaseAllowsRunEffects(
+          this.#persistence,
+          effect.invocation.identity.runId,
+          new Date(dispatchStartedAt).toISOString(),
+          this.#externalDomainLeaseCanUse
+        )
+      ) {
+        continue;
       } else {
         const resolved = resolveRuntimeNodeSchemaContract(
           this.#persistence,

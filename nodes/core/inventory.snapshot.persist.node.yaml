@@ -2,17 +2,16 @@ apiVersion: bpa/v1alpha1
 kind: Node
 metadata:
   id: inventory.snapshot.persist
-  version: 1.0.0
+  version: 2.0.0
   title: 持久化库存版本化事实
   description: 经受限 Unix Socket 幂等写入单商品库存快照、SKU 映射和不可变数据集版本。
-runtime: engine_team
+runtime: engine_builtin
 inputSchema:
   type: object
   additionalProperties: false
-  required: [snapshot, lease]
+  required: [snapshot]
   properties:
     snapshot: { type: object }
-    lease: { type: object }
 outputSchema:
   type: object
   additionalProperties: false
@@ -27,4 +26,4 @@ execution:
   timeoutDefault: 30s
   idempotency: verified_write
   cancellable: true
-errors: [INVENTORY_SERVICE_NOT_CONFIGURED, INVENTORY_SERVICE_UNAVAILABLE, INVENTORY_SERVICE_FAILED, LEASE_FENCE_INVALID, SCHEDULER_LEASE_LOST]
+errors: [INVENTORY_SNAPSHOT_INPUT_INVALID, INVENTORY_EXTERNAL_LEASE_INVALID, INVENTORY_SERVICE_NOT_CONFIGURED, INVENTORY_SERVICE_UNAVAILABLE, INVENTORY_SERVICE_PROTOCOL_ERROR, INVENTORY_SERVICE_FAILED, LEASE_FENCE_INVALID, SCHEDULER_LEASE_LOST]

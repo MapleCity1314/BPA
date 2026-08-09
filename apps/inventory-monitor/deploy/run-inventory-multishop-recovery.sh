@@ -4,9 +4,9 @@ set -euo pipefail
 readonly BPA_PROJECT_ROOT="/Users/yyerybz/Codex/BPA"
 export BPA_RUNTIME_ROOT="$HOME/Library/Application Support/BPA"
 readonly BPA_CORE_ENV="$BPA_RUNTIME_ROOT/core.env"
-readonly BPA_SCHEDULER_ENV="$BPA_RUNTIME_ROOT/inventory-scheduler.env"
+readonly BPA_RECOVERY_ENV="$BPA_RUNTIME_ROOT/inventory-multishop-recovery.env"
 
-if [[ ! -r "$BPA_CORE_ENV" || ! -r "$BPA_SCHEDULER_ENV" ]]; then
+if [[ ! -r "$BPA_CORE_ENV" || ! -r "$BPA_RECOVERY_ENV" ]]; then
   print -u2 "BPA inventory production configuration is unavailable"
   exit 1
 fi
@@ -14,7 +14,7 @@ fi
 cd "$BPA_PROJECT_ROOT"
 set -a
 source "$BPA_CORE_ENV"
-source "$BPA_SCHEDULER_ENV"
+source "$BPA_RECOVERY_ENV"
 set +a
 export BPA_RUNTIME_ROOT
 export BPA_INVENTORY_TRIGGER_KIND="${BPA_INVENTORY_TRIGGER_KIND:-schedule}"

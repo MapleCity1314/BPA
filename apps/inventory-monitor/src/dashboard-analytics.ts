@@ -223,16 +223,6 @@ export function buildOperationalReminders(input: {
       source: "订单新鲜度规则"
     });
   }
-  if (input.scheduleCount === 0) {
-    reminders.push({
-      id: "scheduler-not-running",
-      severity: "warning",
-      title: "30 分钟调度尚未产生运行记录",
-      detail: "服务在线，但自动采集计划还未完成首轮执行。",
-      action: "确认浏览器绑定后启用调度器",
-      source: "调度运行检查"
-    });
-  }
   for (const incident of input.incidents) {
     if (incident.state !== "open" || (incident.severity !== "critical" && incident.severity !== "warning")) continue;
     reminders.push({

@@ -1813,13 +1813,14 @@ describe("append-only migrations", () => {
       seeded.close();
       const v22 = new Database(databasePath);
       v22.exec(`
+        DROP TABLE external_domain_leases;
         DROP INDEX trigger_attempts_workflow_run;
-        DELETE FROM schema_migrations WHERE version=23;
+        DELETE FROM schema_migrations WHERE version>=23;
       `);
       v22.close();
 
       const upgraded = new SqlitePersistence({ path:databasePath });
-      expect(upgraded.health().schemaVersion).toBe(23);
+      expect(upgraded.health().schemaVersion).toBe(24);
       upgraded.close();
       const inspected = new Database(databasePath,{ readonly:true });
       expect(inspected.prepare(
@@ -1880,8 +1881,9 @@ describe("append-only migrations", () => {
 
       const v22 = new Database(databasePath);
       v22.exec(`
+        DROP TABLE external_domain_leases;
         DROP INDEX trigger_attempts_workflow_run;
-        DELETE FROM schema_migrations WHERE version=23;
+        DELETE FROM schema_migrations WHERE version>=23;
       `);
       v22.prepare(
         "UPDATE trigger_attempts SET workflow_run_id=? WHERE attempt_id=?"
@@ -1984,7 +1986,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(23);
+      expect(store.health().schemaVersion).toBe(24);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -2015,6 +2017,7 @@ describe("append-only migrations", () => {
 
       const legacy = new Database(databasePath);
       legacy.exec(`
+        DROP TABLE external_domain_leases;
         DROP TABLE operational_dataset_publication_facts;
         DROP TABLE operational_dataset_publication_lineage;
         DROP TABLE operational_dataset_publication_intent_facts;
@@ -2104,12 +2107,12 @@ describe("append-only migrations", () => {
         DROP TABLE attention_deliveries;
         DROP TABLE attention_records;
         DELETE FROM schema_migrations
-        WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23);
+        WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(23);
+      expect(upgraded.health().schemaVersion).toBe(24);
       expect(upgraded.getAssistanceTask(task.task.taskId)).toEqual(task);
       expect(
         upgraded.getAssistanceRequestResult("not-recorded")
@@ -2134,7 +2137,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(23);
+      expect(store.health().schemaVersion).toBe(24);
       expect(store.getAssistanceRequestResult("not-recorded")).toBeUndefined();
       store.close();
     } finally {
@@ -2156,7 +2159,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(23);
+      expect(store.health().schemaVersion).toBe(24);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -2171,6 +2174,7 @@ describe("append-only migrations", () => {
       seeded.close();
       const legacy = new Database(databasePath);
       legacy.exec(`
+        DROP TABLE external_domain_leases;
         DROP TABLE operational_dataset_publication_facts;
         DROP TABLE operational_dataset_publication_lineage;
         DROP TABLE operational_dataset_publication_intent_facts;
@@ -2255,12 +2259,12 @@ describe("append-only migrations", () => {
         DROP TABLE attention_deliveries;
         DROP TABLE attention_records;
         DELETE FROM schema_migrations
-        WHERE version IN (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23);
+        WHERE version IN (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(23);
+      expect(upgraded.health().schemaVersion).toBe(24);
       expect(
         upgraded.createWorkflowDraft({
           draftId: "v5-upgraded-draft",
@@ -2301,7 +2305,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(23);
+      expect(store.health().schemaVersion).toBe(24);
       expect(store.getWorkflowDraft("not-created")).toBeUndefined();
       store.close();
     } finally {
@@ -2314,7 +2318,7 @@ describe("append-only migrations", () => {
     const databasePath = join(directory, "bpa.sqlite3");
     try {
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(23);
+      expect(store.health().schemaVersion).toBe(24);
       store.close();
       const raw = new Database(databasePath);
       raw

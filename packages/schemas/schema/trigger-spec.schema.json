@@ -38,6 +38,16 @@
     "input": { "type": "object" },
     "concurrencyKey": { "type": "string", "minLength": 1, "maxLength": 256 },
     "browserInstanceId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "externalDomainLease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerId", "resourceId", "ttlSeconds"],
+      "properties": {
+        "providerId": { "const": "inventory-postgres" },
+        "resourceId": { "const": "inventory-production-cycle" },
+        "ttlSeconds": { "const": 300 }
+      }
+    },
     "idempotencyPolicy": { "enum": ["occurrence", "dataset_version", "request_key"] },
     "retryPolicy": { "const": "none" },
     "missedRunPolicy": { "enum": ["skip", "run_once", "bounded_catch_up"] },

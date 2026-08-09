@@ -12,8 +12,15 @@ import type {
 } from "./repository.js";
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
+const DOMAIN_LEASE_KEY = "inventory-production-cycle";
+const MIN_DOMAIN_LEASE_TTL_SECONDS = 5;
+const MAX_DOMAIN_LEASE_TTL_SECONDS = 3_600;
 const OPERATIONS = [
   "health.read",
+  "domain-lease.acquire",
+  "domain-lease.renew",
+  "domain-lease.release",
+  "domain-lease.read",
   "sales-demand.sync",
   "sales-demand.recent.persist",
   "inventory.snapshot.persist",
@@ -53,6 +60,24 @@ function lease(value: unknown): LeaseFence {
     holderId:text(candidate.holderId,"lease.holderId",500),
     fencingToken
   };
+}
+
+function domainLeaseKey(value: unknown): string {
+  const valueText = text(value,"leaseKey",500);
+  if (valueText !== DOMAIN_LEASE_KEY) throw new Error("DOMAIN_LEASE_KEY_NOT_ALLOWED");
+  return valueText;
+}
+
+function domainLeaseTtl(value: unknown): number {
+  const ttlSeconds = Number(value);
+  if (
+    !Number.isSafeInteger(ttlSeconds) ||
+    ttlSeconds < MIN_DOMAIN_LEASE_TTL_SECONDS ||
+    ttlSeconds > MAX_DOMAIN_LEASE_TTL_SECONDS
+  ) {
+    throw new Error("DOMAIN_LEASE_TTL_INVALID");
+  }
+  return ttlSeconds;
 }
 
 function response(socket: Socket, value: unknown): void {
@@ -182,13 +207,45 @@ export class InventoryServiceProtocol {
     const operation = text(parsed.operation, "request.operation", 100) as Operation;
     if (!OPERATIONS.includes(operation)) throw new Error("OPERATION_NOT_ALLOWED");
     const input = record(parsed.input, "request.input");
-    const writeFence = operation === "health.read" || operation === "inventory.forecast-input.read"
-      ? undefined
-      : lease(input.lease);
-    if (writeFence) await this.repository.assertLease(writeFence);
+    const writeFence = operation === "sales-demand.sync" ||
+      operation === "sales-demand.recent.persist" ||
+      operation === "inventory.snapshot.persist" ||
+      operation === "inventory.forecast.persist" ||
+      operation === "inventory.risk.persist"
+      ? lease(input.lease)
+      : undefined;
     let result: unknown;
     if (operation === "health.read") {
       result = await this.repository.health();
+    } else if (operation === "domain-lease.acquire") {
+      result = await this.repository.acquireDomainLease({
+        leaseKey:domainLeaseKey(input.leaseKey),
+        requestId:text(input.requestId,"requestId",200),
+        holderId:text(input.holderId,"holderId",500),
+        ttlSeconds:domainLeaseTtl(input.ttlSeconds)
+      });
+    } else if (operation === "domain-lease.renew") {
+      result = await this.repository.renewDomainLease({
+        leaseKey:domainLeaseKey(input.leaseKey),
+        holderId:text(input.holderId,"holderId",500),
+        fencingToken:lease({
+          leaseKey:input.leaseKey,
+          holderId:input.holderId,
+          fencingToken:input.fencingToken
+        }).fencingToken,
+        ttlSeconds:domainLeaseTtl(input.ttlSeconds)
+      });
+    } else if (operation === "domain-lease.release") {
+      result = await this.repository.releaseDomainLease({
+        ...lease({
+          leaseKey:input.leaseKey,
+          holderId:input.holderId,
+          fencingToken:input.fencingToken
+        }),
+        leaseKey:domainLeaseKey(input.leaseKey)
+      });
+    } else if (operation === "domain-lease.read") {
+      result = await this.repository.readDomainLease(domainLeaseKey(input.leaseKey)) ?? null;
     } else if (operation === "sales-demand.sync") {
       if (!this.salesSync) throw new Error("MYSQL_SOURCE_NOT_CONFIGURED");
       const requestedShop = {
@@ -204,12 +261,12 @@ export class InventoryServiceProtocol {
       if (this.configuredShops.length === 0) throw new Error("SHOP_IDENTITY_NOT_CONFIGURED");
       const snapshot = record(input.snapshot,"snapshot") as unknown as PersistableDoudianSnapshot;
       const configuredShop = this.configuredShop(snapshot.shop.id, snapshot.shop.name);
-      result = await this.repository.persistSnapshot({ ...snapshot,shop:configuredShop });
+      result = await this.repository.persistSnapshot({ ...snapshot,shop:configuredShop },writeFence!);
     } else if (operation === "sales-demand.recent.persist") {
       if (this.configuredShops.length === 0) throw new Error("SHOP_IDENTITY_NOT_CONFIGURED");
       const snapshot = record(input.snapshot,"snapshot") as unknown as PersistableRecentOrders;
       const configuredShop = this.configuredShop(snapshot.shop.id, snapshot.shop.name);
-      result = await this.repository.persistRecentOrders({ ...snapshot,shop:configuredShop });
+      result = await this.repository.persistRecentOrders({ ...snapshot,shop:configuredShop },writeFence!);
     } else if (operation === "inventory.forecast-input.read") {
       result = await this.repository.forecastInputs({
         shopId: text(input.shopId, "shopId", 200),
@@ -225,7 +282,7 @@ export class InventoryServiceProtocol {
           merchantCode: text(input.merchantCode, "merchantCode", 200),
           sourceDataset: record(input.sourceDataset, "sourceDataset") as { id: string; version: string },
           forecast: record(input.forecast, "forecast") as unknown as DemandForecast
-        })
+        },writeFence!)
       };
     } else {
       result = await this.repository.persistRisk({
@@ -233,7 +290,7 @@ export class InventoryServiceProtocol {
         shopId: text(input.shopId, "shopId", 200),
         productId: text(input.productId, "productId", 200),
         evaluation: record(input.evaluation, "evaluation") as unknown as InventoryRiskEvaluation
-      });
+      },writeFence!);
     }
     return { ok: true, id, result };
   }

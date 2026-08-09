@@ -340,9 +340,29 @@ Core 竞态下错误释放有效控制权。正式部署前仍必须完成旧控
 导致声明 `additionalProperties: false` 的清退、体验分和库存 Workflow 在 Run 创建前全部
 被阻断。当前候选已移除这项输入污染：occurrence 与 Dataset 血缘只保留在不可变
 Trigger Run，Workflow 只接收其已冻结业务输入。候选同时用同一 Browser Session 依次
-走通清退商品 `2.0.1`、体验分 `2.0.0`、库存 `1.0.0` 的 Trigger、资源绑定、IR2、Provider、
+走通清退商品 `2.0.1`、体验分 `2.0.0`、库存 `2.0.0` 的 Trigger、资源绑定、IR2、Provider、
 终态与租约释放，并把普通单店失败改为 `collect` 后聚合为 `uncertain + partial`；登录、
 验证码和风控的 `rejected` 仍立即终止。该测试不启动 Chrome，不等于真实登录页 E2E。
+
+2026-08-10 的库存正式化候选新增 Schema v24 与 Core-owned external domain lease。声明库存
+外部租约的 Trigger 先持久 acquisition intent，再以同一 request ID 向库存 PostgreSQL
+Provider 幂等申请 `inventory-production-cycle`；租约忙时 occurrence 保持 deferred 且不创建
+Attempt。远端 grant、TriggerAttempt 与 Workflow Run 绑定后，`inventory.snapshot.persist@2`
+才允许由 Core 内 `inventory-data` Provider 派发。Workflow 输入已删除 lease，fencing token
+只从 Run 绑定的可信上下文注入库存 UDS；PostgreSQL 每个库存写事务在同一连接先以
+`SELECT ... FOR UPDATE` 校验 owner、token 和数据库时钟，再提交幂等账本与业务事实，关闭
+了“先校验、后换事务写入”的 stale-owner 窗口。租约丢失或写入响应不确定时 Run 进入
+`uncertain + reconciliation_required`，不得自动重试；Run 终态后按“远端 release → 本地
+released → Attempt/Occurrence terminal”收口。Core 重启后必须先远端 read 验证同一 owner
+和 token，才能恢复派发；Core 时钟跳变不能延长 PostgreSQL 租期。
+
+这一候选目前只完成单店库存 snapshot 纵切与本机 fixture E2E，不包含 13 店 orders、
+forecast、risk 顶层编排，也没有部署到公司 Mac。旧 `refresh-once` 和已停用 scheduler 的
+源码、测试、launchd 入口已按无兼容层原则删除；现网 serialized `production-cycle.ts`
+仍保留到正式 13 店 Workflow、真实登录 canary 与无中断切换完成。多分片
+`sales-demand.sync` 仍可能在部分 chunk 已提交后才失去租约，因此在替换 Team 写入路径并
+把该情况统一为 uncertain/reconciliation 之前，不得纳入新 Trigger，也不得声称库存正式化
+已经完成。
 
 Schema v22 已随 PR #24 把体验分的“已持久化”从聚合文案改成可审计事实：每店页面读取后，
 由 Core 内 `experience-data` Provider 立即写入 Run 级不可变 Operational Fact；业务日固定

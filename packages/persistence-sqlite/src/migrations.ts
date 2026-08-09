@@ -1864,5 +1864,73 @@ export const migrations: Migration[] = [
         ON trigger_attempts(workflow_run_id)
         WHERE workflow_run_id IS NOT NULL;
     `
+  },
+  {
+    version: 24,
+    sql: `
+      CREATE TABLE external_domain_leases (
+        request_id TEXT PRIMARY KEY,
+        provider_id TEXT NOT NULL,
+        domain_key TEXT NOT NULL,
+        occurrence_id TEXT NOT NULL
+          REFERENCES trigger_occurrences(occurrence_id) ON DELETE RESTRICT,
+        proposed_owner_id TEXT NOT NULL,
+        trigger_attempt_id TEXT UNIQUE
+          REFERENCES trigger_attempts(attempt_id) ON DELETE RESTRICT,
+        workflow_run_id TEXT UNIQUE
+          REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        state TEXT NOT NULL CHECK (state IN (
+          'acquiring', 'bound', 'reconciliation_required', 'released'
+        )),
+        revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+        fencing_token INTEGER
+          CHECK (fencing_token IS NULL OR fencing_token >= 1),
+        server_now TEXT,
+        expires_at TEXT,
+        diagnostic TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        reconciliation_required_at TEXT,
+        released_at TEXT,
+        CHECK (
+          (fencing_token IS NULL AND server_now IS NULL AND expires_at IS NULL)
+          OR
+          (fencing_token IS NOT NULL AND server_now IS NOT NULL
+            AND expires_at IS NOT NULL)
+        ),
+        CHECK (
+          (state = 'acquiring'
+            AND fencing_token IS NULL
+            AND reconciliation_required_at IS NULL
+            AND released_at IS NULL)
+          OR
+          (state = 'bound'
+            AND fencing_token IS NOT NULL
+            AND reconciliation_required_at IS NULL
+            AND released_at IS NULL)
+          OR
+          (state = 'reconciliation_required'
+            AND reconciliation_required_at IS NOT NULL
+            AND released_at IS NULL)
+          OR
+          (state = 'released' AND released_at IS NOT NULL)
+        ),
+        CHECK (
+          (trigger_attempt_id IS NULL AND workflow_run_id IS NULL)
+          OR
+          (trigger_attempt_id IS NOT NULL AND workflow_run_id IS NOT NULL)
+        )
+      ) STRICT;
+
+      CREATE UNIQUE INDEX external_domain_leases_active_domain
+        ON external_domain_leases(provider_id, domain_key)
+        WHERE state != 'released';
+      CREATE UNIQUE INDEX external_domain_leases_active_occurrence
+        ON external_domain_leases(occurrence_id)
+        WHERE state != 'released';
+      CREATE INDEX external_domain_leases_recovery
+        ON external_domain_leases(state, expires_at, updated_at, request_id)
+        WHERE state != 'released';
+    `
   }
 ];

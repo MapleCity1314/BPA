@@ -19,6 +19,11 @@ export type BPATriggerSpecV1Alpha2 = {
   };
   concurrencyKey: string;
   browserInstanceId?: string;
+  externalDomainLease?: {
+    providerId: "inventory-postgres";
+    resourceId: "inventory-production-cycle";
+    ttlSeconds: 300;
+  };
   idempotencyPolicy: "occurrence" | "dataset_version" | "request_key";
   retryPolicy: "none";
   missedRunPolicy?: "skip" | "run_once" | "bounded_catch_up";
