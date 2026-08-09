@@ -36,6 +36,7 @@ export interface PublicRecoverySession {
 
 export interface IssueRecoverySessionRequest {
   attentionId: string;
+  expectedAttentionRevision: number;
   requestedBy: string;
   browserSessionId: string;
   browserInstanceId: string;
@@ -134,6 +135,7 @@ export class RecoverySessionService {
     if (
       !attention ||
       attention.state !== "open" ||
+      attention.revision !== input.expectedAttentionRevision ||
       !attention.item.blocking ||
       attention.item.groupKey !== "authentication"
     ) {

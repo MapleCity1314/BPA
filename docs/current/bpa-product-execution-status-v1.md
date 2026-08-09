@@ -8,8 +8,8 @@
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- Git 基线：截至 2026-08-09，PR #2–#16 均已在 required checks 通过后进入 `main`；
-  最新基线为 PR #16 merge commit `5eab19a80644`。阶段 0 结构收敛、资源观测、清退商品
+- Git 基线：截至 2026-08-09，PR #2–#17 均已在 required checks 通过后进入 `main`；
+  最新基线为 PR #17 merge commit `bfdab31ed135`。阶段 0 结构收敛、资源观测、清退商品
   Mac 目标约束、爆款图片来源闭包校验和体验分候选均已进入主线。
 - GitHub `main` 已启用管理员同样受约束的 Branch Protection：必须走 Pull Request、
   与主线同步、解决 review conversation，并通过 macOS、Windows、性能、双架构发布、
@@ -40,8 +40,9 @@
 Attention 与终态写入同一事务，增加 open/acknowledged、revision CAS、确认审计和重启恢复；
 缺少 Attention 的问题终态会整体回滚。Schema v17 Delivery Outbox、保守投递状态机和面板
 对账已进入主线；独立飞书通知 Adapter 与严格 `0600` 配置加载也已通过 PR #16 进入主线，
-但尚未配置真实 Channel。Schema v18 Recovery Session 持久状态机正在候选分支开发；手机
-推送生产验收、控制台远程操作通道和公司 Mac 灰度仍未完成，不能据此宣称无人值守成立。
+但尚未配置真实 Channel。Schema v18 Recovery Session 持久状态机已进入主线；仅本机
+Console Host 的 CSRF 恢复入口与浏览器断线立即失效正在候选分支开发。手机推送生产验收、
+远程受限页面通道和公司 Mac 灰度仍未完成，不能据此宣称无人值守成立。
 实施顺序与共享 Chrome 资源边界见
 `docs/plans/bpa-stage-one-unattended-operations-v0.1.md`。
 

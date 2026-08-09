@@ -7,10 +7,12 @@ import type {
   DesignModeGrantView,
   DownloadView,
   EvidenceLineageView,
+  RecoverySessionView,
   RunView,
   StagingLease,
   StagingLeaseRequest,
   StagedDatasetImportInput,
+  StartRecoverySessionInput,
   SubmitTaskInput,
   TaskView,
   UploadReceipt,
@@ -26,6 +28,17 @@ export interface OperatorConsoleApi {
   listTasks(): Promise<TaskView[]>;
   submitTask(taskId: string, input: SubmitTaskInput): Promise<void>;
   acknowledgeAttention(id: string, expectedRevision: number): Promise<void>;
+  startRecoverySession(
+    input: StartRecoverySessionInput
+  ): Promise<RecoverySessionView>;
+  completeRecoverySession(
+    id: string,
+    expectedRevision: number
+  ): Promise<RecoverySessionView>;
+  revokeRecoverySession(
+    id: string,
+    expectedRevision: number
+  ): Promise<RecoverySessionView>;
   importDataset(
     file: File,
     input: Omit<StagedDatasetImportInput, "upload">
@@ -141,6 +154,36 @@ export class HttpOperatorConsoleApi implements OperatorConsoleApi {
   async acknowledgeAttention(id: string, expectedRevision: number) {
     await this.#request(
       `/api/attention/${encodeURIComponent(id)}/acknowledge`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expectedRevision })
+      },
+      true
+    );
+  }
+
+  startRecoverySession(input: StartRecoverySessionInput) {
+    return this.#request<RecoverySessionView>(
+      "/api/recovery-sessions",
+      { method: "POST", body: JSON.stringify(input) },
+      true
+    );
+  }
+
+  completeRecoverySession(id: string, expectedRevision: number) {
+    return this.#request<RecoverySessionView>(
+      `/api/recovery-sessions/${encodeURIComponent(id)}/complete`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expectedRevision })
+      },
+      true
+    );
+  }
+
+  revokeRecoverySession(id: string, expectedRevision: number) {
+    return this.#request<RecoverySessionView>(
+      `/api/recovery-sessions/${encodeURIComponent(id)}/revoke`,
       {
         method: "POST",
         body: JSON.stringify({ expectedRevision })

@@ -138,6 +138,7 @@ function seed(path = ":memory:"): SqlitePersistence {
 function request() {
   return {
     attentionId,
+    expectedAttentionRevision: 0,
     requestedBy: "operator:test",
     browserSessionId: "browser-session-recovery",
     browserInstanceId: "managed-doudian-profile",
@@ -429,6 +430,45 @@ describe("RecoverySessionService", () => {
     }
   });
 
+  it("invalidates immediately and releases the fence when the browser disconnects", () => {
+    const persistence = seed();
+    const service = new RecoverySessionService(
+      persistence,
+      () => issuedAt,
+      () => "recovery-disconnect",
+      () => "one-time-token-with-at-least-thirty-two-bytes"
+    );
+    service.issue(request());
+
+    persistence.updateBrowserSession({
+      id: "browser-session-recovery",
+      disconnectedAt: "2026-08-09T08:00:05.000Z"
+    });
+
+    expect(persistence.getRecoverySession("recovery-disconnect")).toMatchObject({
+      state: "invalidated",
+      revision: 1,
+      terminalReason: "RECOVERY_BROWSER_DISCONNECTED"
+    });
+    expect(
+      persistence.acquireBrowserControlLease({
+        resourceId: "browser-instance:managed-doudian-profile",
+        ownerId: "workflow:after-disconnect",
+        now: "2026-08-09T08:00:06.000Z",
+        ttlSeconds: 120
+      })
+    ).toMatchObject({ ownerId: "workflow:after-disconnect", fencingToken: 2 });
+    expect(
+      persistence
+        .listAudit("recovery-session:recovery-disconnect")
+        .map((record) => record.action)
+    ).toEqual([
+      "recovery-session.issued",
+      "recovery-session.invalidated"
+    ]);
+    persistence.close();
+  });
+
   it("rejects non-authentication Attention, profile aliases and non-HTTPS origins", () => {
     const persistence = seed();
     const service = new RecoverySessionService(
@@ -438,6 +478,9 @@ describe("RecoverySessionService", () => {
       () => "one-time-token-with-at-least-thirty-two-bytes"
     );
 
+    expect(() =>
+      service.issue({ ...request(), expectedAttentionRevision: 1 })
+    ).toThrow("RECOVERY_ATTENTION_NOT_ELIGIBLE");
     expect(() =>
       service.issue({ ...request(), profileId: "another-profile" })
     ).toThrow("RECOVERY_PROFILE_BINDING_INVALID");

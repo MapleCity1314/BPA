@@ -2,6 +2,7 @@ import type {
   ControlBackend,
   CreateRunInput,
   DesignModeGrantInput,
+  StartRecoverySessionInput,
   StagingLeaseRequest,
   StagedDatasetImportInput,
   SubmitTaskInput
@@ -28,6 +29,7 @@ export class UnavailableControlBackend implements ControlBackend {
       ],
       browserSessions: [],
       alerts: [],
+      recoverySessions: [],
       activeRunCount: 0,
       pendingTaskCount: 0
     };
@@ -54,6 +56,18 @@ export class UnavailableControlBackend implements ControlBackend {
   }
 
   async acknowledgeAttention(_id: string, _expectedRevision: number) {
+    return unavailable();
+  }
+
+  async startRecoverySession(_input: StartRecoverySessionInput) {
+    return unavailable();
+  }
+
+  async completeRecoverySession(_id: string, _expectedRevision: number) {
+    return unavailable();
+  }
+
+  async revokeRecoverySession(_id: string, _expectedRevision: number) {
     return unavailable();
   }
 

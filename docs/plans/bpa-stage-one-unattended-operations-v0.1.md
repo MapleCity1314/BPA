@@ -92,7 +92,7 @@ attempt、短租约、明确成功、明确失败或 `uncertain`；投递中的�
 Recovery Session 不暴露 DevTools、文件系统、任意 URL 导航或凭证导出；风控仍然可以
 拒绝恢复，且拒绝结果继续进入 Attention。
 
-Schema v18 候选已实现其中的持久安全内核：只允许 open、blocking、authentication
+Schema v18 已进入主线并实现其中的持久安全内核：只允许 open、blocking、authentication
 Attention 创建 Session；一次性令牌只返回一次，SQLite 仅保存 SHA-256 摘要；Session
 精确绑定 Browser Session、`browserInstanceId`、当前托管 Profile、Tab、HTTPS Origin
 和初始 `pageEpoch`，有效期限制为 1–15 分钟。创建 Session 与取得
@@ -102,9 +102,12 @@ Attention 创建 Session；一次性令牌只返回一次，SQLite 仅保存 SHA
 `ready + authenticated`，然后释放租约并记录审计。令牌不能重复激活，过期、撤销、绑定
 漂移均为终态；完成恢复不会改写旧 Run 或自动确认 Attention。
 
-该候选尚未开放 Console Host 路由、手机远程画面或浏览器操作协议，也未部署。下一层只
-允许固定的“查看同一标签页、提交键鼠输入、完成/撤销”能力；任意导航、DevTools、文件
-选择和剪贴板导出继续禁止。
+当前候选将其接入现有仅监听 `127.0.0.1` 的 Console Host：恢复开始、完成和撤销均要求
+现有一次性启动令牌换取的 HttpOnly Session、同源检查与 CSRF；Console Backend 内部完成
+令牌签发与激活，不把一次性令牌交给前端。浏览器断线会在同一持久事务将 issued/active
+Session 置为 invalidated、释放原控制租约并写审计。该层仍不是手机远程入口，也不提供
+页面画面或键鼠控制；远程层只允许固定的同标签页查看、输入、完成/撤销能力，任意导航、
+DevTools、文件选择和剪贴板导出继续禁止。
 
 ## 6. 多工作流共用 Chrome 的性能形态
 

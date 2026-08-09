@@ -951,6 +951,7 @@ export class LocalCoreService {
       case "recovery-session.issue":
         return this.recoverySessions.issue({
           attentionId: String(params.attentionId),
+          expectedAttentionRevision: Number(params.expectedAttentionRevision),
           requestedBy: String(params.actor || userInfo().username),
           browserSessionId: String(params.browserSessionId),
           browserInstanceId: String(params.browserInstanceId),
