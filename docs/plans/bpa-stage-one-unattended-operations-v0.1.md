@@ -131,7 +131,7 @@ PR #19 已把这项边界下沉到 Trigger Runtime：凡 TriggerSpec 声明
 fencing token 持久化到 Schema v19 的 Trigger Run；运行期间与业务并发租约一起续租，
 Workflow Run 创建与 Trigger Run 关联在一个事务中提交，终态再一起释放两把租约。
 浏览器控制租约已被库存、另一条 Trigger 或 Recovery Session 持有时，
-PR #19 的 occurrence 会直接 `skipped`。当前 Schema v20 候选已把逻辑 Occurrence 与
+Schema v20 已随 PR #22 进入主线，把逻辑 Occurrence 与
 execution Attempt 分表：租约忙只写持久 `deferred + nextAttemptAt`，不创建 Attempt、
 不启动额外浏览器；释放后由同一 Mac Trigger Runtime 继续竞争。fixture 使用库存、清退商品、
 体验分三个不同业务并发键和同一浏览器实例，证明任一时刻只有一个 Run 能进入浏览器阶段。
@@ -141,13 +141,114 @@ v1alpha2 候选还把积压限制为每 tick 最多 1000 个 occurrence，并在
 终态后租约释放且实例记录不增长；它仍是 Provider fixture，真实页面、标签页上限和 Chrome
 进程数仍需后续本机浏览器 E2E 验收。
 
-Schema v21 候选继续补齐计划层问题面：没有 Workflow Run 的
+Schema v21 已随 PR #23 进入主线，继续补齐计划层问题面：没有 Workflow Run 的
 `blocked/failed/missed/skipped` 与 dashboard-only Attention 原子提交，已有 Workflow Run
 的终态只保留 Run Attention，避免重复通知；旧版 Workflow 的 Trigger 调用在任何 Run 写入
 前拒绝，不能留下孤儿 Run。库存指挥台按 `appId=inventory-monitor` 只读这些 Attention，
 不写库存数据库、不确认、不恢复、不投递，也不弹浏览器桌面通知。Core 或响应契约不可读时
 面板 fail-closed，明确显示“BPA 触发状态暂不可读”。Schema 20 Attention 控制面非空时
 Schema 21 拒绝升级并保持原库，部署前必须走导出、退役和空库门禁。
+
+PR #24 进一步固定 Browser 交付闭包：浏览器命令、资源绑定和 dispatch 都要求精确的
+Node 与 Adapter id/version/digest，并校验 Extension 最低版本；手动 `run.create` 与
+`run.node.create` 不得绕过 Trigger 直接启动 browser-bound Run。失去 Browser Control
+Lease 的 Trigger 必须先持久取消已关联 Run，再收口 Attempt；取消路由从冻结的 Run
+Resource Binding Snapshot 恢复，不依赖已经清空的活动 checkpoint。该层已通过 fixture、
+协议与对抗测试，但尚未部署。
+
+### 6.1 进程所有权与并行边界
+
+以下是“常驻 Core + 单共享 Chrome”的灰度候选，不是已经越过阶段 0 的 normative 长期决定。
+它先排除“每条 Workflow 一个常驻进程”，候选进程形态为：
+
+| 组件 | 生命周期 | 数量上限 | 所有权 |
+| --- | --- | --- | --- |
+| Local Core | launchd 常驻 | 1 | 唯一 Trigger、Run、Lease、Browser Gateway 与事实控制面 |
+| Inventory Monitor | launchd 常驻 | 1 | 库存领域 API 与指挥台；不拥有浏览器调度 |
+| 受管 Chrome | launchd 常驻 | 每个安全隔离域 1；当前抖店为 1 | 一个 Profile、一个 `browserInstanceId`、一个 Extension 闭包 |
+| Team Worker | Core 首次需要时懒启动并复用 | 首次调用前 0；warm idle 与 active 合计最多 1 | Core 子进程；不得按 Node 重复 spawn；当前没有 idle TTL |
+| Native Host | Extension 连接期 | 每个受管 Extension 连接 1 | 只承载协议，不拥有 Workflow 生命周期 |
+| Console Host | 操作员会话期 | 0 或 1 | 本地/远程控制面，不执行浏览器业务 |
+
+浏览器按需还是常驻，仍须用同一 Profile 的 24 小时资源曲线、重连次数和登录稳定性做对比后
+决定；在该证据闭合前，只能说当前公司形态和本次灰度候选使用 launchd 常驻 Chrome。
+
+Chrome Extension service worker 可能被浏览器回收并重建；长期保证的是可恢复的
+Session/Resume/Observation 协议，不把“JavaScript 背景页永远常驻”当成产品前提。
+
+当前 Trigger Runtime 对 browser-bound Workflow 在整个 Run 生命周期持有
+`browser-instance:<id>` 租约，而不是在最后一个 Browser Node 后提前释放。阶段 1 先保留
+这个保守边界：同一抖店 Profile 的 browser-bound Run 全程串行。纯 HTTP、SQLite、文件、
+计算和 Delivery Workflow 的有界 provider lane 是目标边界，当前 `drainOnce` 仍按全局顺序
+逐个等待 outbox，不得把“没有 Browser Lease”误报成已经并行。只有在 24 小时和 7 天证据
+证明队列等待成为真实 SLO 瓶颈后，才单独评审 provider lane 或 phase-level resource lease；
+不得在本轮用隐式提前释放换吞吐。
+
+### 6.2 资源预算与灰度停止线
+
+以下是公司 Mac 灰度的候选停止线，不是已经通过的生产 SLO。基线取灰度前同一版本、同一
+Profile 连续 30 分钟 idle 样本；所有 RSS 都按完整 Chrome Profile 进程树统计：
+
+| 指标 | 通过条件 | 立即停止灰度 |
+| --- | --- | --- |
+| Chrome 实例/Profile/Session | 始终 1/1/1；断线恢复替换旧 Session，不叠加 | 出现第二个受管抖店实例或两个 ready Session |
+| 受管标签页 | 观测目标为稳态 1、跨域临时页最多 2；硬拒绝门尚待实现 | 连续 3 个样本超过 2，或业务详情页无界增长 |
+| Chrome 进程树 | p95 不超过 idle 基线进程数 +2 | 峰值超过基线 +4 且 15 分钟不回落 |
+| Chrome RSS | 24h p95 不超过参考窗口 + max(128 MiB, 15%)；结束后 15 分钟中位数回到运行前 + max(64 MiB, 10%) | 连续 3 个 60 秒样本超过 2 GiB |
+| Core / Inventory RSS | 各自 24h p95 不超过参考窗口 + max(16 MiB, 10%) | Core 连续 3 个样本超过 384 MiB，或任一服务命中稳定性增长门禁 |
+| BPA 总进程树 RSS | 24h p95 不超过参考窗口 + max(192 MiB, 15%) | 无同机参考窗口，或业务结束后 15 分钟仍持续增长 |
+| Team Worker | 首次调用前为 0；启动后 warm idle/active 合计最多 1 | 同时出现 2 个，或 Core 停止后仍残留 |
+| Browser Control | 同一 `browserInstanceId` 最多 1 个有效 owner | 重叠 owner、fencing 漂移或手动 Run 绕过 Trigger |
+
+现有单点证据约为 Core 195 MiB、库存服务 32 MiB、Chrome Profile 11 个进程/1.23 GiB；
+它只用于设置灰度保护线，不证明稳定。正式结论仍必须由 60 秒采样、完整 page cache、24 小时
+窗口和 7 天稳定性门禁给出。Chrome 启动参数中的远程调试与三个反后台节流开关属于历史
+库存入口；在证明没有旧 CDP 消费者前不得直接删除，证明后应作为独立 canary 逐项退出。
+
+灰度顺序固定为：只观察基线 → 新闭包但 Trigger 全禁用 → 精确 Extension build、单 Profile
+进程树、单 ready Session 与空租约 preflight → 体验分单 Workflow → 清退商品 → 库存。
+任一阶段只允许一个控制面。业务回退默认在同一新闭包内禁用新 Trigger、恢复已验证的旧业务
+入口；二进制回退只允许目标 Runtime 与当前 Schema 兼容且新闭包尚无业务写。不得把前向
+Schema 降级描述成可恢复旧二进制，也不得复制登录态。
+
+### 6.3 进入公司 Mac 灰度前的工程硬缺口
+
+1. **安装维护门**：installer 在停止 Core 前必须证明没有 active Run、Trigger Attempt、
+   Browser/Recovery Lease 或正在写入的业务任务；只取得 maintenance lock 不等于业务已 drain。
+2. **Chrome source-to-closure**：当前 `com.bpa.inventory-chrome.plist` 仍是库存仓库资产，
+   不在 Runtime Closure/installer 所有权内，且包含硬编码 Profile、Extension 路径、CDP 与
+   反后台节流参数。正式唯一控制面必须把受管 Chrome launch agent 配置、精确 Extension
+   路径、Profile 身份和回读校验纳入签名闭包。
+3. **标签页硬上限**：Extension 目前只在命令结束或启动恢复时回收归属子标签页；必须在
+   创建临时页前拒绝超过上限，并把当前归属页数量写入脱敏运行指标。
+4. **有界内存结构**：Extension 的 pacing/cancel/probe generation 集合与 Core 的 page
+   probe 请求表必须有 TTL、容量上限和 size 指标；24 小时窗口前先通过增长反例。
+5. **单连接重连**：Extension 到 Native Host 的 connect 需要 generation/in-flight guard、
+   有上限退避和旧 Port 回调隔离；覆盖 onDisconnect 与连接异常同时发生的对抗测试。
+6. **并行 lane 决策**：第一版不实现 provider 并行。若后续引入，必须按 provider/资源声明
+   有界并发，SQLite 写、同 Dataset/Run 终态与同外部 Effect 仍串行，不开通自由 Promise 并发。
+7. **进程退出所有权**：Core 必须跟踪并关闭 Control Socket 的现有长连接；Node Runtime
+   Registry 必须 dispose Team Worker。否则 launchd 更新可能等待 Native Host，或遗留 worker。
+8. **采样可见性**：现有采集器还不统计 Native Host、Team Worker、短命 Node 子进程、
+   V8 heap、event-loop lag、标签页、Gateway 队列和常驻 Map size。常驻灰度前必须补这些角色
+   指标和 Run terminal 后 15 分钟 quiescence marker。
+9. **入口清退**：旧 source/tsx launchd、Inventory Scheduler 模式与签名闭包 Core 不能并存。
+   灰度前选定签名闭包为唯一 Core；legacy recovery 仍会按步骤启动短命 Node 子进程，只有
+   正式库存 Workflow 接管后，per-step Node spawn 才能归零。
+
+候选 Profile 状态机固定为：
+
+```text
+DISABLED → STARTING → BRIDGE_PENDING → IDLE_AUTHENTICATED
+                                      ├→ TRIGGER_LEASED → RUNNING → POST_BROWSER_DRAIN → IDLE_AUTHENTICATED
+                                      ├→ RECOVERY_LEASED → HUMAN_RECOVERY → IDLE_AUTHENTICATED
+                                      └→ AUTH_REQUIRED
+          ↘ DISCONNECTED → QUARANTINED → MAINTENANCE
+```
+
+Schedule 与 Manual 都必须先形成持久 Trigger Occurrence；Recovery 与 Workflow 互斥；断线时
+不启动第二个 Chrome，恢复后必须取得新鲜 Observation。旧 launchd、CDP、WorkBuddy 与人工
+点击不服从 BPA Lease，灰度前必须清退，或在唯一变更窗口内明确停用。
 
 ## 7. 实施顺序与门禁
 
