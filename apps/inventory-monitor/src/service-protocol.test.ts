@@ -5,6 +5,7 @@ import { createConnection } from "node:net";
 import { resolveLocalIpcEndpoint } from "@bpa/platform-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { InventoryServiceProtocol } from "./service-protocol.js";
+import { SalesDemandPartialCommitError } from "./mysql-source.js";
 
 async function request(socketPath: string, value: unknown): Promise<Record<string, unknown>> {
   return new Promise((resolve,reject) => {
@@ -103,5 +104,129 @@ describe("inventory service protocol", () => {
     await expect(server.handle(frame("c","domain-lease.renew",{
       leaseKey:"inventory-production-cycle",holderId:"run:1",fencingToken:7,ttlSeconds:4
     }))).rejects.toThrow("DOMAIN_LEASE_TTL_INVALID");
+  });
+
+  it("marks a sales-demand transport failure after a persisted chunk as uncertain", async () => {
+    const directory = await mkdtemp(join(tmpdir(),"bpa-inventory-sync-test-"));
+    const socketPath = process.platform === "win32"
+      ? resolveLocalIpcEndpoint(directory,"inventory-sync","win32")
+      : join(directory,"inventory.sock");
+    const persistedChunks:string[] = [];
+    const salesSync = {
+      sync:vi.fn(async () => {
+        persistedChunks.push("chunk-1");
+        throw new SalesDemandPartialCommitError(
+          { committedChunks:1,committedRows:5_000 },
+          "ORDER_SUBMITTED_AT_INVALID"
+        );
+      })
+    };
+    const server = new InventoryServiceProtocol(
+      socketPath,{} as never,salesSync as never,
+      { id:"shop-1",name:"一号店" }
+    );
+    await server.start();
+    try {
+      await expect(request(socketPath,{
+        id:"sync-1",operation:"sales-demand.sync",input:{
+          shopId:"shop-1",shopName:"一号店",
+          lease:{
+            leaseKey:"inventory-production-cycle",
+            holderId:"trigger-attempt:test",
+            fencingToken:7
+          }
+        }
+      })).resolves.toMatchObject({
+        ok:false,
+        error:{ code:"SALES_DEMAND_PARTIAL_COMMIT",outcomeUncertain:true }
+      });
+      expect(persistedChunks).toEqual(["chunk-1"]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("preserves PostgreSQL SQLSTATE on an uncertain write response", async () => {
+    const directory = await mkdtemp(join(tmpdir(),"bpa-inventory-pg-test-"));
+    const socketPath = process.platform === "win32"
+      ? resolveLocalIpcEndpoint(directory,"inventory-pg","win32")
+      : join(directory,"inventory.sock");
+    const repository = {
+      persistSnapshot:vi.fn(async () => {
+        throw Object.assign(new Error("connection terminated"),{ code:"57P01" });
+      })
+    };
+    const server = new InventoryServiceProtocol(
+      socketPath,repository as never,undefined,
+      { id:"shop-1",name:"一号店" }
+    );
+    await server.start();
+    try {
+      await expect(request(socketPath,{
+        id:"pg-1",operation:"inventory.snapshot.persist",input:{
+          lease:{
+            leaseKey:"inventory-production-cycle",
+            holderId:"trigger-attempt:test",fencingToken:7
+          },
+          snapshot:{
+            shop:{ id:"shop-1",name:"一号店" },
+            product:{ id:"80001" }
+          }
+        }
+      })).resolves.toMatchObject({
+        ok:false,error:{ code:"57P01",outcomeUncertain:true }
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("marks an uncertain shop forecast-risk product transaction in the service envelope",async () => {
+    const directory = await mkdtemp(join(tmpdir(),"bpa-inventory-risk-test-"));
+    const socketPath = process.platform === "win32"
+      ? resolveLocalIpcEndpoint(directory,"inventory-risk","win32")
+      : join(directory,"inventory.sock");
+    const repository = {
+      verifiedSnapshotFacts:vi.fn(async () => [{
+        productId:"80001",snapshotId:"snapshot:1",
+        envelope:{
+          schemaVersion:"inventory-product-fact/1.0.0",
+          observedAt:"2026-08-10T00:00:00.000Z",asOf:"2026-08-10T00:00:00.000Z",
+          scope:{ shopId:"shop-1",productId:"80001" },
+          facts:{ productId:"80001",title:"商品",totalStock:0,skus:[] },
+          quality:{ freshness:"fresh",completeness:1,mappingConfidence:"high",diagnostics:[] },
+          source:{
+            kind:"doudian.inventory.product.snapshot.read",datasetId:"inventory-snapshot:shop-1",
+            datasetVersion:"v1",digest:"sha256:snapshot"
+          }
+        }
+      }]),
+      forecastInputs:vi.fn(async () => []),
+      persistForecastRiskProduct:vi.fn(async () => {
+        throw Object.assign(new Error("connection timed out"),{ code:"ETIMEDOUT" });
+      })
+    };
+    const server = new InventoryServiceProtocol(
+      socketPath,repository as never,undefined,{ id:"shop-1",name:"一号店" }
+    );
+    await server.start();
+    try {
+      await expect(request(socketPath,{
+        id:"risk-1",operation:"inventory.shop.forecast-risk.refresh",input:{
+          shop:{ id:"shop-1",name:"一号店" },
+          attemptedSnapshots:1,persistedSnapshots:1,failedSnapshots:0,unresolvedSnapshots:0,
+          snapshotReceipts:[{ itemKey:"80001",output:{ productId:"80001",snapshotId:"snapshot:1" } }],
+          lease:{
+            leaseKey:"inventory-production-cycle",holderId:"trigger-attempt:test",fencingToken:7
+          }
+        }
+      })).resolves.toMatchObject({
+        ok:false,error:{
+          code:"INVENTORY_SHOP_FORECAST_RISK_PARTIAL_COMMIT",outcomeUncertain:true
+        }
+      });
+    } finally {
+      await server.close();
+    }
   });
 });

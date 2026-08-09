@@ -45,24 +45,6 @@ export interface PersistableDoudianSnapshot {
   readonly diagnostics?: readonly string[];
 }
 
-export interface PersistableRecentOrders {
-  readonly observedAt: string;
-  readonly shop: { readonly id: string; readonly name: string };
-  readonly records: readonly {
-    readonly childOrderId: string;
-    readonly productId: string;
-    readonly merchantCode: string;
-    readonly specification: string;
-    readonly quantity: number;
-    readonly submittedAt: string;
-    readonly paidAt?: string;
-    readonly shippedAt?: string;
-    readonly orderStatus: string;
-    readonly aftersalesStatus: string;
-  }[];
-  readonly quality: { readonly completeness: number; readonly diagnostics?: readonly string[] };
-}
-
 export interface LeaseFence {
   readonly leaseKey: string;
   readonly holderId: string;
@@ -80,6 +62,7 @@ export interface DomainLeaseStatus extends DomainLeaseGrant {
 }
 
 export interface NormalizedOrderLine {
+  readonly sourceSystem: string;
   readonly shopId: string;
   readonly shopName: string;
   readonly childOrderId: string;
@@ -215,9 +198,12 @@ export class InventoryRepository {
     const result = await this.pool.query<{ observed_at: Date; age_minutes: string }>(
       `SELECT observed_at,
               extract(epoch FROM (now()-observed_at))/60 AS age_minutes
-       FROM dataset.version WHERE dataset_id=$1
+       FROM dataset.version
+       WHERE dataset_id=$1
+         AND source_kind='ecom-profit-mysql:wdt-stockout'
+         AND lineage->>'publicationProtocol'='staged-v1'
        ORDER BY observed_at DESC LIMIT 1`,
-      [`sales-demand-recent:${shopId}`]
+      [`sales-demand-staged:${shopId}`]
     );
     const latest = result.rows[0];
     if (!latest) return { fresh:false };
@@ -744,6 +730,121 @@ export class InventoryRepository {
     });
   }
 
+  async verifiedSnapshotFacts(input: {
+    readonly shopId: string;
+    readonly receipts: readonly {
+      readonly productId: string;
+      readonly snapshotId: string;
+    }[];
+  }): Promise<readonly {
+    readonly productId: string;
+    readonly snapshotId: string;
+    readonly envelope: FactEnvelope<InventoryProductFact>;
+  }[]> {
+    if (input.receipts.length === 0) return [];
+    const snapshotIds = input.receipts.map(({ snapshotId }) => snapshotId);
+    const snapshots = await this.pool.query<{
+      snapshot_id: string;
+      dataset_id: string;
+      data_version: string;
+      source_digest: string;
+      product_id: string;
+      product_title: string;
+      total_stock: number;
+      observed_at: Date;
+      completeness: string;
+      mapping_confidence: MappingConfidence;
+      diagnostics: unknown;
+    }>(
+      `SELECT snapshot_id,dataset_id,data_version,source_digest,product_id,product_title,
+              total_stock,observed_at,completeness,mapping_confidence,diagnostics
+       FROM inventory.snapshot
+       WHERE shop_id=$1 AND snapshot_id=ANY($2::text[])`,
+      [input.shopId,snapshotIds]
+    );
+    const allowed = new Set(input.receipts.map(({ productId,snapshotId }) => `${productId}\u0000${snapshotId}`));
+    const exactSnapshots = snapshots.rows.filter((snapshot) =>
+      allowed.has(`${snapshot.product_id}\u0000${snapshot.snapshot_id}`)
+    );
+    if (exactSnapshots.length === 0) return [];
+    const exactSnapshotIds = exactSnapshots.map(({ snapshot_id }) => snapshot_id);
+    const skus = await this.pool.query<{
+      snapshot_id: string;
+      platform_sku_id: string;
+      merchant_code: string;
+      current_stock: number;
+      occupied_stock: number;
+      unoccupied_stock: number;
+      channels: unknown;
+    }>(
+      `SELECT ss.snapshot_id,ss.platform_sku_id,ss.merchant_code,
+              ss.current_stock,ss.occupied_stock,ss.unoccupied_stock,
+              COALESCE(jsonb_agg(jsonb_build_object(
+                'channelGoodsId',sc.channel_goods_id,'stock',sc.stock
+              ) ORDER BY sc.channel_goods_id) FILTER (WHERE sc.channel_goods_id IS NOT NULL),'[]'::jsonb) AS channels
+       FROM inventory.snapshot_sku ss
+       LEFT JOIN inventory.snapshot_channel sc
+         ON sc.snapshot_id=ss.snapshot_id AND sc.platform_sku_id=ss.platform_sku_id
+       WHERE ss.snapshot_id=ANY($1::text[])
+       GROUP BY ss.snapshot_id,ss.platform_sku_id,ss.merchant_code,
+                ss.current_stock,ss.occupied_stock,ss.unoccupied_stock
+       ORDER BY ss.snapshot_id,ss.platform_sku_id`,
+      [exactSnapshotIds]
+    );
+    const bySnapshot = new Map<string, typeof skus.rows>();
+    for (const sku of skus.rows) {
+      const values = bySnapshot.get(sku.snapshot_id) ?? [];
+      values.push(sku);
+      bySnapshot.set(sku.snapshot_id,values);
+    }
+    return exactSnapshots.map((snapshot) => {
+      const observedAt = snapshot.observed_at.toISOString();
+      return {
+        productId:snapshot.product_id,
+        snapshotId:snapshot.snapshot_id,
+        envelope:{
+          schemaVersion:INVENTORY_FACT_SCHEMA_VERSION,
+          observedAt,
+          asOf:observedAt,
+          scope:{ shopId:input.shopId,productId:snapshot.product_id },
+          facts:{
+            productId:snapshot.product_id,
+            title:snapshot.product_title,
+            totalStock:snapshot.total_stock,
+            skus:(bySnapshot.get(snapshot.snapshot_id) ?? []).map((sku) => ({
+              platformSkuId:sku.platform_sku_id,
+              merchantCode:sku.merchant_code,
+              currentStock:sku.current_stock,
+              occupiedStock:sku.occupied_stock,
+              unoccupiedStock:sku.unoccupied_stock,
+              channels:Array.isArray(sku.channels)
+                ? sku.channels.flatMap((entry) => {
+                    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+                    const channel = entry as Record<string,unknown>;
+                    return typeof channel.channelGoodsId === "string" && Number.isSafeInteger(Number(channel.stock))
+                      ? [{ channelGoodsId:channel.channelGoodsId,stock:Number(channel.stock) }]
+                      : [];
+                  })
+                : []
+            }))
+          },
+          quality:{
+            freshness:"fresh",
+            completeness:Number(snapshot.completeness),
+            mappingConfidence:snapshot.mapping_confidence,
+            diagnostics:Array.isArray(snapshot.diagnostics) ? snapshot.diagnostics.map(String) : []
+          },
+          source:{
+            kind:"doudian.inventory.product.snapshot.read",
+            datasetId:snapshot.dataset_id,
+            datasetVersion:snapshot.data_version,
+            digest:snapshot.source_digest
+          }
+        }
+      };
+    });
+  }
+
   private async updateBinding(
     client: PoolClient,
     snapshot: PersistableDoudianSnapshot,
@@ -779,88 +880,6 @@ export class InventoryRepository {
     );
   }
 
-  async persistOrders(input: {
-    readonly syncRunId: string;
-    readonly sourceSystem: string;
-    readonly shopId: string;
-    readonly watermark: string;
-    readonly sourceDigest: string;
-    readonly rows: readonly NormalizedOrderLine[];
-  }): Promise<{ inserted: number; updated: number; datasetId: string; dataVersion: string }> {
-    return inTransaction(this.pool, async (client) => {
-      await client.query(
-        `INSERT INTO source.sync_run(sync_run_id,source_system,shop_id,status,started_at,source_watermark)
-         VALUES ($1,$2,$3,'running',now(),$4)`,
-        [input.syncRunId, input.sourceSystem, input.shopId, input.watermark]
-      );
-      let inserted = 0;
-      let updated = 0;
-      for (const item of input.rows) {
-        const sourceItemKey = factDigest([
-          item.shopId,
-          item.childOrderId,
-          item.productId,
-          item.merchantCode
-        ]);
-        const result = await client.query<{ inserted: boolean }>(
-          `INSERT INTO source.order_line_fact(
-            source_item_key,shop_id,shop_name,child_order_id,product_id,
-            merchant_code,specification,submitted_at,paid_at,shipped_at,
-            order_status,aftersales_status,source_quantity,demand_quantity,
-            source_batch_id,source_row_hash,source_loaded_at,source_period_end
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-          ON CONFLICT(source_item_key) DO UPDATE SET
-            specification=EXCLUDED.specification,
-            paid_at=EXCLUDED.paid_at,
-            shipped_at=EXCLUDED.shipped_at,
-            order_status=EXCLUDED.order_status,
-            aftersales_status=EXCLUDED.aftersales_status,
-            source_quantity=EXCLUDED.source_quantity,
-            demand_quantity=EXCLUDED.demand_quantity,
-            source_batch_id=EXCLUDED.source_batch_id,
-            source_row_hash=EXCLUDED.source_row_hash,
-            source_loaded_at=EXCLUDED.source_loaded_at,
-            source_period_end=EXCLUDED.source_period_end,
-            updated_at=now()
-          WHERE source.order_line_fact.source_loaded_at <= EXCLUDED.source_loaded_at
-          RETURNING (xmax = 0) AS inserted`,
-          [
-            sourceItemKey,item.shopId,item.shopName,item.childOrderId,item.productId,
-            item.merchantCode,item.specification,item.submittedAt,item.paidAt ?? null,
-            item.shippedAt ?? null,item.orderStatus,item.aftersalesStatus,
-            item.sourceQuantity,item.demandQuantity,item.sourceBatchId,
-            item.sourceRowHash,item.sourceLoadedAt,item.sourcePeriodEnd ?? null
-          ]
-        );
-        if (result.rows[0]?.inserted) inserted += 1;
-        else if (result.rowCount) updated += 1;
-      }
-      const datasetId = `sales-demand:${input.shopId}`;
-      const dataVersion = `${input.watermark}:${input.sourceDigest.slice(7, 19)}`;
-      await client.query(
-        `INSERT INTO dataset.version(
-          dataset_id,data_version,source_kind,source_digest,observed_at,as_of,
-          record_count,lineage
-        ) VALUES ($1,$2,$3,$4,now(),now(),$5,$6)
-        ON CONFLICT(dataset_id,source_digest) DO NOTHING`,
-        [datasetId,dataVersion,input.sourceSystem,input.sourceDigest,input.rows.length,JSON.stringify({ watermark: input.watermark })]
-      );
-      await client.query(
-        `INSERT INTO source.watermark(source_system,shop_id,dataset_type,watermark,source_digest,updated_at)
-         VALUES ($1,$2,'orders',$3,$4,now())
-         ON CONFLICT(source_system,shop_id,dataset_type) DO UPDATE SET
-           watermark=EXCLUDED.watermark,source_digest=EXCLUDED.source_digest,updated_at=EXCLUDED.updated_at`,
-        [input.sourceSystem,input.shopId,input.watermark,input.sourceDigest]
-      );
-      await client.query(
-        `UPDATE source.sync_run SET status='succeeded',completed_at=now(),inserted_count=$2,updated_count=$3
-         WHERE sync_run_id=$1`,
-        [input.syncRunId,inserted,updated]
-      );
-      return { inserted, updated, datasetId, dataVersion };
-    });
-  }
-
   async beginOrderSync(input: {
     syncRunId: string;
     sourceSystem: string;
@@ -879,15 +898,32 @@ export class InventoryRepository {
     });
   }
 
-  async upsertOrderChunk(rows: readonly NormalizedOrderLine[], fence: LeaseFence): Promise<{
+  async upsertOrderChunk(input: {
+    readonly syncRunId: string;
+    readonly sourceSystem: string;
+    readonly shopId: string;
+    readonly rows: readonly NormalizedOrderLine[];
+  }, fence: LeaseFence): Promise<{
     inserted: number;
     updated: number;
   }> {
-    const payload = this.orderChunkPayload(rows);
+    if (input.rows.some((row) =>
+      row.sourceSystem !== input.sourceSystem || row.shopId !== input.shopId
+    )) {
+      throw new Error("ORDER_SYNC_SOURCE_MISMATCH");
+    }
+    const payload = this.orderChunkPayload(input.rows);
     if (payload.length === 0) return { inserted:0,updated:0 };
     return inTransaction(this.pool, async (client) => {
       await this.assertLeaseForUpdate(client,fence);
-      return this.upsertOrderChunkWithClient(client,payload);
+      const sync = await client.query(
+        `SELECT 1 FROM source.sync_run
+         WHERE sync_run_id=$1 AND source_system=$2 AND shop_id=$3 AND status='running'
+         FOR UPDATE`,
+        [input.syncRunId,input.sourceSystem,input.shopId]
+      );
+      if (sync.rowCount !== 1) throw new Error("ORDER_SYNC_RUN_INVALID");
+      return this.stageOrderChunkWithClient(client,input.syncRunId,payload);
     });
   }
 
@@ -895,7 +931,7 @@ export class InventoryRepository {
     const deduplicated = new Map<string, NormalizedOrderLine>();
     for (const item of rows) {
       const sourceItemKey = factDigest([
-        item.shopId,item.childOrderId,item.productId,item.merchantCode
+        item.sourceSystem,item.shopId,item.childOrderId,item.productId,item.merchantCode
       ]);
       const current = deduplicated.get(sourceItemKey);
       if (
@@ -911,6 +947,7 @@ export class InventoryRepository {
     }
     return [...deduplicated].map(([sourceItemKey,item]) => ({
       source_item_key:sourceItemKey,
+      source_system:item.sourceSystem,
       shop_id:item.shopId,
       shop_name:item.shopName,
       child_order_id:item.childOrderId,
@@ -931,15 +968,16 @@ export class InventoryRepository {
     }));
   }
 
-  private async upsertOrderChunkWithClient(
+  private async stageOrderChunkWithClient(
     client: PoolClient,
+    syncRunId: string,
     payload: readonly Record<string, unknown>[]
   ): Promise<{ inserted: number; updated: number }> {
     if (payload.length === 0) return { inserted:0,updated:0 };
     const result = await client.query<{ inserted: string; updated: string }>(
         `WITH incoming AS (
            SELECT * FROM jsonb_to_recordset($1::jsonb) AS item(
-             source_item_key text,shop_id text,shop_name text,child_order_id text,
+             source_item_key text,source_system text,shop_id text,shop_name text,child_order_id text,
              product_id text,merchant_code text,specification text,
              submitted_at timestamptz,paid_at timestamptz,shipped_at timestamptz,
              order_status text,aftersales_status text,source_quantity integer,
@@ -947,31 +985,32 @@ export class InventoryRepository {
              source_loaded_at timestamptz,source_period_end timestamptz
            )
          ), changed AS (
-           INSERT INTO source.order_line_fact(
-            source_item_key,shop_id,shop_name,child_order_id,product_id,
+           INSERT INTO source.order_line_staging(
+            sync_run_id,source_item_key,source_system,shop_id,shop_name,child_order_id,product_id,
             merchant_code,specification,submitted_at,paid_at,shipped_at,
             order_status,aftersales_status,source_quantity,demand_quantity,
             source_batch_id,source_row_hash,source_loaded_at,source_period_end
            ) SELECT
-             source_item_key,shop_id,shop_name,child_order_id,product_id,
+             $2,source_item_key,source_system,shop_id,shop_name,child_order_id,product_id,
              merchant_code,specification,submitted_at,paid_at,shipped_at,
              order_status,aftersales_status,source_quantity,demand_quantity,
              source_batch_id,source_row_hash,source_loaded_at,source_period_end
            FROM incoming
-          ON CONFLICT(source_item_key) DO UPDATE SET
+          ON CONFLICT(sync_run_id,source_item_key) DO UPDATE SET
             specification=EXCLUDED.specification,paid_at=EXCLUDED.paid_at,
             shipped_at=EXCLUDED.shipped_at,order_status=EXCLUDED.order_status,
             aftersales_status=EXCLUDED.aftersales_status,
             source_quantity=EXCLUDED.source_quantity,demand_quantity=EXCLUDED.demand_quantity,
             source_batch_id=EXCLUDED.source_batch_id,source_row_hash=EXCLUDED.source_row_hash,
-            source_loaded_at=EXCLUDED.source_loaded_at,source_period_end=EXCLUDED.source_period_end,updated_at=now()
-          WHERE source.order_line_fact.source_loaded_at <= EXCLUDED.source_loaded_at
+            source_loaded_at=EXCLUDED.source_loaded_at,source_period_end=EXCLUDED.source_period_end,
+            staged_at=clock_timestamp()
+          WHERE source.order_line_staging.source_loaded_at <= EXCLUDED.source_loaded_at
           RETURNING (xmax = 0) AS was_inserted
          ) SELECT
            count(*) FILTER (WHERE was_inserted)::text AS inserted,
            count(*) FILTER (WHERE NOT was_inserted)::text AS updated
          FROM changed`,
-        [JSON.stringify(payload)]
+        [JSON.stringify(payload),syncRunId]
       );
     const counts = row(result.rows,"order chunk upsert counts");
     return { inserted:Number(counts.inserted),updated:Number(counts.updated) };
@@ -983,23 +1022,86 @@ export class InventoryRepository {
     shopId: string;
     watermark: string;
     sourceDigest: string;
-    inserted: number;
-    updated: number;
     recordCount: number;
     historicalCompleteThrough: string;
-  }, fence: LeaseFence): Promise<{ datasetId: string; dataVersion: string }> {
+    observedAt: string;
+  }, fence: LeaseFence): Promise<{
+    datasetId: string;
+    dataVersion: string;
+    inserted: number;
+    updated: number;
+  }> {
     return inTransaction(this.pool, async (client) => {
       await this.assertLeaseForUpdate(client,fence);
-      const datasetId = `sales-demand:${input.shopId}`;
+      const sync = await client.query(
+        `SELECT 1 FROM source.sync_run
+         WHERE sync_run_id=$1 AND source_system=$2 AND shop_id=$3 AND status='running'
+         FOR UPDATE`,
+        [input.syncRunId,input.sourceSystem,input.shopId]
+      );
+      if (sync.rowCount !== 1) throw new Error("ORDER_SYNC_RUN_INVALID");
+      const promoted = await client.query<{ inserted: string; updated: string }>(
+        `WITH changed AS (
+           INSERT INTO source.order_line_fact(
+             source_item_key,source_system,shop_id,shop_name,child_order_id,product_id,
+             merchant_code,specification,submitted_at,paid_at,shipped_at,
+             order_status,aftersales_status,source_quantity,demand_quantity,
+             source_batch_id,source_row_hash,source_loaded_at,source_period_end
+           ) SELECT
+             source_item_key,source_system,shop_id,shop_name,child_order_id,product_id,
+             merchant_code,specification,submitted_at,paid_at,shipped_at,
+             order_status,aftersales_status,source_quantity,demand_quantity,
+             source_batch_id,source_row_hash,source_loaded_at,source_period_end
+           FROM source.order_line_staging
+           WHERE sync_run_id=$1 AND source_system=$2 AND shop_id=$3
+           ON CONFLICT(source_item_key) DO UPDATE SET
+             source_system=EXCLUDED.source_system,
+             specification=EXCLUDED.specification,paid_at=EXCLUDED.paid_at,
+             shipped_at=EXCLUDED.shipped_at,order_status=EXCLUDED.order_status,
+             aftersales_status=EXCLUDED.aftersales_status,
+             source_quantity=EXCLUDED.source_quantity,demand_quantity=EXCLUDED.demand_quantity,
+             source_batch_id=EXCLUDED.source_batch_id,source_row_hash=EXCLUDED.source_row_hash,
+             source_loaded_at=EXCLUDED.source_loaded_at,source_period_end=EXCLUDED.source_period_end,
+             updated_at=now()
+           WHERE source.order_line_fact.source_loaded_at <= EXCLUDED.source_loaded_at
+           RETURNING (xmax = 0) AS was_inserted
+         ) SELECT
+           count(*) FILTER (WHERE was_inserted)::text AS inserted,
+           count(*) FILTER (WHERE NOT was_inserted)::text AS updated
+         FROM changed`,
+        [input.syncRunId,input.sourceSystem,input.shopId]
+      );
+      const promotedCounts = row(promoted.rows,"published order promotion counts");
+      const inserted = Number(promotedCounts.inserted);
+      const updated = Number(promotedCounts.updated);
+      const datasetId = `sales-demand-staged:${input.shopId}`;
       const dataVersion = `${input.watermark}:${input.sourceDigest.slice(7, 19)}`;
+      const publishedFacts = row((await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+         FROM source.order_line_fact
+         WHERE source_system=$1 AND shop_id=$2
+           AND source_batch_id <= $3::bigint AND updated_at <= now()`,
+        [input.sourceSystem,input.shopId,input.watermark]
+      )).rows,"published order fact count");
+      const publishedRecordCount = Number(publishedFacts.count);
+      if (!Number.isSafeInteger(publishedRecordCount) || publishedRecordCount < 0) {
+        throw new Error("ORDER_SYNC_PUBLISHED_COUNT_INVALID");
+      }
       await client.query(
         `INSERT INTO dataset.version(
           dataset_id,data_version,source_kind,source_digest,observed_at,as_of,
           record_count,lineage
-        ) VALUES ($1,$2,$3,$4,now(),$5,$6,$7)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
         ON CONFLICT(dataset_id,source_digest) DO NOTHING`,
-        [datasetId,dataVersion,input.sourceSystem,input.sourceDigest,input.historicalCompleteThrough,input.recordCount,
-         JSON.stringify({ watermark: input.watermark, syncRunId: input.syncRunId })]
+        [datasetId,dataVersion,input.sourceSystem,input.sourceDigest,input.observedAt,
+         input.historicalCompleteThrough,publishedRecordCount,
+         JSON.stringify({
+           watermark:input.watermark,
+           syncRunId:input.syncRunId,
+           publicationProtocol:"staged-v1",
+           sourceDigestKind:"incremental-sync-v1",
+           syncRecordCount:input.recordCount
+         })]
       );
       await client.query(
         `INSERT INTO source.watermark(source_system,shop_id,dataset_type,watermark,source_digest,updated_at)
@@ -1008,99 +1110,48 @@ export class InventoryRepository {
            watermark=EXCLUDED.watermark,source_digest=EXCLUDED.source_digest,updated_at=EXCLUDED.updated_at`,
         [input.sourceSystem,input.shopId,input.watermark,input.sourceDigest]
       );
-      await client.query(
+      const completed = await client.query(
         `UPDATE source.sync_run SET status='succeeded',completed_at=now(),
            inserted_count=$2,updated_count=$3,source_watermark=$4
-         WHERE sync_run_id=$1`,
-        [input.syncRunId,input.inserted,input.updated,input.watermark]
+         WHERE sync_run_id=$1 AND status='running'`,
+        [input.syncRunId,inserted,updated,input.watermark]
       );
-      return { datasetId,dataVersion };
+      if (completed.rowCount !== 1) throw new Error("ORDER_SYNC_RUN_INVALID");
+      await client.query(
+        "DELETE FROM source.order_line_staging WHERE sync_run_id=$1",
+        [input.syncRunId]
+      );
+      return { datasetId,dataVersion,inserted,updated };
     });
   }
 
   async completeNoChangeOrderSync(syncRunId: string, fence: LeaseFence): Promise<void> {
     await inTransaction(this.pool, async (client) => {
       await this.assertLeaseForUpdate(client,fence);
-      await client.query(
+      const completed = await client.query(
         `UPDATE source.sync_run SET status='succeeded',completed_at=clock_timestamp(),
            inserted_count=0,updated_count=0,diagnostics='["No newer source batch was available."]'::jsonb
-         WHERE sync_run_id=$1`,
+         WHERE sync_run_id=$1 AND status='running'`,
         [syncRunId]
       );
+      if (completed.rowCount !== 1) throw new Error("ORDER_SYNC_RUN_INVALID");
+      await client.query("DELETE FROM source.order_line_staging WHERE sync_run_id=$1",[syncRunId]);
     });
   }
 
-  async persistRecentOrders(input: PersistableRecentOrders, fence: LeaseFence): Promise<{
-    datasetId: string;
-    dataVersion: string;
-    inserted: number;
-    updated: number;
-  }> {
-    const observedAt = new Date(input.observedAt);
-    if (!Number.isFinite(observedAt.getTime())) throw new Error("RECENT_ORDER_OBSERVED_AT_INVALID");
-    const sourceBatchId = Math.floor(observedAt.getTime() / 1000);
-    const merchantCodes = [...new Set(input.records.map((record) => record.merchantCode))];
-    return inTransaction(this.pool, async (client) => {
-      await this.assertLeaseForUpdate(client,fence);
-      const bindings = merchantCodes.length ? await client.query<{
-        merchant_code: string;
-        product_id: string;
-      }>(
-        `SELECT merchant_code,product_id FROM inventory.sku_binding
-         WHERE shop_id=$1 AND merchant_code=ANY($2::text[]) AND valid_to IS NULL`,
-        [input.shop.id,merchantCodes]
-      ) : { rows: [] as { merchant_code: string; product_id: string }[] };
-      const productsByMerchant = new Map<string,Set<string>>();
-      for (const binding of bindings.rows) {
-        const products = productsByMerchant.get(binding.merchant_code) ?? new Set<string>();
-        products.add(binding.product_id);
-        productsByMerchant.set(binding.merchant_code,products);
-      }
-      const orderRows: NormalizedOrderLine[] = input.records.flatMap((record) => {
-        const mapped = productsByMerchant.get(record.merchantCode);
-        const productId = mapped?.has(record.productId)
-          ? record.productId
-          : mapped?.size === 1 ? [...mapped][0] : undefined;
-        if (!productId) return [];
-        const cancelledBeforeShipment = /关闭|取消/u.test(record.orderStatus) && !record.shippedAt;
-        return [{
-          shopId:input.shop.id,shopName:input.shop.name,childOrderId:record.childOrderId,
-          productId,merchantCode:record.merchantCode,
-          specification:record.specification,submittedAt:record.submittedAt,
-          ...(record.paidAt ? { paidAt:record.paidAt } : {}),
-          ...(record.shippedAt ? { shippedAt:record.shippedAt } : {}),
-          orderStatus:record.orderStatus,aftersalesStatus:record.aftersalesStatus,
-          sourceQuantity:record.quantity,
-          demandQuantity:record.paidAt && !cancelledBeforeShipment ? record.quantity : 0,
-          sourceBatchId,sourceRowHash:factDigest(record),sourceLoadedAt:input.observedAt
-        }];
-      });
-      const payload = this.orderChunkPayload(orderRows);
-      const changes = await this.upsertOrderChunkWithClient(client,payload);
-      const sourceDigest = factDigest({ shop:input.shop,observedAt:input.observedAt,records:input.records });
-      const datasetId = `sales-demand-recent:${input.shop.id}`;
-      const dataVersion = `${input.observedAt}:${sourceDigest.slice(7,19)}`;
-      await client.query(
-        `INSERT INTO dataset.version(
-          dataset_id,data_version,source_kind,source_digest,observed_at,as_of,
-          record_count,lineage
-         ) VALUES ($1,$2,'doudian.orders.recent.read',$3,$4,$4,$5,$6)
-         ON CONFLICT(dataset_id,source_digest) DO NOTHING`,
-        [datasetId,dataVersion,sourceDigest,input.observedAt,input.records.length,
-         JSON.stringify({ completeness:input.quality.completeness,diagnostics:input.quality.diagnostics ?? [] })]
-      );
-      return { datasetId,dataVersion,...changes };
-    });
-  }
-
-  async failOrderSync(syncRunId: string, message: string, fence: LeaseFence): Promise<void> {
+  async failOrderSync(syncRunId: string, diagnosticCode: string, fence: LeaseFence): Promise<void> {
     await inTransaction(this.pool, async (client) => {
       await this.assertLeaseForUpdate(client,fence);
-      await client.query(
+      const code = /^[A-Z][A-Z0-9_]{1,99}$/u.test(diagnosticCode)
+        ? diagnosticCode
+        : "ORDER_SYNC_FAILED";
+      const failed = await client.query(
         `UPDATE source.sync_run SET status='failed',completed_at=clock_timestamp(),diagnostics=$2
-         WHERE sync_run_id=$1`,
-        [syncRunId,JSON.stringify([message.slice(0, 1000)])]
+         WHERE sync_run_id=$1 AND status='running'`,
+        [syncRunId,JSON.stringify([code])]
       );
+      if (failed.rowCount !== 1) throw new Error("ORDER_SYNC_RUN_INVALID");
+      await client.query("DELETE FROM source.order_line_staging WHERE sync_run_id=$1",[syncRunId]);
     });
   }
 
@@ -1110,6 +1161,101 @@ export class InventoryRepository {
       [sourceSystem, shopId]
     );
     return result.rows[0]?.watermark;
+  }
+
+  async ordersFreshness(input: {
+    shop: { id: string; name: string };
+    baseline?: {
+      status: "fresh_reused" | "refresh_required" | "refreshed" | "degraded";
+      datasetId: string | null;
+      dataVersion: string | null;
+    };
+  }): Promise<{
+    status: "fresh_reused" | "refresh_required" | "refreshed" | "degraded";
+    shop: { id: string; name: string };
+    checkedAt: string;
+    maxAgeSeconds: 7200;
+    latestObservedAt: string | null;
+    ageSeconds: number | null;
+    datasetId: string | null;
+    dataVersion: string | null;
+    source: "wdt" | null;
+  }> {
+    const result = await this.pool.query<{
+      server_now: Date;
+      dataset_id: string | null;
+      data_version: string | null;
+      source_kind: string | null;
+      observed_at: Date | null;
+    }>(
+      `WITH clock AS (SELECT clock_timestamp() AS server_now), latest AS (
+         SELECT dataset_id,data_version,source_kind,observed_at
+         FROM dataset.version
+         WHERE dataset_id='sales-demand-staged:' || $1
+           AND source_kind='ecom-profit-mysql:wdt-stockout'
+           AND lineage->>'publicationProtocol'='staged-v1'
+         ORDER BY observed_at DESC,created_at DESC,dataset_id,data_version
+         LIMIT 1
+       )
+       SELECT clock.server_now,latest.dataset_id,latest.data_version,
+              latest.source_kind,latest.observed_at
+       FROM clock LEFT JOIN latest ON true`,
+      [input.shop.id]
+    );
+    const freshness = row(result.rows,"orders freshness");
+    const checkedAt = freshness.server_now.toISOString();
+    const latestObservedAt = freshness.observed_at?.toISOString() ?? null;
+    const ageSeconds = latestObservedAt === null
+      ? null
+      : Math.max(
+          0,
+          Math.floor(
+            (freshness.server_now.getTime() - freshness.observed_at!.getTime()) /
+              1_000
+          )
+        );
+    const datasetId = freshness.dataset_id ?? null;
+    const dataVersion = freshness.data_version ?? null;
+    const currentFresh = ageSeconds !== null && ageSeconds <= 7_200;
+    const versionChanged = Boolean(
+      input.baseline &&
+      datasetId &&
+      dataVersion &&
+      (datasetId !== input.baseline.datasetId ||
+        dataVersion !== input.baseline.dataVersion)
+    );
+    const freshBaselineStillExact = Boolean(
+      input.baseline?.status === "fresh_reused" &&
+      currentFresh &&
+      datasetId === input.baseline.datasetId &&
+      dataVersion === input.baseline.dataVersion
+    );
+    const status = input.baseline
+      ? input.baseline.status === "fresh_reused"
+        ? freshBaselineStillExact
+          ? "fresh_reused"
+          : "degraded"
+        : input.baseline.status === "refresh_required" &&
+            currentFresh &&
+            versionChanged
+          ? "refreshed"
+          : "degraded"
+      : currentFresh
+        ? "fresh_reused"
+        : "refresh_required";
+    return {
+      status,
+      shop:input.shop,
+      checkedAt,
+      maxAgeSeconds:7_200,
+      latestObservedAt,
+      ageSeconds,
+      datasetId,
+      dataVersion,
+      source:freshness.source_kind === "ecom-profit-mysql:wdt-stockout"
+          ? "wdt"
+          : null
+    };
   }
 
   async forecastInputs(input: {
@@ -1123,32 +1269,49 @@ export class InventoryRepository {
        ORDER BY platform_sku_id`,
       [input.shopId,input.productId]
     );
-    const datasetResult = await this.pool.query<{ dataset_id: string; data_version: string; source_digest: string; as_of: Date }>(
-      `SELECT dataset_id,data_version,source_digest,as_of FROM dataset.version
-       WHERE dataset_id=$1 AND as_of <= $2 ORDER BY as_of DESC LIMIT 1`,
-      [`sales-demand:${input.shopId}`,input.asOf]
-    );
-    const recentResult = await this.pool.query<{ observed_at: Date }>(
-      `SELECT observed_at FROM dataset.version
-       WHERE dataset_id=$1 AND observed_at <= $2 ORDER BY observed_at DESC LIMIT 1`,
-      [`sales-demand-recent:${input.shopId}`,input.asOf]
+    const datasetResult = await this.pool.query<{
+      dataset_id: string;
+      data_version: string;
+      source_kind: string;
+      source_digest: string;
+      observed_at: Date;
+      created_at: Date;
+      as_of: Date;
+      watermark: string;
+    }>(
+      `SELECT dataset_id,data_version,source_kind,source_digest,observed_at,created_at,as_of,
+              lineage->>'watermark' AS watermark
+       FROM dataset.version
+       WHERE dataset_id=$1 AND source_kind='ecom-profit-mysql:wdt-stockout'
+         AND lineage->>'publicationProtocol'='staged-v1'
+         AND as_of <= $2 AND lineage->>'watermark' ~ '^[0-9]+$'
+       ORDER BY observed_at DESC,created_at DESC,data_version DESC LIMIT 1`,
+      [`sales-demand-staged:${input.shopId}`,input.asOf]
     );
     const dataset = datasetResult.rows[0] ?? {
-      dataset_id:`sales-demand:${input.shopId}`,data_version:"unavailable",
+      dataset_id:`sales-demand-staged:${input.shopId}`,data_version:"unavailable",
+      source_kind:"unavailable",
       source_digest:factDigest({ shopId:input.shopId,kind:"sales-demand-unavailable" }),
-      as_of:new Date(0)
+      observed_at:new Date(0),
+      created_at:new Date(0),
+      as_of:new Date(0),
+      watermark:"-1"
     };
     const productFallback = await this.pool.query<{ quantity: string }>(
       `SELECT COALESCE(sum(demand_quantity),0)::text AS quantity
        FROM source.order_line_fact WHERE shop_id=$1 AND product_id=$2
-         AND paid_at > $3::timestamptz-interval '28 days' AND paid_at <= $3 AND demand_quantity > 0`,
-      [input.shopId,input.productId,input.asOf]
+         AND paid_at > $3::timestamptz-interval '28 days' AND paid_at <= $3 AND demand_quantity > 0
+         AND source_system=$4 AND source_batch_id <= $5::bigint
+         AND updated_at <= $6::timestamptz`,
+      [input.shopId,input.productId,input.asOf,dataset.source_kind,dataset.watermark,dataset.created_at]
     );
     const storeFallback = await this.pool.query<{ quantity: string }>(
       `SELECT COALESCE(sum(demand_quantity),0)::text AS quantity
        FROM source.order_line_fact WHERE shop_id=$1
-         AND paid_at > $2::timestamptz-interval '28 days' AND paid_at <= $2 AND demand_quantity > 0`,
-      [input.shopId,input.asOf]
+         AND paid_at > $2::timestamptz-interval '28 days' AND paid_at <= $2 AND demand_quantity > 0
+         AND source_system=$3 AND source_batch_id <= $4::bigint
+         AND updated_at <= $5::timestamptz`,
+      [input.shopId,input.asOf,dataset.source_kind,dataset.watermark,dataset.created_at]
     );
     const activeSkuCount = await this.pool.query<{ count: number }>(
       `SELECT count(*)::int AS count FROM inventory.sku_binding WHERE shop_id=$1 AND valid_to IS NULL`,
@@ -1164,8 +1327,11 @@ export class InventoryRepository {
          WHERE shop_id=$1 AND product_id=$2 AND merchant_code=$3
            AND paid_at > $4::timestamptz - interval '90 days' AND paid_at <= $4
            AND demand_quantity > 0
+           AND source_system=$5 AND source_batch_id <= $6::bigint
+           AND updated_at <= $7::timestamptz
          GROUP BY 1 ORDER BY 1`,
-        [input.shopId,input.productId,binding.merchant_code,input.asOf]
+        [input.shopId,input.productId,binding.merchant_code,input.asOf,
+         dataset.source_kind,dataset.watermark,dataset.created_at]
       );
       const channels = await this.pool.query<{ at: Date; channel_goods_id: string; stock: number }>(
         `SELECT s.observed_at AS at,c.channel_goods_id,c.stock
@@ -1183,8 +1349,8 @@ export class InventoryRepository {
         channelPoints: channels.rows.map((entry) => ({ at: entry.at.toISOString(), channelGoodsId: entry.channel_goods_id, stock: entry.stock })),
         sourceDataset: { id: dataset.dataset_id, version: dataset.data_version, digest: dataset.source_digest },
         demandQuality: {
-          ...(recentResult.rows[0]?.observed_at
-            ? { recentObservedAt:recentResult.rows[0].observed_at.toISOString() }
+          ...(datasetResult.rows[0]?.observed_at
+            ? { recentObservedAt:datasetResult.rows[0].observed_at.toISOString() }
             : {}),
           ...(datasetResult.rows[0]?.as_of
             ? { historicalCompleteThrough:datasetResult.rows[0].as_of.toISOString() }
@@ -1201,31 +1367,98 @@ export class InventoryRepository {
     return records;
   }
 
-  async persistForecast(input: {
+  private async persistForecastRows(client: PoolClient, inputs: readonly {
     readonly shopId: string;
     readonly productId: string;
     readonly platformSkuId: string;
     readonly merchantCode: string;
     readonly sourceDataset: { id: string; version: string };
     readonly forecast: DemandForecast;
-  }, fence: LeaseFence): Promise<string> {
-    const forecastId = `forecast:${factDigest(input).slice(7, 39)}`;
-    await inTransaction(this.pool, async (client) => {
-      await this.assertLeaseForUpdate(client,fence);
-      await client.query(
+  }[]): Promise<readonly string[]> {
+    const forecastIds: string[] = [];
+    for (const input of inputs) {
+      const forecastId = `forecast:${factDigest(input).slice(7, 39)}`;
+      const persisted = await client.query<{ forecast_id: string }>(
         `INSERT INTO inventory.demand_forecast(
           forecast_id,shop_id,product_id,platform_sku_id,merchant_code,as_of,
           algorithm_version,source_dataset_id,source_data_version,selected_model,
           confidence,daily_p50,daily_p90,horizons,diagnostics
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-        ON CONFLICT(shop_id,product_id,platform_sku_id,as_of,algorithm_version) DO NOTHING`,
+        ON CONFLICT(shop_id,product_id,platform_sku_id,as_of,algorithm_version)
+        DO UPDATE SET forecast_id=inventory.demand_forecast.forecast_id
+        RETURNING forecast_id`,
         [forecastId,input.shopId,input.productId,input.platformSkuId,input.merchantCode,input.forecast.asOf,
          input.forecast.algorithmVersion,input.sourceDataset.id,input.sourceDataset.version,input.forecast.selectedModel,
          input.forecast.confidence,input.forecast.dailyP50,input.forecast.dailyP90,
          JSON.stringify(input.forecast.horizons),JSON.stringify(input.forecast.diagnostics)]
       );
+      if (row(persisted.rows, "persisted inventory forecast").forecast_id !== forecastId) {
+        throw new Error("INVENTORY_FORECAST_CONFLICT");
+      }
+      forecastIds.push(forecastId);
+    }
+    return forecastIds;
+  }
+
+  async persistForecastRiskProduct(input: {
+    readonly forecasts: readonly {
+      readonly shopId: string;
+      readonly productId: string;
+      readonly platformSkuId: string;
+      readonly merchantCode: string;
+      readonly sourceDataset: { id: string; version: string };
+      readonly forecast: DemandForecast;
+    }[];
+    readonly risk: {
+      readonly snapshotId: string;
+      readonly shopId: string;
+      readonly productId: string;
+      readonly evaluation: InventoryRiskEvaluation;
+    };
+  }, fence: LeaseFence): Promise<{
+    readonly forecastIds: readonly string[];
+    readonly evaluationId: string;
+    readonly incidentsUpdated: number;
+  }> {
+    return inTransaction(this.pool, async (client) => {
+      await this.assertLeaseForUpdate(client,fence);
+      const forecastIds = await this.persistForecastRows(client,input.forecasts);
+      const sourceDigest = factDigest(input.risk);
+      const evaluationId = `evaluation:${sourceDigest.slice(7, 39)}`;
+      const insertedEvaluation = await client.query<{ evaluation_id: string }>(
+        `INSERT INTO inventory.risk_evaluation(
+          evaluation_id,shop_id,product_id,snapshot_id,policy_version,evaluated_at,
+          severity,findings,diagnostics,source_digest
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT(shop_id,product_id,snapshot_id,policy_version) DO NOTHING
+        RETURNING evaluation_id`,
+        [evaluationId,input.risk.shopId,input.risk.productId,input.risk.snapshotId,
+         input.risk.evaluation.policyVersion,input.risk.evaluation.evaluatedAt,
+         input.risk.evaluation.severity,JSON.stringify(input.risk.evaluation.findings),
+         JSON.stringify(input.risk.evaluation.diagnostics),sourceDigest]
+      );
+      let incidentsUpdated = 0;
+      if (insertedEvaluation.rowCount === 1) {
+        for (const finding of input.risk.evaluation.findings) {
+          if (await this.persistIncident(
+            client,evaluationId,input.risk.evaluation.policyVersion,
+            input.risk.evaluation.evaluatedAt,finding
+          )) {
+            incidentsUpdated += 1;
+          }
+        }
+      } else {
+        const existing = await client.query<{ evaluation_id: string }>(
+          `SELECT evaluation_id FROM inventory.risk_evaluation
+           WHERE shop_id=$1 AND product_id=$2 AND snapshot_id=$3 AND policy_version=$4`,
+          [input.risk.shopId,input.risk.productId,input.risk.snapshotId,input.risk.evaluation.policyVersion]
+        );
+        if (row(existing.rows,"persisted inventory risk").evaluation_id !== evaluationId) {
+          throw new Error("INVENTORY_RISK_CONFLICT");
+        }
+      }
+      return { forecastIds,evaluationId,incidentsUpdated };
     });
-    return forecastId;
   }
 
   async persistRisk(input: {
@@ -1327,7 +1560,9 @@ export class InventoryRepository {
       `SELECT
         (SELECT max(observed_at) FROM inventory.snapshot WHERE shop_id=$1) AS latest_inventory_at,
         (SELECT max(observed_at) FROM dataset.version
-          WHERE dataset_id='sales-demand-recent:' || $1) AS latest_order_at,
+          WHERE dataset_id='sales-demand-staged:' || $1
+            AND source_kind='ecom-profit-mysql:wdt-stockout'
+            AND lineage->>'publicationProtocol'='staged-v1') AS latest_order_at,
         (SELECT max(source_period_end) FROM source.order_line_fact WHERE shop_id=$1) AS historical_complete_through,
         (SELECT count(DISTINCT product_id)::int FROM inventory.snapshot WHERE shop_id=$1) AS product_count,
         (SELECT count(DISTINCT product_id)::int FROM inventory.snapshot

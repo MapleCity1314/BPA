@@ -850,17 +850,32 @@ function requiredRouteIssues(
 }
 
 function executionCost(block: ExecutionBlock): bigint {
-  let cost = 0n;
-  for (const step of Object.values(block.steps)) {
-    cost += 1n;
-    if (step.kind === "foreach") {
-      const maxItems = isPositiveSafeInteger(step.limits.maxItems)
-        ? BigInt(step.limits.maxItems)
-        : 0n;
-      cost += maxItems * executionCost(step.body);
-    }
-  }
-  return cost;
+  const memo = new Map<string, bigint>();
+  const visiting = new Set<string>();
+  const from = (key: string): bigint => {
+    const cached = memo.get(key);
+    if (cached !== undefined) return cached;
+    const step = block.steps[key];
+    if (!step || visiting.has(key)) return 0n;
+    visiting.add(key);
+    const bodyCost = step.kind === "foreach"
+      ? (isPositiveSafeInteger(step.limits.maxItems)
+          ? BigInt(step.limits.maxItems)
+          : 0n) * executionCost(step.body)
+      : 0n;
+    const continuationCost = stepTargets(step).reduce(
+      (maximum, target) => {
+        const candidate = from(target);
+        return candidate > maximum ? candidate : maximum;
+      },
+      0n
+    );
+    visiting.delete(key);
+    const cost = 1n + bodyCost + continuationCost;
+    memo.set(key, cost);
+    return cost;
+  };
+  return from(block.entry);
 }
 
 export function estimateMaxStepExecutions(plan: ExecutionPlan): bigint {

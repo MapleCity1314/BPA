@@ -1,0 +1,46 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: ecom.sales-demand.sync
+  version: 2.0.0
+  title: 同步固定 WDT 销售需求事实
+  description: 由 Core 从当前 Run 派生 fencing，通过库存服务按精确店铺增量同步非 PII 历史需求；源未配置或零提交数据质量失败以 unavailable 返回，禁止伪装成已刷新。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [shopId, shopName]
+  properties:
+    shopId: { type: string, pattern: "^[0-9]{5,30}$" }
+    shopName: { type: string, minLength: 2, maxLength: 80 }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [status, syncRunId, processed, reasonCode]
+  allOf:
+    - if:
+        properties: { status: { const: unavailable } }
+        required: [status]
+      then:
+        properties:
+          processed: { const: 0 }
+          reasonCode: { enum: [MYSQL_SOURCE_NOT_CONFIGURED, WDT_SOURCE_UNAVAILABLE, WDT_DATA_QUALITY_INVALID] }
+      else:
+        properties:
+          reasonCode: { type: "null" }
+  properties:
+    status: { enum: [succeeded, no_changes, unavailable] }
+    syncRunId: { type: [string, "null"], maxLength: 500 }
+    processed: { type: integer, minimum: 0 }
+    reasonCode:
+      anyOf:
+        - { type: "null" }
+        - { type: string, minLength: 1, maxLength: 100 }
+risk:
+  level: R1
+  permissions: [inventory.service.sales-demand.write]
+execution:
+  timeoutDefault: 10m
+  idempotency: verified_write
+  cancellable: true
+errors: [INVENTORY_WRITE_INPUT_INVALID, INVENTORY_EXTERNAL_LEASE_INVALID, INVENTORY_SERVICE_NOT_CONFIGURED, INVENTORY_SERVICE_UNAVAILABLE, INVENTORY_SERVICE_PROTOCOL_ERROR, INVENTORY_SERVICE_FAILED, SALES_DEMAND_PARTIAL_COMMIT, SHOP_IDENTITY_MISMATCH, LEASE_FENCE_INVALID, SCHEDULER_LEASE_LOST]

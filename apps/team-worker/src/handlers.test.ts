@@ -61,6 +61,7 @@ describe("trusted Team Worker handlers", () => {
       channelEstimates: {}
     })).resolves.toMatchObject({ severity: "unknown" });
   });
+
   it("normalizes collected scope products and keeps unmatched products inspectable", async () => {
     const normalized = await invoke(PACKAGING_PRODUCTS_NORMALIZE_HANDLER_REF, {
       shopId: "shop-1",

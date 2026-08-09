@@ -10,14 +10,14 @@ origins:
   - https://fxg.jinritemai.com
   - https://buyin.jinritemai.com
 extension:
-  minimumVersion: 0.6.1
+  minimumVersion: 0.6.2
 capabilities:
   - nodeId: doudian.alliance.shops.discover
     nodeVersions:
       - 2.0.0
     handlerId: doudian.alliance.shops.discover
     handlerVersion: 2.0.0
-    implementationDigest: sha256:1857a8eb36d62af55163b7ea52f1f7a1e5d25e65e9d73b213884c73440d083f8
+    implementationDigest: sha256:d41febec7c052c2c3119d771725d021126ddfba67e0e8df85079bf39bba904bc
     permissions:
       - browser.dom.read
       - browser.dom.write
@@ -28,7 +28,7 @@ capabilities:
       - 2.0.0
     handlerId: doudian.alliance.shop.retired-products.scan
     handlerVersion: 2.0.0
-    implementationDigest: sha256:1857a8eb36d62af55163b7ea52f1f7a1e5d25e65e9d73b213884c73440d083f8
+    implementationDigest: sha256:d41febec7c052c2c3119d771725d021126ddfba67e0e8df85079bf39bba904bc
     permissions:
       - browser.dom.read
       - browser.dom.write

@@ -47,9 +47,6 @@ function handlers(): ContentActionHandlers {
     "doudian.inventory.product.snapshot.read": vi.fn(async () => ({
       output: { status: "complete", formMutations: 0 }
     })),
-    "doudian.orders.recent.read": vi.fn(async () => ({
-      output: { status: "complete", records: [], formMutations: 0 }
-    })),
     "doudian.product.editor.open": vi.fn(async () => ({
       output: { status: "ready", domMutations: 0 }
     })),

@@ -621,6 +621,9 @@ function completeItem(
   );
   if (terminal.status === "rejected" || terminal.status === "uncertain") {
     const rejected = terminal.status === "rejected";
+    const terminalOutput = terminal.output
+      ? resolveBinding(terminal.output,state)
+      : undefined;
     return {
       state: immutableState(
         {
@@ -629,13 +632,21 @@ function completeItem(
           cursor: undefined,
           active: undefined,
           stepOutputs: retainedStepOutputs,
+          ...(terminal.status === "uncertain" && terminalOutput !== undefined
+            ? { output:terminalOutput }
+            : {}),
           error: {
             code:
               terminal.errorCode ??
+              state.error?.code ??
               (rejected ? "ITEM_REJECTED" : "ITEM_UNCERTAIN"),
-            message: rejected
-              ? "An item outcome was rejected."
-              : "An item outcome is uncertain."
+            message:terminal.errorCode
+              ? rejected
+                ? "An item outcome was rejected."
+                : "An item outcome is uncertain."
+              : state.error?.message ?? (rejected
+                ? "An item outcome was rejected."
+                : "An item outcome is uncertain.")
           }
         },
         state.revision
@@ -982,17 +993,23 @@ function drive(
                 error: {
                   code:
                     step.errorCode ??
+                    state.error?.code ??
                     (step.status === "rejected"
                       ? "WORKFLOW_REJECTED"
                       : step.status === "uncertain"
                         ? "WORKFLOW_UNCERTAIN"
                         : "WORKFLOW_FAILED"),
-                  message:
-                    step.status === "rejected"
+                  message:step.errorCode
+                    ? step.status === "rejected"
                       ? "Workflow reached a rejected terminal."
                       : step.status === "uncertain"
                         ? "Workflow reached an uncertain terminal."
                         : "Workflow reached a failed terminal."
+                    : state.error?.message ?? (step.status === "rejected"
+                      ? "Workflow reached a rejected terminal."
+                      : step.status === "uncertain"
+                        ? "Workflow reached an uncertain terminal."
+                        : "Workflow reached a failed terminal.")
                 }
               }
             : {})
@@ -1109,33 +1126,38 @@ export class DeterministicWorkflowEngine {
       ...state.completedExternalIds,
       input.invocationId
     ];
-    if (
-      input.outcome.status === "rejected" ||
-      input.outcome.status === "uncertain"
-    ) {
-      return {
-        state: immutableState(
-          {
-            ...state,
-            status: input.outcome.status,
-            cursor: undefined,
-            active: undefined,
-            completedExternalIds,
-            error: {
-              code: input.outcome.error.code,
-              message: input.outcome.error.message
-            }
-          },
-          state.revision
-        ),
-        effects: [],
-        disposition: "advanced"
-      };
-    }
     const block = blockAt(this.plan, state.cursor!.blockPath);
     const step = block.steps[state.cursor!.stepKey];
     if (step?.kind !== "call") {
       throw new Error("Active call cursor does not reference a call step");
+    }
+    if (
+      input.outcome.status === "rejected" ||
+      input.outcome.status === "uncertain"
+    ) {
+      return drive(
+        this.plan,
+        immutableState(
+          {
+            ...state,
+            status:"running",
+            cursor:{
+              ...state.cursor!,
+              stepKey:input.outcome.status === "rejected"
+                ? step.routes.rejected
+                : step.routes.uncertain
+            },
+            active:undefined,
+            completedExternalIds,
+            error:{
+              code:input.outcome.error.code,
+              message:input.outcome.error.message
+            }
+          },
+          state.revision
+        ),
+        this.dependencies
+      );
     }
     const retryable =
       input.outcome.status !== "succeeded" &&

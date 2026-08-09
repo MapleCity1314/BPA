@@ -2,7 +2,7 @@ import type { BridgeCapability } from "@bpa/browser-bridge";
 
 export const BROWSER_PROTOCOL = "bpa.browser/2";
 export const DOUDIAN_ADAPTER_VERSION = "1.2.0";
-export const DOUDIAN_INVENTORY_ADAPTER_VERSION = "1.0.0";
+export const DOUDIAN_INVENTORY_ADAPTER_VERSION = "2.0.0";
 export const DOUDIAN_ALLIANCE_ADAPTER_VERSION = "2.0.0";
 export const DOUDIAN_ORIGIN = "https://fxg.jinritemai.com";
 export const DOUDIAN_BUYIN_ORIGIN = "https://buyin.jinritemai.com";
@@ -22,8 +22,8 @@ export type ExtensionNodeId =
   | "doudian.shop.context.read"
   | "doudian.product.scope.collect"
   | "doudian.product.scope.restore"
+  | "doudian.inventory.shop.activate"
   | "doudian.inventory.product.snapshot.read"
-  | "doudian.orders.recent.read"
   | "doudian.product.editor.open"
   | "doudian.editor.priority-items.inspect"
   | "doudian.alliance.shops.discover"
@@ -151,8 +151,31 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
     adapter: { id: "doudian", version: DOUDIAN_ADAPTER_VERSION }
   },
   {
-    nodeId: "doudian.inventory.product.snapshot.read",
+    nodeId: "doudian.inventory.shop.activate",
     versions: ["1.0.0"],
+    riskLevel: "R1",
+    permissions: [
+      "browser.dom.read",
+      "browser.dom.write",
+      "browser.tabs.read",
+      "browser.tabs.navigate"
+    ],
+    routes: [
+      {
+        origin: DOUDIAN_ORIGIN,
+        pathnamePrefixes: ["/ffa/g/list"],
+        observerCapabilityId: "doudian.page"
+      }
+    ],
+    adapter: {
+      id: "doudian-inventory",
+      version: DOUDIAN_INVENTORY_ADAPTER_VERSION
+    },
+    executionTarget: "background"
+  },
+  {
+    nodeId: "doudian.inventory.product.snapshot.read",
+    versions: ["2.0.0"],
     riskLevel: "R1",
     permissions: [
       "browser.dom.read",
@@ -170,18 +193,6 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
       id: "doudian-inventory",
       version: DOUDIAN_INVENTORY_ADAPTER_VERSION
     }
-  },
-  {
-    nodeId: "doudian.orders.recent.read",
-    versions: ["1.0.0","1.1.0","1.2.0"],
-    riskLevel: "R1",
-    permissions: ["browser.dom.read","browser.dom.write","browser.tabs.read"],
-    routes: [{
-      origin: DOUDIAN_ORIGIN,
-      pathnamePrefixes: ["/ffa/morder/order"],
-      observerCapabilityId: "doudian.page"
-    }],
-    adapter: { id:"doudian-inventory",version:DOUDIAN_INVENTORY_ADAPTER_VERSION }
   },
   {
     nodeId: "doudian.product.editor.open",

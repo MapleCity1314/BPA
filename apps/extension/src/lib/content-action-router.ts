@@ -57,10 +57,6 @@ export interface ContentActionHandlers {
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
   ) => Promise<ContentActionResult>;
-  readonly "doudian.orders.recent.read": (
-    input: Readonly<Record<string, unknown>>,
-    request: ContentActionRequest
-  ) => Promise<ContentActionResult>;
   readonly "doudian.product.editor.open": (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
@@ -296,7 +292,6 @@ export async function routeContentAction(input: {
     route.capability.nodeId !== "doudian.product.editor.open" &&
     route.capability.nodeId !== "doudian.product.scope.restore" &&
     route.capability.nodeId !== "doudian.inventory.product.snapshot.read" &&
-    route.capability.nodeId !== "doudian.orders.recent.read" &&
     route.capability.nodeId !== "ecommerce.marketplace.search-results.read" &&
     route.capability.nodeId !== "browser.design.snapshot.capture" &&
     Object.keys(actionInput).length > 0
@@ -328,20 +323,6 @@ export async function routeContentAction(input: {
         "库存快照目标与店铺身份无效。",
         request.pageEpoch
       );
-    }
-  }
-  if (route.capability.nodeId === "doudian.orders.recent.read") {
-    if (
-      Object.keys(actionInput).some((key) => !["shopId","shopName","lookbackMinutes"].includes(key)) ||
-      typeof actionInput.shopId !== "string" || !actionInput.shopId.trim() ||
-      typeof actionInput.shopName !== "string" || !actionInput.shopName.trim() ||
-      (actionInput.lookbackMinutes !== undefined && (
-        typeof actionInput.lookbackMinutes !== "number" ||
-        !Number.isSafeInteger(actionInput.lookbackMinutes) ||
-        Number(actionInput.lookbackMinutes) < 60 || Number(actionInput.lookbackMinutes) > 180
-      ))
-    ) {
-      return failure("RECENT_ORDER_INPUT_INVALID","近期订单读取目标无效。",request.pageEpoch);
     }
   }
   if (

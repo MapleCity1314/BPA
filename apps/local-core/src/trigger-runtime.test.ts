@@ -1721,7 +1721,7 @@ describe("external inventory domain lease Trigger lifecycle", () => {
     store.close();
   });
 
-  it("marks an active Run uncertain before reconciling and releasing a lost domain lease", async () => {
+  it("marks an active Run uncertain and blocks the Attempt until business reconciliation", async () => {
     const store = new SqlitePersistence({ path: ":memory:" });
     let current = new Date("2026-08-05T00:00:00.000Z");
     const trigger = store.putTriggerSpec({
@@ -1759,12 +1759,11 @@ describe("external inventory domain lease Trigger lifecycle", () => {
     expect(store.getRun(attempt.workflowRunId!)?.status).toBe("uncertain");
     expect(store.getTriggerAttempt(attempt.attemptId)?.status).toBe("running");
     await coordinator.tick();
-    expect(store.getExternalDomainLease(lease.requestId)?.state).toBe("released");
+    expect(store.getExternalDomainLease(lease.requestId)?.state).toBe(
+      "reconciliation_required"
+    );
     engine.tick();
-    expect(store.getTriggerAttempt(attempt.attemptId)).toMatchObject({
-      status: "terminal",
-      terminalOutcome: "uncertain"
-    });
+    expect(store.getTriggerAttempt(attempt.attemptId)?.status).toBe("running");
     store.close();
   });
 

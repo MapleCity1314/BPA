@@ -88,13 +88,8 @@ export const INVENTORY_CHANNEL_ESTIMATE_HANDLER_REF =
   "inventory.channel-consumption.estimate@1.0.0";
 export const INVENTORY_RISK_EVALUATE_HANDLER_REF =
   "inventory.risk.evaluate@1.0.0";
-export const SALES_DEMAND_SYNC_HANDLER_REF = "ecom.sales-demand.sync@1.0.0";
-export const SALES_DEMAND_RECENT_PERSIST_HANDLER_REF = "ecom.sales-demand.recent.persist@1.0.0";
 export const INVENTORY_FORECAST_INPUT_READ_HANDLER_REF = "inventory.forecast-input.read@1.0.0";
 export const INVENTORY_FORECAST_INPUT_READ_V101_HANDLER_REF = "inventory.forecast-input.read@1.0.1";
-export const INVENTORY_FORECAST_PERSIST_HANDLER_REF = "inventory.forecast.persist@1.0.0";
-export const INVENTORY_RISK_PERSIST_HANDLER_REF = "inventory.risk.persist@1.0.0";
-export const INVENTORY_SHADOW_PRODUCT_COMPUTE_HANDLER_REF = "inventory.shadow.product.compute@1.0.0";
 
 const MAX_TEAM_DATASET_BYTES = 512 * 1024;
 const MAX_TEAM_DATASET_BASE64_LENGTH = 700_000;
@@ -234,29 +229,6 @@ const manifestDigest = (ref: string): string => {
 
 export const teamHandlerRegistry = new TeamHandlerRegistry([
   {
-    node: { id: "ecom.sales-demand.sync", version: "1.0.0" },
-    implementationDigest: manifestDigest(SALES_DEMAND_SYNC_HANDLER_REF),
-    invoke(input, signal) {
-      const candidate = inputObject(input, "Sales demand sync input");
-      return invokeInventoryService("sales-demand.sync", {
-        shopId: boundedString(candidate.shopId, "shopId", 200),
-        shopName: boundedString(candidate.shopName, "shopName", 200),
-        lease:inputObject(candidate.lease as JsonValue,"lease")
-      }, signal);
-    }
-  },
-  {
-    node: { id: "ecom.sales-demand.recent.persist", version: "1.0.0" },
-    implementationDigest: manifestDigest(SALES_DEMAND_RECENT_PERSIST_HANDLER_REF),
-    invoke(input, signal) {
-      const candidate = inputObject(input,"Recent sales demand persist input");
-      return invokeInventoryService("sales-demand.recent.persist",{
-        snapshot:inputObject(candidate.snapshot as JsonValue,"snapshot"),
-        lease:inputObject(candidate.lease as JsonValue,"lease")
-      },signal);
-    }
-  },
-  {
     node: { id: "inventory.forecast-input.read", version: "1.0.0" },
     implementationDigest: manifestDigest(INVENTORY_FORECAST_INPUT_READ_HANDLER_REF),
     invoke(input, signal) {
@@ -278,98 +250,6 @@ export const teamHandlerRegistry = new TeamHandlerRegistry([
         productId: boundedString(candidate.productId, "productId", 200),
         asOf: boundedString(candidate.asOf, "asOf", 100)
       }, signal);
-    }
-  },
-  {
-    node: { id: "inventory.forecast.persist", version: "1.0.0" },
-    implementationDigest: manifestDigest(INVENTORY_FORECAST_PERSIST_HANDLER_REF),
-    invoke(input, signal) {
-      const candidate = inputObject(input, "Inventory forecast persist input");
-      return invokeInventoryService("inventory.forecast.persist", candidate, signal);
-    }
-  },
-  {
-    node: { id: "inventory.risk.persist", version: "1.0.0" },
-    implementationDigest: manifestDigest(INVENTORY_RISK_PERSIST_HANDLER_REF),
-    invoke(input, signal) {
-      const candidate = inputObject(input, "Inventory risk persist input");
-      return invokeInventoryService("inventory.risk.persist", candidate, signal);
-    }
-  },
-  {
-    node: { id: "inventory.shadow.product.compute", version: "1.0.0" },
-    implementationDigest: manifestDigest(INVENTORY_SHADOW_PRODUCT_COMPUTE_HANDLER_REF),
-    invoke(input, signal) {
-      const candidate = inputObject(input, "Inventory shadow product input");
-      const envelope = candidate.envelope as FactEnvelope<InventoryProductFact>;
-      const inputs = candidate.inputs;
-      if (!Array.isArray(inputs) || inputs.length > 500) {
-        throw new TeamHandlerError("TEAM_HANDLER_INPUT_INVALID", "Inventory product computation requires at most 500 SKU inputs");
-      }
-      return domainResult("Inventory shadow product computation", signal, () => {
-        const forecasts: Record<string, DemandForecast> = {};
-        const channelEstimates: Record<string, ChannelShareEstimate> = {};
-        const persistableForecasts: Record<string, unknown>[] = [];
-        for (const raw of inputs) {
-          const item = raw as Record<string, unknown>;
-          const platformSkuId = boundedString(item.platformSkuId, "platformSkuId", 200);
-          const merchantCode = boundedString(item.merchantCode, "merchantCode", 200);
-          const observations = Array.isArray(item.observations)
-            ? item.observations as DemandObservation[]
-            : [];
-          const channelPoints = Array.isArray(item.channelPoints)
-            ? item.channelPoints as ChannelStockPoint[]
-            : [];
-          const forecast = forecastDemand({
-            asOf: boundedString(candidate.evaluatedAt, "evaluatedAt", 100),
-            observations,
-            ...(item.fallbackHourlyRate === undefined ? {} : {
-              fallbackHourlyRate:Number(item.fallbackHourlyRate)
-            }),
-            ...(item.fallbackReason === undefined ? {} : {
-              fallbackReason:boundedString(item.fallbackReason,"fallbackReason",500)
-            })
-          });
-          const cutoff = Date.parse(forecast.asOf) - 3 * 24 * 60 * 60 * 1000;
-          const observedSkuDemand = observations.reduce((sum, point) =>
-            Date.parse(point.at) >= cutoff ? sum + point.quantity : sum, 0);
-          forecasts[platformSkuId] = forecast;
-          channelEstimates[platformSkuId] = estimateChannelShares({
-            asOf: forecast.asOf,
-            points: channelPoints,
-            observedSkuDemand
-          });
-          persistableForecasts.push({
-            shopId: envelope.scope.shopId,
-            productId: envelope.facts.productId,
-            platformSkuId,
-            merchantCode,
-            sourceDataset: item.sourceDataset,
-            forecast,
-            lease:inputObject(candidate.lease as JsonValue,"lease")
-          });
-        }
-        const demandQuality = (
-          inputs[0] as Record<string, unknown> | undefined
-        )?.demandQuality as
-          | {
-              recentObservedAt?: string;
-              historicalCompleteThrough?: string;
-            }
-          | undefined;
-        return {
-          forecasts,
-          channelEstimates,
-          persistableForecasts,
-          evaluation: evaluateInventoryRisk({
-            evaluatedAt: boundedString(candidate.evaluatedAt, "evaluatedAt", 100),
-            envelope,
-            forecasts,
-            channelEstimates,
-            ...(demandQuality === undefined ? {} : { demandQuality })
-          })
-        };
-      });
     }
   },
   {

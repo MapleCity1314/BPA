@@ -252,6 +252,61 @@ describe("Adapter Node registry", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("activates an exact inventory shop without opening another browser", async () => {
+    const result = await executeRegisteredAdapterNode(
+      "doudian.inventory.shop.activate",
+      { targetShop: { id: targetShop.id, name: targetShop.name } },
+      context
+    );
+
+    expect(driver.switchShop).toHaveBeenCalledWith({
+      id: targetShop.id,
+      name: targetShop.name,
+      status: "active",
+      statusText: "active"
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      output: {
+        status: "complete",
+        currentShop: { id: targetShop.id, name: targetShop.name }
+      }
+    });
+    expect(driver.cleanupShopTabs).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an inventory shop target without a stable numeric id", async () => {
+    const result = await executeRegisteredAdapterNode(
+      "doudian.inventory.shop.activate",
+      { targetShop: { id: "name-only", name: targetShop.name } },
+      context
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "SHOP_TARGET_INVALID", retryable: false }
+    });
+    expect(driver.switchShop).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when inventory shop activation is not confirmed", async () => {
+    driver.switchShop.mockRejectedValueOnce(
+      new AllianceRetiredDriverError("SHOP_IDENTITY_MISMATCH")
+    );
+
+    const result = await executeRegisteredAdapterNode(
+      "doudian.inventory.shop.activate",
+      { targetShop: { id: targetShop.id, name: targetShop.name } },
+      context
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "SHOP_IDENTITY_MISMATCH", retryable: false }
+    });
+    expect(driver.cleanupShopTabs).toHaveBeenCalledOnce();
+  });
+
   it("fails alliance discovery when an active shop lacks a stable numeric id", async () => {
     driver.discoverShopContext.mockResolvedValue({
       currentShopName: "无ID店铺",

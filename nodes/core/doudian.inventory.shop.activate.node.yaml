@@ -1,0 +1,59 @@
+apiVersion: bpa/v1alpha2
+kind: Node
+metadata:
+  id: doudian.inventory.shop.activate
+  version: 1.0.0
+  title: 激活并验证抖店库存目标店铺
+  description: 在同一受管商品管理标签页内切换到固定目标店铺，并以数字 ID 与名称确认当前上下文；不创建额外浏览器实例。
+runtime: browser
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [targetShop]
+  properties:
+    targetShop: { $ref: "#/$defs/shop" }
+  $defs:
+    shop:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: { type: string, pattern: "^[0-9]{5,30}$" }
+        name: { type: string, minLength: 2, maxLength: 80 }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [status, currentShop, observedAt]
+  properties:
+    status: { const: complete }
+    currentShop: { $ref: "#/$defs/shop" }
+    observedAt: { type: string, format: date-time }
+  $defs:
+    shop:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: { type: string, pattern: "^[0-9]{5,30}$" }
+        name: { type: string, minLength: 2, maxLength: 80 }
+risk:
+  level: R1
+  permissions: [browser.dom.read, browser.dom.write, browser.tabs.read, browser.tabs.navigate]
+  domains: [https://fxg.jinritemai.com]
+resources:
+  browser:
+    kind: browser
+    capabilities: [browser.dom.read, browser.dom.write, browser.tabs.read, browser.tabs.navigate]
+    allowedOrigins: [https://fxg.jinritemai.com]
+    authentication: authenticated
+    purpose: 在一个已认证商品管理标签页中切换并精确验证目标店铺，最终也用同一能力恢复源店铺
+execution:
+  timeoutDefault: 2m
+  idempotency: repeatable_read
+  retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED, INVENTORY_PRODUCT_PAGE_TIMEOUT]
+  cancellable: true
+  timingPolicy:
+    rateLimit: { scope: authentication_context, minIntervalMs: 1000, maxQueueMs: 10000 }
+errors: [AUTH_REQUIRED, BROWSER_DISCONNECTED, CAPTCHA_REQUIRED, COMMAND_CANCELLED, COMMAND_RESULT_TOO_LARGE, DEADLINE_EXCEEDED, INVENTORY_CANARY_FAILED, INVENTORY_PRODUCT_PAGE_TIMEOUT, PAGE_LOADING, PAGE_MISMATCH, PAGE_URL_INVALID, RISK_CONTROL, SESSION_EXPIRED, SHOP_CONTEXT_RESTORE_FAILED, SHOP_IDENTITY_AMBIGUOUS, SHOP_IDENTITY_MISMATCH, SHOP_IDENTITY_UNCERTAIN]
+evidence: { required: [result, error] }
+adapter: { id: doudian-inventory, versions: [2.0.0] }

@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ExternalDomainLeaseProviderError,
-  InventoryDomainLeaseClient
+  InventoryDomainLeaseClient,
+  inventoryWriteTimeoutMs
 } from "./inventory-domain-lease-client.js";
 import { InventoryServiceWriterError } from "./inventory-data-runtime-provider.js";
 
@@ -85,6 +86,13 @@ function grant(overrides: Record<string, unknown> = {}): Record<string, unknown>
 }
 
 describe("InventoryDomainLeaseClient", () => {
+  it("allows the sales sync Node deadline while bounding ordinary writes", () => {
+    expect(inventoryWriteTimeoutMs("sales-demand.sync")).toBe(600_000);
+    expect(inventoryWriteTimeoutMs("inventory.snapshot.persist")).toBe(30_000);
+    expect(inventoryWriteTimeoutMs("inventory.shop.forecast-risk.refresh"))
+      .toBe(1_800_000);
+  });
+
   it("returns a strictly validated acquisition grant", async () => {
     const socketPath = await inventoryServer((request) => ({
       ok: true,
@@ -196,11 +204,14 @@ describe("InventoryDomainLeaseClient", () => {
     });
     const client = new InventoryDomainLeaseClient(socketPath);
     await expect(
-      client.persistSnapshot(
+      client.write(
         {
-          snapshot: {
-            shop: { id: "10001", name: "测试店铺" },
-            product: { id: "80001" }
+          operation: "inventory.snapshot.persist",
+          input: {
+            snapshot: {
+              shop: { id: "10001", name: "测试店铺" },
+              product: { id: "80001" }
+            }
           },
           lease: {
             leaseKey: "inventory-production-cycle",
@@ -229,9 +240,10 @@ describe("InventoryDomainLeaseClient", () => {
     const missingPath = missingSocketPath("bpa-snapshot-writer-missing");
     const unavailable = new InventoryDomainLeaseClient(missingPath, 50);
     const error = await unavailable
-      .persistSnapshot(
+      .write(
         {
-          snapshot: { shop: { id: "10001" } },
+          operation: "inventory.snapshot.persist",
+          input: { snapshot: { shop: { id: "10001" } } },
           lease: {
             leaseKey: "inventory-production-cycle",
             holderId: "trigger-attempt:test",
@@ -245,5 +257,59 @@ describe("InventoryDomainLeaseClient", () => {
       code: "INVENTORY_SERVICE_UNAVAILABLE",
       transportUncertain: true
     });
+  });
+
+  it("preserves a service-declared partial-commit uncertainty", async () => {
+    const socketPath = await inventoryServer(() => ({
+      ok:false,
+      error:{
+        code:"SALES_DEMAND_PARTIAL_COMMIT",
+        message:"controlled",
+        outcomeUncertain:true
+      }
+    }));
+    const client = new InventoryDomainLeaseClient(socketPath);
+    const error = await client.write({
+      operation:"sales-demand.sync",
+      input:{ shopId:"shop-1",shopName:"一号店" },
+      lease:{
+        leaseKey:"inventory-production-cycle",
+        holderId:"trigger-attempt:test",
+        fencingToken:7
+      }
+    },new AbortController().signal).catch(
+      (caught) => caught as InventoryServiceWriterError
+    );
+    expect(error).toMatchObject({
+      code:"SALES_DEMAND_PARTIAL_COMMIT",
+      transportUncertain:true
+    });
+  });
+
+  it("reads only the controlled orders-freshness projection without a fence",async () => {
+    let received:RequestFrame | undefined;
+    const socketPath = await inventoryServer((request) => {
+      received = request;
+      return {
+        ok:true,id:request.id,result:{
+          status:"fresh_reused",shop:{ id:"10001",name:"测试店铺" },
+          checkedAt:"2026-08-09T08:00:00.000Z",maxAgeSeconds:7200,
+          latestObservedAt:"2026-08-09T07:30:00.000Z",ageSeconds:1800,
+          datasetId:"sales-demand-staged:10001",dataVersion:"v1",
+          source:"wdt"
+        }
+      };
+    });
+    const client = new InventoryDomainLeaseClient(socketPath);
+    await expect(client.readOrdersFreshness({
+      shop:{ id:"10001",name:"测试店铺" }
+    },new AbortController().signal)).resolves.toMatchObject({
+      status:"fresh_reused",ageSeconds:1800
+    });
+    expect(received).toMatchObject({
+      operation:"inventory.orders.freshness.read",
+      input:{ shop:{ id:"10001",name:"测试店铺" } }
+    });
+    expect(received?.input).not.toHaveProperty("lease");
   });
 });

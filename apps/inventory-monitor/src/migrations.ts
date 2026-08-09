@@ -317,5 +317,83 @@ export const INVENTORY_MIGRATIONS: readonly AppMigration[] = [
       CREATE INDEX lease_acquisition_request_holder_idx
         ON ops.lease_acquisition_request(lease_key,holder_id,acquired_at DESC);
     `
+  },
+  {
+    version: 6,
+    name: "published-order-staging",
+    sql: `
+      CREATE SCHEMA IF NOT EXISTS legacy;
+
+      ALTER TABLE source.order_line_fact SET SCHEMA legacy;
+      ALTER TABLE legacy.order_line_fact RENAME TO order_line_fact_v5;
+      ALTER TABLE source.watermark SET SCHEMA legacy;
+      ALTER TABLE legacy.watermark RENAME TO watermark_v5;
+
+      CREATE TABLE source.watermark (
+        source_system text NOT NULL,
+        shop_id text NOT NULL,
+        dataset_type text NOT NULL,
+        watermark text NOT NULL,
+        source_digest text NOT NULL,
+        updated_at timestamptz NOT NULL,
+        PRIMARY KEY (source_system, shop_id, dataset_type)
+      );
+
+      CREATE TABLE source.order_line_fact (
+        source_item_key text PRIMARY KEY,
+        source_system text NOT NULL,
+        shop_id text NOT NULL,
+        shop_name text NOT NULL,
+        child_order_id text NOT NULL,
+        product_id text NOT NULL,
+        merchant_code text NOT NULL,
+        specification text NOT NULL,
+        submitted_at timestamptz NOT NULL,
+        paid_at timestamptz,
+        shipped_at timestamptz,
+        order_status text NOT NULL,
+        aftersales_status text NOT NULL,
+        source_quantity integer NOT NULL CHECK (source_quantity >= 0),
+        demand_quantity integer NOT NULL CHECK (demand_quantity >= 0),
+        source_batch_id bigint NOT NULL,
+        source_row_hash text NOT NULL,
+        source_loaded_at timestamptz NOT NULL,
+        source_period_end timestamptz,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE INDEX order_line_fact_demand_idx
+        ON source.order_line_fact(shop_id, product_id, merchant_code, paid_at)
+        WHERE paid_at IS NOT NULL AND demand_quantity > 0;
+      CREATE INDEX order_line_fact_period_end_idx
+        ON source.order_line_fact(shop_id,source_period_end DESC);
+      CREATE TABLE source.order_line_staging (
+        sync_run_id text NOT NULL REFERENCES source.sync_run(sync_run_id) ON DELETE RESTRICT,
+        source_item_key text NOT NULL,
+        source_system text NOT NULL,
+        shop_id text NOT NULL,
+        shop_name text NOT NULL,
+        child_order_id text NOT NULL,
+        product_id text NOT NULL,
+        merchant_code text NOT NULL,
+        specification text NOT NULL,
+        submitted_at timestamptz NOT NULL,
+        paid_at timestamptz,
+        shipped_at timestamptz,
+        order_status text NOT NULL,
+        aftersales_status text NOT NULL,
+        source_quantity integer NOT NULL CHECK (source_quantity >= 0),
+        demand_quantity integer NOT NULL CHECK (demand_quantity >= 0),
+        source_batch_id bigint NOT NULL,
+        source_row_hash text NOT NULL,
+        source_loaded_at timestamptz NOT NULL,
+        source_period_end timestamptz,
+        staged_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+        PRIMARY KEY(sync_run_id,source_item_key)
+      );
+      CREATE INDEX order_line_fact_published_cutoff_idx
+        ON source.order_line_fact(shop_id,source_system,source_batch_id,product_id,merchant_code);
+      CREATE INDEX order_line_staging_sync_idx
+        ON source.order_line_staging(sync_run_id,source_batch_id);
+    `
   }
 ];

@@ -1,7 +1,6 @@
 import {
   collectDoudianProductScope,
   collectDoudianProductInventorySnapshot,
-  collectDoudianRecentOrders,
   detectDoudianRiskSignals,
   doudianExperienceErrorPayload,
   inspectDoudianPriorityItems,
@@ -296,21 +295,6 @@ const handlers: ContentActionHandlers = {
         stable_for_ms: request.timingPolicy?.readiness?.stableForMs ?? 250
       }
     };
-  },
-
-  async "doudian.orders.recent.read"(input,request) {
-    const output = await collectDoudianRecentOrders(document,{
-      shopId:String(input.shopId),shopName:String(input.shopName),
-      ...(input.lookbackMinutes === undefined ? {} : { lookbackMinutes:Number(input.lookbackMinutes) })
-    },{
-      deadline:Date.parse(request.deadline!),
-      ...(request.timingPolicy?.readiness?.pollIntervalMs === undefined
-        ? {}
-        : { waitMs:request.timingPolicy.readiness.pollIntervalMs })
-    });
-    const riskSignals = detectDoudianRiskSignals(document,location.href);
-    if (firstBlockingRiskSignal(riskSignals)) throw new ContentActionRiskError(riskSignals);
-    return { output,riskSignals };
   },
 
   async "doudian.product.editor.open"(input, request) {

@@ -2,9 +2,9 @@ apiVersion: bpa/v1alpha2
 kind: Node
 metadata:
   id: doudian.inventory.product.snapshot.read
-  version: 1.0.0
+  version: 2.0.0
   title: 读取抖店商品 SKU 与渠道库存快照
-  description: 在商品管理页只读打开指定商品的库存抽屉，读取 SKU 当前、占用、未占用及渠道商品库存，并保留渠道共享库存池的口径差异诊断。
+  description: 在已由正式店铺激活节点验证的商品管理页只读打开指定商品库存抽屉，读取 SKU 当前、占用、未占用及渠道库存，并严格绑定店铺与商品身份。
 runtime: browser
 inputSchema:
   type: object
@@ -16,8 +16,8 @@ inputSchema:
       additionalProperties: false
       required: [id, name]
       properties:
-        id: { type: string, minLength: 1, maxLength: 200 }
-        name: { type: string, minLength: 2, maxLength: 100 }
+        id: { type: string, pattern: "^[0-9]{5,30}$" }
+        name: { type: string, minLength: 2, maxLength: 80 }
     product:
       type: object
       additionalProperties: false
@@ -31,22 +31,22 @@ outputSchema:
   required: [status, snapshotVersion, observedAt, shop, product, skus, diagnostics, formMutations]
   properties:
     status: { const: complete }
-    snapshotVersion: { const: 1.0.0 }
+    snapshotVersion: { const: 2.0.0 }
     observedAt: { type: string, format: date-time }
     shop:
       type: object
       additionalProperties: false
       required: [id, name]
       properties:
-        id: { type: string }
-        name: { type: string }
+        id: { type: string, pattern: "^[0-9]{5,30}$" }
+        name: { type: string, minLength: 2, maxLength: 80 }
     product:
       type: object
       additionalProperties: false
       required: [id, title, totalStock]
       properties:
-        id: { type: string }
-        title: { type: string }
+        id: { type: string, pattern: "^[0-9]{5,30}$" }
+        title: { type: string, minLength: 1, maxLength: 1000 }
         totalStock: { type: integer, minimum: 0 }
     skus:
       type: array
@@ -71,52 +71,24 @@ outputSchema:
               properties:
                 channelGoodsId: { type: string, pattern: "^[0-9]{5,30}$" }
                 stock: { type: integer, minimum: 0 }
-    diagnostics:
-      type: array
-      maxItems: 100
-      items: { type: string, maxLength: 1000 }
+    diagnostics: { type: array, maxItems: 100, items: { type: string, maxLength: 1000 } }
     formMutations: { const: 0 }
 risk:
   level: R1
-  permissions:
-    - browser.dom.read
-    - browser.dom.write
-    - browser.tabs.read
-  domains:
-    - https://fxg.jinritemai.com
+  permissions: [browser.dom.read, browser.dom.write, browser.tabs.read]
+  domains: [https://fxg.jinritemai.com]
 resources:
   browser:
     kind: browser
     capabilities: [browser.dom.read, browser.dom.write, browser.tabs.read]
     allowedOrigins: [https://fxg.jinritemai.com]
     authentication: authenticated
-    purpose: 在冻结的商品管理标签页只读采集单个商品库存快照
+    purpose: 在已精确激活的店铺商品管理标签页只读采集单商品库存快照
 execution:
   timeoutDefault: 2m
   idempotency: repeatable_read
-  retryableErrors:
-    - PAGE_LOADING
-    - BROWSER_DISCONNECTED
-    - INVENTORY_DRAWER_NOT_READY
+  retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED, INVENTORY_DRAWER_NOT_READY]
   cancellable: true
-errors:
-  - PAGE_MISMATCH
-  - SHOP_IDENTITY_MISMATCH
-  - PRODUCT_ROW_NOT_FOUND
-  - PRODUCT_ROW_AMBIGUOUS
-  - INVENTORY_DRAWER_NOT_READY
-  - INVENTORY_SKU_COLUMNS_MISSING
-  - INVENTORY_SKU_ROWS_EMPTY
-  - INVENTORY_SKU_LIST_INCOMPLETE
-  - CHANNEL_STOCK_UNAVAILABLE
-  - SKU_STOCK_TOTAL_MISMATCH
-  - PRODUCT_STOCK_TOTAL_MISMATCH
-  - CAPTCHA_REQUIRED
-  - RATE_LIMITED
-  - RISK_CONTROL
-  - SESSION_EXPIRED
-evidence:
-  required: [result, error]
-adapter:
-  id: doudian-inventory
-  versions: [1.0.0]
+errors: [AUTH_REQUIRED, BROWSER_DISCONNECTED, CAPTCHA_REQUIRED, CHANNEL_STOCK_UNAVAILABLE, INVENTORY_DRAWER_NOT_READY, INVENTORY_SKU_COLUMNS_MISSING, INVENTORY_SKU_LIST_INCOMPLETE, INVENTORY_SKU_ROWS_EMPTY, PAGE_MISMATCH, PRODUCT_ROW_AMBIGUOUS, PRODUCT_ROW_NOT_FOUND, PRODUCT_STOCK_TOTAL_MISMATCH, RATE_LIMITED, RISK_CONTROL, SESSION_EXPIRED, SHOP_IDENTITY_MISMATCH, SKU_STOCK_TOTAL_MISMATCH]
+evidence: { required: [result, error] }
+adapter: { id: doudian-inventory, versions: [2.0.0] }

@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { parseWorkflowYaml } from "@bpa/compiler";
 import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
 import {
@@ -43,6 +46,46 @@ function fixture() {
 }
 
 describe("doudian inventory snapshot", () => {
+  it("publishes the exact inventory v2 browser closure", () => {
+    const adapter = parseWorkflowYaml(readFileSync(
+      new URL("../doudian-inventory.adapter.yaml", import.meta.url),
+      "utf8"
+    )) as {
+      metadata: { version: string };
+      extension: { minimumVersion: string };
+      capabilities: Array<{
+        nodeId: string;
+        nodeVersions: string[];
+        implementationDigest: string;
+      }>;
+    };
+    const implementationDigest = `sha256:${createHash("sha256")
+      .update([
+        "apps/extension/src/entrypoints/background.ts",
+        "apps/extension/src/entrypoints/content.ts",
+        "apps/extension/src/lib/adapter-node-registry.ts",
+        "apps/extension/src/lib/alliance-retired-background.ts",
+        "apps/extension/src/lib/alliance-retired-content.ts",
+        "adapters/doudian/src/alliance-retired.ts",
+        "adapters/doudian/src/inventory-snapshot.ts",
+        "adapters/doudian/src/product-list-guard.ts"
+      ].map((path) => readFileSync(new URL(`../../../${path}`, import.meta.url)))
+        .join("\n"))
+      .digest("hex")}`;
+    expect(adapter.metadata.version).toBe("2.0.0");
+    expect(adapter.extension.minimumVersion).toBe("0.6.2");
+    expect(adapter.capabilities).toHaveLength(2);
+    expect(adapter.capabilities.map((capability) => capability.nodeId)).toEqual([
+      "doudian.inventory.shop.activate",
+      "doudian.inventory.product.snapshot.read"
+    ]);
+    expect(adapter.capabilities.map((capability) => capability.nodeVersions))
+      .toEqual([["1.0.0"], ["2.0.0"]]);
+    for (const capability of adapter.capabilities) {
+      expect(capability.implementationDigest).toBe(implementationDigest);
+    }
+  });
+
   it("reads the current stock API used by the production inventory drawer", async () => {
     const doc = fixture();
     const fetch = async (input: string | URL, init?: RequestInit): Promise<Response> => {

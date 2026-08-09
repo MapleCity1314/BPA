@@ -2,10 +2,59 @@ import { createHash, randomUUID } from "node:crypto";
 import mysql, { type Pool as MysqlPool, type RowDataPacket } from "mysql2/promise";
 import type { InventoryRepository, LeaseFence, NormalizedOrderLine } from "./repository.js";
 
-const SOURCE_SYSTEM = "ecom-profit-mysql:doudian-manual-order";
 const WDT_SOURCE_SYSTEM = "ecom-profit-mysql:wdt-stockout";
 const PAGE_SIZE = 5_000;
 const MAX_ROWS_PER_SYNC = 1_000_000;
+
+export interface SalesDemandCommitProgress {
+  readonly committedChunks: number;
+  readonly committedRows: number;
+}
+
+export class SalesDemandPartialCommitError extends Error {
+  readonly code = "SALES_DEMAND_PARTIAL_COMMIT";
+
+  constructor(
+    readonly progress: SalesDemandCommitProgress,
+    readonly causeCode: string
+  ) {
+    super("SALES_DEMAND_PARTIAL_COMMIT");
+  }
+}
+
+function controlledCauseCode(error: unknown): string {
+  if (
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    (/^[A-Z][A-Z0-9_]{1,99}$/u.test(error.code) ||
+      /^[A-Z0-9]{5}$/u.test(error.code))
+  ) {
+    return error.code;
+  }
+  const first = error instanceof Error
+    ? error.message.split(/[:\s]/u)[0]
+    : "SALES_DEMAND_SYNC_FAILED";
+  return first && (
+    /^[A-Z][A-Z0-9_]{1,99}$/u.test(first) ||
+    /^[A-Z0-9]{5}$/u.test(first)
+  )
+    ? first
+    : "SALES_DEMAND_SYNC_FAILED";
+}
+
+export function salesDemandSyncFailure(
+  error: unknown,
+  progress: SalesDemandCommitProgress
+): Error {
+  if (error instanceof SalesDemandPartialCommitError) return error;
+  return progress.committedChunks > 0
+    ? new SalesDemandPartialCommitError(progress, controlledCauseCode(error))
+    : error instanceof Error
+      ? error
+      : new Error("SALES_DEMAND_SYNC_FAILED");
+}
 
 export interface MysqlSalesSourceOptions {
   readonly host: string;
@@ -13,30 +62,9 @@ export interface MysqlSalesSourceOptions {
   readonly user: string;
   readonly password: string;
   readonly database: string;
-  readonly manualSkipShopIds?: readonly string[];
 }
 
-interface SourceRow extends RowDataPacket {
-  id: number;
-  batch_id: number;
-  shop_name: string;
-  shop_id: string;
-  row_hash: string;
-  loaded_at: string;
-  period_end: string;
-  child_order_id: string | null;
-  product_id: string | null;
-  merchant_code: string | null;
-  specification: string | null;
-  source_quantity: string | number | null;
-  submitted_at: string | null;
-  paid_at: string | null;
-  shipped_at: string | null;
-  order_status: string | null;
-  aftersales_status: string | null;
-}
-
-interface WdtSourceRow extends RowDataPacket {
+export interface WdtSourceRow extends RowDataPacket {
   id: number;
   source_shop_name: string;
   child_order_id: string;
@@ -52,7 +80,7 @@ interface WdtSourceRow extends RowDataPacket {
   query_end_time: string;
 }
 
-interface WdtCoverageRow extends RowDataPacket {
+export interface WdtCoverageRow extends RowDataPacket {
   query_end_time: string | null;
   source_loaded_at: string | null;
 }
@@ -72,12 +100,6 @@ function optionalShanghaiTimestamp(value: unknown): string | undefined {
   return new Date(parsed).toISOString();
 }
 
-function shanghaiPeriodEnd(value: unknown): string | undefined {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}/u.test(value)) return undefined;
-  const parsed = Date.parse(`${value.slice(0,10)}T23:59:59.999+08:00`);
-  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
-}
-
 function completeDayBefore(value: unknown): string | undefined {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}/u.test(value)) return undefined;
   const instant = Date.parse(`${value.replace(" ", "T")}+08:00`);
@@ -90,37 +112,8 @@ function completeDayBefore(value: unknown): string | undefined {
   return new Date(startOfDay - 1).toISOString();
 }
 
-function normalizeRow(row: SourceRow): NormalizedOrderLine {
-  const submittedAt = optionalShanghaiTimestamp(row.submitted_at);
-  if (!submittedAt) throw new Error("ORDER_SUBMITTED_AT_INVALID");
-  const paidAt = optionalShanghaiTimestamp(row.paid_at);
-  const shippedAt = optionalShanghaiTimestamp(row.shipped_at);
-  const quantity = Number(row.source_quantity ?? 0);
-  if (!Number.isSafeInteger(quantity) || quantity < 0) {
-    throw new Error("ORDER_QUANTITY_INVALID");
-  }
-  const orderStatus = String(row.order_status ?? "").trim();
-  const cancelledBeforeShipment = /关闭|取消/u.test(orderStatus) && !shippedAt;
-  const sourcePeriodEnd = shanghaiPeriodEnd(row.period_end);
-  return {
-    shopId: required(String(row.shop_id), "shopId", 200),
-    shopName: required(row.shop_name, "shopName", 200),
-    childOrderId: required(row.child_order_id, "childOrderId", 100),
-    productId: required(row.product_id, "productId", 100),
-    merchantCode: required(row.merchant_code, "merchantCode", 200),
-    specification: String(row.specification ?? "").trim().slice(0, 1_000),
-    submittedAt,
-    ...(paidAt ? { paidAt } : {}),
-    ...(shippedAt ? { shippedAt } : {}),
-    orderStatus,
-    aftersalesStatus: String(row.aftersales_status ?? "").trim().slice(0, 200),
-    sourceQuantity: quantity,
-    demandQuantity: paidAt && !cancelledBeforeShipment ? quantity : 0,
-    sourceBatchId: Number(row.batch_id),
-    sourceRowHash: required(row.row_hash, "rowHash", 100),
-    sourceLoadedAt: optionalShanghaiTimestamp(row.loaded_at) ?? new Date(0).toISOString(),
-    ...(sourcePeriodEnd ? { sourcePeriodEnd } : {})
-  };
+function wdtShopNames(shopName: string): readonly [string, string, string] {
+  return [shopName, `抖音-${shopName}`, `抖音-享乐东${shopName}`];
 }
 
 export class MysqlSalesDemandSync {
@@ -153,117 +146,11 @@ export class MysqlSalesDemandSync {
     readonly expectedShopId?: string;
     readonly lease: LeaseFence;
   }): Promise<Record<string, unknown>> {
-    const manual = input.expectedShopId && this.options.manualSkipShopIds?.includes(input.expectedShopId)
-      ? {
-          status:"skipped",
-          processed:0,
-          diagnostic:"Historical manual-order backfill is isolated for this high-volume shop; recent WDT demand remains enabled."
-        }
-      : await this.syncManual(input);
-    const wdt = await this.syncWdt(input);
-    const primary = wdt.status === "succeeded" ? wdt : manual;
-    return {
-      status: wdt.status === "succeeded" || manual.status === "succeeded"
-        ? "succeeded"
-        : "no_changes",
-      syncRunId:String(primary.syncRunId),
-      processed:Number(manual.processed ?? 0) + Number(wdt.processed ?? 0),
-      inserted:Number(manual.inserted ?? 0) + Number(wdt.inserted ?? 0),
-      updated:Number(manual.updated ?? 0) + Number(wdt.updated ?? 0),
-      watermark:primary.watermark ?? null,
-      manual,
-      wdt,
-      dataset: wdt.dataset ?? manual.dataset ?? null
-    };
+    return this.syncWdt(input);
   }
 
-  private async syncManual(input: {
-    readonly shopName: string;
-    readonly expectedShopId?: string;
-    readonly lease: LeaseFence;
-  }): Promise<Record<string, unknown>> {
-    const syncRunId = `sync:${randomUUID()}`;
-    const current = await this.repository.currentWatermark(SOURCE_SYSTEM, input.expectedShopId ?? input.shopName);
-    await this.repository.beginOrderSync({
-      syncRunId,
-      sourceSystem: SOURCE_SYSTEM,
-      shopId: input.expectedShopId ?? input.shopName,
-      ...(current ? { sourceWatermark: current } : {})
-    },input.lease);
-    const digest = createHash("sha256");
-    let cursor = 0;
-    let watermark = current ? Number(current) : 0;
-    let processed = 0;
-    let inserted = 0;
-    let updated = 0;
-    let actualShopId = input.expectedShopId;
-    let historicalCompleteThrough = new Date(0).toISOString();
-    try {
-      while (true) {
-        const rows = await this.readPage({
-          shopName: input.shopName,
-          cursor,
-          ...(current ? { minimumBatchId: Number(current) + 1 } : {})
-        });
-        if (rows.length === 0) break;
-        cursor = rows[rows.length - 1]!.id;
-        const normalized: NormalizedOrderLine[] = [];
-        for (const source of rows) {
-          if (input.expectedShopId && String(source.shop_id) !== input.expectedShopId) {
-            throw new Error("MYSQL_SHOP_IDENTITY_MISMATCH");
-          }
-          actualShopId ??= String(source.shop_id);
-          const item = normalizeRow(source);
-          normalized.push(item);
-          watermark = Math.max(watermark, item.sourceBatchId);
-          if (item.sourcePeriodEnd && item.sourcePeriodEnd > historicalCompleteThrough) {
-            historicalCompleteThrough = item.sourcePeriodEnd;
-          }
-          digest.update(`${source.id}:${source.batch_id}:${source.row_hash}\n`);
-        }
-        const changes = await this.repository.upsertOrderChunk(normalized,input.lease);
-        inserted += changes.inserted;
-        updated += changes.updated;
-        processed += normalized.length;
-        if (processed > MAX_ROWS_PER_SYNC) throw new Error("MYSQL_SYNC_ROW_LIMIT_EXCEEDED");
-        if (rows.length < PAGE_SIZE) break;
-      }
-      if (processed === 0) {
-        await this.repository.completeNoChangeOrderSync(syncRunId,input.lease);
-        return { status: "no_changes", syncRunId, watermark: current ?? null, processed: 0 };
-      }
-      const shopId = required(actualShopId, "actualShopId", 200);
-      const sourceDigest = `sha256:${digest.digest("hex")}`;
-      const dataset = await this.repository.completeOrderSync({
-        syncRunId,
-        sourceSystem: SOURCE_SYSTEM,
-        shopId,
-        watermark: String(watermark),
-        sourceDigest,
-        inserted,
-        updated,
-        recordCount: processed,
-        historicalCompleteThrough
-      },input.lease);
-      return {
-        status: "succeeded",
-        syncRunId,
-        shopId,
-        watermark: String(watermark),
-        sourceDigest,
-        processed,
-        inserted,
-        updated,
-        dataset
-      };
-    } catch (error) {
-      await this.repository.failOrderSync(
-        syncRunId,
-        error instanceof Error ? error.message : String(error),
-        input.lease
-      ).catch(() => undefined);
-      throw error;
-    }
+  protected maximumRowsPerSync(): number {
+    return MAX_ROWS_PER_SYNC;
   }
 
   private async syncWdt(input: {
@@ -284,11 +171,11 @@ export class MysqlSalesDemandSync {
     let cursor = current ? Number(current) : 0;
     let watermark = cursor;
     let processed = 0;
-    let inserted = 0;
-    let updated = 0;
     let historicalCompleteThrough = new Date(0).toISOString();
+    let committedChunks = 0;
+    let committedRows = 0;
     try {
-      const coverage = await this.readWdtCoverage();
+      const coverage = await this.readWdtCoverage(input.shopName);
       const recentObservedAt = optionalShanghaiTimestamp(coverage.query_end_time);
       const coverageCompleteThrough = completeDayBefore(coverage.query_end_time);
       if (coverageCompleteThrough) historicalCompleteThrough = coverageCompleteThrough;
@@ -318,6 +205,7 @@ export class MysqlSalesDemandSync {
             quantity,submittedAt,paidAt,shippedAt ?? null,source.refund_status ?? ""
           ])).digest("hex")}`;
           normalized.push({
+            sourceSystem:WDT_SOURCE_SYSTEM,
             shopId,shopName:input.shopName,
             childOrderId:required(source.child_order_id,"childOrderId",100),
             productId:required(source.product_id,"productId",100),
@@ -333,84 +221,68 @@ export class MysqlSalesDemandSync {
           if (sourcePeriodEnd > historicalCompleteThrough) historicalCompleteThrough = sourcePeriodEnd;
           digest.update(`${source.id}:${rowHash}\n`);
         }
-        const changes = await this.repository.upsertOrderChunk(normalized,input.lease);
-        inserted += changes.inserted;
-        updated += changes.updated;
+        await this.repository.upsertOrderChunk({
+          syncRunId,sourceSystem:WDT_SOURCE_SYSTEM,shopId,rows:normalized
+        },input.lease);
+        committedChunks += 1;
+        committedRows += normalized.length;
         processed += normalized.length;
-        if (processed > MAX_ROWS_PER_SYNC) throw new Error("WDT_SYNC_ROW_LIMIT_EXCEEDED");
+        if (processed > this.maximumRowsPerSync()) {
+          throw new Error("WDT_SYNC_ROW_LIMIT_EXCEEDED");
+        }
         if (rows.length < PAGE_SIZE) break;
       }
-      if (processed === 0 && (!recentObservedAt || !coverageCompleteThrough)) {
-        await this.repository.completeNoChangeOrderSync(syncRunId,input.lease);
-        return { status:"no_changes",syncRunId,watermark:current ?? null,processed:0 };
+      if (!recentObservedAt || !coverageCompleteThrough) {
+        if (processed === 0) {
+          await this.repository.completeNoChangeOrderSync(syncRunId,input.lease);
+          return { status:"no_changes",syncRunId,watermark:current ?? null,processed:0 };
+        }
+        throw new Error("WDT_DATA_QUALITY_INVALID");
       }
       const sourceDigest = `sha256:${digest.digest("hex")}`;
       const dataset = await this.repository.completeOrderSync({
         syncRunId,sourceSystem:WDT_SOURCE_SYSTEM,shopId,
-        watermark:String(watermark),sourceDigest,inserted,updated,
-        recordCount:processed,historicalCompleteThrough
+        watermark:String(watermark),sourceDigest,
+        recordCount:processed,historicalCompleteThrough,
+        observedAt:recentObservedAt
       },input.lease);
-      if (recentObservedAt) {
-        await this.repository.persistRecentOrders({
-          observedAt:recentObservedAt,shop:{ id:shopId,name:input.shopName },records:[],
-          quality:{ completeness:1,diagnostics:[
-            "Recent demand window coverage was verified from the WDT stockout API mirror."
-          ] }
-        },input.lease);
-      }
       return {
         status:"succeeded",syncRunId,shopId,watermark:String(watermark),
-        sourceDigest,processed,inserted,updated,historicalCompleteThrough,dataset
+        sourceDigest,processed,inserted:dataset.inserted,updated:dataset.updated,
+        historicalCompleteThrough,dataset
       };
     } catch (error) {
-      await this.repository.failOrderSync(
-        syncRunId,error instanceof Error ? error.message : String(error),input.lease
-      ).catch(() => undefined);
-      throw error;
+      try {
+        await this.repository.failOrderSync(
+          syncRunId,controlledCauseCode(error),input.lease
+        );
+      } catch (cleanupError) {
+        if (controlledCauseCode(cleanupError) === "SCHEDULER_LEASE_LOST") {
+          throw cleanupError instanceof Error
+            ? cleanupError
+            : new Error("SCHEDULER_LEASE_LOST");
+        }
+        throw new SalesDemandPartialCommitError(
+          { committedChunks,committedRows },
+          controlledCauseCode(error)
+        );
+      }
+      const causeCode = controlledCauseCode(error);
+      throw new Error(
+        causeCode === "WDT_ORDER_ROW_INVALID" ||
+        causeCode === "WDT_SYNC_ROW_LIMIT_EXCEEDED" ||
+        causeCode === "WDT_DATA_QUALITY_INVALID"
+          ? "WDT_DATA_QUALITY_INVALID"
+          : "WDT_SOURCE_UNAVAILABLE"
+      );
     }
   }
 
-  private async readPage(input: {
-    shopName: string;
-    cursor: number;
-    minimumBatchId?: number;
-  }): Promise<SourceRow[]> {
-    const [rows] = await this.pool.query<SourceRow[]>(
-      `SELECT
-         id,batch_id,shop_name,shop_id,row_hash,loaded_at,period_end,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."子订单编号"')) AS child_order_id,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."商品ID"')) AS product_id,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."商家编码"')) AS merchant_code,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."商品规格"')) AS specification,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."商品数量"')) AS source_quantity,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."订单提交时间"')) AS submitted_at,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."支付完成时间"')) AS paid_at,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."发货时间"')) AS shipped_at,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."订单状态"')) AS order_status,
-         JSON_UNQUOTE(JSON_EXTRACT(row_json,'$."售后状态"')) AS aftersales_status
-       FROM stg_doudian_manual_order_raw
-       WHERE id > ? AND shop_name = ?
-         AND dataset_type IN ('order','orders')
-         AND platform IN ('抖音','douyin')
-         AND (? IS NOT NULL AND batch_id >= ? OR ? IS NULL AND period_end >= DATE_SUB(CURRENT_DATE, INTERVAL 90 DAY))
-       ORDER BY id
-       LIMIT ${PAGE_SIZE}`,
-      [
-        input.cursor,
-        input.shopName,
-        input.minimumBatchId ?? null,
-        input.minimumBatchId ?? null,
-        input.minimumBatchId ?? null
-      ]
-    );
-    return rows;
-  }
-
-  private async readWdtPage(input: {
+  protected async readWdtPage(input: {
     shopName: string;
     cursor: number;
   }): Promise<WdtSourceRow[]> {
-    const sourceNames = [input.shopName,`抖音-${input.shopName}`,`抖音-享乐东${input.shopName}`];
+    const sourceNames = wdtShopNames(input.shopName);
     const [rows] = await this.pool.query<WdtSourceRow[]>(
       `SELECT
          id,shop_name AS source_shop_name,origin_sub_order_no AS child_order_id,
@@ -434,11 +306,14 @@ export class MysqlSalesDemandSync {
     return rows;
   }
 
-  private async readWdtCoverage(): Promise<WdtCoverageRow> {
+  protected async readWdtCoverage(shopName: string): Promise<WdtCoverageRow> {
+    const sourceNames = wdtShopNames(shopName);
     const [rows] = await this.pool.query<WdtCoverageRow[]>(
       `SELECT MAX(query_end_time) AS query_end_time,MAX(synced_at) AS source_loaded_at
        FROM ods_wdt_stock_out_api_line
-       WHERE platform_id='69' AND query_end_time >= DATE_SUB(NOW(),INTERVAL 3 DAY)`
+       WHERE platform_id='69' AND shop_name IN (?,?,?)
+         AND query_end_time >= DATE_SUB(NOW(),INTERVAL 3 DAY)`,
+      [...sourceNames]
     );
     return rows[0] ?? ({ query_end_time:null,source_loaded_at:null } as WdtCoverageRow);
   }
@@ -456,15 +331,5 @@ export function mysqlOptionsFromEnvironment(
   if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
     throw new Error("BPA_MYSQL_PORT is invalid");
   }
-  const manualSkipShopIds = (environment.BPA_MYSQL_MANUAL_SKIP_SHOP_IDS ?? "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  if (manualSkipShopIds.some((value) => !/^[0-9A-Za-z:_-]{1,200}$/u.test(value))) {
-    throw new Error("BPA_MYSQL_MANUAL_SKIP_SHOP_IDS is invalid");
-  }
-  return {
-    host,port,user,password,database,
-    ...(manualSkipShopIds.length > 0 ? { manualSkipShopIds } : {})
-  };
+  return { host,port,user,password,database };
 }

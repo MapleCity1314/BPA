@@ -36,12 +36,12 @@ describe("Local Core platform assets", () => {
         "nodes/core/doudian.editor.priority-items.inspect@1.1.0.node.yaml"
       ],
       [
-        "doudian.inventory.product.snapshot.read",
-        "nodes/core/doudian.inventory.product.snapshot.read.node.yaml"
+        "doudian.inventory.shop.activate",
+        "nodes/core/doudian.inventory.shop.activate.node.yaml"
       ],
       [
-        "doudian.orders.recent.read",
-        "nodes/core/doudian.orders.recent.read.node.yaml"
+        "doudian.inventory.product.snapshot.read",
+        "nodes/core/doudian.inventory.product.snapshot.read@2.0.0.node.yaml"
       ]
     ] as const) {
       expect(
@@ -141,7 +141,7 @@ describe("Local Core platform assets", () => {
       ok: true,
       result: {
         valid: true,
-        identity: "doudian-inventory@1.0.0"
+        identity: "doudian-inventory@2.0.0"
       }
     });
     const contract = asset(

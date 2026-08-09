@@ -1,0 +1,397 @@
+apiVersion: bpa/v1alpha3
+kind: Workflow
+metadata:
+  id: doudian.inventory.production-cycle
+  version: 1.0.0
+  title: 抖店多店库存预测生产周期
+  description: 在一个已认证 Mac Chrome 标签页和一个 Run 级库存领域租约内，串行完成固定 13 店的订单新鲜度、库存事实、预测与风险闭环，并恢复源店铺；已知单店实证最大商品数为 86，首版每店容量 250，超限失败关闭。
+spec:
+  riskLevel: R1
+  inputSchema:
+    type: object
+    additionalProperties: false
+    required: [expectedShopCount, shops]
+    properties:
+      expectedShopCount: { const: 13 }
+      shops:
+        type: array
+        minItems: 13
+        maxItems: 13
+        items:
+          type: object
+          additionalProperties: false
+          required: [id, name]
+          properties:
+            id: { type: string, pattern: "^[0-9]{5,30}$" }
+            name: { type: string, minLength: 2, maxLength: 80 }
+  outputSchema:
+    type: object
+    additionalProperties: false
+    required: [notification, cycle, sourceRestore]
+    properties:
+      notification:
+        type: object
+        additionalProperties: false
+        required: [shouldNotify, level, title, message]
+        properties:
+          shouldNotify: { type: boolean }
+          level: { enum: [info, warning, error] }
+          title: { type: string, minLength: 1, maxLength: 200 }
+          message: { type: string, minLength: 1, maxLength: 1000 }
+      cycle: { type: object }
+      sourceRestore: { type: object }
+      operationalAttentionMarker:
+        type: object
+        additionalProperties: false
+        required: [version, kind, code]
+        properties:
+          version: { const: "1" }
+          kind: { const: business-finding }
+          code: { enum: [inventory-production-cycle-degraded, inventory-risk-finding] }
+  limits: { maxDepth: 3, maxStepExecutions: 10000 }
+  resourceSlots:
+    inventory_browser:
+      kind: browser
+      capabilities: [browser.dom.read, browser.dom.write, browser.tabs.read, browser.tabs.navigate]
+      allowedOrigins: [https://fxg.jinritemai.com]
+      authentication: authenticated
+      purpose: 绑定一个确切且已认证的商品管理标签页，在同一 Chrome 实例中串行切店并最终恢复源店铺
+  root:
+    kind: sequence
+    steps:
+      - key: validate_cycle_input
+        kind: call
+        use: inventory.production-cycle.input.validate@1.0.0
+        with:
+          expectedShopCount: ${input.expectedShopCount}
+          shops: ${input.shops}
+        timeout: 5s
+      - key: read_source_shop
+        kind: call
+        use: doudian.shop.context.read@1.3.0
+        resourceMappings: { browser: inventory_browser }
+        timeout: 15s
+      - key: process_shops
+        kind: foreach
+        items: ${input.shops}
+        itemName: shop
+        indexName: shop_index
+        itemKey: ${item.id}
+        maxItems: 13
+        maxDuration: 8h
+        onItemError: collect
+        body:
+          kind: sequence
+          steps:
+            - key: activate_shop
+              kind: call
+              use: doudian.inventory.shop.activate@1.0.0
+              with:
+                targetShop: ${item}
+              resourceMappings: { browser: inventory_browser }
+              timeout: 2m
+              retry:
+                maxAttempts: 3
+                backoff: 2s
+                retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED, INVENTORY_PRODUCT_PAGE_TIMEOUT]
+            - key: read_orders_freshness
+              kind: call
+              use: inventory.orders.freshness.read@1.0.0
+              with:
+                shop: ${item}
+              timeout: 30s
+            - key: refresh_orders_gate
+              kind: decision
+              condition:
+                kind: compare
+                operator: equals
+                left: { kind: binding, binding: "${steps.read_orders_freshness.output.status}" }
+                right: { kind: literal, value: refresh_required }
+              then:
+                kind: sequence
+                steps:
+                  - key: sync_orders
+                    kind: call
+                    use: ecom.sales-demand.sync@2.0.0
+                    with:
+                      shopId: ${item.id}
+                      shopName: ${item.name}
+                    timeout: 10m
+              else:
+                kind: sequence
+                steps:
+                  - key: reuse_fresh_orders
+                    kind: call
+                    use: control.noop@1.0.0
+                    with:
+                      value: ${steps.read_orders_freshness.output}
+                    timeout: 1s
+            - key: confirm_orders_freshness
+              kind: call
+              use: inventory.orders.freshness.read@1.0.0
+              with:
+                shop: ${item}
+                baseline: ${steps.read_orders_freshness.output}
+              timeout: 30s
+            - key: collect_product_scope
+              kind: call
+              use: doudian.product.scope.collect@1.1.0
+              resourceMappings: { browser: inventory_browser }
+              timeout: 10m
+            - key: scope_complete_gate
+              kind: decision
+              condition:
+                kind: compare
+                operator: equals
+                left: { kind: binding, binding: "${steps.collect_product_scope.output.status}" }
+                right: { kind: literal, value: complete }
+              then:
+                kind: sequence
+                steps:
+                  - key: collect_snapshots
+                    kind: foreach
+                    items: ${steps.collect_product_scope.output.inspectionQueue}
+                    itemName: product
+                    indexName: product_index
+                    itemKey: ${item.id}
+                    maxItems: 250
+                    maxDuration: 8h
+                    onItemError: collect
+                    body:
+                      kind: sequence
+                      steps:
+                        - key: read_inventory_snapshot
+                          kind: call
+                          use: doudian.inventory.product.snapshot.read@2.0.0
+                          with:
+                            shop:
+                              id: ${steps.activate_shop.output.currentShop.id}
+                              name: ${steps.activate_shop.output.currentShop.name}
+                            product:
+                              id: ${item.id}
+                              title: ${item.title}
+                          resourceMappings: { browser: inventory_browser }
+                          timeout: 2m
+                        - key: persist_inventory_snapshot
+                          kind: call
+                          use: inventory.snapshot.persist@2.0.0
+                          with:
+                            snapshot: ${steps.read_inventory_snapshot.output}
+                          timeout: 30s
+                        - key: snapshot_completed
+                          kind: terminal
+                          status: succeeded
+                          output:
+                            productId: ${item.id}
+                            snapshotId: ${steps.persist_inventory_snapshot.output.snapshotId}
+                  - key: evaluate_risks
+                    kind: call
+                    use: inventory.shop.forecast-risk.refresh@1.0.0
+                    with:
+                      shop:
+                        id: ${steps.activate_shop.output.currentShop.id}
+                        name: ${steps.activate_shop.output.currentShop.name}
+                      attemptedSnapshots: ${steps.collect_snapshots.output.total}
+                      persistedSnapshots: ${steps.collect_snapshots.output.succeeded.count}
+                      failedSnapshots: ${steps.collect_snapshots.output.failed.count}
+                      unresolvedSnapshots: ${steps.collect_snapshots.output.unresolved.count}
+                      snapshotReceipts: ${steps.collect_snapshots.output.succeeded.items}
+                    timeout: 30m
+                    handlers:
+                      timeout:
+                        kind: sequence
+                        steps:
+                          - key: forecast_risk_timeout
+                            kind: terminal
+                            status: uncertain
+                            output:
+                              notification: { shouldNotify: true, level: error, title: 库存预测风险处理超时, message: 已持久化的库存快照仍然有效，但预测与风险写入结果不确定，需要对账。 }
+                              cycle:
+                                status: partial
+                                reason: forecast-risk-outcome-uncertain
+                                shop: ${item}
+                                snapshots:
+                                  attempted: ${steps.collect_snapshots.output.total}
+                                  persisted: ${steps.collect_snapshots.output.succeeded.count}
+                                  failed: ${steps.collect_snapshots.output.failed.count}
+                                  unresolved: ${steps.collect_snapshots.output.unresolved.count}
+                              sourceRestore: { status: not_attempted }
+                            error: { code: INVENTORY_FORECAST_RISK_TIMEOUT, message: 库存快照已保留，但预测风险写入超时，必须先对账。 }
+                      uncertain:
+                        kind: sequence
+                        steps:
+                          - key: forecast_risk_uncertain
+                            kind: terminal
+                            status: uncertain
+                            output:
+                              notification: { shouldNotify: true, level: error, title: 库存预测风险结果不确定, message: 已持久化的库存快照仍然有效，但预测与风险写入结果不确定，需要对账。 }
+                              cycle:
+                                status: partial
+                                reason: forecast-risk-outcome-uncertain
+                                shop: ${item}
+                                snapshots:
+                                  attempted: ${steps.collect_snapshots.output.total}
+                                  persisted: ${steps.collect_snapshots.output.succeeded.count}
+                                  failed: ${steps.collect_snapshots.output.failed.count}
+                                  unresolved: ${steps.collect_snapshots.output.unresolved.count}
+                              sourceRestore: { status: not_attempted }
+                            error: { code: INVENTORY_FORECAST_RISK_UNCERTAIN, message: 库存快照已保留，但预测风险写入结果不确定，必须先对账。 }
+                  - key: shop_completed
+                    kind: terminal
+                    status: succeeded
+                    output:
+                      shop: ${item}
+                      ordersStatus: ${steps.confirm_orders_freshness.output.status}
+                      scopeStatus: ${steps.collect_product_scope.output.status}
+                      snapshots:
+                        attempted: ${steps.collect_snapshots.output.total}
+                        persisted: ${steps.collect_snapshots.output.succeeded.count}
+                        failed: ${steps.collect_snapshots.output.failed.count}
+                        unresolved: ${steps.collect_snapshots.output.unresolved.count}
+                      forecastRisk: ${steps.evaluate_risks.output}
+              else:
+                kind: sequence
+                steps:
+                  - key: shop_scope_blocked
+                    kind: terminal
+                    status: succeeded
+                    output:
+                      shop: ${item}
+                      ordersStatus: ${steps.confirm_orders_freshness.output.status}
+                      scopeStatus: ${steps.collect_product_scope.output.status}
+                      snapshots: { attempted: 0, persisted: 0, failed: 0, unresolved: 0 }
+                      forecastRisk: null
+      - key: restore_source_shop
+        kind: call
+        use: doudian.inventory.shop.activate@1.0.0
+        with:
+          targetShop:
+            id: ${steps.read_source_shop.output.shop.id}
+            name: ${steps.read_source_shop.output.shop.name}
+        resourceMappings: { browser: inventory_browser }
+        timeout: 2m
+        handlers:
+          failure:
+            kind: sequence
+            steps:
+              - key: source_restore_failed
+                kind: terminal
+                status: uncertain
+                error: { code: INVENTORY_SOURCE_SHOP_RESTORE_FAILED, message: 库存事实可能已持久化，但浏览器未可靠恢复到源店铺，需要人工确认。 }
+          timeout:
+            kind: sequence
+            steps:
+              - key: source_restore_timeout
+                kind: terminal
+                status: uncertain
+                error: { code: INVENTORY_SOURCE_SHOP_RESTORE_TIMEOUT, message: 库存事实可能已持久化，但恢复源店铺超时，需要人工确认。 }
+          uncertain:
+            kind: sequence
+            steps:
+              - key: source_restore_uncertain
+                kind: terminal
+                status: uncertain
+                error: { code: INVENTORY_SOURCE_SHOP_RESTORE_UNCERTAIN, message: 源店铺恢复结果不确定，需要人工确认后再运行。 }
+      - key: aggregate_cycle
+        kind: call
+        use: inventory.production-cycle.aggregate@1.0.0
+        with:
+          expectedShopCount: ${input.expectedShopCount}
+          configuredShops: ${input.shops}
+          sourceShop:
+            id: ${steps.read_source_shop.output.shop.id}
+            name: ${steps.read_source_shop.output.shop.name}
+          foreachOutcome: ${steps.process_shops.output}
+        timeout: 30s
+        handlers:
+          failure:
+            kind: sequence
+            steps:
+              - key: aggregate_failed
+                kind: terminal
+                status: uncertain
+                error: { code: INVENTORY_PRODUCTION_CYCLE_AGGREGATE_FAILED, message: 逐商品事实已保留，但生产周期覆盖汇总失败。 }
+          timeout:
+            kind: sequence
+            steps:
+              - key: aggregate_timeout
+                kind: terminal
+                status: uncertain
+                error: { code: INVENTORY_PRODUCTION_CYCLE_AGGREGATE_TIMEOUT, message: 逐商品事实已保留，但生产周期覆盖汇总超时。 }
+          uncertain:
+            kind: sequence
+            steps:
+              - key: aggregate_uncertain
+                kind: terminal
+                status: uncertain
+                error: { code: INVENTORY_PRODUCTION_CYCLE_AGGREGATE_UNCERTAIN, message: 生产周期覆盖汇总结果不确定，禁止报告正常完成。 }
+      - key: cycle_failed_gate
+        kind: decision
+        condition:
+          kind: compare
+          operator: equals
+          left: { kind: binding, binding: "${steps.aggregate_cycle.output.status}" }
+          right: { kind: literal, value: failed }
+        then:
+          kind: sequence
+          steps:
+            - key: cycle_failed
+              kind: terminal
+              status: failed
+              output:
+                notification: { shouldNotify: true, level: error, title: 抖店库存生产周期失败, message: 没有形成可用库存覆盖，禁止报告本轮正常完成。 }
+                cycle: ${steps.aggregate_cycle.output}
+                sourceRestore: ${steps.restore_source_shop.output}
+              error: { code: INVENTORY_PRODUCTION_CYCLE_EMPTY, message: 没有形成可用库存覆盖。 }
+        else:
+          kind: sequence
+          steps:
+            - key: cycle_partial_gate
+              kind: decision
+              condition:
+                kind: compare
+                operator: equals
+                left: { kind: binding, binding: "${steps.aggregate_cycle.output.status}" }
+                right: { kind: literal, value: partial }
+              then:
+                kind: sequence
+                steps:
+                  - key: cycle_partial
+                    kind: terminal
+                    status: uncertain
+                    output:
+                      notification: { shouldNotify: true, level: error, title: 抖店库存生产周期部分完成, message: 已保留成功库存事实，但店铺、商品、预测或风险覆盖不完整，需要运营处理。 }
+                      cycle: ${steps.aggregate_cycle.output}
+                      sourceRestore: ${steps.restore_source_shop.output}
+                    error: { code: INVENTORY_PRODUCTION_CYCLE_PARTIAL, message: 本轮存在已持久化的部分事实和未完成覆盖，禁止报告全量完成。 }
+              else:
+                kind: sequence
+                steps:
+                  - key: business_attention_gate
+                    kind: decision
+                    condition:
+                      kind: compare
+                      operator: equals
+                      left: { kind: binding, binding: "${steps.aggregate_cycle.output.attentionRequired}" }
+                      right: { kind: literal, value: true }
+                    then:
+                      kind: sequence
+                      steps:
+                        - key: cycle_completed_with_attention
+                          kind: terminal
+                          status: succeeded
+                          output:
+                            notification: { shouldNotify: true, level: warning, title: 抖店库存生产周期完成并有待处理项, message: 全部必要效果已闭合，但订单质量或库存风险需要运营关注。 }
+                            cycle: ${steps.aggregate_cycle.output}
+                            sourceRestore: ${steps.restore_source_shop.output}
+                            operationalAttentionMarker: ${steps.aggregate_cycle.output.operationalAttentionMarker}
+                    else:
+                      kind: sequence
+                      steps:
+                        - key: cycle_completed
+                          kind: terminal
+                          status: succeeded
+                          output:
+                            notification: { shouldNotify: false, level: info, title: 抖店库存生产周期完成, message: 全部配置店铺的订单、库存、预测与风险覆盖均已闭合。 }
+                            cycle: ${steps.aggregate_cycle.output}
+                            sourceRestore: ${steps.restore_source_shop.output}
