@@ -11,6 +11,7 @@ import {
   DesignModeGrantConflictError,
   EvidenceConflictError,
   EvidenceOwnershipError,
+  RecoverySessionConflictError,
   RevisionConflictError,
   StaleFencingTokenError,
   WorkflowCandidateConflictError,
@@ -73,6 +74,9 @@ import {
   type Persistence,
   type PublishArtifactInput,
   type RetentionJobRecord,
+  type RecoverySessionRecord,
+  type RecoverySessionState,
+  type IssueRecoverySessionInput,
   type RunRecord,
   type RunPlanSnapshotRecord,
   type RunStatus,
@@ -5233,6 +5237,374 @@ export class SqlitePersistence implements Persistence {
     })();
   }
 
+  issueRecoverySession(
+    input: IssueRecoverySessionInput
+  ): RecoverySessionRecord {
+    return this.#db.transaction(() => {
+      const required = [
+        input.id,
+        input.attentionId,
+        input.requestedBy,
+        input.browserSessionId,
+        input.browserInstanceId,
+        input.profileId,
+        input.origin,
+        input.initialPageEpoch,
+        input.tokenDigest
+      ];
+      if (required.some((value) => !value.trim())) {
+        throw new RecoverySessionConflictError(
+          "Recovery Session identity and binding are required"
+        );
+      }
+      if (!Number.isSafeInteger(input.tabId) || input.tabId < 0) {
+        throw new RecoverySessionConflictError(
+          "Recovery Session tabId is invalid"
+        );
+      }
+      if (!/^sha256:[a-f0-9]{64}$/u.test(input.tokenDigest)) {
+        throw new RecoverySessionConflictError(
+          "Recovery Session token digest is invalid"
+        );
+      }
+      const issuedAtMs = Date.parse(input.issuedAt);
+      const expiresAtMs = Date.parse(input.expiresAt);
+      const ttlSeconds = (expiresAtMs - issuedAtMs) / 1_000;
+      if (
+        !Number.isFinite(issuedAtMs) ||
+        !Number.isFinite(expiresAtMs) ||
+        !Number.isSafeInteger(ttlSeconds) ||
+        ttlSeconds < 5 ||
+        ttlSeconds > 3_600
+      ) {
+        throw new RecoverySessionConflictError(
+          "Recovery Session lifetime is invalid"
+        );
+      }
+      const browser = this.getBrowserSession(input.browserSessionId);
+      if (
+        !browser ||
+        browser.disconnectedAt ||
+        browser.browserInstanceId !== input.browserInstanceId
+      ) {
+        throw new RecoverySessionConflictError(
+          "Recovery Session browser binding is unavailable"
+        );
+      }
+      const attention = this.getAttention(input.attentionId);
+      if (
+        !attention ||
+        attention.state !== "open" ||
+        !attention.item.blocking ||
+        attention.item.groupKey !== "authentication"
+      ) {
+        throw new RecoverySessionConflictError(
+          "Recovery Session Attention is not eligible"
+        );
+      }
+      const page = this.getBrowserPageObservation(
+        input.browserSessionId,
+        input.tabId
+      );
+      if (
+        !page ||
+        page.browserInstanceId !== input.browserInstanceId ||
+        page.origin !== input.origin ||
+        page.pageEpoch !== input.initialPageEpoch ||
+        input.profileId !== input.browserInstanceId
+      ) {
+        throw new RecoverySessionConflictError(
+          "Recovery Session page binding does not match"
+        );
+      }
+      const existing = this.#db
+        .prepare(
+          "SELECT recovery_session_id FROM recovery_sessions WHERE attention_id = ?"
+        )
+        .get(input.attentionId);
+      if (existing) {
+        throw new RecoverySessionConflictError(
+          "Attention already has a Recovery Session"
+        );
+      }
+      const leaseResourceId = `browser-instance:${input.browserInstanceId}`;
+      const leaseOwnerId = `recovery-session:${input.id}`;
+      const lease = this.#acquireControlLease(
+        "browser_control_leases",
+        "resource_id",
+        leaseResourceId,
+        leaseOwnerId,
+        input.issuedAt,
+        ttlSeconds
+      );
+      if (!lease) {
+        throw new RecoverySessionConflictError(
+          "Recovery Session browser resource is busy"
+        );
+      }
+      this.#db.prepare(
+        `INSERT INTO recovery_sessions(
+          recovery_session_id, attention_id, revision, state, requested_by,
+          browser_session_id, browser_instance_id, profile_id, tab_id, origin,
+          initial_page_epoch, token_digest, lease_resource_id, lease_owner_id,
+          lease_fencing_token, issued_at, expires_at, updated_at
+        ) VALUES (?, ?, 0, 'issued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        input.id,
+        input.attentionId,
+        input.requestedBy,
+        input.browserSessionId,
+        input.browserInstanceId,
+        input.profileId,
+        input.tabId,
+        input.origin,
+        input.initialPageEpoch,
+        input.tokenDigest,
+        leaseResourceId,
+        leaseOwnerId,
+        lease.fencingToken,
+        input.issuedAt,
+        input.expiresAt,
+        input.issuedAt
+      );
+      this.#insertAuditRecord({
+        id: this.#idFactory(),
+        action: "recovery-session.issued",
+        actor: input.requestedBy,
+        target: `recovery-session:${input.id}`,
+        detail: {
+          attentionId: input.attentionId,
+          browserInstanceId: input.browserInstanceId,
+          profileId: input.profileId,
+          tabId: input.tabId,
+          origin: input.origin,
+          expiresAt: input.expiresAt,
+          leaseFencingToken: lease.fencingToken
+        },
+        occurredAt: input.issuedAt
+      });
+      return this.getRecoverySession(input.id)!;
+    })();
+  }
+
+  getRecoverySession(id: string): RecoverySessionRecord | undefined {
+    const row = this.#db
+      .prepare(
+        "SELECT * FROM recovery_sessions WHERE recovery_session_id = ?"
+      )
+      .get(id) as SqlRow | undefined;
+    return row ? this.#readRecoverySession(row) : undefined;
+  }
+
+  listRecoverySessions(input: {
+    states?: readonly RecoverySessionState[];
+    limit: number;
+  }): RecoverySessionRecord[] {
+    const requestedLimit = Number.isSafeInteger(input.limit)
+      ? input.limit
+      : 100;
+    const limit = Math.min(Math.max(requestedLimit, 1), 200);
+    const states = [...new Set(input.states ?? [])];
+    const rows = (states.length === 0
+      ? this.#db.prepare(
+          `SELECT * FROM recovery_sessions
+           ORDER BY issued_at DESC, recovery_session_id LIMIT ?`
+        ).all(limit)
+      : this.#db.prepare(
+          `SELECT * FROM recovery_sessions
+           WHERE state IN (${states.map(() => "?").join(",")})
+           ORDER BY issued_at DESC, recovery_session_id LIMIT ?`
+        ).all(...states, limit)) as SqlRow[];
+    return rows.map((row) => this.#readRecoverySession(row));
+  }
+
+  activateRecoverySession(input: {
+    id: string;
+    expectedRevision: number;
+    tokenDigest: string;
+    actor: string;
+    activatedAt: string;
+  }): RecoverySessionRecord {
+    return this.#db.transaction(() => {
+      const result = this.#db.prepare(
+        `UPDATE recovery_sessions
+         SET state = 'active', revision = revision + 1,
+             activated_at = ?, updated_at = ?
+         WHERE recovery_session_id = ? AND state = 'issued'
+           AND revision = ? AND token_digest = ? AND expires_at > ?`
+      ).run(
+        input.activatedAt,
+        input.activatedAt,
+        input.id,
+        input.expectedRevision,
+        input.tokenDigest,
+        input.activatedAt
+      );
+      if (result.changes !== 1) {
+        throw new RecoverySessionConflictError(
+          "Recovery Session cannot be activated"
+        );
+      }
+      const record = this.getRecoverySession(input.id)!;
+      this.#insertAuditRecord({
+        id: this.#idFactory(),
+        action: "recovery-session.activated",
+        actor: input.actor,
+        target: `recovery-session:${input.id}`,
+        detail: { revision: record.revision },
+        occurredAt: input.activatedAt
+      });
+      return record;
+    })();
+  }
+
+  completeRecoverySession(input: {
+    id: string;
+    expectedRevision: number;
+    actor: string;
+    completedAt: string;
+    completionPageEpoch: string;
+  }): RecoverySessionRecord {
+    return this.#db.transaction(() => {
+      if (!input.completionPageEpoch.trim()) {
+        throw new RecoverySessionConflictError(
+          "Recovery Session completion page epoch is required"
+        );
+      }
+      const current = this.getRecoverySession(input.id);
+      const result = this.#db.prepare(
+        `UPDATE recovery_sessions
+         SET state = 'completed', revision = revision + 1,
+             completed_at = ?, completion_page_epoch = ?, updated_at = ?
+         WHERE recovery_session_id = ? AND state = 'active'
+           AND revision = ? AND expires_at > ?`
+      ).run(
+        input.completedAt,
+        input.completionPageEpoch,
+        input.completedAt,
+        input.id,
+        input.expectedRevision,
+        input.completedAt
+      );
+      if (result.changes !== 1 || !current) {
+        throw new RecoverySessionConflictError(
+          "Recovery Session cannot be completed"
+        );
+      }
+      this.#releaseControlLease(
+        "browser_control_leases",
+        "resource_id",
+        current.leaseResourceId,
+        current.leaseOwnerId,
+        current.leaseFencingToken,
+        input.completedAt
+      );
+      const record = this.getRecoverySession(input.id)!;
+      this.#insertAuditRecord({
+        id: this.#idFactory(),
+        action: "recovery-session.completed",
+        actor: input.actor,
+        target: `recovery-session:${input.id}`,
+        detail: {
+          revision: record.revision,
+          completionPageEpoch: input.completionPageEpoch
+        },
+        occurredAt: input.completedAt
+      });
+      return record;
+    })();
+  }
+
+  terminateRecoverySession(input: {
+    id: string;
+    expectedRevision: number;
+    nextState: "revoked" | "invalidated";
+    actor: string;
+    occurredAt: string;
+    reason: string;
+  }): RecoverySessionRecord {
+    return this.#db.transaction(() => {
+      if (!input.reason.trim()) {
+        throw new RecoverySessionConflictError(
+          "Recovery Session terminal reason is required"
+        );
+      }
+      const current = this.getRecoverySession(input.id);
+      const result = this.#db.prepare(
+        `UPDATE recovery_sessions
+         SET state = ?, revision = revision + 1,
+             terminal_reason = ?, updated_at = ?
+         WHERE recovery_session_id = ? AND state IN ('issued', 'active')
+           AND revision = ?`
+      ).run(
+        input.nextState,
+        input.reason,
+        input.occurredAt,
+        input.id,
+        input.expectedRevision
+      );
+      if (result.changes !== 1 || !current) {
+        throw new RecoverySessionConflictError(
+          "Recovery Session cannot be terminated"
+        );
+      }
+      this.#releaseControlLease(
+        "browser_control_leases",
+        "resource_id",
+        current.leaseResourceId,
+        current.leaseOwnerId,
+        current.leaseFencingToken,
+        input.occurredAt
+      );
+      const record = this.getRecoverySession(input.id)!;
+      this.#insertAuditRecord({
+        id: this.#idFactory(),
+        action: `recovery-session.${input.nextState}`,
+        actor: input.actor,
+        target: `recovery-session:${input.id}`,
+        detail: { reason: input.reason, revision: record.revision },
+        occurredAt: input.occurredAt
+      });
+      return record;
+    })();
+  }
+
+  expireRecoverySessions(input: {
+    now: string;
+    actor: string;
+  }): RecoverySessionRecord[] {
+    return this.#db.transaction(() => {
+      const expiring = this.#db.prepare(
+        `SELECT * FROM recovery_sessions
+         WHERE state IN ('issued', 'active') AND expires_at <= ?
+         ORDER BY expires_at, recovery_session_id`
+      ).all(input.now) as SqlRow[];
+      const expired: RecoverySessionRecord[] = [];
+      for (const row of expiring) {
+        const current = this.#readRecoverySession(row);
+        const result = this.#db.prepare(
+          `UPDATE recovery_sessions
+           SET state = 'expired', revision = revision + 1,
+               terminal_reason = 'RECOVERY_SESSION_EXPIRED', updated_at = ?
+           WHERE recovery_session_id = ? AND revision = ?
+             AND state IN ('issued', 'active') AND expires_at <= ?`
+        ).run(input.now, current.id, current.revision, input.now);
+        if (result.changes !== 1) continue;
+        const record = this.getRecoverySession(current.id)!;
+        this.#insertAuditRecord({
+          id: this.#idFactory(),
+          action: "recovery-session.expired",
+          actor: input.actor,
+          target: `recovery-session:${current.id}`,
+          detail: { revision: record.revision },
+          occurredAt: input.now
+        });
+        expired.push(record);
+      }
+      return expired;
+    })();
+  }
+
   getAttentionDelivery(id: string): AttentionDeliveryRecord | undefined {
     const row = this.#db
       .prepare("SELECT * FROM attention_deliveries WHERE delivery_id = ?")
@@ -6399,6 +6771,40 @@ export class SqlitePersistence implements Persistence {
       ...(row.completed_at == null
         ? {}
         : { completedAt: String(row.completed_at) })
+    };
+  }
+
+  #readRecoverySession(row: SqlRow): RecoverySessionRecord {
+    return {
+      id: String(row.recovery_session_id),
+      attentionId: String(row.attention_id),
+      revision: Number(row.revision),
+      state: row.state as RecoverySessionState,
+      requestedBy: String(row.requested_by),
+      browserSessionId: String(row.browser_session_id),
+      browserInstanceId: String(row.browser_instance_id),
+      profileId: String(row.profile_id),
+      tabId: Number(row.tab_id),
+      origin: String(row.origin),
+      initialPageEpoch: String(row.initial_page_epoch),
+      leaseResourceId: String(row.lease_resource_id),
+      leaseOwnerId: String(row.lease_owner_id),
+      leaseFencingToken: Number(row.lease_fencing_token),
+      issuedAt: String(row.issued_at),
+      expiresAt: String(row.expires_at),
+      updatedAt: String(row.updated_at),
+      ...(row.activated_at == null
+        ? {}
+        : { activatedAt: String(row.activated_at) }),
+      ...(row.completed_at == null
+        ? {}
+        : { completedAt: String(row.completed_at) }),
+      ...(row.completion_page_epoch == null
+        ? {}
+        : { completionPageEpoch: String(row.completion_page_epoch) }),
+      ...(row.terminal_reason == null
+        ? {}
+        : { terminalReason: String(row.terminal_reason) })
     };
   }
 

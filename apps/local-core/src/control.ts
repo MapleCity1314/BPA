@@ -101,6 +101,7 @@ import {
 } from "./staging-transfer.js";
 import { LocalCandidateArchiveService } from "./candidate-archive-service.js";
 import { TriggerRuntime } from "./trigger-runtime.js";
+import { RecoverySessionService } from "./recovery-session.js";
 
 export const CONTROL_MAX_MESSAGE_BYTES = 512 * 1024;
 
@@ -127,6 +128,7 @@ export class LocalCoreService {
   readonly candidateArchives: LocalCandidateArchiveService | undefined;
   readonly datasets: PackagingDatasetService;
   readonly triggers: TriggerRuntime;
+  readonly recoverySessions: RecoverySessionService;
   readonly #resourceBindings: RuntimeResourceBindingService;
   readonly #trustedEvidence: TrustedEvidenceQueryService;
 
@@ -139,6 +141,7 @@ export class LocalCoreService {
     readonly runtimeMaintenancePath?: string
   ) {
     this.engine = new LocalWorkflowEngine(persistence);
+    this.recoverySessions = new RecoverySessionService(persistence);
     this.datasets = new PackagingDatasetService(persistence);
     this.triggers = new TriggerRuntime(
       persistence,
@@ -944,6 +947,39 @@ export class LocalCoreService {
           expectedRevision: Number(params.expectedRevision),
           actor: String(params.actor || userInfo().username),
           acknowledgedAt: new Date().toISOString()
+        });
+      case "recovery-session.issue":
+        return this.recoverySessions.issue({
+          attentionId: String(params.attentionId),
+          requestedBy: String(params.actor || userInfo().username),
+          browserSessionId: String(params.browserSessionId),
+          browserInstanceId: String(params.browserInstanceId),
+          profileId: String(params.profileId),
+          tabId: Number(params.tabId),
+          origin: String(params.origin),
+          pageEpoch: String(params.pageEpoch),
+          ttlSeconds: Number(params.ttlSeconds ?? 300)
+        });
+      case "recovery-session.list":
+        return this.recoverySessions.list(Number(params.limit ?? 100));
+      case "recovery-session.activate":
+        return this.recoverySessions.activate({
+          id: String(params.id),
+          expectedRevision: Number(params.expectedRevision),
+          token: String(params.token),
+          actor: String(params.actor || userInfo().username)
+        });
+      case "recovery-session.complete":
+        return this.recoverySessions.complete({
+          id: String(params.id),
+          expectedRevision: Number(params.expectedRevision),
+          actor: String(params.actor || userInfo().username)
+        });
+      case "recovery-session.revoke":
+        return this.recoverySessions.revoke({
+          id: String(params.id),
+          expectedRevision: Number(params.expectedRevision),
+          actor: String(params.actor || userInfo().username)
         });
       case "run.inspect": {
         const runId = String(params.runId);
