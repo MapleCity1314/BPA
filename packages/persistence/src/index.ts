@@ -21,6 +21,8 @@ import type {
   EvidenceTransferRecord
 } from "@bpa/evidence-core";
 import type {
+  ArtifactRef,
+  ExecutionIdentity,
   ExecutionPlan,
   JsonValue,
   ResourceAuthentication,
@@ -47,6 +49,8 @@ export type {
   EvidenceTransferRecord
 } from "@bpa/evidence-core";
 export type {
+  ArtifactRef,
+  ExecutionIdentity,
   ExecutionPlan,
   JsonValue,
   ResourceAuthentication,
@@ -383,6 +387,7 @@ export interface RunTransitionInput {
   output?: unknown;
   attention?: AttentionRecord;
   attentionDelivery?: AttentionDeliveryRecord;
+  operationalDatasetPublicationIntentId?: string;
   event: ExecutionEventRecord;
 }
 
@@ -577,6 +582,115 @@ export interface DatasetPublicationUnitOfWork {
     records: readonly JsonValue[];
     nextRecordKey?: string;
   };
+}
+
+/**
+ * Runtime-owned identity for a mutating service invocation. Callers must copy
+ * this value from the active RuntimeInvocation; Workflow inputs are untrusted
+ * and must never be used to construct it.
+ */
+export interface OperationalExecutionContext {
+  invocationId: string;
+  identity: ExecutionIdentity;
+  node: ArtifactRef & { readonly kind: "node" };
+  idempotencyKey: string;
+  fencingToken: number;
+}
+
+export interface OperationalFactRecord {
+  factKey: string;
+  namespace: string;
+  runId: string;
+  businessDate: string;
+  businessTimeZone: string;
+  businessAnchorAt: string;
+  subjectId: string;
+  schemaVersion: string;
+  record: JsonValue;
+  recordDigest: string;
+  invocationId: string;
+  node: OperationalExecutionContext["node"];
+  identity: ExecutionIdentity;
+  idempotencyKey: string;
+  fencingToken: number;
+  observedAt: string;
+  persistedAt: string;
+}
+
+export interface PreparedOperationalDatasetPublication {
+  publicationIntentId: string;
+  runId: string;
+  stagingId: string;
+  dataset: DatasetVersionDefinition;
+  factKeys: readonly string[];
+  audit: AuditRecord;
+  quality: "complete" | "partial";
+  businessDate: string;
+  coverage: OperationalDatasetCoverage;
+  preparedBy: OperationalExecutionContext;
+  preparedAt: string;
+}
+
+export interface OperationalDatasetPublicationLineage {
+  runId: string;
+  datasetId: string;
+  datasetVersion: string;
+  terminalStatus: "succeeded" | "uncertain";
+  quality: "complete" | "partial";
+  businessDate: string;
+  coverage: OperationalDatasetCoverage;
+  factKeys: readonly string[];
+  publishedAt: string;
+}
+
+export interface OperationalDatasetCoverage {
+  discovered: number;
+  collectable: number;
+  attempted: number;
+  persisted: number;
+  failed: number;
+  skipped: number;
+}
+
+export interface OperationalFactStore {
+  putOperationalFact(input: {
+    namespace: string;
+    businessTimeZone: string;
+    subjectId: string;
+    schemaVersion: string;
+    record: JsonValue;
+    observedAt: string;
+    persistedAt: string;
+    executionContext: OperationalExecutionContext;
+  }): {
+    status: "accepted" | "duplicate";
+    fact: OperationalFactRecord;
+  };
+  getOperationalFact(factKey: string): OperationalFactRecord | undefined;
+  listOperationalFactsForRun(runId: string): OperationalFactRecord[];
+  getOperationalBusinessContext(
+    runId: string,
+    businessTimeZone: string
+  ): { businessDate: string; anchorAt: string };
+  prepareOperationalDatasetPublication(input: {
+    publicationIntentId: string;
+    runId: string;
+    stagingId: string;
+    dataset: DatasetVersionDefinition;
+    factKeys: readonly string[];
+    audit: AuditRecord;
+    quality: "complete" | "partial";
+    coverage: OperationalDatasetCoverage;
+    executionContext: OperationalExecutionContext;
+    preparedAt: string;
+  }): PreparedOperationalDatasetPublication;
+  getPreparedOperationalDatasetPublication(
+    runId: string
+  ): PreparedOperationalDatasetPublication | undefined;
+  getOperationalDatasetPublicationLineage(
+    datasetId: string,
+    datasetVersion: string
+  ): OperationalDatasetPublicationLineage | undefined;
 }
 
 export interface DecisionRecordStore {
@@ -1541,6 +1655,7 @@ export interface Persistence
     RecoveryStateStore,
     AssistanceUnitOfWork,
     DatasetPublicationUnitOfWork,
+    OperationalFactStore,
     DecisionRecordStore,
     GatewayDeliveryUnitOfWork,
     ExecutionStore,
@@ -1634,6 +1749,7 @@ export interface Persistence
 export class RevisionConflictError extends Error {}
 export class RecoverySessionConflictError extends Error {}
 export class ArtifactConflictError extends Error {}
+export class OperationalFactConflictError extends Error {}
 export class StaleFencingTokenError extends Error {}
 export class WorkflowDraftConflictError extends Error {}
 export class WorkflowOperationConflictError extends Error {}

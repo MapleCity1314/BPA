@@ -225,6 +225,12 @@ export interface Command {
       id: Id;
       version: Id;
     };
+    adapter_ref?: {
+      id: Id;
+      version: Id;
+      digest: Digest;
+      minimum_extension_version: Id;
+    };
     input: unknown;
     permission_grant: BPASignedPermissionGrant;
     deadline: Timestamp;

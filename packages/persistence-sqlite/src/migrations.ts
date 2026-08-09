@@ -1757,5 +1757,104 @@ export const migrations: Migration[] = [
         SELECT RAISE(ABORT, 'Recovery Session requires workflow-run Attention');
       END;
     `
+  },
+  {
+    version: 22,
+    sql: `
+      CREATE TABLE operational_facts (
+        fact_key TEXT PRIMARY KEY,
+        namespace TEXT NOT NULL,
+        run_id TEXT NOT NULL
+          REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        business_date TEXT NOT NULL CHECK (
+          business_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+        ),
+        business_time_zone TEXT NOT NULL,
+        business_anchor_at TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        schema_version TEXT NOT NULL,
+        record_digest TEXT NOT NULL CHECK (
+          record_digest GLOB 'sha256:*' AND length(record_digest) = 71
+        ),
+        record_json TEXT NOT NULL,
+        invocation_id TEXT NOT NULL,
+        node_json TEXT NOT NULL,
+        scope_path_json TEXT NOT NULL,
+        iteration_key TEXT NOT NULL,
+        step_key TEXT NOT NULL,
+        attempt INTEGER NOT NULL CHECK (attempt >= 1),
+        idempotency_key TEXT NOT NULL,
+        fencing_token INTEGER NOT NULL CHECK (fencing_token >= 1),
+        observed_at TEXT NOT NULL,
+        persisted_at TEXT NOT NULL,
+        UNIQUE(
+          namespace, run_id, business_date, subject_id, schema_version
+        )
+      ) STRICT;
+
+      CREATE INDEX operational_facts_run_business_date
+        ON operational_facts(run_id, business_date, subject_id, fact_key);
+
+      CREATE TABLE operational_dataset_publication_intents (
+        run_id TEXT PRIMARY KEY
+          REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        publication_intent_id TEXT NOT NULL UNIQUE,
+        staging_id TEXT NOT NULL UNIQUE
+          REFERENCES dataset_staging(staging_id) ON DELETE RESTRICT,
+        dataset_id TEXT NOT NULL,
+        dataset_version TEXT NOT NULL,
+        dataset_json TEXT NOT NULL,
+        audit_json TEXT NOT NULL,
+        quality TEXT NOT NULL CHECK (quality IN ('complete', 'partial')),
+        business_date TEXT NOT NULL,
+        coverage_json TEXT NOT NULL,
+        invocation_id TEXT NOT NULL,
+        execution_context_json TEXT NOT NULL,
+        prepared_at TEXT NOT NULL,
+        UNIQUE(dataset_id, dataset_version)
+      ) STRICT;
+
+      CREATE TABLE operational_dataset_publication_intent_facts (
+        run_id TEXT NOT NULL
+          REFERENCES operational_dataset_publication_intents(run_id)
+          ON DELETE CASCADE,
+        fact_key TEXT NOT NULL
+          REFERENCES operational_facts(fact_key) ON DELETE RESTRICT,
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        PRIMARY KEY(run_id, fact_key),
+        UNIQUE(run_id, ordinal)
+      ) STRICT;
+
+      CREATE TABLE operational_dataset_publication_lineage (
+        dataset_id TEXT NOT NULL,
+        dataset_version TEXT NOT NULL,
+        run_id TEXT NOT NULL UNIQUE
+          REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        terminal_status TEXT NOT NULL CHECK (
+          terminal_status IN ('succeeded', 'uncertain')
+        ),
+        quality TEXT NOT NULL CHECK (quality IN ('complete', 'partial')),
+        business_date TEXT NOT NULL,
+        coverage_json TEXT NOT NULL,
+        published_at TEXT NOT NULL,
+        PRIMARY KEY(dataset_id, dataset_version),
+        FOREIGN KEY(dataset_id, dataset_version)
+          REFERENCES dataset_versions(dataset_id, version) ON DELETE RESTRICT
+      ) STRICT;
+
+      CREATE TABLE operational_dataset_publication_facts (
+        dataset_id TEXT NOT NULL,
+        dataset_version TEXT NOT NULL,
+        fact_key TEXT NOT NULL
+          REFERENCES operational_facts(fact_key) ON DELETE RESTRICT,
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        PRIMARY KEY(dataset_id, dataset_version, fact_key),
+        UNIQUE(dataset_id, dataset_version, ordinal),
+        FOREIGN KEY(dataset_id, dataset_version)
+          REFERENCES operational_dataset_publication_lineage(
+            dataset_id, dataset_version
+          ) ON DELETE RESTRICT
+      ) STRICT;
+    `
   }
 ];

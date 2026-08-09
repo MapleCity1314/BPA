@@ -453,7 +453,7 @@ describe("Console Host security boundary", () => {
     backend.getDashboard.mockResolvedValueOnce({
       attention: "normal",
       headline: "运行正常",
-      runtimeVersion: "0.6.0",
+      runtimeVersion: "0.6.1",
       components: [{
         id: "core",
         label: "Core",

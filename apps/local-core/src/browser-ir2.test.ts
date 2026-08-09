@@ -41,7 +41,23 @@ function nodeFixture(): NodeDefinition {
   };
 }
 
-function plan(node: NodeDefinition): ExecutionPlan {
+function adapterFixture():Record<string,any> {
+  const adapter = parse(readFileSync(
+    new URL("../../../adapters/doudian/doudian.adapter.yaml",import.meta.url),
+    "utf8"
+  )) as Record<string,any>;
+  return {
+    ...adapter,
+    metadata:{ ...adapter.metadata,version:"1.1.0" },
+    capabilities:[{
+      ...adapter.capabilities[0],
+      nodeVersions:["1.2.0"],
+      handlerVersion:"1.1.0"
+    }]
+  };
+}
+
+function plan(node: NodeDefinition,adapter:Record<string,any>): ExecutionPlan {
   return {
     irVersion: "bpa.workflow-ir/2",
     workflow: {
@@ -56,6 +72,12 @@ function plan(node: NodeDefinition): ExecutionPlan {
           id: node.metadata.id,
           version: node.metadata.version,
           digest: contentDigest(node)
+        },
+        {
+          kind:"adapter",
+          id:String(adapter.metadata.id),
+          version:String(adapter.metadata.version),
+          digest:contentDigest(adapter)
         }
       ]
     },
@@ -79,7 +101,12 @@ function plan(node: NodeDefinition): ExecutionPlan {
           domains: [...(node.risk.domains ?? [])]
         },
         dependencies: {
-          adapters: [],
+          adapters: [{
+            kind:"adapter",
+            id:String(adapter.metadata.id),
+            version:String(adapter.metadata.version),
+            digest:contentDigest(adapter)
+          }],
           policies: [],
           datasetProfiles: []
         },
@@ -126,8 +153,11 @@ function plan(node: NodeDefinition): ExecutionPlan {
   };
 }
 
-function boundPlan(node: NodeDefinition): ExecutionPlan {
-  const source = plan(node);
+function boundPlan(
+  node: NodeDefinition,
+  adapter:Record<string,any>
+): ExecutionPlan {
+  const source = plan(node,adapter);
   const observe = source.steps.observe;
   if (!observe || observe.kind !== "call") {
     throw new Error("Browser plan fixture must start with a Call");
@@ -177,6 +207,7 @@ describe("IR2 browser provider", () => {
     );
     const service = new LocalCoreService(persistence, gateway);
     const node = nodeFixture();
+    const adapter = adapterFixture();
     expect(
       service.handle({
         id: "publish-node",
@@ -184,6 +215,10 @@ describe("IR2 browser provider", () => {
         params: { assetType: "node", content: node, actor: "test" }
       }).ok
     ).toBe(true);
+    expect(service.handle({
+      id:"publish-adapter",method:"asset.publish",
+      params:{ assetType:"adapter",content:adapter,actor:"test" }
+    }).ok).toBe(true);
     const outgoing: Array<Record<string, any>> = [];
     const primaryConnection = gateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
@@ -327,7 +362,7 @@ describe("IR2 browser provider", () => {
       sessionId: decoySessionId,
       browserInstanceId: "browser-ir2-decoy"
     });
-    const executionPlan = boundPlan(node);
+    const executionPlan = boundPlan(node,adapter);
     const run = service.ir2Runtime.start(
       executionPlan,
       {},
@@ -372,6 +407,10 @@ describe("IR2 browser provider", () => {
       node: {
         id: node.metadata.id,
         version: node.metadata.version
+      },
+      adapter_ref:{
+        id:"doudian",version:"1.1.0",digest:contentDigest(adapter),
+        minimum_extension_version:"0.3.0"
       }
     });
     gateway.handle({
@@ -455,6 +494,7 @@ describe("IR2 browser provider", () => {
     );
     const firstService = new LocalCoreService(persistence, firstGateway);
     const node = nodeFixture();
+    const adapter = adapterFixture();
     expect(
       firstService.handle({
         id: "publish-cancel-node",
@@ -462,6 +502,10 @@ describe("IR2 browser provider", () => {
         params: { assetType: "node", content: node, actor: "test" }
       }).ok
     ).toBe(true);
+    expect(firstService.handle({
+      id:"publish-cancel-adapter",method:"asset.publish",
+      params:{ assetType:"adapter",content:adapter,actor:"test" }
+    }).ok).toBe(true);
     const firstOutgoing: Array<Record<string, any>> = [];
     const firstConnection = firstGateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
@@ -518,7 +562,7 @@ describe("IR2 browser provider", () => {
         manifest_digest: `sha256:${"d".repeat(64)}`
       }
     });
-    const run = firstService.ir2Runtime.start(plan(node), {});
+    const run = firstService.ir2Runtime.start(plan(node,adapter), {});
     const draining = firstService.ir2Runtime.drainOnce();
     const command = firstOutgoing.find(
       (message) => message.type === "command.dispatch"
@@ -536,6 +580,9 @@ describe("IR2 browser provider", () => {
       ok: true,
       result: { status: "cancelled", revision: 1 }
     });
+    expect(persistence.getEngineCheckpoint(run.id)?.state).not.toHaveProperty(
+      "active"
+    );
     expect(persistence.listPendingEngineOutbox()).toEqual([]);
     expect(
       persistence.getGatewayCommand(String(command.payload.command_id))

@@ -2,8 +2,8 @@
 
 > 文档类别：公司业务工作流迁移计划。  
 > 记录时间：2026-08-07。  
-> 实现状态：部分实现；P1 与正式资产本机 Provider E2E 已完成，尚未执行真实浏览器 E2E、
-> 单店事实持久化、Dataset、外部投递、部署或调度切换。
+> 实现状态：P1 与“逐店事实 → 终态 Dataset”本机候选已实现；尚未执行真实浏览器 E2E、
+> 截图 Evidence、外部投递、部署或调度切换。
 > 适用范围：公司 Mac mini 上的抖店体验分每日多店采集。  
 > 不在本期：微信小店、快手小店、历史数据兼容层、Rust 改写。  
 > 权威上位文档：`docs/normative/bpa-product-form-v1.md`、
@@ -185,7 +185,8 @@ JSON 和结果记录判断。
 - 不把旧 Python Collector 包成 Shell/Process Node。
 - 不复制 Cookie、密码、Token 或 Feishu Secret 到仓库。
 - 不合并库存与体验分 Profile，不通过复制浏览器资料迁移登录态。
-- 不为该业务修改 Engine、Compiler、通用 Schema 语义或 Persistence 核心。
+- 不把体验分业务特例写入 Engine、Compiler 或 Persistence；所需的 Run-scoped Fact 与
+  terminal Dataset 作为通用、版本化能力独立实现和验证。
 - 不在本期实现通用 HTTP Request、File Write 或 Excel Export 产品能力。
 - 不用 Rust 改写页面采集；该链路主要受浏览器与页面延迟影响。
 - 不把历史 Excel/SQLite/Run JSON 接成生产读取回退。
@@ -281,9 +282,13 @@ Mac 正式运行采用以下硬边界：
 如果实施过程中必须为这一条业务修改 Engine、Compiler、Persistence 核心或控制台通用
 协议，应停止本计划并单独提出通用产品能力，不得把业务特例塞进 Core。
 
+2026-08-09 的实现遵守该边界：Schema v22 新增通用 Operational Fact、发布意图与
+terminal Dataset 原子事务；体验分字段投影、覆盖率和 Dataset 描述保留在独立
+`experience-data` Provider，不进入通用持久层判断。
+
 ## 6. Node 设计
 
-### 6.1 `doudian.experience.shops.discover@1.0.0`
+### 6.1 `doudian.experience.shops.discover@2.0.0`
 
 目的：从体验分页面可访问的店铺上下文中发现本轮候选店铺，不只依赖静态配置。
 
@@ -476,11 +481,13 @@ message     : workflowRunId + reportTemplateVersion
 
 ```text
 dataset id      : doudian-experience-daily
-dataset version : <businessDate>.<workflowRunId-short>
+dataset version : <year>.<month>.<day>-run.<workflowRunId-digest-short>
 record key      : <shopId>
 ```
 
 - Dataset 只包含已持久化事实；失败、跳过和阻断信息保留在 Run 与聚合记录中。
+- 在“最新完整结果”和“最新一次尝试”拥有独立、质量感知的查询前，不把该 Dataset 接入
+  Dataset Trigger，也不把通用 `latestDatasetVersion` 投影称为“最新体验分”。
 - 不从旧 Excel、旧 SQLite 或飞书读取回退事实。
 
 ## 8. Workflow 设计
@@ -492,7 +499,7 @@ apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: doudian.experience-score.daily
-  version: 1.0.1
+  version: 2.0.0
 spec:
   riskLevel: R1
   limits:
@@ -529,7 +536,7 @@ spec:
 | 条件 | Workflow 终态 |
 | --- | --- |
 | 全部可采集店铺已持久化，投递已确认 | `succeeded` |
-| 至少一家已持久化，但存在普通店铺失败 | `partial` |
+| 至少一家已持久化，但存在普通店铺失败 | 业务结果 `partial`，Run 终态 `uncertain` |
 | 登录、验证码、风控或全局权限阻断 | `blocked` / `rejected` |
 | 事实已持久化，但飞书效果无法证明 | `uncertain` |
 | 已有有效同类 Run 或账号级浏览器租约 | `skipped` |
@@ -545,7 +552,7 @@ spec:
 ```yaml
 id: doudian-experience-daily
 kind: schedule
-workflow: doudian.experience-score.daily@1.0.1
+workflow: doudian.experience-score.daily@2.0.0
 schedule:
   type: daily
   timezone: Asia/Shanghai
@@ -559,6 +566,13 @@ enabled: false
 ```
 
 Trigger 在发布和真实 E2E 通过前保持禁用。
+
+`doudian-experience` Adapter、店铺发现 Node 和单店快照 Node 已整体升到 `2.0.0`；
+旧 `1.0.0` 源码执行路径不再保留，且要求 Runtime 与 Extension 至少为 `0.6.1`。
+体验分 Dataset 当前只在 DatasetVersion 中内嵌并
+整体摘要 recordSchema 与 normalization 约束，不把进程常量伪装成已发布的
+dataset_profile closure ref。正式版本化 dataset_profile 资产发布与闭包解析能力是部署前
+门禁，未完成前不得部署或宣称该 profile 已发布。
 
 ### 9.2 与库存的调度关系
 
@@ -662,7 +676,7 @@ Trigger 在发布和真实 E2E 通过前保持禁用。
 
 门禁：fixture 不包含 Cookie、Token、员工敏感信息或未授权截图。
 
-### P1：Adapter、Node 与 Workflow 候选
+### P1：Adapter、Node、Workflow 与事实链候选
 
 状态：本机候选与 Provider E2E 已完成（2026-08-09），未部署。
 
@@ -670,22 +684,27 @@ Trigger 在发布和真实 E2E 通过前保持禁用。
 
 - 新建 `doudian-experience` Adapter；
 - 新建发现、事务性身份校验与快照读取 Node；
-- 新建聚合 Node；逐店 Step 输出已形成 Runtime 检查点；
-- 新建 `doudian.experience-score.daily@1.0.1` Workflow；普通单店失败进入
+- 新建 Core `fact.persist`、`aggregate@2.0.0` 与 `dataset.prepare` Node；逐店读取成功后
+  立即写入 Run-scoped 不可变事实；
+- 新建 `doudian.experience-score.daily@2.0.0` Workflow；普通单店失败进入
   foreach `collect` 后聚合，阻断类 `rejected` 仍立即终止；
+- 每次完整或部分成功只准备一个发布意图；只有成功终态携带精确 marker 时，Run、
+  checkpoint、Dataset、audit 与 lineage 才在同一事务发布；
 - fixture 行为测试、Schema 测试、RiskSignal 测试；
 - 正式资产本机 E2E 通过临时 Trigger、同一 Browser Session、资源绑定、IR2 Provider、
   终态和浏览器租约释放，并与清退商品、库存依次运行时保持单实例记录；
 - 候选资产保持未部署，未创建或启用生产 Trigger。
 
-留待 P2/P3：正式 `experience.snapshot.persist` 服务写入、不可变 Dataset 发布、截图 Evidence
-与飞书 Effect。当前候选不能以本地测试替代这些生产能力。
+留待 P2/P3：真实页面 13 店覆盖、截图 Evidence、通用 Dataset 浏览、正式发布的
+`dataset_profile` 资产、飞书 Effect 与灰度部署。当前候选不能以进程内常量冒充已发布
+Profile 闭包，也不能以本地测试替代真实登录或生产证据。
 
 门禁：
 
 - `pnpm verify` 全绿；
 - 不调用旧 `.command` 或 Python Collector；
-- 不修改 Engine/Compiler/Persistence 通用协议；
+- 通用 Fact/Dataset 协议通过事务故障、幂等、租约丢失与跨午夜反例；
+- Dataset Profile 在正式资产目录发布，digest 覆盖 record schema 与规范化语义；
 - 全部阻断信号 fail closed。
 
 ### P2：浏览器真实页面 E2E
@@ -710,7 +729,7 @@ Trigger 在发布和真实 E2E 通过前保持禁用。
 
 建议 PR 3：
 
-- 发布 Workflow 1.0.1 与 Node/Adapter 1.0.0；
+- 发布 Workflow 2.0.0 与对应 Node/Adapter 固定版本；
 - 创建但不启用 Schedule Trigger；
 - Operator Console 展示 Run、Dataset、Evidence、Alert；
 - Feishu Bitable 与消息 Effect 完成幂等和不确定效果测试；

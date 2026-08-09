@@ -598,6 +598,17 @@
                 "version": { "$ref": "#/$defs/id" }
               }
             },
+            "adapter_ref": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "version", "digest", "minimum_extension_version"],
+              "properties": {
+                "id": { "$ref": "#/$defs/id" },
+                "version": { "$ref": "#/$defs/id" },
+                "digest": { "$ref": "#/$defs/digest" },
+                "minimum_extension_version": { "$ref": "#/$defs/id" }
+              }
+            },
             "input": {},
             "permission_grant": { "$ref": "#/$defs/permissionGrant" },
             "deadline": { "$ref": "#/$defs/timestamp" },

@@ -17,7 +17,7 @@ export class UnavailableControlBackend implements ControlBackend {
     return {
       attention: "action" as const,
       headline: "BPA Core 尚未连接",
-      runtimeVersion: "0.6.0",
+      runtimeVersion: "0.6.1",
       components: [
         {
           id: "core",

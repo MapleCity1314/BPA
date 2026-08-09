@@ -72,7 +72,41 @@ function checkpoint(run: RunRecord): EngineCheckpointRecord {
   };
 }
 
-function runtime(store: SqlitePersistence, now: () => Date): TriggerRuntime {
+function cancelTestRun(
+  store: SqlitePersistence,
+  now: () => Date,
+  runId: string
+): RunRecord {
+  const run = store.getRun(runId);
+  if (!run) throw new Error(`Run not found: ${runId}`);
+  if (
+    ["succeeded", "rejected", "failed", "cancelled", "uncertain"].includes(
+      run.status
+    )
+  ) {
+    return run;
+  }
+  return store.commitRunTransition({
+    runId,
+    expectedRevision: run.revision,
+    nextStatus: "cancelled",
+    event: {
+      id: randomUUID(),
+      runId,
+      sequence: store.listEvents(runId).length + 1,
+      type: "RUN_CANCELLED_AFTER_TRIGGER_CONTROL_LOSS",
+      payload: {},
+      occurredAt: now().toISOString()
+    }
+  });
+}
+
+function runtime(
+  store: SqlitePersistence,
+  now: () => Date,
+  cancelWorkflow: (runId: string, reason: string) => RunRecord = (runId) =>
+    cancelTestRun(store, now, runId)
+): TriggerRuntime {
   return new TriggerRuntime(
     store,
     (trigger, input, triggerAttemptId) => {
@@ -103,6 +137,7 @@ function runtime(store: SqlitePersistence, now: () => Date): TriggerRuntime {
         }
       });
     },
+    cancelWorkflow,
     now
   );
 }
@@ -581,9 +616,13 @@ describe("deterministic Trigger Runtime", () => {
       actor: "operator",
       occurredAt: current.toISOString()
     });
-    const engine = runtime(store, () => current);
+    const cancelWorkflow = vi.fn((runId: string) =>
+      cancelTestRun(store, () => current, runId)
+    );
+    const engine = runtime(store, () => current, cancelWorkflow);
     const fired = engine.fire({ trigger, occurrenceKey: "manual:fenced" });
     const attempt = fired.attempt!;
+    const runId = attempt.workflowRunId!;
     expect(attempt.browserFencingToken).toBe(1);
 
     current = new Date("2026-08-05T00:00:01.000Z");
@@ -606,9 +645,14 @@ describe("deterministic Trigger Runtime", () => {
 
     current = new Date("2026-08-05T00:00:02.000Z");
     engine.tick();
+    expect(cancelWorkflow).toHaveBeenCalledWith(
+      runId,
+      "Browser instance lease was lost."
+    );
+    expect(store.getRun(runId)).toMatchObject({ status: "cancelled" });
     expect(store.getTriggerOccurrence(fired.occurrence.occurrenceId)).toMatchObject({
       status: "terminal",
-      terminalOutcome: "failed",
+      terminalOutcome: "cancelled",
       diagnostic: "Browser instance lease was lost."
     });
     expect(
@@ -621,6 +665,344 @@ describe("deterministic Trigger Runtime", () => {
     expect(store.listBrowserControlLeases(current.toISOString())).toEqual([
       expect.objectContaining({ ownerId: "recovery-session:successor", fencingToken: 2 })
     ]);
+    store.close();
+  });
+
+  it("retries durable Workflow cancellation before terminalizing a fenced attempt", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    let current = new Date("2026-08-05T00:00:00.000Z");
+    const trigger = store.putTriggerSpec({
+      spec: { ...base, browserInstanceId: "doudian-company-main" },
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    let cancellationCalls = 0;
+    const cancelWorkflow = vi.fn((runId: string) => {
+      cancellationCalls += 1;
+      if (cancellationCalls === 1) throw new Error("simulated cancellation crash");
+      return cancelTestRun(store, () => current, runId);
+    });
+    const engine = runtime(store, () => current, cancelWorkflow);
+    const fired = engine.fire({
+      trigger,
+      occurrenceKey: "manual:trigger-lease-fenced"
+    });
+    const attempt = fired.attempt!;
+    const runId = attempt.workflowRunId!;
+
+    current = new Date("2026-08-05T00:00:01.000Z");
+    expect(
+      store.releaseTriggerLease({
+        concurrencyKey: base.concurrencyKey,
+        ownerId: attempt.attemptId,
+        fencingToken: attempt.fencingToken!,
+        releasedAt: current.toISOString()
+      })
+    ).toBe(true);
+    expect(
+      store.acquireTriggerLease({
+        concurrencyKey: base.concurrencyKey,
+        ownerId: "successor",
+        now: current.toISOString(),
+        ttlSeconds: 300
+      })?.fencingToken
+    ).toBe(2);
+
+    current = new Date("2026-08-05T00:00:02.000Z");
+    engine.tick();
+    expect(store.getRun(runId)).toMatchObject({ status: "running" });
+    expect(store.getTriggerAttempt(attempt.attemptId)).toMatchObject({
+      status: "running"
+    });
+    expect(store.getTriggerOccurrence(fired.occurrence.occurrenceId)).toMatchObject({
+      status: "running"
+    });
+    expect(store.listBrowserControlLeases(current.toISOString())).toEqual([
+      expect.objectContaining({
+        resourceId: "browser-instance:doudian-company-main",
+        ownerId: attempt.attemptId,
+        fencingToken: attempt.browserFencingToken
+      })
+    ]);
+
+    current = new Date("2026-08-05T00:00:03.000Z");
+    engine.tick();
+    expect(cancelWorkflow).toHaveBeenCalledTimes(2);
+    expect(store.getRun(runId)).toMatchObject({ status: "cancelled" });
+    expect(store.getTriggerAttempt(attempt.attemptId)).toMatchObject({
+      status: "terminal",
+      terminalOutcome: "cancelled",
+      diagnostic: "Trigger concurrency lease was lost."
+    });
+    expect(store.getTriggerOccurrence(fired.occurrence.occurrenceId)).toMatchObject({
+      status: "terminal",
+      terminalOutcome: "cancelled",
+      diagnostic: "Trigger concurrency lease was lost."
+    });
+    expect(store.listBrowserControlLeases(current.toISOString())).toEqual([]);
+    store.close();
+  });
+
+  it("retains the surviving concurrency lease until a browser-fenced Run is durably cancelled", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    let current = new Date("2026-08-05T00:00:00.000Z");
+    const oldTrigger = store.putTriggerSpec({
+      spec: {
+        ...base,
+        id: "inventory.browser-fenced-old",
+        browserInstanceId: "doudian-company-main"
+      },
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    const successorTrigger = store.putTriggerSpec({
+      spec: {
+        ...base,
+        id: "inventory.concurrency-successor"
+      },
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    let cancellationCalls = 0;
+    const cancelWorkflow = vi.fn((runId: string) => {
+      cancellationCalls += 1;
+      if (cancellationCalls === 1) {
+        return { ...store.getRun(runId)!, status: "cancelled" as const };
+      }
+      return cancelTestRun(store, () => current, runId);
+    });
+    const engine = runtime(store, () => current, cancelWorkflow);
+    const old = engine.fire({
+      trigger: oldTrigger,
+      occurrenceKey: "manual:browser-fenced-old"
+    });
+    const oldAttempt = old.attempt!;
+    const oldRunId = oldAttempt.workflowRunId!;
+
+    current = new Date("2026-08-05T00:00:01.000Z");
+    expect(store.releaseBrowserControlLease({
+      resourceId: "browser-instance:doudian-company-main",
+      ownerId: oldAttempt.attemptId,
+      fencingToken: oldAttempt.browserFencingToken!,
+      releasedAt: current.toISOString()
+    })).toBe(true);
+    expect(store.acquireBrowserControlLease({
+      resourceId: "browser-instance:doudian-company-main",
+      ownerId: "recovery-session:successor",
+      now: current.toISOString(),
+      ttlSeconds: 300
+    })?.fencingToken).toBe(2);
+
+    current = new Date("2026-08-05T00:00:02.000Z");
+    engine.tick();
+    expect(cancelWorkflow).toHaveBeenCalledTimes(1);
+    expect(store.getRun(oldRunId)).toMatchObject({ status: "running" });
+    expect(store.listTriggerLeases(current.toISOString())).toEqual([
+      expect.objectContaining({
+        resourceId: base.concurrencyKey,
+        ownerId: oldAttempt.attemptId,
+        fencingToken: oldAttempt.fencingToken
+      })
+    ]);
+
+    const successor = engine.fire({
+      trigger: successorTrigger,
+      occurrenceKey: "manual:concurrency-successor"
+    });
+    expect(successor).toMatchObject({
+      occurrence: {
+        status: "deferred",
+        attemptCount: 0,
+        nextAttemptAt: "2026-08-05T00:01:02.000Z"
+      }
+    });
+    expect(successor.attempt).toBeUndefined();
+    expect(store.getRun(oldRunId)).toMatchObject({ status: "running" });
+
+    current = new Date("2026-08-05T00:00:03.000Z");
+    engine.tick();
+    expect(cancelWorkflow).toHaveBeenCalledTimes(2);
+    expect(store.getRun(oldRunId)).toMatchObject({ status: "cancelled" });
+    expect(store.getTriggerAttempt(oldAttempt.attemptId)).toMatchObject({
+      status: "terminal",
+      terminalOutcome: "cancelled"
+    });
+    expect(store.listTriggerLeases(current.toISOString())).toEqual([]);
+
+    current = new Date("2026-08-05T00:01:03.000Z");
+    engine.tick();
+    expect(
+      store.getTriggerOccurrence(successor.occurrence.occurrenceId)
+    ).toMatchObject({ status: "running", attemptCount: 1 });
+    expect(store.listActiveTriggerAttempts(successorTrigger.spec.id)).toEqual([
+      expect.objectContaining({ status: "running", fencingToken: 2 })
+    ]);
+    store.close();
+  });
+
+  it("cancels an active browser Run before terminalizing an Attempt whose pinned TriggerSpec vanished", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    let current = new Date("2026-08-05T00:00:00.000Z");
+    const trigger = store.putTriggerSpec({
+      spec: {
+        ...base,
+        id: "inventory.missing-pinned-spec",
+        browserInstanceId: "doudian-company-main"
+      },
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    let cancellationCalls = 0;
+    const cancelWorkflow = vi.fn((runId: string) => {
+      cancellationCalls += 1;
+      if (cancellationCalls === 1) {
+        throw new Error("simulated cancellation outage");
+      }
+      return cancelTestRun(store, () => current, runId);
+    });
+    const engine = runtime(store, () => current, cancelWorkflow);
+    const fired = engine.fire({
+      trigger,
+      occurrenceKey: "manual:missing-pinned-spec"
+    });
+    const attempt = fired.attempt!;
+    const runId = attempt.workflowRunId!;
+    const getPinned = store.getTriggerSpecVersion.bind(store);
+    vi.spyOn(store, "getTriggerSpecVersion").mockImplementation((id, version) =>
+      id === trigger.spec.id && version === trigger.spec.version
+        ? undefined
+        : getPinned(id, version)
+    );
+
+    current = new Date("2026-08-05T00:00:01.000Z");
+    engine.tick();
+    expect(cancelWorkflow).toHaveBeenCalledWith(
+      runId,
+      "Pinned TriggerSpec version is missing."
+    );
+    expect(store.getRun(runId)).toMatchObject({ status: "running" });
+    expect(store.getTriggerAttempt(attempt.attemptId)).toMatchObject({
+      status: "running"
+    });
+    expect(store.listTriggerLeases(current.toISOString())).toHaveLength(1);
+    expect(store.listBrowserControlLeases(current.toISOString())).toEqual([
+      expect.objectContaining({
+        ownerId: attempt.attemptId,
+        fencingToken: attempt.browserFencingToken
+      })
+    ]);
+
+    current = new Date("2026-08-05T00:00:02.000Z");
+    engine.tick();
+    expect(cancelWorkflow).toHaveBeenCalledTimes(2);
+    expect(store.getRun(runId)).toMatchObject({ status: "cancelled" });
+    expect(store.getTriggerAttempt(attempt.attemptId)).toMatchObject({
+      status: "terminal",
+      terminalOutcome: "cancelled",
+      diagnostic: "Pinned TriggerSpec version is missing."
+    });
+    expect(store.getTriggerOccurrence(fired.occurrence.occurrenceId)).toMatchObject({
+      status: "terminal",
+      terminalOutcome: "cancelled"
+    });
+    expect(store.listTriggerLeases(current.toISOString())).toEqual([]);
+    expect(store.listBrowserControlLeases(current.toISOString())).toEqual([]);
+    store.close();
+  });
+
+  it("finishes a fenced attempt from an already-terminal Workflow without cancelling it", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    let current = new Date("2026-08-05T00:00:00.000Z");
+    const trigger = store.putTriggerSpec({
+      spec: base,
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    const cancelWorkflow = vi.fn((runId: string) =>
+      cancelTestRun(store, () => current, runId)
+    );
+    const engine = runtime(store, () => current, cancelWorkflow);
+    const fired = engine.fire({ trigger, occurrenceKey: "manual:terminal-race" });
+    const attempt = fired.attempt!;
+    const run = store.getRun(attempt.workflowRunId!)!;
+
+    current = new Date("2026-08-05T00:00:01.000Z");
+    store.releaseTriggerLease({
+      concurrencyKey: base.concurrencyKey,
+      ownerId: attempt.attemptId,
+      fencingToken: attempt.fencingToken!,
+      releasedAt: current.toISOString()
+    });
+    store.acquireTriggerLease({
+      concurrencyKey: base.concurrencyKey,
+      ownerId: "successor",
+      now: current.toISOString(),
+      ttlSeconds: 300
+    });
+    finishRun(store, run, "succeeded", current.toISOString());
+
+    current = new Date("2026-08-05T00:00:02.000Z");
+    engine.tick();
+    expect(cancelWorkflow).not.toHaveBeenCalled();
+    expect(store.getTriggerOccurrence(fired.occurrence.occurrenceId)).toMatchObject({
+      status: "terminal",
+      terminalOutcome: "complete"
+    });
+    store.close();
+  });
+
+  it("recovers after Workflow cancellation commits before the Trigger Attempt finishes", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    let current = new Date("2026-08-05T00:00:00.000Z");
+    const trigger = store.putTriggerSpec({
+      spec: base,
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    let crashed = false;
+    const cancelWorkflow = vi.fn((runId: string) => {
+      const cancelled = cancelTestRun(store, () => current, runId);
+      if (!crashed) {
+        crashed = true;
+        throw new Error("simulated crash after cancellation commit");
+      }
+      return cancelled;
+    });
+    const engine = runtime(store, () => current, cancelWorkflow);
+    const fired = engine.fire({ trigger, occurrenceKey: "manual:cancel-crash" });
+    const attempt = fired.attempt!;
+
+    current = new Date("2026-08-05T00:00:01.000Z");
+    store.releaseTriggerLease({
+      concurrencyKey: base.concurrencyKey,
+      ownerId: attempt.attemptId,
+      fencingToken: attempt.fencingToken!,
+      releasedAt: current.toISOString()
+    });
+    store.acquireTriggerLease({
+      concurrencyKey: base.concurrencyKey,
+      ownerId: "successor",
+      now: current.toISOString(),
+      ttlSeconds: 300
+    });
+
+    current = new Date("2026-08-05T00:00:02.000Z");
+    engine.tick();
+    expect(store.getRun(attempt.workflowRunId!)).toMatchObject({
+      status: "cancelled"
+    });
+    expect(store.getTriggerAttempt(attempt.attemptId)).toMatchObject({
+      status: "running"
+    });
+
+    current = new Date("2026-08-05T00:00:03.000Z");
+    engine.tick();
+    expect(cancelWorkflow).toHaveBeenCalledTimes(1);
+    expect(store.getTriggerAttempt(attempt.attemptId)).toMatchObject({
+      status: "terminal",
+      terminalOutcome: "cancelled",
+      diagnostic: "Trigger concurrency lease was lost."
+    });
     store.close();
   });
 

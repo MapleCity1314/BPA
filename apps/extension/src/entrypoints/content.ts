@@ -3,6 +3,7 @@ import {
   collectDoudianProductInventorySnapshot,
   collectDoudianRecentOrders,
   detectDoudianRiskSignals,
+  doudianExperienceErrorPayload,
   inspectDoudianPriorityItems,
   legacyDoudianScopeCollectionResult,
   readDoudianShopContext,
@@ -499,15 +500,11 @@ export default defineContentScript({
             );
             sendResponse({ ok: true, result });
           } catch (error) {
+            const safeError = doudianExperienceErrorPayload(error);
             sendResponse({
               ok: false,
               error: {
-                code:
-                  error instanceof Error
-                    ? error.message
-                    : "EXPERIENCE_STAGE_FAILED",
-                message:
-                  error instanceof Error ? error.message : String(error)
+                ...safeError
               }
             });
           }

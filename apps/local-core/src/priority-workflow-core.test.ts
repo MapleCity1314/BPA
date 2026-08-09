@@ -414,32 +414,46 @@ describe("Local Core priority inspection workflow", () => {
       observedAt: new Date().toISOString()
     });
 
-    const created = service.handle({
-      id: "run",
-      method: "run.create",
+    expect(service.handle({
+      id: "priority-trigger-put",
+      method: "trigger.put",
       params: {
-        workflowId: "doudian.priority-items-readonly-inspect",
-        workflowVersion: "0.3.0",
-        input: {
-          dataset: { id: "packaging-master", version: "1.0.0" },
-          platformFillCheck: false
-        },
-        resourceBindings: {
-          doudian_browser: {
-            sessionId: "session-priority",
-            browserInstanceId: "browser-1",
-            tabId: 1,
-            observationRevision: 1
-          }
+        actor: "test",
+        spec: {
+          apiVersion: "bpa.trigger/v1alpha2",
+          id: "priority-workflow-test",
+          version: "1.0.0",
+          appId: "priority-workflow-test",
+          kind: "manual",
+          workflow: {
+            id: "doudian.priority-items-readonly-inspect",
+            version: "0.3.0"
+          },
+          enabled: true,
+          inputSchemaVersion: "priority-workflow-test/1",
+          input: {
+            dataset: { id: "packaging-master", version: "1.0.0" },
+            platformFillCheck: false
+          },
+          concurrencyKey: "doudian-account:priority-workflow-test",
+          browserInstanceId: "browser-1",
+          idempotencyPolicy: "request_key",
+          retryPolicy: "none"
         }
       }
+    })).toMatchObject({ ok: true });
+    const created = service.handle({
+      id: "priority-trigger-fire",
+      method: "trigger.fire",
+      params: { id: "priority-workflow-test", requestKey: "healthy" }
     });
     expect(created).toMatchObject({
       ok: true,
-      result: { status: "waiting_browser" }
+      result: { attempt: { status: "running" } }
     });
     const runId = String(
-      (created.result as { id: string }).id
+      (created.result as { attempt: { workflowRunId: string } }).attempt
+        .workflowRunId
     );
     for (let turn = 0; turn < 20; turn += 1) {
       await service.ir2Runtime.drainOnce();

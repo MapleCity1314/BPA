@@ -99,6 +99,28 @@ function currentStep(state: EngineState): string | undefined {
   return state.cursor?.stepKey;
 }
 
+function operationalDatasetPublicationIntentId(
+  state: EngineState
+): string | undefined {
+  if (state.status !== "succeeded" && state.status !== "uncertain") {
+    return undefined;
+  }
+  const output = state.output;
+  if (output === null || typeof output !== "object" || Array.isArray(output)) {
+    return undefined;
+  }
+  if (!("operationalDatasetPublicationIntentId" in output)) {
+    return undefined;
+  }
+  const value = output.operationalDatasetPublicationIntentId;
+  if (typeof value !== "string" || value.length === 0 || value.length > 200) {
+    throw new Error(
+      "Operational Dataset publication marker must be a 1-200 character string"
+    );
+  }
+  return value;
+}
+
 function assistanceRequestOutboxId(taskId: string): string {
   return `effect:${taskId}`;
 }
@@ -720,7 +742,10 @@ export class Ir2WorkflowRuntime {
         taskId: input.task.task.taskId,
         outcome: input.runOutcome.status,
         reason: input.runOutcome.reason,
-        stateRevision: transition.state.revision
+        stateRevision: transition.state.revision,
+        ...(transition.state.error
+          ? { error: transition.state.error }
+          : {})
       },
       timestamp
     );
@@ -803,6 +828,9 @@ export class Ir2WorkflowRuntime {
       {
         stateRevision: input.transition.state.revision,
         status: input.transition.state.status,
+        ...(input.transition.state.error
+          ? { error: input.transition.state.error }
+          : {}),
         ...input.eventPayload
       },
       timestamp
@@ -812,6 +840,9 @@ export class Ir2WorkflowRuntime {
       nextRunStatus,
       event
     );
+    const publicationIntentId = operationalDatasetPublicationIntentId(
+      input.transition.state
+    );
     return this.#persistence.commitRecoverableTransition({
       runId: input.run.id,
       expectedRevision: input.run.revision,
@@ -820,6 +851,9 @@ export class Ir2WorkflowRuntime {
       ...(input.transition.state.output === undefined
         ? {}
         : { output: input.transition.state.output }),
+      ...(publicationIntentId
+        ? { operationalDatasetPublicationIntentId: publicationIntentId }
+        : {}),
       checkpoint: this.#checkpoint(input.transition.state, timestamp),
       expectedCheckpointRevision: input.checkpoint.stateRevision,
       outbox: effects.outbox,

@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
 import validateMessage from "@bpa/schemas/browser-protocol-v2.validator";
 import {
@@ -9,6 +11,7 @@ import {
 } from "./capability-manifest.js";
 
 const permissions = ["browser.dom.read", "browser.tabs.read"];
+const repoRoot = new URL("../../../../",import.meta.url);
 
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") {
@@ -28,6 +31,33 @@ function canonicalJson(value: unknown): string {
 }
 
 describe("extension capability manifest", () => {
+  it("locks the v2 experience capability to Runtime and Extension 0.6.1", () => {
+    for (const path of [
+      "package.json",
+      "apps/cli/package.json",
+      "apps/console-host/package.json",
+      "apps/extension/package.json",
+      "apps/local-core/package.json",
+      "apps/mcp-server/package.json",
+      "apps/native-host/package.json",
+      "apps/operator-console/package.json",
+      "apps/team-worker/package.json"
+    ]) {
+      const packageJson = JSON.parse(
+        readFileSync(new URL(path,repoRoot),"utf8")
+      ) as { version:string };
+      expect(packageJson.version, path).toBe("0.6.1");
+    }
+    expect(
+      readFileSync(new URL("apps/extension/wxt.config.ts",repoRoot),"utf8")
+    ).toContain('version: "0.6.1"');
+    const adapter = parse(readFileSync(
+      new URL("adapters/doudian/doudian-experience.adapter.yaml",repoRoot),
+      "utf8"
+    )) as { extension:{ minimumVersion:string } };
+    expect(adapter.extension.minimumVersion).toBe("0.6.1");
+  });
+
   it("derives the complete protocol v2 report and digest from one registry", async () => {
     expect(BROWSER_PROTOCOL).toBe("bpa.browser/2");
     const report = await capabilityReport();
@@ -36,7 +66,7 @@ describe("extension capability manifest", () => {
       "exact_tab_binding_v2",
       "active_page_probe_v1"
     ]);
-    expect(report.capabilities).toHaveLength(15);
+    expect(report.capabilities).toHaveLength(14);
     expect(report.capabilities).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -61,8 +91,14 @@ describe("extension capability manifest", () => {
           ])
         }),
         expect.objectContaining({
+          node_id: "doudian.experience.shops.discover",
+          adapter_id: "doudian-experience",
+          versions: ["2.0.0"]
+        }),
+        expect.objectContaining({
           node_id: "doudian.experience.shop.snapshot.read",
           adapter_id: "doudian-experience",
+          versions: ["2.0.0"],
           routes: [
             {
               origin: "https://fxg.jinritemai.com",
@@ -183,7 +219,7 @@ describe("extension capability manifest", () => {
     },
     {
       nodeId: "doudian.experience.shop.snapshot.read",
-      nodeVersion: "1.0.0",
+      nodeVersion: "2.0.0",
       currentUrl: "https://fxg.jinritemai.com/ffa/eco/experience-score",
       grantedPermissions: [
         "browser.dom.read",
