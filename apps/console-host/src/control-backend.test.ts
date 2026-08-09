@@ -93,7 +93,9 @@ describe("UdsControlBackend", () => {
           reason: "浏览器返回了登录阻断。",
           requestedAction: "在受管 Chrome Profile 中完成人工登录。",
           createdAt: "2026-07-30T03:58:00.000Z",
-          revision: 0
+          revision: 0,
+          deliveryState: "pending",
+          deliveryAttempt: 0
         }
       ])
       .respond(CONSOLE_CONTROL_METHODS.browserPageObservationList, [
@@ -119,7 +121,8 @@ describe("UdsControlBackend", () => {
       alerts: [
         {
           id: "run-terminal:run-login",
-          kind: "blocking"
+          kind: "blocking",
+          deliveryState: "pending"
         }
       ],
       components: [

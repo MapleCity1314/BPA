@@ -28,6 +28,7 @@ import {
 } from "@bpa/node-runtime";
 import type {
   AssistanceTaskRecord,
+  AttentionDeliveryRecord,
   AttentionRecord,
   CommitAssistanceTaskRequestResult,
   EngineCheckpointRecord,
@@ -44,6 +45,7 @@ import type {
   JsonValue,
   ResourceBindingSnapshot
 } from "@bpa/workflow-ir";
+import { createTerminalAttentionDelivery } from "./attention-delivery.js";
 import {
   resolveRuntimeNodeSchemaContract,
   runtimeSchemaErrors,
@@ -720,7 +722,11 @@ export class Ir2WorkflowRuntime {
       },
       timestamp
     );
-    const attention = this.#terminalAttention(run, nextRunStatus, wakeEvent);
+    const terminalAttention = this.#terminalAttention(
+      run,
+      nextRunStatus,
+      wakeEvent
+    );
     const result = this.#persistence.submitTaskAndWakeRun({
       task: input.task,
       expectedTaskRevision: input.expectedRevision,
@@ -743,7 +749,7 @@ export class Ir2WorkflowRuntime {
         ? {}
         : { output: transition.state.output }),
       assistanceTasks: effects.tasks,
-      ...(attention ? { attention } : {}),
+      ...(terminalAttention ?? {}),
       additionalOutbox: effects.outbox,
       acknowledgeOutboxIds: this.#pendingOutboxIds([
         assistanceRequestOutboxId(input.task.task.taskId),
@@ -799,7 +805,11 @@ export class Ir2WorkflowRuntime {
       },
       timestamp
     );
-    const attention = this.#terminalAttention(input.run, nextRunStatus, event);
+    const terminalAttention = this.#terminalAttention(
+      input.run,
+      nextRunStatus,
+      event
+    );
     return this.#persistence.commitRecoverableTransition({
       runId: input.run.id,
       expectedRevision: input.run.revision,
@@ -812,7 +822,7 @@ export class Ir2WorkflowRuntime {
       expectedCheckpointRevision: input.checkpoint.stateRevision,
       outbox: effects.outbox,
       assistanceTasks: effects.tasks,
-      ...(attention ? { attention } : {}),
+      ...(terminalAttention ?? {}),
       ...(input.inbox ? { inbox: [input.inbox] } : {}),
       ...(input.acknowledgeOutboxIds
         ? { acknowledgeOutboxIds: input.acknowledgeOutboxIds }
@@ -825,22 +835,35 @@ export class Ir2WorkflowRuntime {
     run: RunRecord,
     status: RunStatus,
     event: ExecutionEventRecord
-  ): AttentionRecord | undefined {
+  ):
+    | {
+        attention: AttentionRecord;
+        attentionDelivery: AttentionDeliveryRecord;
+      }
+    | undefined {
     if (status !== "rejected" && status !== "failed" && status !== "uncertain") {
       return undefined;
     }
+    const item = projectTerminalRunAttention({
+      id: run.id,
+      workflowId: run.workflowId,
+      workflowVersion: run.workflowVersion,
+      status,
+      ...(run.currentNodeKey ? { currentNodeKey: run.currentNodeKey } : {}),
+      updatedAt: event.occurredAt,
+      events: [{ type: event.type, payload: event.payload }]
+    });
     return {
-      item: projectTerminalRunAttention({
-        id: run.id,
+      attention: {
+        item,
+        state: "open",
+        revision: 0
+      },
+      attentionDelivery: createTerminalAttentionDelivery({
+        attention: item,
         workflowId: run.workflowId,
-        workflowVersion: run.workflowVersion,
-        status,
-        ...(run.currentNodeKey ? { currentNodeKey: run.currentNodeKey } : {}),
-        updatedAt: event.occurredAt,
-        events: [{ type: event.type, payload: event.payload }]
-      }),
-      state: "open",
-      revision: 0
+        workflowVersion: run.workflowVersion
+      })
     };
   }
 
@@ -909,7 +932,7 @@ export class Ir2WorkflowRuntime {
       input.eventPayload,
       input.timestamp
     );
-    const attention = this.#terminalAttention(
+    const terminalAttention = this.#terminalAttention(
       input.run,
       nextRunStatus,
       wakeEvent
@@ -936,7 +959,7 @@ export class Ir2WorkflowRuntime {
         ? {}
         : { output: input.transition.state.output }),
       assistanceTasks: effects.tasks,
-      ...(attention ? { attention } : {}),
+      ...(terminalAttention ?? {}),
       additionalOutbox: effects.outbox,
       acknowledgeOutboxIds: this.#pendingOutboxIds([
         assistanceRequestOutboxId(input.taskId),
