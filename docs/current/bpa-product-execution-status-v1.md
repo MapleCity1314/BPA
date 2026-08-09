@@ -8,8 +8,8 @@
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- Git 基线：截至 2026-08-09，PR #2–#17 均已在 required checks 通过后进入 `main`；
-  最新基线为 PR #17 merge commit `bfdab31ed135`。阶段 0 结构收敛、资源观测、清退商品
+- Git 基线：截至 2026-08-09，PR #2–#18 均已在 required checks 通过后进入 `main`；
+  最新基线为 PR #18 merge commit `3262b0465de1`。阶段 0 结构收敛、资源观测、清退商品
   Mac 目标约束、爆款图片来源闭包校验和体验分候选均已进入主线。
 - GitHub `main` 已启用管理员同样受约束的 Branch Protection：必须走 Pull Request、
   与主线同步、解决 review conversation，并通过 macOS、Windows、性能、双架构发布、
@@ -40,9 +40,9 @@
 Attention 与终态写入同一事务，增加 open/acknowledged、revision CAS、确认审计和重启恢复；
 缺少 Attention 的问题终态会整体回滚。Schema v17 Delivery Outbox、保守投递状态机和面板
 对账已进入主线；独立飞书通知 Adapter 与严格 `0600` 配置加载也已通过 PR #16 进入主线，
-但尚未配置真实 Channel。Schema v18 Recovery Session 持久状态机已进入主线；仅本机
-Console Host 的 CSRF 恢复入口与浏览器断线立即失效正在候选分支开发。手机推送生产验收、
-远程受限页面通道和公司 Mac 灰度仍未完成，不能据此宣称无人值守成立。
+但尚未配置真实 Channel。Schema v18 Recovery Session 持久状态机、仅本机 Console Host
+的 CSRF 恢复入口和浏览器断线立即失效均已进入主线。手机推送生产验收、远程受限页面
+通道和公司 Mac 灰度仍未完成，不能据此宣称无人值守成立。
 实施顺序与共享 Chrome 资源边界见
 `docs/plans/bpa-stage-one-unattended-operations-v0.1.md`。
 
@@ -263,6 +263,16 @@ typecheck 已通过；生产已部署精确 RC，现场 schema、索引和查询
 的当前配置。Trigger Run 同时原样保留 Workflow 的
 `rejected`、`uncertain`、`cancelled`、`failed` 终态。该修复已通过 10 项 required checks
 并进入主线，但尚未部署；库存仍由原生产控制面运行。
+
+2026-08-09 后续本机候选增加 Schema v19 与 Trigger 浏览器控制租约：声明
+`browserInstanceId` 的 Trigger Run 在整个 Workflow 生命周期同时持有业务并发租约和
+`browser-instance:<id>` 租约，后者 fencing token 随 Trigger Run 持久化并在每次 tick
+续租；Workflow Run 的创建与 Trigger Run 关联在同一 SQLite 事务提交，启动中断不会留下
+可执行的孤儿 Run。清退、库存、体验分即使使用不同业务并发键，只要绑定同一个受管浏览器
+实例就不能重叠；浏览器被库存或 Recovery Session 占用时 occurrence 明确 `skipped`，不会排队或
+启动新 Chrome。丢失浏览器租约时 Trigger fail-closed，且不能释放后来控制者的租约。
+三工作流本机 fixture 已覆盖占用、跳过、终态释放和接管；该候选尚未进入主线或部署，
+也不等于三条真实页面 E2E 已完成。
 
 2026-08-09 只读生产复核显示最新自然周期于 11:54（Asia/Shanghai）成功终止：13/13
 店完成，库存 319/319 持久化、失败 0，四类共 52 个步骤均为终态；当前有效租约和运行中

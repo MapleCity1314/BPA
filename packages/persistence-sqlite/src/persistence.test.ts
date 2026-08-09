@@ -432,6 +432,65 @@ describe("recoverable execution persistence", () => {
     store.close();
   });
 
+  it("atomically links a leased Trigger Run to its recoverable Workflow Run", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    const spec = {
+      apiVersion:"bpa.trigger/v1alpha1" as const,
+      id:"inventory.atomic-link",version:"1.0.0",appId:"inventory-monitor",
+      kind:"manual" as const,
+      workflow:{ id:"test.workflow",version:"1.0.0" },enabled:true,
+      inputSchemaVersion:"test/1",input:{},concurrencyKey:"inventory:atomic",
+      browserInstanceId:"doudian-company-main",
+      idempotencyPolicy:"request_key" as const,retryPolicy:"none" as const
+    };
+    store.putTriggerSpec({ spec,actor:"test",occurredAt:timestamp });
+    const triggerRunId = "trigger-run:atomic-link";
+    store.claimTriggerOccurrence({
+      triggerRunId,triggerId:spec.id,triggerVersion:spec.version,
+      occurrenceKey:"manual:atomic",status:"due",createdAt:timestamp,
+      updatedAt:timestamp
+    });
+    store.updateTriggerRun({
+      triggerRunId,status:"lease_acquired",updatedAt:timestamp,
+      fencingToken:1,browserFencingToken:1
+    });
+    const run:RunRecord = {
+      id:"run-trigger-atomic",workflowId:"test.workflow",workflowVersion:"1.0.0",
+      workflowDigest:"sha256:workflow",status:"created",revision:0,input:{},
+      createdAt:timestamp,updatedAt:timestamp
+    };
+
+    store.createRecoverableRun({
+      run,planSnapshot:planSnapshot(run.id),checkpoint:checkpoint(run.id),
+      event:event(run.id,1,"RUN_CREATED"),triggerRunId
+    });
+
+    expect(store.listTriggerRuns(spec.id)[0]).toMatchObject({
+      triggerRunId,status:"run_created",workflowRunId:run.id,
+      fencingToken:1,browserFencingToken:1
+    });
+    store.close();
+  });
+
+  it("rolls back a recoverable Run when its Trigger link is not live", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    const run:RunRecord = {
+      id:"run-trigger-missing",workflowId:"test.workflow",workflowVersion:"1.0.0",
+      workflowDigest:"sha256:workflow",status:"created",revision:0,input:{},
+      createdAt:timestamp,updatedAt:timestamp
+    };
+
+    expect(() => store.createRecoverableRun({
+      run,planSnapshot:planSnapshot(run.id),checkpoint:checkpoint(run.id),
+      event:event(run.id,1,"RUN_CREATED"),triggerRunId:"trigger-run:missing"
+    })).toThrow("Trigger Run is not ready for atomic Run creation");
+    expect(store.getRun(run.id)).toBeUndefined();
+    expect(store.getRunPlanSnapshot(run.id)).toBeUndefined();
+    expect(store.getEngineCheckpoint(run.id)).toBeUndefined();
+    expect(store.listEvents(run.id)).toEqual([]);
+    store.close();
+  });
+
   it("rolls back run, plan and event together on an injected crash", () => {
     const store = new SqlitePersistence({
       path: ":memory:",
@@ -1707,7 +1766,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(18);
+      expect(store.health().schemaVersion).toBe(19);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1820,12 +1879,12 @@ describe("append-only migrations", () => {
         DROP TABLE attention_deliveries;
         DROP TABLE attention_records;
         DELETE FROM schema_migrations
-        WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18);
+        WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(18);
+      expect(upgraded.health().schemaVersion).toBe(19);
       expect(upgraded.getAssistanceTask(task.task.taskId)).toEqual(task);
       expect(
         upgraded.getAssistanceRequestResult("not-recorded")
@@ -1850,7 +1909,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(18);
+      expect(store.health().schemaVersion).toBe(19);
       expect(store.getAssistanceRequestResult("not-recorded")).toBeUndefined();
       store.close();
     } finally {
@@ -1872,7 +1931,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(18);
+      expect(store.health().schemaVersion).toBe(19);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1964,12 +2023,12 @@ describe("append-only migrations", () => {
         DROP TABLE attention_deliveries;
         DROP TABLE attention_records;
         DELETE FROM schema_migrations
-        WHERE version IN (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18);
+        WHERE version IN (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(18);
+      expect(upgraded.health().schemaVersion).toBe(19);
       expect(
         upgraded.createWorkflowDraft({
           draftId: "v5-upgraded-draft",
@@ -2010,7 +2069,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(18);
+      expect(store.health().schemaVersion).toBe(19);
       expect(store.getWorkflowDraft("not-created")).toBeUndefined();
       store.close();
     } finally {
@@ -2023,7 +2082,7 @@ describe("append-only migrations", () => {
     const databasePath = join(directory, "bpa.sqlite3");
     try {
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(18);
+      expect(store.health().schemaVersion).toBe(19);
       store.close();
       const raw = new Database(databasePath);
       raw

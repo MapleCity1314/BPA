@@ -102,7 +102,7 @@ Attention 创建 Session；一次性令牌只返回一次，SQLite 仅保存 SHA
 `ready + authenticated`，然后释放租约并记录审计。令牌不能重复激活，过期、撤销、绑定
 漂移均为终态；完成恢复不会改写旧 Run 或自动确认 Attention。
 
-当前候选将其接入现有仅监听 `127.0.0.1` 的 Console Host：恢复开始、完成和撤销均要求
+PR #18 已将其接入现有仅监听 `127.0.0.1` 的 Console Host：恢复开始、完成和撤销均要求
 现有一次性启动令牌换取的 HttpOnly Session、同源检查与 CSRF；Console Backend 内部完成
 令牌签发与激活，不把一次性令牌交给前端。浏览器断线会在同一持久事务将 issued/active
 Session 置为 invalidated、释放原控制租约并写审计。该层仍不是手机远程入口，也不提供
@@ -125,6 +125,15 @@ DevTools、文件选择和剪贴板导出继续禁止。
   理由。
 
 这样浏览器资源上限与“受管 Profile 数”相关，而不是与“同时存在的 Workflow 数”相关。
+
+当前本机候选把这项边界下沉到 Trigger Runtime：凡 TriggerSpec 声明
+`browserInstanceId`，Run 创建前必须取得 `browser-instance:<id>` 控制租约，并把独立
+fencing token 持久化到 Schema v19 的 Trigger Run；运行期间与业务并发租约一起续租，
+Workflow Run 创建与 Trigger Run 关联在一个事务中提交，终态再一起释放两把租约。
+浏览器控制租约已被库存、另一条 Trigger 或 Recovery Session 持有时，
+当前 occurrence 直接 `skipped`，不等待、不启动额外浏览器。fixture 使用库存、清退商品、
+体验分三个不同业务并发键和同一浏览器实例，证明任一时刻只有一个 Run 能进入浏览器阶段；
+真实页面、标签页上限和 Chrome 进程数仍需后续本机 E2E 验收。
 
 ## 7. 实施顺序与门禁
 

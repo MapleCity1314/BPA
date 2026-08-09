@@ -385,6 +385,7 @@ export interface ExecutionUnitOfWork {
     input: CreateRunInput & {
       planSnapshot: RunPlanSnapshotRecord;
       checkpoint: EngineCheckpointRecord;
+      triggerRunId?: string;
       outbox?: readonly OutboxMessage[];
       assistanceTasks?: readonly AssistanceTaskRecord[];
     }
@@ -927,6 +928,7 @@ export interface TriggerRunRecord {
   status: TriggerRunStatus;
   workflowRunId?: string;
   fencingToken?: number;
+  browserFencingToken?: number;
   datasetId?: string;
   datasetVersion?: string;
   diagnostic?: string;
@@ -970,8 +972,10 @@ export interface TriggerStore {
     updatedAt: string;
     workflowRunId?: string;
     fencingToken?: number;
+    browserFencingToken?: number;
     diagnostic?: string;
   }): TriggerRunRecord;
+  getTriggerRun(triggerRunId: string): TriggerRunRecord | undefined;
   listTriggerRuns(triggerId?: string): TriggerRunRecord[];
   latestDatasetVersion(datasetId: string): {
     id: string;

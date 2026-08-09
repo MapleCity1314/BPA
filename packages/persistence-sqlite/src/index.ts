@@ -1584,6 +1584,7 @@ export class SqlitePersistence implements Persistence {
     input: CreateRunInput & {
       planSnapshot: RunPlanSnapshotRecord;
       checkpoint: EngineCheckpointRecord;
+      triggerRunId?: string;
       outbox?: readonly OutboxMessage[];
       assistanceTasks?: readonly AssistanceTaskRecord[];
     }
@@ -1630,6 +1631,19 @@ export class SqlitePersistence implements Persistence {
       this.#inject("recoverable_run.after_effects");
       this.#insertEvent(input.event);
       this.#inject("recoverable_run.after_event");
+      if (input.triggerRunId) {
+        const linked = this.#db.prepare(
+          `UPDATE trigger_runs
+           SET status='run_created',workflow_run_id=?,updated_at=?
+           WHERE trigger_run_id=? AND status='lease_acquired'
+             AND workflow_run_id IS NULL`
+        ).run(input.run.id,input.run.createdAt,input.triggerRunId);
+        if (linked.changes !== 1) {
+          throw new Error(
+            `Trigger Run is not ready for atomic Run creation: ${input.triggerRunId}`
+          );
+        }
+      }
       return input.run;
     })();
   }
@@ -4986,12 +5000,14 @@ export class SqlitePersistence implements Persistence {
     const result = this.#db.prepare(
       `INSERT INTO trigger_runs(
         trigger_run_id,trigger_id,trigger_version,occurrence_key,status,
-        workflow_run_id,fencing_token,dataset_id,dataset_version,diagnostic,created_at,updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        workflow_run_id,fencing_token,browser_fencing_token,
+        dataset_id,dataset_version,diagnostic,created_at,updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(trigger_id,occurrence_key) DO NOTHING`
     ).run(
       input.triggerRunId,input.triggerId,input.triggerVersion,input.occurrenceKey,input.status,
-      input.workflowRunId ?? null,input.fencingToken ?? null,input.datasetId ?? null,input.datasetVersion ?? null,
+      input.workflowRunId ?? null,input.fencingToken ?? null,
+      input.browserFencingToken ?? null,input.datasetId ?? null,input.datasetVersion ?? null,
       input.diagnostic ?? null,input.createdAt,input.updatedAt
     );
     if (result.changes === 1) return { status:"accepted",record:input };
@@ -5007,21 +5023,31 @@ export class SqlitePersistence implements Persistence {
     updatedAt: string;
     workflowRunId?: string;
     fencingToken?: number;
+    browserFencingToken?: number;
     diagnostic?: string;
   }): TriggerRunRecord {
     const result = this.#db.prepare(
       `UPDATE trigger_runs SET status=?,updated_at=?,
          workflow_run_id=COALESCE(?,workflow_run_id),
-         fencing_token=COALESCE(?,fencing_token),diagnostic=COALESCE(?,diagnostic)
+         fencing_token=COALESCE(?,fencing_token),
+         browser_fencing_token=COALESCE(?,browser_fencing_token),
+         diagnostic=COALESCE(?,diagnostic)
        WHERE trigger_run_id=?`
     ).run(
       input.status,input.updatedAt,input.workflowRunId ?? null,input.fencingToken ?? null,
-      input.diagnostic ?? null,input.triggerRunId
+      input.browserFencingToken ?? null,input.diagnostic ?? null,input.triggerRunId
     );
     if (result.changes !== 1) throw new Error(`Trigger Run not found: ${input.triggerRunId}`);
     const row = this.#db.prepare("SELECT * FROM trigger_runs WHERE trigger_run_id=?")
       .get(input.triggerRunId) as SqlRow;
     return this.#readTriggerRun(row);
+  }
+
+  getTriggerRun(triggerRunId: string): TriggerRunRecord | undefined {
+    const row = this.#db.prepare(
+      "SELECT * FROM trigger_runs WHERE trigger_run_id=?"
+    ).get(triggerRunId) as SqlRow | undefined;
+    return row ? this.#readTriggerRun(row) : undefined;
   }
 
   listTriggerRuns(triggerId?: string): TriggerRunRecord[] {
@@ -6329,6 +6355,9 @@ export class SqlitePersistence implements Persistence {
       status:row.status as TriggerRunStatus,
       ...(row.workflow_run_id == null ? {} : { workflowRunId:String(row.workflow_run_id) }),
       ...(row.fencing_token == null ? {} : { fencingToken:Number(row.fencing_token) }),
+      ...(row.browser_fencing_token == null
+        ? {}
+        : { browserFencingToken:Number(row.browser_fencing_token) }),
       ...(row.dataset_id == null ? {} : { datasetId:String(row.dataset_id) }),
       ...(row.dataset_version == null ? {} : { datasetVersion:String(row.dataset_version) }),
       ...(row.diagnostic == null ? {} : { diagnostic:String(row.diagnostic) }),
