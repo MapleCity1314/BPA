@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: doudian.inventory.snapshot.refresh
-  version: 1.0.0
+  version: 2.0.0
   title: 刷新抖店全量库存快照
   description: 校验当前店铺名称，完整对账全部在售商品，并逐商品只读采集、立即持久化 SKU 与渠道库存。
 spec:
@@ -10,11 +10,10 @@ spec:
   inputSchema:
     type: object
     additionalProperties: false
-    required: [shopId, shopName, lease]
+    required: [shopId, shopName]
     properties:
       shopId: { type: string, minLength: 1, maxLength: 200 }
       shopName: { type: string, minLength: 2, maxLength: 200 }
-      lease: { type: object }
   outputSchema:
     type: object
   limits: { maxDepth: 3, maxStepExecutions: 6000 }
@@ -56,7 +55,7 @@ spec:
               itemKey: ${item.id}
               maxItems: 500
               maxDuration: 8h
-              onItemError: stop
+              onItemError: collect
               body:
                 kind: sequence
                 steps:
@@ -72,18 +71,40 @@ spec:
                     timeout: 2m
                   - key: persist_snapshot
                     kind: call
-                    use: inventory.snapshot.persist@1.0.0
+                    use: inventory.snapshot.persist@2.0.0
                     with:
                       snapshot: ${steps.read_snapshot.output}
-                      lease: ${input.lease}
                     timeout: 30s
-            - key: completed
-              kind: terminal
-              status: succeeded
-              output:
-                shop: ${steps.read_shop.output.shop}
-                scope: ${steps.collect_scope.output}
-                snapshots: ${steps.snapshot_products.output}
+            - key: inventory_completion_gate
+              kind: decision
+              condition:
+                kind: compare
+                operator: equals
+                left: { kind: binding, binding: "${steps.snapshot_products.output.failed.count}" }
+                right: { kind: literal, value: 0 }
+              then:
+                kind: sequence
+                steps:
+                  - key: completed
+                    kind: terminal
+                    status: succeeded
+                    output:
+                      shop: ${steps.read_shop.output.shop}
+                      scope: ${steps.collect_scope.output}
+                      snapshots: ${steps.snapshot_products.output}
+              else:
+                kind: sequence
+                steps:
+                  - key: partial
+                    kind: terminal
+                    status: uncertain
+                    output:
+                      shop: ${steps.read_shop.output.shop}
+                      scope: ${steps.collect_scope.output}
+                      snapshots: ${steps.snapshot_products.output}
+                    error:
+                      code: DOUDIAN_INVENTORY_SNAPSHOT_PARTIAL
+                      message: 至少一个商品库存快照未可靠持久化，已保留成功结果但禁止报告全量完成。
         else:
           kind: sequence
           steps:

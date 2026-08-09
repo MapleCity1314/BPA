@@ -90,7 +90,6 @@ export const INVENTORY_RISK_EVALUATE_HANDLER_REF =
   "inventory.risk.evaluate@1.0.0";
 export const SALES_DEMAND_SYNC_HANDLER_REF = "ecom.sales-demand.sync@1.0.0";
 export const SALES_DEMAND_RECENT_PERSIST_HANDLER_REF = "ecom.sales-demand.recent.persist@1.0.0";
-export const INVENTORY_SNAPSHOT_PERSIST_HANDLER_REF = "inventory.snapshot.persist@1.0.0";
 export const INVENTORY_FORECAST_INPUT_READ_HANDLER_REF = "inventory.forecast-input.read@1.0.0";
 export const INVENTORY_FORECAST_INPUT_READ_V101_HANDLER_REF = "inventory.forecast-input.read@1.0.1";
 export const INVENTORY_FORECAST_PERSIST_HANDLER_REF = "inventory.forecast.persist@1.0.0";
@@ -255,17 +254,6 @@ export const teamHandlerRegistry = new TeamHandlerRegistry([
         snapshot:inputObject(candidate.snapshot as JsonValue,"snapshot"),
         lease:inputObject(candidate.lease as JsonValue,"lease")
       },signal);
-    }
-  },
-  {
-    node: { id: "inventory.snapshot.persist", version: "1.0.0" },
-    implementationDigest: manifestDigest(INVENTORY_SNAPSHOT_PERSIST_HANDLER_REF),
-    invoke(input, signal) {
-      const candidate = inputObject(input, "Inventory snapshot persist input");
-      return invokeInventoryService("inventory.snapshot.persist", {
-        snapshot: inputObject(candidate.snapshot as JsonValue, "snapshot"),
-        lease:inputObject(candidate.lease as JsonValue,"lease")
-      }, signal);
     }
   },
   {

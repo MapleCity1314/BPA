@@ -726,7 +726,7 @@ describe("migration v7", () => {
         })
     ).toThrow("crash");
     const recovered = new SqlitePersistence({ path });
-    expect(recovered.health().schemaVersion).toBe(23);
+    expect(recovered.health().schemaVersion).toBe(24);
     recovered.close();
   });
 });

@@ -42,7 +42,6 @@ describe("dashboard analytics", () => {
     expect(result.map((reminder) => reminder.id)).toEqual([
       "inventory-collection-missing",
       "recent-orders-stale",
-      "scheduler-not-running"
     ]);
   });
 

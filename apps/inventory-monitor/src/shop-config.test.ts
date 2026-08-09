@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   inventoryShopsFromEnvironment,
-  prioritizeBrowserBoundShops,
-  schedulerShopIndexGroups
+  prioritizeBrowserBoundShops
 } from "./shop-config.js";
 
 describe("inventory shop configuration", () => {
@@ -76,11 +75,4 @@ describe("inventory shop configuration", () => {
     ]);
   });
 
-  it("separates live collection from background historical synchronization",() => {
-    expect(schedulerShopIndexGroups([
-      { id:"shop-2",name:"二号店",browserInstanceId:"browser-2" },
-      { id:"shop-1",name:"一号店" },
-      { id:"shop-3",name:"三号店" }
-    ])).toEqual({ bound:[0],unbound:[1,2] });
-  });
 });

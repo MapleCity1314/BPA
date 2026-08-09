@@ -15,6 +15,7 @@ import {
   DesignModeGrantConflictError,
   EvidenceConflictError,
   EvidenceOwnershipError,
+  ExternalDomainLeaseConflictError,
   OperationalFactConflictError,
   RecoverySessionConflictError,
   RevisionConflictError,
@@ -67,6 +68,8 @@ import {
   type ExportRecord,
   type ExecutionScopeRecord,
   type ExecutionEventRecord,
+  type ExternalDomainLeaseMutationResult,
+  type ExternalDomainLeaseRecord,
   type GatewayCommandRecord,
   type InboxMessageRecord,
   type IterationInstanceRecord,
@@ -1732,10 +1735,16 @@ export class SqlitePersistence implements Persistence {
       planSnapshot: RunPlanSnapshotRecord;
       checkpoint: EngineCheckpointRecord;
       triggerAttemptId?: string;
+      externalDomainLeaseRequestId?: string;
       outbox?: readonly OutboxMessage[];
       assistanceTasks?: readonly AssistanceTaskRecord[];
     }
   ): RunRecord {
+    if (input.externalDomainLeaseRequestId && !input.triggerAttemptId) {
+      throw new Error(
+        "An external domain lease requires an owning Trigger Attempt"
+      );
+    }
     if (input.triggerAttemptId) {
       const attempt = this.getTriggerAttempt(input.triggerAttemptId);
       const occurrence = attempt
@@ -1768,6 +1777,36 @@ export class SqlitePersistence implements Persistence {
         throw new Error(
           `Trigger Attempt workflow does not match Run: ${input.triggerAttemptId}`
         );
+      }
+      if (
+        (pinnedSpec.externalDomainLease !== undefined) !==
+        (input.externalDomainLeaseRequestId !== undefined)
+      ) {
+        throw new Error(
+          `Trigger Attempt external domain lease does not match Run creation: ${input.triggerAttemptId}`
+        );
+      }
+      if (input.externalDomainLeaseRequestId) {
+        const lease = this.getExternalDomainLease(
+          input.externalDomainLeaseRequestId
+        );
+        const externalDomainLease = pinnedSpec.externalDomainLease;
+        if (
+          !externalDomainLease ||
+          !lease ||
+          lease.state !== "bound" ||
+          lease.providerId !== externalDomainLease.providerId ||
+          lease.domainKey !== externalDomainLease.resourceId ||
+          lease.ownerId !== input.triggerAttemptId ||
+          lease.occurrenceId !== attempt.occurrenceId ||
+          lease.triggerAttemptId ||
+          lease.runId ||
+          !lease.expiresAt
+        ) {
+          throw new Error(
+            `External domain lease is not ready for atomic Run creation: ${input.externalDomainLeaseRequestId}`
+          );
+        }
       }
     }
     return this.#db.transaction(() => {
@@ -1841,6 +1880,50 @@ export class SqlitePersistence implements Persistence {
             `Trigger Attempt is not ready for atomic Run creation: ${input.triggerAttemptId}`
           );
         }
+      }
+      if (input.externalDomainLeaseRequestId && input.triggerAttemptId) {
+        const linked = this.#db
+          .prepare(
+            `UPDATE external_domain_leases
+             SET trigger_attempt_id=?,workflow_run_id=?,updated_at=?,
+                 revision=revision+1
+             WHERE request_id=? AND state='bound'
+               AND proposed_owner_id=?
+               AND trigger_attempt_id IS NULL AND workflow_run_id IS NULL
+               AND EXISTS (
+                 SELECT 1
+                 FROM trigger_attempts attempt
+                 INNER JOIN trigger_occurrences occurrence
+                   ON occurrence.occurrence_id=attempt.occurrence_id
+                 INNER JOIN trigger_spec_versions version
+                   ON version.trigger_id=occurrence.trigger_id
+                  AND version.trigger_version=occurrence.trigger_version
+                 WHERE attempt.attempt_id=?
+                   AND attempt.workflow_run_id=?
+                   AND occurrence.occurrence_id=external_domain_leases.occurrence_id
+                   AND json_extract(
+                     version.spec_json,'$.externalDomainLease.providerId'
+                   )=external_domain_leases.provider_id
+                   AND json_extract(
+                     version.spec_json,'$.externalDomainLease.resourceId'
+                   )=external_domain_leases.domain_key
+               )`
+          )
+          .run(
+            input.triggerAttemptId,
+            input.run.id,
+            input.run.createdAt,
+            input.externalDomainLeaseRequestId,
+            input.triggerAttemptId,
+            input.triggerAttemptId,
+            input.run.id
+          );
+        if (linked.changes !== 1) {
+          throw new Error(
+            `External domain lease is not ready for atomic Run creation: ${input.externalDomainLeaseRequestId}`
+          );
+        }
+        this.#inject("recoverable_run.after_external_domain_lease");
       }
       return input.run;
     })();
@@ -6105,6 +6188,409 @@ export class SqlitePersistence implements Persistence {
     } : undefined;
   }
 
+  beginExternalDomainLeaseAcquisition(input: {
+    requestId: string;
+    providerId: string;
+    domainKey: string;
+    occurrenceId: string;
+    ownerId: string;
+    createdAt: string;
+  }): {
+    status: "accepted" | "duplicate";
+    record: ExternalDomainLeaseRecord;
+  } {
+    assertAuthoringId(input.requestId, "requestId");
+    assertAuthoringId(input.providerId, "providerId");
+    assertAuthoringId(input.domainKey, "domainKey");
+    assertAuthoringId(input.occurrenceId, "occurrenceId");
+    assertAuthoringId(input.ownerId, "ownerId");
+    assertTimestamp(input.createdAt, "createdAt");
+    return this.#db.transaction(() => {
+      const replay = this.getExternalDomainLease(input.requestId);
+      if (replay) {
+        if (
+          replay.providerId !== input.providerId ||
+          replay.domainKey !== input.domainKey ||
+          replay.occurrenceId !== input.occurrenceId ||
+          replay.ownerId !== input.ownerId ||
+          replay.createdAt !== input.createdAt
+        ) {
+          throw new ExternalDomainLeaseConflictError(
+            `External domain lease request identity changed: ${input.requestId}`
+          );
+        }
+        return { status: "duplicate" as const, record: replay };
+      }
+      const occurrence = this.getTriggerOccurrence(input.occurrenceId);
+      if (
+        !occurrence ||
+        (occurrence.status !== "pending" && occurrence.status !== "deferred")
+      ) {
+        throw new ExternalDomainLeaseConflictError(
+          `Trigger Occurrence is not ready for lease acquisition: ${input.occurrenceId}`
+        );
+      }
+      const pinnedSpec = this.getTriggerSpecVersion(
+        occurrence.triggerId,
+        occurrence.triggerVersion
+      );
+      if (
+        !pinnedSpec?.externalDomainLease ||
+        pinnedSpec.externalDomainLease.providerId !== input.providerId ||
+        pinnedSpec.externalDomainLease.resourceId !== input.domainKey
+      ) {
+        throw new ExternalDomainLeaseConflictError(
+          `External domain lease does not match pinned TriggerSpec: ${input.occurrenceId}`
+        );
+      }
+      const conflict = this.#db
+        .prepare(
+          `SELECT request_id FROM external_domain_leases
+           WHERE state!='released' AND (
+             (provider_id=? AND domain_key=?) OR occurrence_id=?
+           ) LIMIT 1`
+        )
+        .get(input.providerId, input.domainKey, input.occurrenceId) as
+        | SqlRow
+        | undefined;
+      if (conflict) {
+        throw new ExternalDomainLeaseConflictError(
+          `External domain lease is already active: ${String(conflict.request_id)}`
+        );
+      }
+      this.#db
+        .prepare(
+          `INSERT INTO external_domain_leases(
+            request_id,provider_id,domain_key,occurrence_id,proposed_owner_id,
+            state,revision,created_at,updated_at
+          ) VALUES (?,?,?,?,?,'acquiring',0,?,?)`
+        )
+        .run(
+          input.requestId,
+          input.providerId,
+          input.domainKey,
+          input.occurrenceId,
+          input.ownerId,
+          input.createdAt,
+          input.createdAt
+        );
+      this.#inject("external_domain_lease.begin.after_insert");
+      return {
+        status: "accepted" as const,
+        record: this.getExternalDomainLease(input.requestId)!
+      };
+    }).immediate();
+  }
+
+  bindExternalDomainLease(input: {
+    requestId: string;
+    expectedRevision: number;
+    fencingToken: number;
+    serverNow: string;
+    expiresAt: string;
+    updatedAt: string;
+  }): ExternalDomainLeaseMutationResult {
+    this.#assertExternalDomainLeaseBinding(input);
+    const current = this.getExternalDomainLease(input.requestId);
+    if (
+      current?.state === "bound" &&
+      current.fencingToken === input.fencingToken &&
+      current.serverNow === input.serverNow &&
+      current.expiresAt === input.expiresAt &&
+      current.updatedAt === input.updatedAt
+    ) {
+      return { status: "duplicate", record: current };
+    }
+    if (!current || current.revision !== input.expectedRevision) {
+      throw new RevisionConflictError("External domain lease revision changed");
+    }
+    if (current.state !== "acquiring") {
+      throw new ExternalDomainLeaseConflictError(
+        `Invalid external domain lease transition: ${current.state} -> bound`
+      );
+    }
+    return this.#db.transaction(() => {
+      const result = this.#db
+        .prepare(
+          `UPDATE external_domain_leases
+           SET state='bound',revision=revision+1,fencing_token=?,server_now=?,
+               expires_at=?,diagnostic=NULL,updated_at=?
+           WHERE request_id=? AND revision=? AND state='acquiring'`
+        )
+        .run(
+          input.fencingToken,
+          input.serverNow,
+          input.expiresAt,
+          input.updatedAt,
+          input.requestId,
+          input.expectedRevision
+        );
+      if (result.changes !== 1) {
+        throw new RevisionConflictError("External domain lease revision changed");
+      }
+      this.#inject("external_domain_lease.bind.after_update");
+      return {
+        status: "updated" as const,
+        record: this.getExternalDomainLease(input.requestId)!
+      };
+    })();
+  }
+
+  renewExternalDomainLease(input: {
+    requestId: string;
+    expectedRevision: number;
+    fencingToken: number;
+    serverNow: string;
+    expiresAt: string;
+    updatedAt: string;
+  }): ExternalDomainLeaseMutationResult {
+    this.#assertExternalDomainLeaseBinding(input);
+    const current = this.getExternalDomainLease(input.requestId);
+    if (
+      current?.state === "bound" &&
+      current.fencingToken === input.fencingToken &&
+      current.serverNow === input.serverNow &&
+      current.expiresAt === input.expiresAt &&
+      current.updatedAt === input.updatedAt
+    ) {
+      return { status: "duplicate", record: current };
+    }
+    if (!current || current.revision !== input.expectedRevision) {
+      throw new RevisionConflictError("External domain lease revision changed");
+    }
+    if (current.state !== "bound") {
+      throw new ExternalDomainLeaseConflictError(
+        `Invalid external domain lease transition: ${current.state} -> bound renewal`
+      );
+    }
+    if (current.fencingToken !== input.fencingToken) {
+      throw new ExternalDomainLeaseConflictError(
+        "External domain lease fencing token changed during renewal"
+      );
+    }
+    return this.#db.transaction(() => {
+      const result = this.#db
+        .prepare(
+          `UPDATE external_domain_leases
+           SET revision=revision+1,server_now=?,expires_at=?,updated_at=?
+           WHERE request_id=? AND revision=? AND state='bound'
+             AND fencing_token=?`
+        )
+        .run(
+          input.serverNow,
+          input.expiresAt,
+          input.updatedAt,
+          input.requestId,
+          input.expectedRevision,
+          input.fencingToken
+        );
+      if (result.changes !== 1) {
+        throw new RevisionConflictError("External domain lease revision changed");
+      }
+      this.#inject("external_domain_lease.renew.after_update");
+      return {
+        status: "updated" as const,
+        record: this.getExternalDomainLease(input.requestId)!
+      };
+    })();
+  }
+
+  markExternalDomainLeaseReconciliationRequired(input: {
+    requestId: string;
+    expectedRevision: number;
+    diagnostic: string;
+    updatedAt: string;
+  }): ExternalDomainLeaseMutationResult {
+    assertRevision(input.expectedRevision, "expectedRevision");
+    assertTimestamp(input.updatedAt, "updatedAt");
+    if (!input.diagnostic.trim() || input.diagnostic.length > 1_000) {
+      throw new Error("diagnostic must be 1-1000 characters");
+    }
+    const current = this.getExternalDomainLease(input.requestId);
+    if (
+      current?.state === "reconciliation_required" &&
+      current.diagnostic === input.diagnostic &&
+      current.reconciliationRequiredAt === input.updatedAt &&
+      current.updatedAt === input.updatedAt
+    ) {
+      return { status: "duplicate", record: current };
+    }
+    if (!current || current.revision !== input.expectedRevision) {
+      throw new RevisionConflictError("External domain lease revision changed");
+    }
+    if (current.state !== "acquiring" && current.state !== "bound") {
+      throw new ExternalDomainLeaseConflictError(
+        `Invalid external domain lease transition: ${current.state} -> reconciliation_required`
+      );
+    }
+    return this.#db.transaction(() => {
+      const result = this.#db
+        .prepare(
+          `UPDATE external_domain_leases
+           SET state='reconciliation_required',revision=revision+1,diagnostic=?,
+               reconciliation_required_at=?,updated_at=?
+           WHERE request_id=? AND revision=? AND state=?`
+        )
+        .run(
+          input.diagnostic,
+          input.updatedAt,
+          input.updatedAt,
+          input.requestId,
+          input.expectedRevision,
+          current.state
+        );
+      if (result.changes !== 1) {
+        throw new RevisionConflictError("External domain lease revision changed");
+      }
+      this.#inject("external_domain_lease.reconcile.after_update");
+      return {
+        status: "updated" as const,
+        record: this.getExternalDomainLease(input.requestId)!
+      };
+    })();
+  }
+
+  releaseExternalDomainLease(input: {
+    requestId: string;
+    expectedRevision: number;
+    releasedAt: string;
+  }): ExternalDomainLeaseMutationResult {
+    assertRevision(input.expectedRevision, "expectedRevision");
+    assertTimestamp(input.releasedAt, "releasedAt");
+    const current = this.getExternalDomainLease(input.requestId);
+    if (
+      current?.state === "released" &&
+      current.releasedAt === input.releasedAt &&
+      current.updatedAt === input.releasedAt
+    ) {
+      return { status: "duplicate", record: current };
+    }
+    if (!current || current.revision !== input.expectedRevision) {
+      throw new RevisionConflictError("External domain lease revision changed");
+    }
+    if (current.state === "released") {
+      throw new ExternalDomainLeaseConflictError(
+        "External domain lease was released with a different operation"
+      );
+    }
+    return this.#db.transaction(() => {
+      const result = this.#db
+        .prepare(
+          `UPDATE external_domain_leases
+           SET state='released',revision=revision+1,released_at=?,updated_at=?
+           WHERE request_id=? AND revision=? AND state!='released'`
+        )
+        .run(
+          input.releasedAt,
+          input.releasedAt,
+          input.requestId,
+          input.expectedRevision
+        );
+      if (result.changes !== 1) {
+        throw new RevisionConflictError("External domain lease revision changed");
+      }
+      this.#inject("external_domain_lease.release.after_update");
+      return {
+        status: "updated" as const,
+        record: this.getExternalDomainLease(input.requestId)!
+      };
+    })();
+  }
+
+  getExternalDomainLease(
+    requestId: string
+  ): ExternalDomainLeaseRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM external_domain_leases WHERE request_id=?")
+      .get(requestId) as SqlRow | undefined;
+    return row ? this.#readExternalDomainLease(row) : undefined;
+  }
+
+  listExternalDomainLeases(): ExternalDomainLeaseRecord[] {
+    return (
+      this.#db
+        .prepare(
+          `SELECT * FROM external_domain_leases
+           ORDER BY created_at,request_id`
+        )
+        .all() as SqlRow[]
+    ).map((row) => this.#readExternalDomainLease(row));
+  }
+
+  listExternalDomainLeasesNeedingRecovery(input: {
+    now: string;
+  }): ExternalDomainLeaseRecord[] {
+    assertTimestamp(input.now, "now");
+    return (
+      this.#db
+        .prepare(
+          `SELECT lease.* FROM external_domain_leases lease
+           LEFT JOIN trigger_attempts attempt
+             ON attempt.attempt_id=lease.trigger_attempt_id
+           LEFT JOIN workflow_runs run ON run.id=lease.workflow_run_id
+           WHERE lease.state!='released'
+             AND (attempt.attempt_id IS NULL OR attempt.status!='terminal')
+             AND (run.id IS NULL OR run.status NOT IN (
+               'succeeded','rejected','failed','cancelled','uncertain'
+             ))
+             AND (
+               lease.state IN ('acquiring','reconciliation_required')
+               OR (lease.state='bound' AND julianday(lease.expires_at)<=julianday(?))
+             )
+           ORDER BY lease.updated_at,lease.request_id`
+        )
+        .all(input.now) as SqlRow[]
+    ).map((row) => this.#readExternalDomainLease(row));
+  }
+
+  listExternalDomainLeasesNeedingRenewal(input: {
+    now: string;
+    renewBefore: string;
+  }): ExternalDomainLeaseRecord[] {
+    assertTimestamp(input.now, "now");
+    assertTimestamp(input.renewBefore, "renewBefore");
+    if (Date.parse(input.renewBefore) < Date.parse(input.now)) {
+      throw new Error("renewBefore must not be before now");
+    }
+    return (
+      this.#db
+        .prepare(
+          `SELECT lease.* FROM external_domain_leases lease
+           LEFT JOIN trigger_attempts attempt
+             ON attempt.attempt_id=lease.trigger_attempt_id
+           LEFT JOIN workflow_runs run ON run.id=lease.workflow_run_id
+           WHERE lease.state='bound'
+             AND julianday(lease.expires_at)>julianday(?)
+             AND julianday(lease.expires_at)<=julianday(?)
+             AND (attempt.attempt_id IS NULL OR attempt.status!='terminal')
+             AND (run.id IS NULL OR run.status NOT IN (
+               'succeeded','rejected','failed','cancelled','uncertain'
+             ))
+           ORDER BY lease.expires_at,lease.request_id`
+        )
+        .all(input.now, input.renewBefore) as SqlRow[]
+    ).map((row) => this.#readExternalDomainLease(row));
+  }
+
+  listExternalDomainLeasesNeedingRelease(): ExternalDomainLeaseRecord[] {
+    return (
+      this.#db
+        .prepare(
+          `SELECT lease.* FROM external_domain_leases lease
+           LEFT JOIN trigger_attempts attempt
+             ON attempt.attempt_id=lease.trigger_attempt_id
+           LEFT JOIN workflow_runs run ON run.id=lease.workflow_run_id
+           WHERE lease.state!='released' AND (
+             attempt.status='terminal' OR run.status IN (
+               'succeeded','rejected','failed','cancelled','uncertain'
+             )
+           )
+           ORDER BY lease.updated_at,lease.request_id`
+        )
+        .all() as SqlRow[]
+    ).map((row) => this.#readExternalDomainLease(row));
+  }
+
   acquireTriggerLease(input: {
     concurrencyKey: string;ownerId: string;now: string;ttlSeconds: number;
   }): BrowserControlLeaseRecord | undefined {
@@ -9211,6 +9697,65 @@ export class SqlitePersistence implements Persistence {
       ...(row.observed_at == null
         ? {}
         : { observedAt: String(row.observed_at) })
+    };
+  }
+
+  #assertExternalDomainLeaseBinding(input: {
+    requestId: string;
+    expectedRevision: number;
+    fencingToken: number;
+    serverNow: string;
+    expiresAt: string;
+    updatedAt: string;
+  }): void {
+    assertAuthoringId(input.requestId, "requestId");
+    assertRevision(input.expectedRevision, "expectedRevision");
+    if (!Number.isSafeInteger(input.fencingToken) || input.fencingToken < 1) {
+      throw new Error("fencingToken must be a positive safe integer");
+    }
+    assertTimestamp(input.serverNow, "serverNow");
+    assertTimestamp(input.expiresAt, "expiresAt");
+    assertTimestamp(input.updatedAt, "updatedAt");
+    if (Date.parse(input.expiresAt) <= Date.parse(input.serverNow)) {
+      throw new Error("External domain lease expiresAt must be after serverNow");
+    }
+  }
+
+  #readExternalDomainLease(row: SqlRow): ExternalDomainLeaseRecord {
+    return {
+      requestId: String(row.request_id),
+      providerId: String(row.provider_id),
+      domainKey: String(row.domain_key),
+      occurrenceId: String(row.occurrence_id),
+      ownerId: String(row.proposed_owner_id),
+      ...(row.trigger_attempt_id == null
+        ? {}
+        : { triggerAttemptId: String(row.trigger_attempt_id) }),
+      ...(row.workflow_run_id == null
+        ? {}
+        : { runId: String(row.workflow_run_id) }),
+      state: String(row.state) as ExternalDomainLeaseRecord["state"],
+      revision: Number(row.revision),
+      ...(row.fencing_token == null
+        ? {}
+        : { fencingToken: Number(row.fencing_token) }),
+      ...(row.server_now == null ? {} : { serverNow: String(row.server_now) }),
+      ...(row.expires_at == null ? {} : { expiresAt: String(row.expires_at) }),
+      ...(row.diagnostic == null
+        ? {}
+        : { diagnostic: String(row.diagnostic) }),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      ...(row.reconciliation_required_at == null
+        ? {}
+        : {
+            reconciliationRequiredAt: String(
+              row.reconciliation_required_at
+            )
+          }),
+      ...(row.released_at == null
+        ? {}
+        : { releasedAt: String(row.released_at) })
     };
   }
 

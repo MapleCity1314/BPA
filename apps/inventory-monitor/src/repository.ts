@@ -69,6 +69,16 @@ export interface LeaseFence {
   readonly fencingToken: number;
 }
 
+export interface DomainLeaseGrant extends LeaseFence {
+  readonly serverNow: string;
+  readonly expiresAt: string;
+  readonly active: boolean;
+}
+
+export interface DomainLeaseStatus extends DomainLeaseGrant {
+  readonly acquiredAt: string;
+}
+
 export interface NormalizedOrderLine {
   readonly shopId: string;
   readonly shopName: string;
@@ -303,10 +313,222 @@ export class InventoryRepository {
     return token === undefined ? undefined : Number(token);
   }
 
+  async acquireDomainLease(input: {
+    leaseKey: string;
+    requestId: string;
+    holderId: string;
+    ttlSeconds: number;
+  }): Promise<DomainLeaseGrant> {
+    return inTransaction(this.pool, async (client) => {
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+        [input.leaseKey]
+      );
+      const priorRequest = await client.query<{
+        holder_id: string;
+        fencing_token: string;
+        expires_at: Date;
+      }>(
+        `SELECT r.holder_id,r.fencing_token::text,r.expires_at
+         FROM ops.lease_acquisition_request r
+         WHERE r.lease_key=$1 AND r.request_id=$2
+         FOR UPDATE`,
+        [input.leaseKey,input.requestId]
+      );
+      const prior = priorRequest.rows[0];
+      const currentResult = await client.query<{
+        holder_id: string;
+        fencing_token: string;
+        expires_at: Date;
+        server_now: Date;
+      }>(
+        `SELECT holder_id,fencing_token::text,expires_at,clock_timestamp() AS server_now
+         FROM ops.lease WHERE lease_key=$1 FOR UPDATE`,
+        [input.leaseKey]
+      );
+      const current = currentResult.rows[0];
+      if (prior) {
+        if (prior.holder_id !== input.holderId) {
+          throw new Error("DOMAIN_LEASE_REQUEST_CONFLICT");
+        }
+        if (!current) throw new Error("DOMAIN_LEASE_STATE_INVALID");
+        return {
+          leaseKey:input.leaseKey,
+          holderId:prior.holder_id,
+          fencingToken:Number(prior.fencing_token),
+          serverNow:current.server_now.toISOString(),
+          expiresAt:prior.expires_at.toISOString(),
+          active:
+            current?.holder_id === prior.holder_id &&
+            Number(current?.fencing_token) === Number(prior.fencing_token) &&
+            current.expires_at.getTime() > current.server_now.getTime()
+        };
+      }
+      if (current && current.expires_at.getTime() > current.server_now.getTime()) {
+        throw new Error("DOMAIN_LEASE_BUSY");
+      }
+      const lease = await client.query<{
+        holder_id: string;
+        fencing_token: string;
+        server_now: Date;
+        expires_at: Date;
+      }>(
+        `INSERT INTO ops.lease(lease_key,holder_id,fencing_token,acquired_at,expires_at)
+         VALUES (
+           $1,$2,1,clock_timestamp(),
+           clock_timestamp()+make_interval(secs => $3)
+         )
+         ON CONFLICT(lease_key) DO UPDATE SET
+           holder_id=EXCLUDED.holder_id,
+           fencing_token=ops.lease.fencing_token+1,
+           acquired_at=clock_timestamp(),
+           expires_at=clock_timestamp()+make_interval(secs => $3)
+         WHERE ops.lease.expires_at <= clock_timestamp()
+         RETURNING holder_id,fencing_token::text,acquired_at AS server_now,expires_at`,
+        [input.leaseKey,input.holderId,input.ttlSeconds]
+      );
+      const granted = lease.rows[0];
+      if (!granted) throw new Error("DOMAIN_LEASE_BUSY");
+      const fencingToken = Number(granted.fencing_token);
+      if (!Number.isSafeInteger(fencingToken) || fencingToken < 1) {
+        throw new Error("DOMAIN_LEASE_TOKEN_INVALID");
+      }
+      await client.query(
+        `INSERT INTO ops.lease_acquisition_request(
+           lease_key,request_id,holder_id,fencing_token,acquired_at,expires_at
+         ) VALUES ($1,$2,$3,$4,$5,$6)`,
+        [input.leaseKey,input.requestId,input.holderId,fencingToken,granted.server_now,granted.expires_at]
+      );
+      return {
+        leaseKey:input.leaseKey,
+        holderId:granted.holder_id,
+        fencingToken:Number(granted.fencing_token),
+        serverNow:granted.server_now.toISOString(),
+        expiresAt:granted.expires_at.toISOString(),
+        active:true
+      };
+    });
+  }
+
+  async renewDomainLease(input: LeaseFence & { ttlSeconds: number }): Promise<DomainLeaseGrant> {
+    return inTransaction(this.pool, async (client) => {
+      const locked = await client.query<{
+        holder_id: string;
+        fencing_token: string;
+        expires_at: Date;
+        server_now: Date;
+      }>(
+        `SELECT holder_id,fencing_token::text,expires_at,clock_timestamp() AS server_now
+         FROM ops.lease WHERE lease_key=$1 FOR UPDATE`,
+        [input.leaseKey]
+      );
+      const current = locked.rows[0];
+      if (
+        !current || current.holder_id !== input.holderId ||
+        Number(current.fencing_token) !== input.fencingToken ||
+        current.expires_at.getTime() <= current.server_now.getTime()
+      ) {
+        throw new Error("DOMAIN_LEASE_LOST");
+      }
+      const renewed = await client.query<{ expires_at: Date }>(
+        `UPDATE ops.lease
+         SET expires_at=$4::timestamptz+make_interval(secs => $5)
+         WHERE lease_key=$1 AND holder_id=$2 AND fencing_token=$3
+         RETURNING expires_at`,
+        [input.leaseKey,input.holderId,input.fencingToken,current.server_now,input.ttlSeconds]
+      );
+      return {
+        leaseKey:input.leaseKey,
+        holderId:input.holderId,
+        fencingToken:input.fencingToken,
+        serverNow:current.server_now.toISOString(),
+        expiresAt:row(renewed.rows,"renewed domain lease").expires_at.toISOString(),
+        active:true
+      };
+    });
+  }
+
+  async releaseDomainLease(input: LeaseFence): Promise<DomainLeaseGrant> {
+    return inTransaction(this.pool, async (client) => {
+      const locked = await client.query<{
+        holder_id: string;
+        fencing_token: string;
+        acquired_at: Date;
+        expires_at: Date;
+        server_now: Date;
+      }>(
+        `SELECT holder_id,fencing_token::text,acquired_at,expires_at,
+                clock_timestamp() AS server_now
+         FROM ops.lease WHERE lease_key=$1 FOR UPDATE`,
+        [input.leaseKey]
+      );
+      const current = locked.rows[0];
+      if (
+        !current || current.holder_id !== input.holderId ||
+        Number(current.fencing_token) !== input.fencingToken
+      ) {
+        throw new Error("DOMAIN_LEASE_LOST");
+      }
+      const released = await client.query<{ expires_at: Date }>(
+        `UPDATE ops.lease
+         SET expires_at=GREATEST($4::timestamptz,acquired_at+interval '1 microsecond')
+         WHERE lease_key=$1 AND holder_id=$2 AND fencing_token=$3
+         RETURNING expires_at`,
+        [input.leaseKey,input.holderId,input.fencingToken,current.server_now]
+      );
+      return {
+        leaseKey:input.leaseKey,
+        holderId:input.holderId,
+        fencingToken:input.fencingToken,
+        serverNow:current.server_now.toISOString(),
+        expiresAt:row(released.rows,"released domain lease").expires_at.toISOString(),
+        active:false
+      };
+    });
+  }
+
+  async readDomainLease(leaseKey: string): Promise<DomainLeaseStatus | undefined> {
+    const result = await this.pool.query<{
+      holder_id: string;
+      fencing_token: string;
+      acquired_at: Date;
+      expires_at: Date;
+      server_now: Date;
+      active: boolean;
+    }>(
+      `WITH clock AS (SELECT clock_timestamp() AS server_now)
+       SELECT holder_id,fencing_token::text,acquired_at,expires_at,
+              clock.server_now,expires_at > clock.server_now AS active
+       FROM ops.lease CROSS JOIN clock WHERE lease_key=$1`,
+      [leaseKey]
+    );
+    const current = result.rows[0];
+    return current ? {
+      leaseKey,
+      holderId:current.holder_id,
+      fencingToken:Number(current.fencing_token),
+      acquiredAt:current.acquired_at.toISOString(),
+      serverNow:current.server_now.toISOString(),
+      expiresAt:current.expires_at.toISOString(),
+      active:current.active
+    } : undefined;
+  }
+
   async assertLease(fence: LeaseFence): Promise<void> {
     const result = await this.pool.query(
       `SELECT 1 FROM ops.lease
        WHERE lease_key=$1 AND holder_id=$2 AND fencing_token=$3 AND expires_at > now()`,
+      [fence.leaseKey,fence.holderId,fence.fencingToken]
+    );
+    if (result.rowCount !== 1) throw new Error("SCHEDULER_LEASE_LOST");
+  }
+
+  private async assertLeaseForUpdate(client: PoolClient, fence: LeaseFence): Promise<void> {
+    const result = await client.query(
+      `SELECT 1 FROM ops.lease
+       WHERE lease_key=$1 AND holder_id=$2 AND fencing_token=$3
+         AND expires_at > clock_timestamp()
+       FOR UPDATE`,
       [fence.leaseKey,fence.holderId,fence.fencingToken]
     );
     if (result.rowCount !== 1) throw new Error("SCHEDULER_LEASE_LOST");
@@ -338,57 +560,14 @@ export class InventoryRepository {
     );
   }
 
-  async startScheduleRun(input: {
-    scheduleRunId: string;
-    leaseKey: string;
-    holderId: string;
-    fencingToken?: number;
-    scheduledFor: string;
-    status?: "running" | "skipped";
-    diagnostic?: string;
-  }): Promise<boolean> {
-    const result = await this.pool.query(
-      `INSERT INTO ops.schedule_run(
-         schedule_run_id,lease_key,holder_id,fencing_token,scheduled_for,status,diagnostics,completed_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,CASE WHEN $6='skipped' THEN now() ELSE NULL END)
-       ON CONFLICT(lease_key,scheduled_for) DO NOTHING
-       RETURNING schedule_run_id`,
-      [input.scheduleRunId,input.leaseKey,input.holderId,input.fencingToken ?? null,
-       input.scheduledFor,input.status ?? "running",JSON.stringify(input.diagnostic ? [input.diagnostic] : [])]
-    );
-    return result.rowCount === 1;
-  }
-
-  async completeScheduleRun(input: {
-    scheduleRunId: string;
-    leaseKey: string;
-    holderId: string;
-    fencingToken: number;
-    status: "succeeded" | "failed" | "degraded";
-    workflowRunIds: readonly string[];
-    diagnostics: readonly string[];
-  }): Promise<boolean> {
-    const result = await this.pool.query(
-      `UPDATE ops.schedule_run SET status=$2,workflow_runs=$3,diagnostics=$4,completed_at=now()
-       WHERE schedule_run_id=$1 AND lease_key=$5 AND holder_id=$6 AND fencing_token=$7
-         AND EXISTS (
-           SELECT 1 FROM ops.lease l
-           WHERE l.lease_key=$5 AND l.holder_id=$6 AND l.fencing_token=$7
-             AND l.expires_at > now()
-         )`,
-      [input.scheduleRunId,input.status,JSON.stringify(input.workflowRunIds),JSON.stringify(input.diagnostics),
-       input.leaseKey,input.holderId,input.fencingToken]
-    );
-    return result.rowCount === 1;
-  }
-
-  async persistSnapshot(snapshot: PersistableDoudianSnapshot): Promise<{
+  async persistSnapshot(snapshot: PersistableDoudianSnapshot, fence: LeaseFence): Promise<{
     readonly snapshotId: string;
     readonly envelope: FactEnvelope<InventoryProductFact>;
   }> {
     const factEnvelope = envelope(snapshot);
     let snapshotId = `snapshot:${snapshot.shop.id}:${snapshot.product.id}:${factEnvelope.source.digest.slice(7, 23)}`;
     await inTransaction(this.pool, async (client) => {
+      await this.assertLeaseForUpdate(client,fence);
       await client.query(
         `INSERT INTO dataset.version(
           dataset_id, data_version, source_kind, source_digest, observed_at,
@@ -687,20 +866,32 @@ export class InventoryRepository {
     sourceSystem: string;
     shopId: string;
     sourceWatermark?: string;
-  }): Promise<void> {
-    await this.pool.query(
-      `INSERT INTO source.sync_run(
-        sync_run_id,source_system,shop_id,status,started_at,source_watermark
-      ) VALUES ($1,$2,$3,'running',now(),$4)
-      ON CONFLICT(sync_run_id) DO NOTHING`,
-      [input.syncRunId,input.sourceSystem,input.shopId,input.sourceWatermark ?? null]
-    );
+  }, fence: LeaseFence): Promise<void> {
+    await inTransaction(this.pool, async (client) => {
+      await this.assertLeaseForUpdate(client,fence);
+      await client.query(
+        `INSERT INTO source.sync_run(
+          sync_run_id,source_system,shop_id,status,started_at,source_watermark
+        ) VALUES ($1,$2,$3,'running',clock_timestamp(),$4)
+        ON CONFLICT(sync_run_id) DO NOTHING`,
+        [input.syncRunId,input.sourceSystem,input.shopId,input.sourceWatermark ?? null]
+      );
+    });
   }
 
-  async upsertOrderChunk(rows: readonly NormalizedOrderLine[]): Promise<{
+  async upsertOrderChunk(rows: readonly NormalizedOrderLine[], fence: LeaseFence): Promise<{
     inserted: number;
     updated: number;
   }> {
+    const payload = this.orderChunkPayload(rows);
+    if (payload.length === 0) return { inserted:0,updated:0 };
+    return inTransaction(this.pool, async (client) => {
+      await this.assertLeaseForUpdate(client,fence);
+      return this.upsertOrderChunkWithClient(client,payload);
+    });
+  }
+
+  private orderChunkPayload(rows: readonly NormalizedOrderLine[]): readonly Record<string, unknown>[] {
     const deduplicated = new Map<string, NormalizedOrderLine>();
     for (const item of rows) {
       const sourceItemKey = factDigest([
@@ -718,8 +909,7 @@ export class InventoryRepository {
         deduplicated.set(sourceItemKey,item);
       }
     }
-    if (deduplicated.size === 0) return { inserted:0,updated:0 };
-    const payload = [...deduplicated].map(([sourceItemKey,item]) => ({
+    return [...deduplicated].map(([sourceItemKey,item]) => ({
       source_item_key:sourceItemKey,
       shop_id:item.shopId,
       shop_name:item.shopName,
@@ -739,8 +929,14 @@ export class InventoryRepository {
       source_loaded_at:item.sourceLoadedAt,
       source_period_end:item.sourcePeriodEnd ?? null
     }));
-    return inTransaction(this.pool, async (client) => {
-      const result = await client.query<{ inserted: string; updated: string }>(
+  }
+
+  private async upsertOrderChunkWithClient(
+    client: PoolClient,
+    payload: readonly Record<string, unknown>[]
+  ): Promise<{ inserted: number; updated: number }> {
+    if (payload.length === 0) return { inserted:0,updated:0 };
+    const result = await client.query<{ inserted: string; updated: string }>(
         `WITH incoming AS (
            SELECT * FROM jsonb_to_recordset($1::jsonb) AS item(
              source_item_key text,shop_id text,shop_name text,child_order_id text,
@@ -777,9 +973,8 @@ export class InventoryRepository {
          FROM changed`,
         [JSON.stringify(payload)]
       );
-      const counts = row(result.rows,"order chunk upsert counts");
-      return { inserted:Number(counts.inserted),updated:Number(counts.updated) };
-    });
+    const counts = row(result.rows,"order chunk upsert counts");
+    return { inserted:Number(counts.inserted),updated:Number(counts.updated) };
   }
 
   async completeOrderSync(input: {
@@ -792,8 +987,9 @@ export class InventoryRepository {
     updated: number;
     recordCount: number;
     historicalCompleteThrough: string;
-  }): Promise<{ datasetId: string; dataVersion: string }> {
+  }, fence: LeaseFence): Promise<{ datasetId: string; dataVersion: string }> {
     return inTransaction(this.pool, async (client) => {
+      await this.assertLeaseForUpdate(client,fence);
       const datasetId = `sales-demand:${input.shopId}`;
       const dataVersion = `${input.watermark}:${input.sourceDigest.slice(7, 19)}`;
       await client.query(
@@ -822,16 +1018,19 @@ export class InventoryRepository {
     });
   }
 
-  async completeNoChangeOrderSync(syncRunId: string): Promise<void> {
-    await this.pool.query(
-      `UPDATE source.sync_run SET status='succeeded',completed_at=now(),
-         inserted_count=0,updated_count=0,diagnostics='["No newer source batch was available."]'::jsonb
-       WHERE sync_run_id=$1`,
-      [syncRunId]
-    );
+  async completeNoChangeOrderSync(syncRunId: string, fence: LeaseFence): Promise<void> {
+    await inTransaction(this.pool, async (client) => {
+      await this.assertLeaseForUpdate(client,fence);
+      await client.query(
+        `UPDATE source.sync_run SET status='succeeded',completed_at=clock_timestamp(),
+           inserted_count=0,updated_count=0,diagnostics='["No newer source batch was available."]'::jsonb
+         WHERE sync_run_id=$1`,
+        [syncRunId]
+      );
+    });
   }
 
-  async persistRecentOrders(input: PersistableRecentOrders): Promise<{
+  async persistRecentOrders(input: PersistableRecentOrders, fence: LeaseFence): Promise<{
     datasetId: string;
     dataVersion: string;
     inserted: number;
@@ -841,61 +1040,68 @@ export class InventoryRepository {
     if (!Number.isFinite(observedAt.getTime())) throw new Error("RECENT_ORDER_OBSERVED_AT_INVALID");
     const sourceBatchId = Math.floor(observedAt.getTime() / 1000);
     const merchantCodes = [...new Set(input.records.map((record) => record.merchantCode))];
-    const bindings = merchantCodes.length ? await this.pool.query<{
-      merchant_code: string;
-      product_id: string;
-    }>(
-      `SELECT merchant_code,product_id FROM inventory.sku_binding
-       WHERE shop_id=$1 AND merchant_code=ANY($2::text[]) AND valid_to IS NULL`,
-      [input.shop.id,merchantCodes]
-    ) : { rows: [] as { merchant_code: string; product_id: string }[] };
-    const productsByMerchant = new Map<string,Set<string>>();
-    for (const binding of bindings.rows) {
-      const products = productsByMerchant.get(binding.merchant_code) ?? new Set<string>();
-      products.add(binding.product_id);
-      productsByMerchant.set(binding.merchant_code,products);
-    }
-    const rows: NormalizedOrderLine[] = input.records.flatMap((record) => {
-      const mapped = productsByMerchant.get(record.merchantCode);
-      const productId = mapped?.has(record.productId)
-        ? record.productId
-        : mapped?.size === 1 ? [...mapped][0] : undefined;
-      if (!productId) return [];
-      const cancelledBeforeShipment = /关闭|取消/u.test(record.orderStatus) && !record.shippedAt;
-      return [{
-        shopId:input.shop.id,shopName:input.shop.name,childOrderId:record.childOrderId,
-        productId,merchantCode:record.merchantCode,
-        specification:record.specification,submittedAt:record.submittedAt,
-        ...(record.paidAt ? { paidAt:record.paidAt } : {}),
-        ...(record.shippedAt ? { shippedAt:record.shippedAt } : {}),
-        orderStatus:record.orderStatus,aftersalesStatus:record.aftersalesStatus,
-        sourceQuantity:record.quantity,
-        demandQuantity:record.paidAt && !cancelledBeforeShipment ? record.quantity : 0,
-        sourceBatchId,sourceRowHash:factDigest(record),sourceLoadedAt:input.observedAt
-      }];
+    return inTransaction(this.pool, async (client) => {
+      await this.assertLeaseForUpdate(client,fence);
+      const bindings = merchantCodes.length ? await client.query<{
+        merchant_code: string;
+        product_id: string;
+      }>(
+        `SELECT merchant_code,product_id FROM inventory.sku_binding
+         WHERE shop_id=$1 AND merchant_code=ANY($2::text[]) AND valid_to IS NULL`,
+        [input.shop.id,merchantCodes]
+      ) : { rows: [] as { merchant_code: string; product_id: string }[] };
+      const productsByMerchant = new Map<string,Set<string>>();
+      for (const binding of bindings.rows) {
+        const products = productsByMerchant.get(binding.merchant_code) ?? new Set<string>();
+        products.add(binding.product_id);
+        productsByMerchant.set(binding.merchant_code,products);
+      }
+      const orderRows: NormalizedOrderLine[] = input.records.flatMap((record) => {
+        const mapped = productsByMerchant.get(record.merchantCode);
+        const productId = mapped?.has(record.productId)
+          ? record.productId
+          : mapped?.size === 1 ? [...mapped][0] : undefined;
+        if (!productId) return [];
+        const cancelledBeforeShipment = /关闭|取消/u.test(record.orderStatus) && !record.shippedAt;
+        return [{
+          shopId:input.shop.id,shopName:input.shop.name,childOrderId:record.childOrderId,
+          productId,merchantCode:record.merchantCode,
+          specification:record.specification,submittedAt:record.submittedAt,
+          ...(record.paidAt ? { paidAt:record.paidAt } : {}),
+          ...(record.shippedAt ? { shippedAt:record.shippedAt } : {}),
+          orderStatus:record.orderStatus,aftersalesStatus:record.aftersalesStatus,
+          sourceQuantity:record.quantity,
+          demandQuantity:record.paidAt && !cancelledBeforeShipment ? record.quantity : 0,
+          sourceBatchId,sourceRowHash:factDigest(record),sourceLoadedAt:input.observedAt
+        }];
+      });
+      const payload = this.orderChunkPayload(orderRows);
+      const changes = await this.upsertOrderChunkWithClient(client,payload);
+      const sourceDigest = factDigest({ shop:input.shop,observedAt:input.observedAt,records:input.records });
+      const datasetId = `sales-demand-recent:${input.shop.id}`;
+      const dataVersion = `${input.observedAt}:${sourceDigest.slice(7,19)}`;
+      await client.query(
+        `INSERT INTO dataset.version(
+          dataset_id,data_version,source_kind,source_digest,observed_at,as_of,
+          record_count,lineage
+         ) VALUES ($1,$2,'doudian.orders.recent.read',$3,$4,$4,$5,$6)
+         ON CONFLICT(dataset_id,source_digest) DO NOTHING`,
+        [datasetId,dataVersion,sourceDigest,input.observedAt,input.records.length,
+         JSON.stringify({ completeness:input.quality.completeness,diagnostics:input.quality.diagnostics ?? [] })]
+      );
+      return { datasetId,dataVersion,...changes };
     });
-    const changes = await this.upsertOrderChunk(rows);
-    const sourceDigest = factDigest({ shop:input.shop,observedAt:input.observedAt,records:input.records });
-    const datasetId = `sales-demand-recent:${input.shop.id}`;
-    const dataVersion = `${input.observedAt}:${sourceDigest.slice(7,19)}`;
-    await this.pool.query(
-      `INSERT INTO dataset.version(
-        dataset_id,data_version,source_kind,source_digest,observed_at,as_of,
-        record_count,lineage
-       ) VALUES ($1,$2,'doudian.orders.recent.read',$3,$4,$4,$5,$6)
-       ON CONFLICT(dataset_id,source_digest) DO NOTHING`,
-      [datasetId,dataVersion,sourceDigest,input.observedAt,input.records.length,
-       JSON.stringify({ completeness:input.quality.completeness,diagnostics:input.quality.diagnostics ?? [] })]
-    );
-    return { datasetId,dataVersion,...changes };
   }
 
-  async failOrderSync(syncRunId: string, message: string): Promise<void> {
-    await this.pool.query(
-      `UPDATE source.sync_run SET status='failed',completed_at=now(),diagnostics=$2
-       WHERE sync_run_id=$1`,
-      [syncRunId,JSON.stringify([message.slice(0, 1000)])]
-    );
+  async failOrderSync(syncRunId: string, message: string, fence: LeaseFence): Promise<void> {
+    await inTransaction(this.pool, async (client) => {
+      await this.assertLeaseForUpdate(client,fence);
+      await client.query(
+        `UPDATE source.sync_run SET status='failed',completed_at=clock_timestamp(),diagnostics=$2
+         WHERE sync_run_id=$1`,
+        [syncRunId,JSON.stringify([message.slice(0, 1000)])]
+      );
+    });
   }
 
   async currentWatermark(sourceSystem: string, shopId: string): Promise<string | undefined> {
@@ -1002,20 +1208,23 @@ export class InventoryRepository {
     readonly merchantCode: string;
     readonly sourceDataset: { id: string; version: string };
     readonly forecast: DemandForecast;
-  }): Promise<string> {
+  }, fence: LeaseFence): Promise<string> {
     const forecastId = `forecast:${factDigest(input).slice(7, 39)}`;
-    await this.pool.query(
-      `INSERT INTO inventory.demand_forecast(
-        forecast_id,shop_id,product_id,platform_sku_id,merchant_code,as_of,
-        algorithm_version,source_dataset_id,source_data_version,selected_model,
-        confidence,daily_p50,daily_p90,horizons,diagnostics
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-      ON CONFLICT(shop_id,product_id,platform_sku_id,as_of,algorithm_version) DO NOTHING`,
-      [forecastId,input.shopId,input.productId,input.platformSkuId,input.merchantCode,input.forecast.asOf,
-       input.forecast.algorithmVersion,input.sourceDataset.id,input.sourceDataset.version,input.forecast.selectedModel,
-       input.forecast.confidence,input.forecast.dailyP50,input.forecast.dailyP90,
-       JSON.stringify(input.forecast.horizons),JSON.stringify(input.forecast.diagnostics)]
-    );
+    await inTransaction(this.pool, async (client) => {
+      await this.assertLeaseForUpdate(client,fence);
+      await client.query(
+        `INSERT INTO inventory.demand_forecast(
+          forecast_id,shop_id,product_id,platform_sku_id,merchant_code,as_of,
+          algorithm_version,source_dataset_id,source_data_version,selected_model,
+          confidence,daily_p50,daily_p90,horizons,diagnostics
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        ON CONFLICT(shop_id,product_id,platform_sku_id,as_of,algorithm_version) DO NOTHING`,
+        [forecastId,input.shopId,input.productId,input.platformSkuId,input.merchantCode,input.forecast.asOf,
+         input.forecast.algorithmVersion,input.sourceDataset.id,input.sourceDataset.version,input.forecast.selectedModel,
+         input.forecast.confidence,input.forecast.dailyP50,input.forecast.dailyP90,
+         JSON.stringify(input.forecast.horizons),JSON.stringify(input.forecast.diagnostics)]
+      );
+    });
     return forecastId;
   }
 
@@ -1024,11 +1233,12 @@ export class InventoryRepository {
     readonly shopId: string;
     readonly productId: string;
     readonly evaluation: InventoryRiskEvaluation;
-  }): Promise<{ evaluationId: string; incidentsUpdated: number }> {
+  }, fence: LeaseFence): Promise<{ evaluationId: string; incidentsUpdated: number }> {
     const sourceDigest = factDigest(input);
     const evaluationId = `evaluation:${sourceDigest.slice(7, 39)}`;
     let incidentsUpdated = 0;
     await inTransaction(this.pool, async (client) => {
+      await this.assertLeaseForUpdate(client,fence);
       const insertedEvaluation = await client.query(
         `INSERT INTO inventory.risk_evaluation(
           evaluation_id,shop_id,product_id,snapshot_id,policy_version,evaluated_at,

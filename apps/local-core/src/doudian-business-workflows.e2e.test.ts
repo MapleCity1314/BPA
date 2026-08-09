@@ -17,6 +17,15 @@ import type {
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { LocalCoreService } from "./control.js";
 import type { TriggerFireResult } from "./trigger-runtime.js";
+import {
+  InventoryDataRuntimeProvider,
+  type InventoryServiceWriter,
+  type LeaseFence
+} from "./inventory-data-runtime-provider.js";
+import type {
+  ExternalDomainLeaseGrant,
+  ExternalDomainLeaseProvider
+} from "./inventory-domain-lease-client.js";
 
 const root = new URL("../../../",import.meta.url);
 const observedAt = "2026-08-09T08:00:00.000Z";
@@ -290,14 +299,82 @@ class FixtureProvider implements RuntimeProvider {
         });
       case "inventory.snapshot.persist":
         return success({
-          snapshotId:"snapshot:80001",envelope:{
-            runId:String(object(input.lease).runId ?? "fixture"),
-            persisted:true
-          }
+          snapshotId:"snapshot:80001",envelope:{ persisted:true }
         });
       default:
         throw new Error(`Unexpected fixture Node: ${invocation.node.id}`);
     }
+  }
+}
+
+class InventoryFixtureWriter implements InventoryServiceWriter {
+  readonly calls:Array<{ snapshot:JsonValue;lease:LeaseFence }> = [];
+
+  constructor(readonly invocations:string[]) {}
+
+  async persistSnapshot(input:{
+    readonly snapshot:JsonValue;
+    readonly lease:LeaseFence;
+  }):Promise<JsonValue> {
+    this.invocations.push("inventory.snapshot.persist");
+    this.calls.push(structuredClone(input));
+    return {
+      snapshotId:"snapshot:80001",
+      envelope:{ persisted:true }
+    };
+  }
+}
+
+class InventoryFixtureDomainLeaseProvider
+implements ExternalDomainLeaseProvider {
+  readonly id = "inventory-postgres";
+  active:ExternalDomainLeaseGrant | undefined;
+
+  async acquire(input:{
+    readonly domainKey:string;
+    readonly ownerId:string;
+  }):Promise<ExternalDomainLeaseGrant> {
+    return this.setActive(input.domainKey,input.ownerId,7,true);
+  }
+
+  async renew(input:{
+    readonly domainKey:string;
+    readonly ownerId:string;
+    readonly fencingToken:number;
+  }):Promise<ExternalDomainLeaseGrant> {
+    return this.setActive(
+      input.domainKey,input.ownerId,input.fencingToken,true
+    );
+  }
+
+  async release(input:{
+    readonly domainKey:string;
+    readonly ownerId:string;
+    readonly fencingToken:number;
+  }):Promise<ExternalDomainLeaseGrant> {
+    return this.setActive(
+      input.domainKey,input.ownerId,input.fencingToken,false
+    );
+  }
+
+  async read():Promise<ExternalDomainLeaseGrant | undefined> {
+    return this.active;
+  }
+
+  private setActive(
+    domainKey:string,
+    ownerId:string,
+    fencingToken:number,
+    active:boolean
+  ):ExternalDomainLeaseGrant {
+    this.active = {
+      domainKey,ownerId,fencingToken,serverNow:observedAt,
+      expiresAt:active
+        ? new Date(Date.parse(observedAt) + 300_000).toISOString()
+        : observedAt,
+      active
+    };
+    return this.active;
   }
 }
 
@@ -396,6 +473,7 @@ async function runTrigger(
     readonly workflowId:string;
     readonly workflowVersion:string;
     readonly workflowInput:Record<string,unknown>;
+    readonly externalDomainLease?:boolean;
   }
 ):Promise<{
   readonly run:RunRecord;
@@ -411,6 +489,10 @@ async function runTrigger(
         workflow:{ id:input.workflowId,version:input.workflowVersion },
         enabled:true,inputSchemaVersion:`${input.id}/1`,input:input.workflowInput,
         concurrencyKey:"doudian-account:company-main",browserInstanceId,
+        ...(input.externalDomainLease ? { externalDomainLease:{
+          providerId:"inventory-postgres",resourceId:"inventory-production-cycle",
+          ttlSeconds:300
+        } } : {}),
         idempotencyPolicy:"request_key",retryPolicy:"none"
       }
     }
@@ -419,7 +501,23 @@ async function runTrigger(
     id:`fire:${input.id}`,method:"trigger.fire",
     params:{ id:input.id,requestKey:"local-e2e" }
   });
-  const triggerResult = fired.result as TriggerFireResult;
+  let triggerResult = fired.result as TriggerFireResult;
+  if (fired.ok && input.externalDomainLease && !triggerResult.attempt) {
+    await service.externalDomainLeases.tick();
+    service.triggers.tick();
+    const refreshedOccurrence = store.getTriggerOccurrence(
+      triggerResult.occurrence.occurrenceId
+    );
+    const refreshedAttempt = store.listTriggerAttempts(
+      triggerResult.occurrence.occurrenceId
+    ).at(-1);
+    if (refreshedOccurrence) {
+      triggerResult = {
+        occurrence:refreshedOccurrence,
+        ...(refreshedAttempt ? { attempt:refreshedAttempt } : {})
+      };
+    }
+  }
   if (!fired.ok || triggerResult.attempt?.status !== "running") {
     throw new Error(`Trigger did not create a Run: ${JSON.stringify(fired)}`);
   }
@@ -430,6 +528,9 @@ async function runTrigger(
     if (["succeeded","failed","rejected","uncertain","cancelled"].includes(String(status))) {
       break;
     }
+  }
+  if (input.externalDomainLease) {
+    await service.externalDomainLeases.tick();
   }
   service.triggers.tick();
   const run = store.getRun(triggerAttempt.workflowRunId!);
@@ -459,7 +560,13 @@ describe("local Doudian business Workflow acceptance",() => {
     const invocations:string[] = [];
     providers.register(new FixtureProvider("browser",invocations));
     providers.register(new FixtureProvider("team",invocations));
-    const service = new LocalCoreService(store,undefined,providers);
+    const inventoryWriter = new InventoryFixtureWriter(invocations);
+    const inventoryLeaseProvider = new InventoryFixtureDomainLeaseProvider();
+    providers.register(new InventoryDataRuntimeProvider(store,inventoryWriter));
+    const service = new LocalCoreService(
+      store,undefined,providers,undefined,undefined,undefined,
+      [inventoryLeaseProvider]
+    );
 
     const nodeAssets = [
       "nodes/core/doudian.alliance.shops.discover.node.yaml",
@@ -624,11 +731,9 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const inventory = await runTrigger(service,store,{
       id:"doudian-inventory-local",appId:"inventory-monitor",
-      workflowId:"doudian.inventory.snapshot.refresh",workflowVersion:"1.0.0",
-      workflowInput:{
-        shopId:"10001",shopName:"测试店铺",
-        lease:{ runId:"local-e2e",fencingToken:1 }
-      }
+      workflowId:"doudian.inventory.snapshot.refresh",workflowVersion:"2.0.0",
+      workflowInput:{ shopId:"10001",shopName:"测试店铺" },
+      externalDomainLease:true
     });
     expect(inventory).toMatchObject({
       run:{ status:"succeeded",output:{ shop:{ id:"10001",name:"测试店铺" } } },
@@ -640,6 +745,13 @@ describe("local Doudian business Workflow acceptance",() => {
     expect(store.listBrowserControlLeases(new Date().toISOString())).toEqual([]);
     expect(store.listBrowserSessions({ limit:10 }).records).toHaveLength(1);
     expect(store.listBrowserPageObservations({ limit:10 })).toHaveLength(1);
+    expect(inventoryWriter.calls).toMatchObject([{
+      lease:{
+        leaseKey:"inventory-production-cycle",
+        holderId:expect.stringMatching(/^trigger-attempt:/u),
+        fencingToken:7
+      }
+    }]);
     expect(invocations).toEqual([
       "doudian.alliance.shops.discover",
       "doudian.alliance.shop.retired-products.scan",

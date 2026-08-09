@@ -48,7 +48,6 @@ describe("inventory service protocol", () => {
 
   it("maps each browser-observed shop only to its configured identity", async () => {
     const repository = {
-      assertLease:vi.fn(async () => undefined),
       persistSnapshot:vi.fn(async (snapshot: unknown) => ({ snapshot }))
     };
     const server = new InventoryServiceProtocol("unused",repository as never,undefined,[
@@ -69,10 +68,40 @@ describe("inventory service protocol", () => {
     await expect(server.handle(frame({ id:"name:observed",name:"二号店" }))).resolves.toMatchObject({
       ok:true,id:"persist"
     });
-    expect(repository.persistSnapshot).toHaveBeenCalledWith(expect.objectContaining({
-      shop:{ id:"shop-2",name:"二号店" }
-    }));
+    expect(repository.persistSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ shop:{ id:"shop-2",name:"二号店" } }),
+      { leaseKey:"inventory-shadow:shop-2",holderId:"holder",fencingToken:1 }
+    );
     await expect(server.handle(frame({ id:"name:unknown",name:"未配置店" })))
       .rejects.toThrow("SHOP_IDENTITY_MISMATCH");
+  });
+
+  it("exposes only the production-cycle domain lease with bounded TTL", async () => {
+    const grant = {
+      leaseKey:"inventory-production-cycle",holderId:"run:1",fencingToken:7,
+      serverNow:"2026-08-09T00:00:00.000Z",expiresAt:"2026-08-09T00:05:00.000Z",active:true
+    };
+    const repository = {
+      acquireDomainLease:vi.fn(async () => grant),
+      renewDomainLease:vi.fn(async () => grant),
+      releaseDomainLease:vi.fn(async () => ({ ...grant,active:false })),
+      readDomainLease:vi.fn(async () => grant)
+    };
+    const server = new InventoryServiceProtocol("unused",repository as never);
+    const frame = (id:string,operation:string,input:Record<string,unknown>) =>
+      Buffer.from(JSON.stringify({ id,operation,input }));
+
+    await expect(server.handle(frame("a","domain-lease.acquire",{
+      leaseKey:"inventory-production-cycle",requestId:"request:1",holderId:"run:1",ttlSeconds:300
+    }))).resolves.toMatchObject({ ok:true,result:grant });
+    expect(repository.acquireDomainLease).toHaveBeenCalledWith({
+      leaseKey:"inventory-production-cycle",requestId:"request:1",holderId:"run:1",ttlSeconds:300
+    });
+    await expect(server.handle(frame("b","domain-lease.acquire",{
+      leaseKey:"inventory-shadow:shop-1",requestId:"request:2",holderId:"run:2",ttlSeconds:300
+    }))).rejects.toThrow("DOMAIN_LEASE_KEY_NOT_ALLOWED");
+    await expect(server.handle(frame("c","domain-lease.renew",{
+      leaseKey:"inventory-production-cycle",holderId:"run:1",fencingToken:7,ttlSeconds:4
+    }))).rejects.toThrow("DOMAIN_LEASE_TTL_INVALID");
   });
 });

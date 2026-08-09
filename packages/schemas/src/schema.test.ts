@@ -38,6 +38,11 @@ describe("TriggerSpec schema",() => {
     inputSchemaVersion:"inventory.refresh-input/1",
     input:{ shopId:"10461048" },
     concurrencyKey:"inventory:10461048",
+    externalDomainLease:{
+      providerId:"inventory-postgres",
+      resourceId:"inventory-production-cycle",
+      ttlSeconds:300
+    },
     idempotencyPolicy:"request_key",
     retryPolicy:"none"
   };
@@ -65,6 +70,36 @@ describe("TriggerSpec schema",() => {
       ...base,id:"inventory.risk.dataset",kind:"dataset",
       idempotencyPolicy:"dataset_version",dataset:{ id:"inventory-snapshot:10461048" }
     })).toBe(true);
+  });
+
+  it("accepts only one static inventory PostgreSQL domain lease",() => {
+    expect(validateTriggerSpec(base)).toBe(true);
+    expect(validateTriggerSpec({
+      ...base,
+      externalDomainLease:{
+        ...base.externalDomainLease,
+        providerId:"arbitrary-provider"
+      }
+    })).toBe(false);
+    expect(validateTriggerSpec({
+      ...base,
+      externalDomainLease:{
+        ...base.externalDomainLease,
+        resourceId:"inventory-shadow:10461048"
+      }
+    })).toBe(false);
+    expect(validateTriggerSpec({
+      ...base,
+      externalDomainLease:{ ...base.externalDomainLease,ttlSeconds:299 }
+    })).toBe(false);
+    expect(validateTriggerSpec({
+      ...base,
+      externalDomainLease:{ ...base.externalDomainLease,ttlSeconds:301 }
+    })).toBe(false);
+    expect(validateTriggerSpec({
+      ...base,
+      externalDomainLease:{ ...base.externalDomainLease,template:"${input.shopId}" }
+    })).toBe(false);
   });
 
   it("rejects incomplete or overly frequent schedules",() => {

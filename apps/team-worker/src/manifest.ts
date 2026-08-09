@@ -28,13 +28,6 @@ export const TEAM_WORKER_HANDLER_MANIFEST = [
     )
   },
   {
-    ref: "inventory.snapshot.persist@1.0.0",
-    implementationDigest: implementationDigest(
-      "inventory.snapshot.persist@1.0.0",
-      "inventory-service-uds:snapshot-persist:verified-write:v1"
-    )
-  },
-  {
     ref: "inventory.forecast-input.read@1.0.0",
     implementationDigest: implementationDigest(
       "inventory.forecast-input.read@1.0.0",

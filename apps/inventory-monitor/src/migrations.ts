@@ -299,5 +299,23 @@ export const INVENTORY_MIGRATIONS: readonly AppMigration[] = [
       CREATE INDEX collection_step_shop_recent_idx
         ON ops.collection_step(shop_id,started_at DESC);
     `
+  },
+  {
+    version: 5,
+    name: "domain-lease-acquisition-requests",
+    sql: `
+      CREATE TABLE ops.lease_acquisition_request (
+        lease_key text NOT NULL REFERENCES ops.lease(lease_key) ON DELETE RESTRICT,
+        request_id text NOT NULL,
+        holder_id text NOT NULL,
+        fencing_token bigint NOT NULL CHECK(fencing_token >= 1),
+        acquired_at timestamptz NOT NULL,
+        expires_at timestamptz NOT NULL,
+        PRIMARY KEY(lease_key,request_id),
+        CHECK(expires_at > acquired_at)
+      );
+      CREATE INDEX lease_acquisition_request_holder_idx
+        ON ops.lease_acquisition_request(lease_key,holder_id,acquired_at DESC);
+    `
   }
 ];

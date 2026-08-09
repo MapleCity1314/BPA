@@ -23,9 +23,6 @@ case "$component" in
   service)
     exec "$BPA_NODE_BIN" --import tsx apps/inventory-monitor/src/main.ts
     ;;
-  scheduler)
-    exec "$BPA_NODE_BIN" --import tsx apps/inventory-monitor/src/scheduler-main.ts
-    ;;
   feishu-report)
     export BPA_FEISHU_REPORT_KIND=daily
     exec "$BPA_NODE_BIN" --import tsx apps/inventory-monitor/src/feishu-report-main.ts

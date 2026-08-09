@@ -1590,4 +1590,56 @@ describe("Local Core IR2 runtime", () => {
     ).toBe("duplicate");
     persistence.close();
   });
+
+  it("marks an active external-domain write uncertain and requests provider cancellation", async () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const cancellations: Array<{ invocationId: string; fencingToken: number }> = [];
+    const provider: RuntimeProvider = {
+      id: "external-write",
+      supports: () => true,
+      invoke: async () => {
+        throw new Error("uncertain test must not invoke the provider");
+      },
+      cancel: async (invocationId, fencingToken) => {
+        cancellations.push({ invocationId, fencingToken });
+      }
+    };
+    const providers = new RuntimeProviderRegistry();
+    providers.register(provider);
+    const runtime = new Ir2WorkflowRuntime(persistence, providers, {
+      now: () => 1_000,
+      id: ids(),
+      random: () => 0.5
+    });
+    const run = runtime.start(plan("external-write"), {});
+    const checkpoint = persistence.getEngineCheckpoint(run.id)!;
+    const state = checkpoint.state as unknown as EngineState;
+    if (state.active?.kind !== "call") throw new Error("fixture changed");
+
+    expect(
+      runtime.markExternalDomainLeaseUncertain(
+        run.id,
+        "External inventory domain lease was lost."
+      )
+    ).toMatchObject({ status: "uncertain", revision: 1 });
+    expect(cancellations).toEqual([
+      {
+        invocationId: state.active.invocation.invocationId,
+        fencingToken: state.active.invocation.fencingToken
+      }
+    ]);
+    expect(persistence.listPendingEngineOutbox()).toEqual([]);
+    expect(persistence.getEngineCheckpoint(run.id)?.state).toMatchObject({
+      status: "uncertain",
+      error: {
+        code: "EXTERNAL_DOMAIN_LEASE_RECONCILIATION_REQUIRED",
+        message: "External inventory domain lease was lost."
+      }
+    });
+    expect(
+      persistence.queryAttention({ sourceKinds: ["workflow-run"], limit: 20 })
+    ).toMatchObject({ total: 1 });
+    await expect(runtime.drainOnce()).resolves.toBe(0);
+    persistence.close();
+  });
 });

@@ -15,6 +15,15 @@ import { describe, expect, it, vi } from "vitest";
 import { createTerminalAttentionDelivery } from "./attention-delivery.js";
 import { LocalCoreService } from "./control.js";
 import { TriggerRuntime } from "./trigger-runtime.js";
+import {
+  ExternalDomainLeaseCoordinator,
+  externalLeaseAllowsRunEffects
+} from "./external-domain-lease-coordinator.js";
+import {
+  ExternalDomainLeaseProviderError,
+  type ExternalDomainLeaseGrant,
+  type ExternalDomainLeaseProvider
+} from "./inventory-domain-lease-client.js";
 
 const base: TriggerSpecDefinition = {
   apiVersion: "bpa.trigger/v1alpha2",
@@ -106,11 +115,13 @@ function runtime(
   store: SqlitePersistence,
   now: () => Date,
   cancelWorkflow: (runId: string, reason: string) => RunRecord = (runId) =>
-    cancelTestRun(store, now, runId)
+    cancelTestRun(store, now, runId),
+  externalDomainLeases?: ExternalDomainLeaseCoordinator,
+  markWorkflowUncertain?: (runId: string, diagnostic: string) => RunRecord
 ): TriggerRuntime {
   return new TriggerRuntime(
     store,
-    (trigger, input, triggerAttemptId) => {
+    (trigger, input, triggerAttemptId, externalDomainLeaseRequestId) => {
       const timestamp = now().toISOString();
       const run: RunRecord = {
         id: `run:${randomUUID()}`,
@@ -128,6 +139,9 @@ function runtime(
         planSnapshot: planSnapshot(run),
         checkpoint: checkpoint(run),
         triggerAttemptId,
+        ...(externalDomainLeaseRequestId
+          ? { externalDomainLeaseRequestId }
+          : {}),
         event: {
           id: randomUUID(),
           runId: run.id,
@@ -139,9 +153,87 @@ function runtime(
       });
     },
     cancelWorkflow,
-    now
+    now,
+    externalDomainLeases,
+    markWorkflowUncertain
   );
 }
+
+class TestExternalDomainLeaseProvider implements ExternalDomainLeaseProvider {
+  readonly id = "inventory-postgres";
+  readonly requests: string[] = [];
+  active: ExternalDomainLeaseGrant | undefined;
+  acquireError: Error | undefined;
+
+  async acquire(input: {
+    readonly requestId: string;
+    readonly domainKey: string;
+    readonly ownerId: string;
+    readonly ttlSeconds: number;
+  }): Promise<ExternalDomainLeaseGrant> {
+    this.requests.push(input.requestId);
+    if (this.acquireError) {
+      const error = this.acquireError;
+      this.acquireError = undefined;
+      throw error;
+    }
+    this.active = {
+      domainKey: input.domainKey,
+      ownerId: input.ownerId,
+      fencingToken: 17,
+      serverNow: "2026-08-05T00:00:00.000Z",
+      expiresAt: "2026-08-05T00:05:00.000Z",
+      active: true
+    };
+    return this.active;
+  }
+
+  async renew(input: {
+    readonly domainKey: string;
+    readonly ownerId: string;
+    readonly fencingToken: number;
+    readonly ttlSeconds: number;
+  }): Promise<ExternalDomainLeaseGrant> {
+    this.active = {
+      domainKey: input.domainKey,
+      ownerId: input.ownerId,
+      fencingToken: input.fencingToken,
+      serverNow: "2026-08-05T00:04:00.000Z",
+      expiresAt: "2026-08-05T00:09:00.000Z",
+      active: true
+    };
+    return this.active;
+  }
+
+  async release(input: {
+    readonly domainKey: string;
+    readonly ownerId: string;
+    readonly fencingToken: number;
+  }): Promise<ExternalDomainLeaseGrant> {
+    this.active = {
+      domainKey: input.domainKey,
+      ownerId: input.ownerId,
+      fencingToken: input.fencingToken,
+      serverNow: "2026-08-05T00:00:01.000Z",
+      expiresAt: "2026-08-05T00:00:01.000Z",
+      active: false
+    };
+    return this.active;
+  }
+
+  async read(): Promise<ExternalDomainLeaseGrant | undefined> {
+    return this.active;
+  }
+}
+
+const externalBase: TriggerSpecDefinition = {
+  ...base,
+  externalDomainLease: {
+    providerId: "inventory-postgres",
+    resourceId: "inventory-production-cycle",
+    ttlSeconds: 300
+  }
+};
 
 function finishRun(
   store: SqlitePersistence,
@@ -1407,4 +1499,297 @@ describe("deterministic Trigger Runtime", () => {
       store.close();
     }
   );
+});
+
+describe("external inventory domain lease Trigger lifecycle", () => {
+  it("does not create an Attempt until the same durable request is bound", async () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    const current = new Date("2026-08-05T00:00:00.000Z");
+    const trigger = store.putTriggerSpec({
+      spec: externalBase,
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    const provider = new TestExternalDomainLeaseProvider();
+    const coordinator = new ExternalDomainLeaseCoordinator(
+      store,
+      [provider],
+      () => current
+    );
+    const engine = runtime(store, () => current, undefined, coordinator);
+
+    const fired = engine.fire({ trigger, occurrenceKey: "manual:lease" });
+    expect(fired.attempt).toBeUndefined();
+    const intent = store.listExternalDomainLeases()[0]!;
+    expect(intent).toMatchObject({
+      occurrenceId: fired.occurrence.occurrenceId,
+      state: "acquiring"
+    });
+    expect(store.listTriggerAttempts(fired.occurrence.occurrenceId)).toEqual([]);
+
+    await coordinator.tick();
+    expect(store.getExternalDomainLease(intent.requestId)).toMatchObject({
+      state: "bound",
+      fencingToken: 17
+    });
+    engine.tick();
+    const attempt = store.listTriggerAttempts(fired.occurrence.occurrenceId)[0]!;
+    expect(attempt).toMatchObject({
+      attemptId: intent.ownerId,
+      status: "running"
+    });
+    expect(store.getExternalDomainLease(intent.requestId)).toMatchObject({
+      triggerAttemptId: attempt.attemptId,
+      runId: attempt.workflowRunId
+    });
+    expect(
+      externalLeaseAllowsRunEffects(
+        store,
+        attempt.workflowRunId!,
+        current.toISOString(),
+        (requestId) => coordinator.canStart(requestId)
+      )
+    ).toBe(true);
+    expect(
+      externalLeaseAllowsRunEffects(
+        store,
+        attempt.workflowRunId!,
+        current.toISOString(),
+        () => false
+      )
+    ).toBe(false);
+    store.close();
+  });
+
+  it.each([
+    ["ahead", "2026-08-06T00:00:00.000Z"],
+    ["behind", "2026-08-04T00:00:00.000Z"]
+  ])("uses the provider duration when the Core clock is %s", async (_label, localNow) => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    const current = new Date(localNow);
+    const trigger = store.putTriggerSpec({
+      spec: externalBase,
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    const provider = new TestExternalDomainLeaseProvider();
+    const coordinator = new ExternalDomainLeaseCoordinator(store, [provider], () => current);
+    const engine = runtime(store, () => current, undefined, coordinator);
+    const fired = engine.fire({ trigger, occurrenceKey: `manual:clock:${_label}` });
+
+    await coordinator.tick();
+    engine.tick();
+    const attempt = store.listTriggerAttempts(fired.occurrence.occurrenceId)[0]!;
+    expect(attempt.status).toBe("running");
+    expect(
+      externalLeaseAllowsRunEffects(
+        store,
+        attempt.workflowRunId!,
+        current.toISOString(),
+        (requestId) => coordinator.canStart(requestId)
+      )
+    ).toBe(true);
+    store.close();
+  });
+
+  it("retries an uncertain acquisition with the same request id", async () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    const current = new Date("2026-08-05T00:00:00.000Z");
+    const trigger = store.putTriggerSpec({
+      spec: externalBase,
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    const provider = new TestExternalDomainLeaseProvider();
+    provider.acquireError = new ExternalDomainLeaseProviderError(
+      "INVENTORY_SERVICE_UNAVAILABLE",
+      "socket closed",
+      true
+    );
+    const coordinator = new ExternalDomainLeaseCoordinator(store, [provider], () => current);
+    const engine = runtime(store, () => current, undefined, coordinator);
+    engine.fire({ trigger, occurrenceKey: "manual:uncertain" });
+    const requestId = store.listExternalDomainLeases()[0]!.requestId;
+
+    await coordinator.tick();
+    expect(store.getExternalDomainLease(requestId)?.state).toBe("acquiring");
+    await coordinator.tick();
+    expect(provider.requests).toEqual([requestId, requestId]);
+    expect(store.getExternalDomainLease(requestId)?.state).toBe("bound");
+    store.close();
+  });
+
+  it("requires a fresh remote verification after Core restart before creating the Attempt", async () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    const current = new Date("2026-08-05T00:00:00.000Z");
+    const trigger = store.putTriggerSpec({
+      spec: externalBase,
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    const provider = new TestExternalDomainLeaseProvider();
+    const firstCoordinator = new ExternalDomainLeaseCoordinator(store, [provider], () => current);
+    const firstRuntime = runtime(store, () => current, undefined, firstCoordinator);
+    const fired = firstRuntime.fire({ trigger, occurrenceKey: "manual:restart" });
+    await firstCoordinator.tick();
+    const requestId = store.listExternalDomainLeases()[0]!.requestId;
+    expect(firstCoordinator.canStart(requestId)).toBe(true);
+
+    const restartedCoordinator = new ExternalDomainLeaseCoordinator(
+      store,
+      [provider],
+      () => current
+    );
+    const restartedRuntime = runtime(
+      store,
+      () => current,
+      undefined,
+      restartedCoordinator
+    );
+    restartedRuntime.tick();
+    expect(store.listTriggerAttempts(fired.occurrence.occurrenceId)).toEqual([]);
+    await restartedCoordinator.tick();
+    expect(restartedCoordinator.canStart(requestId)).toBe(true);
+    restartedRuntime.tick();
+    expect(store.listTriggerAttempts(fired.occurrence.occurrenceId)).toHaveLength(1);
+    store.close();
+  });
+
+  it("releases a busy intent and defers without creating an Attempt", async () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    let current = new Date("2026-08-05T00:00:00.000Z");
+    const trigger = store.putTriggerSpec({
+      spec: externalBase,
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    const provider = new TestExternalDomainLeaseProvider();
+    provider.acquireError = new ExternalDomainLeaseProviderError(
+      "DOMAIN_LEASE_BUSY",
+      "busy"
+    );
+    const coordinator = new ExternalDomainLeaseCoordinator(store, [provider], () => current);
+    const engine = runtime(store, () => current, undefined, coordinator);
+    const fired = engine.fire({ trigger, occurrenceKey: "manual:busy" });
+
+    await coordinator.tick();
+    expect(store.listExternalDomainLeases()[0]?.state).toBe("released");
+    expect(store.getTriggerOccurrence(fired.occurrence.occurrenceId)).toMatchObject({
+      status: "deferred",
+      diagnostic: "The external inventory lease is busy."
+    });
+    expect(store.listTriggerAttempts(fired.occurrence.occurrenceId)).toEqual([]);
+
+    current = new Date("2026-08-05T00:01:01.000Z");
+    engine.tick();
+    expect(store.listExternalDomainLeases()).toHaveLength(2);
+    expect(store.listExternalDomainLeases()[1]?.requestId).not.toBe(
+      store.listExternalDomainLeases()[0]?.requestId
+    );
+    store.close();
+  });
+
+  it("keeps the Attempt active until a terminal Run fence is remotely and locally released", async () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    let current = new Date("2026-08-05T00:00:00.000Z");
+    const trigger = store.putTriggerSpec({
+      spec: externalBase,
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    const provider = new TestExternalDomainLeaseProvider();
+    const coordinator = new ExternalDomainLeaseCoordinator(store, [provider], () => current);
+    const engine = runtime(store, () => current, undefined, coordinator);
+    const fired = engine.fire({ trigger, occurrenceKey: "manual:terminal" });
+    await coordinator.tick();
+    engine.tick();
+    const attempt = store.listTriggerAttempts(fired.occurrence.occurrenceId)[0]!;
+    const run = store.getRun(attempt.workflowRunId!)!;
+    current = new Date("2026-08-05T00:00:01.000Z");
+    finishRun(store, run, "succeeded", current.toISOString());
+
+    engine.tick();
+    expect(store.getTriggerAttempt(attempt.attemptId)?.status).toBe("running");
+    expect(store.listExternalDomainLeases()[0]?.state).toBe("bound");
+    await coordinator.tick();
+    expect(store.listExternalDomainLeases()[0]?.state).toBe("released");
+    engine.tick();
+    expect(store.getTriggerAttempt(attempt.attemptId)).toMatchObject({
+      status: "terminal",
+      terminalOutcome: "complete"
+    });
+    store.close();
+  });
+
+  it("marks an active Run uncertain before reconciling and releasing a lost domain lease", async () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    let current = new Date("2026-08-05T00:00:00.000Z");
+    const trigger = store.putTriggerSpec({
+      spec: externalBase,
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    const provider = new TestExternalDomainLeaseProvider();
+    const coordinator = new ExternalDomainLeaseCoordinator(store, [provider], () => current);
+    const markUncertain = (runId: string): RunRecord => {
+      const run = store.getRun(runId)!;
+      finishRun(store, run, "uncertain", current.toISOString());
+      return store.getRun(runId)!;
+    };
+    const engine = runtime(
+      store,
+      () => current,
+      undefined,
+      coordinator,
+      markUncertain
+    );
+    const fired = engine.fire({ trigger, occurrenceKey: "manual:lost" });
+    await coordinator.tick();
+    engine.tick();
+    const lease = store.listExternalDomainLeases()[0]!;
+    const attempt = store.listTriggerAttempts(fired.occurrence.occurrenceId)[0]!;
+    coordinator.markReconciliationRequired(lease.requestId, "lease lost");
+    current = new Date("2026-08-05T00:00:01.000Z");
+
+    await coordinator.tick();
+    expect(store.getExternalDomainLease(lease.requestId)?.state).toBe(
+      "reconciliation_required"
+    );
+    engine.tick();
+    expect(store.getRun(attempt.workflowRunId!)?.status).toBe("uncertain");
+    expect(store.getTriggerAttempt(attempt.attemptId)?.status).toBe("running");
+    await coordinator.tick();
+    expect(store.getExternalDomainLease(lease.requestId)?.state).toBe("released");
+    engine.tick();
+    expect(store.getTriggerAttempt(attempt.attemptId)).toMatchObject({
+      status: "terminal",
+      terminalOutcome: "uncertain"
+    });
+    store.close();
+  });
+
+  it("fails closed before intent creation when the provider is missing", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    const current = new Date("2026-08-05T00:00:00.000Z");
+    const trigger = store.putTriggerSpec({
+      spec: externalBase,
+      actor: "operator",
+      occurredAt: current.toISOString()
+    });
+    const coordinator = new ExternalDomainLeaseCoordinator(store, [], () => current);
+    const engine = runtime(store, () => current, undefined, coordinator);
+    const fired = engine.fire({ trigger, occurrenceKey: "manual:missing" });
+
+    expect(fired.occurrence).toMatchObject({
+      status: "terminal",
+      terminalOutcome: "blocked"
+    });
+    expect(store.listExternalDomainLeases()).toEqual([]);
+    expect(store.listTriggerAttempts(fired.occurrence.occurrenceId)).toEqual([]);
+    expect(
+      store.queryAttention({ sourceKinds: ["trigger-occurrence"], limit: 20 })
+        .total
+    ).toBe(1);
+    store.close();
+  });
 });

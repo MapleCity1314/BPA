@@ -1,6 +1,6 @@
 # Inventory monitor production deployment
 
-Target paths are fixed to `/Users/yyerybz/Codex/BPA` and `~/Library/Application Support/BPA`. Runtime, scheduler, migration, reader, and backup credentials must remain in separate `0600` files; never place credentials in a plist or the repository.
+Target paths are fixed to `/Users/yyerybz/Codex/BPA` and `~/Library/Application Support/BPA`. Runtime, service, migration, reader, and backup credentials must remain in separate `0600` files; never place credentials in a plist or the repository.
 
 The production directory contract is enforced by `production-layout.sh`:
 
@@ -36,13 +36,13 @@ updates the `0600` backup environment paths.
 1. Install the exact Node `24.18.0` runtime and pnpm `10.32.1`, synchronize this repository into the target directory, and run `pnpm install --frozen-lockfile`.
 2. As a PostgreSQL administrator, run `postgres-bootstrap.sql` with three newly generated passwords supplied as psql variables `owner_password`, `runtime_password`, and `reader_password`.
 3. Put the owner DSN only in a temporary `0600` migration environment, run `run-component.sh <migration-env> migrate`, then run `postgres-grants.sql` as `bpa_app_owner`. Remove or archive the migration environment outside the runtime directory afterward.
-4. Create separate `0600` env files for Core, monitor, scheduler, and backup. Required values are documented by the process startup errors. The runtime service uses `bpa_app_runtime`; review/diagnostic clients use `bpa_app_reader`.
+4. Create separate `0600` env files for Core, inventory service, serialized recovery (`inventory-multishop-recovery.env`), and backup. Required values are documented by the process startup errors. The runtime service uses `bpa_app_runtime`; review/diagnostic clients use `bpa_app_reader`.
 5. Human-publish the exact Node, Adapter, and Workflow YAML assets with `bpa publish ... --yes`. Publication must not be automated.
-6. Copy the four plist files to `~/Library/LaunchAgents`, create the log directory, validate with `plutil -lint`, then bootstrap Core, monitor, scheduler, and backup in that order.
-7. Verify `127.0.0.1:17650`, the `0600` Unix socket and launch-URL file, the three 30-minute workflows, lease rows, and absence of DingTalk network requests. Read the one-time URL from that file, then access the review page only through `ssh -L 17650:127.0.0.1:17650 yyerybz@<verified-host>`.
+6. Install only the explicitly selected Core, inventory service, serialized recovery, Chrome, and backup launch agents; validate every plist with `plutil -lint` before bootstrap. The retired inventory scheduler is not a supported control plane.
+7. Verify `127.0.0.1:17650`, the `0600` Unix socket and launch-URL file, Trigger/Run state, lease rows, and absence of DingTalk network requests. Read the one-time URL from that file, then access the review page only through `ssh -L 17650:127.0.0.1:17650 yyerybz@<verified-host>`.
 8. Before shadow acceptance, run `restore-drill.sh` against an isolated empty drill database and record process-crash, browser-disconnect, and temporary-database-outage evidence.
 
-The scheduler deliberately degrades when either the frozen product-management tab or frozen recent-order tab is unavailable. Login, CAPTCHA, risk-control, shop mismatch, and DOM-contract errors are never treated as a healthy inventory result.
+The serialized recovery path deliberately degrades when either the frozen product-management tab or frozen recent-order tab is unavailable. Login, CAPTCHA, risk-control, shop mismatch, and DOM-contract errors are never treated as a healthy inventory result.
 
 ## Independent Feishu inventory report
 
@@ -58,7 +58,7 @@ Set `BPA_FEISHU_INVENTORY_MODE=preview` to render the complete card to stdout wi
 
 ## Multi-shop configuration
 
-Legacy `BPA_INVENTORY_SHOP_ID` and `BPA_INVENTORY_SHOP_NAME` remain supported for a single shop. For multiple shops, set the same `BPA_INVENTORY_SHOPS_JSON` value in the monitor and scheduler `0600` environment files:
+For multiple shops, set the same `BPA_INVENTORY_SHOPS_JSON` value in the inventory service and serialized recovery `0600` environment files:
 
 ```json
 [
@@ -66,10 +66,6 @@ Legacy `BPA_INVENTORY_SHOP_ID` and `BPA_INVENTORY_SHOP_NAME` remain supported fo
   { "id": "shop-2", "name": "二号店", "browserInstanceId": "browser-instance-2" }
 ]
 ```
-
-The normal scheduler requires a different dedicated BPA browser profile and
-`browserInstanceId` for every concurrently collected shop. Missing, duplicate,
-or shared bindings stop that scheduler instead of risking cross-shop collection.
 
 For one authenticated DouDian account that can switch among many shops, the
 serialized recovery worker is the supported alternative:
@@ -92,10 +88,11 @@ serialized recovery worker is the supported alternative:
 - The status file is atomically replaced with mode `0600` and exposes only
   allowlisted state, shop identity, timestamp, and bounded diagnostics.
 
-Do not enable the legacy scheduler and serialized recovery worker together.
-PostgreSQL facts, leases, forecasts, incidents, and dashboard queries remain
-isolated by shop ID in either mode. The dashboard exposes only configured shops
-and rejects arbitrary shop IDs.
+The retired scheduler and `refresh-once` entrypoint have been removed. Do not
+recreate a second browser/write control plane around the serialized recovery
+worker or the Core Trigger Runtime. PostgreSQL facts, leases, forecasts,
+incidents, and dashboard queries remain isolated by shop ID. The dashboard
+exposes only configured shops and rejects arbitrary shop IDs.
 
 ## Notification hold
 

@@ -403,6 +403,7 @@ export interface ExecutionUnitOfWork {
       planSnapshot: RunPlanSnapshotRecord;
       checkpoint: EngineCheckpointRecord;
       triggerAttemptId?: string;
+      externalDomainLeaseRequestId?: string;
       outbox?: readonly OutboxMessage[];
       assistanceTasks?: readonly AssistanceTaskRecord[];
     }
@@ -1100,6 +1101,97 @@ export interface TriggerScheduleStateRecord {
   updatedAt: string;
 }
 
+export type ExternalDomainLeaseState =
+  | "acquiring"
+  | "bound"
+  | "reconciliation_required"
+  | "released";
+
+/**
+ * Core's durable view of a lease owned by an external domain service.
+ * ownerId is the stable proposed Trigger Attempt id. The actual Attempt and
+ * Run are attached atomically when the recoverable Run is created. The
+ * provider token is never exposed through Workflow input or output.
+ */
+export interface ExternalDomainLeaseRecord {
+  requestId: string;
+  providerId: string;
+  domainKey: string;
+  occurrenceId: string;
+  /** Stable proposed Trigger Attempt id, chosen before remote acquisition. */
+  ownerId: string;
+  triggerAttemptId?: string;
+  runId?: string;
+  state: ExternalDomainLeaseState;
+  revision: number;
+  fencingToken?: number;
+  serverNow?: string;
+  expiresAt?: string;
+  diagnostic?: string;
+  createdAt: string;
+  updatedAt: string;
+  reconciliationRequiredAt?: string;
+  releasedAt?: string;
+}
+
+export type ExternalDomainLeaseMutationResult = {
+  status: "updated" | "duplicate";
+  record: ExternalDomainLeaseRecord;
+};
+
+export interface ExternalDomainLeaseStore {
+  beginExternalDomainLeaseAcquisition(input: {
+    requestId: string;
+    providerId: string;
+    domainKey: string;
+    occurrenceId: string;
+    ownerId: string;
+    createdAt: string;
+  }): {
+    status: "accepted" | "duplicate";
+    record: ExternalDomainLeaseRecord;
+  };
+  bindExternalDomainLease(input: {
+    requestId: string;
+    expectedRevision: number;
+    fencingToken: number;
+    serverNow: string;
+    expiresAt: string;
+    updatedAt: string;
+  }): ExternalDomainLeaseMutationResult;
+  renewExternalDomainLease(input: {
+    requestId: string;
+    expectedRevision: number;
+    fencingToken: number;
+    serverNow: string;
+    expiresAt: string;
+    updatedAt: string;
+  }): ExternalDomainLeaseMutationResult;
+  markExternalDomainLeaseReconciliationRequired(input: {
+    requestId: string;
+    expectedRevision: number;
+    diagnostic: string;
+    updatedAt: string;
+  }): ExternalDomainLeaseMutationResult;
+  releaseExternalDomainLease(input: {
+    requestId: string;
+    expectedRevision: number;
+    releasedAt: string;
+  }): ExternalDomainLeaseMutationResult;
+  getExternalDomainLease(
+    requestId: string
+  ): ExternalDomainLeaseRecord | undefined;
+  listExternalDomainLeases(): ExternalDomainLeaseRecord[];
+  listExternalDomainLeasesNeedingRecovery(input: {
+    now: string;
+  }): ExternalDomainLeaseRecord[];
+  listExternalDomainLeasesNeedingRenewal(input: {
+    now: string;
+    renewBefore: string;
+  }): ExternalDomainLeaseRecord[];
+  listExternalDomainLeasesNeedingRelease(): ExternalDomainLeaseRecord[];
+}
+
 export interface BrowserControlLeaseRecord {
   resourceId: string;
   ownerId: string;
@@ -1675,7 +1767,8 @@ export interface Persistence
     ExportStore,
     BrowserObservationStore,
     GatewayCommandStore,
-    TriggerStore {
+    TriggerStore,
+    ExternalDomainLeaseStore {
   health(): {
     adapter: string;
     schemaVersion: number;
@@ -1752,6 +1845,7 @@ export interface Persistence
 }
 
 export class RevisionConflictError extends Error {}
+export class ExternalDomainLeaseConflictError extends Error {}
 export class RecoverySessionConflictError extends Error {}
 export class ArtifactConflictError extends Error {}
 export class OperationalFactConflictError extends Error {}
