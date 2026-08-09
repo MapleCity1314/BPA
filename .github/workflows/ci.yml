@@ -275,7 +275,7 @@ jobs:
             $result.status -ne "package_verified" -or
             -not $result.runtimeIdentity -or
             -not $result.runtimeSha256 -or
-            @($result.assets).Count -ne 5
+            @($result.assets).Count -ne 7
           ) {
             throw "WorkBuddy package-only validation returned an invalid result"
           }

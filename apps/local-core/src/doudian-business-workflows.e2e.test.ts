@@ -116,6 +116,16 @@ class FixtureProvider implements RuntimeProvider {
       }>;
       readonly failedShopId?:string;
       readonly snapshotStatus?:"complete" | "no_score";
+    },
+    readonly retired?:{
+      readonly shops:ReadonlyArray<{
+        readonly key:string;
+        readonly id?:string;
+        readonly name:string;
+        readonly status:"active" | "blocked";
+        readonly statusText:string;
+      }>;
+      readonly failedShopId?:string;
     }
   ) {}
 
@@ -125,7 +135,10 @@ class FixtureProvider implements RuntimeProvider {
 
   async invoke(invocation:RuntimeInvocation):Promise<RuntimeOutcome> {
     this.invocations.push(invocation.node.id);
-    if (invocation.node.id === this.failedNodeId) {
+    if (
+      invocation.node.id === this.failedNodeId &&
+      invocation.node.id !== "doudian.alliance.shop.retired-products.scan"
+    ) {
       return {
         status:"failed",
         error:{ code:"FIXTURE_ORDINARY_FAILURE",message:"Fixture failure",retryable:false },
@@ -135,42 +148,59 @@ class FixtureProvider implements RuntimeProvider {
     const input = object(invocation.input);
     switch (invocation.node.id) {
       case "doudian.alliance.shops.discover": {
-        const shop = {
+        const shops = this.retired?.shops ?? [{
           key:"id:10001",id:"10001",name:"测试店铺",status:"active",
-          statusText:"经营中"
-        };
+          statusText:"经营中" as const
+        }];
+        if (shops.some((shop) =>
+          shop.status === "active" && !/^[0-9]{5,30}$/u.test(shop.id ?? "")
+        )) {
+          return {
+            status:"failed",
+            error:{
+              code:"SHOP_IDENTITY_UNCERTAIN",
+              message:"Active shop identity is incomplete.",retryable:false
+            },
+            evidence:[],riskSignals:[]
+          };
+        }
         return success({
-          shops:[shop],sourceShop:shop,discoveredShopCount:1,
-          activeShopCount:1,skippedShopCount:0,observedAt
+          status:"complete",shops,sourceShop:shops[0],
+          discoveredCount:shops.length,
+          collectableCount:shops.filter((shop) => shop.status === "active").length,
+          observedAt,diagnostics:[]
         });
       }
-      case "doudian.alliance.shop.retired-products.scan":
+      case "doudian.alliance.shop.retired-products.scan": {
+        const shop = object(input.shop);
+        if (shop.status === "blocked") {
+          return success({
+            shop:input.shop,status:"skipped",retiredCount:0,products:[],
+            diagnostics:["SHOP_NOT_ACTIVE"]
+          });
+        }
+        if (
+          invocation.node.id === this.failedNodeId ||
+          shop.id === this.retired?.failedShopId
+        ) {
+          return {
+            status:"failed",
+            error:{ code:"FIXTURE_ORDINARY_FAILURE",message:"Fixture failure",retryable:false },
+            evidence:[],riskSignals:[]
+          };
+        }
         return success({
           shop:input.shop,status:"complete",retiredCount:1,
-          updatedAt:"2026-08-09 15:00:00",
+          updatedAt:"2026-08-09 15:00:00",observedAt,
           products:[{
             treatmentId:"T-10001",productId:"90001",title:"测试清退商品",
             status:"已清退",processedAt:"2026-08-09",reason:"体验分不达标"
-          }]
-        });
-      case "doudian.alliance.retired-products.aggregate": {
-        const shops = foreachItems(invocation.input);
-        const outcome = object(input.foreachOutcome);
-        const failedCount = Number(object(outcome.failed).count) +
-          Number(object(outcome.unresolved).count);
-        const retiredProductCount = shops.reduce(
-          (count,shop) => count + Number(shop.retiredCount ?? 0),0
-        );
-        return success({
-          status:failedCount > 0
-            ? "partial"
-            : retiredProductCount > 0 ? "complete_with_items" : "complete_empty",
-          businessDate:"2026-08-09",observedAt,
-          discoveredShopCount:Number(outcome.total),scannedShopCount:shops.length,
-          failedShopCount:failedCount,
-          affectedShopCount:shops.filter((shop) => Number(shop.retiredCount ?? 0) > 0).length,
-          retiredProductCount,
-          shops,foreachOutcome:input.foreachOutcome
+          }],
+          evidence:{
+            pageUrl:"https://buyin.jinritemai.com/dashboard/regulation/clear-out?session=private#fragment",
+            capturedAt:observedAt
+          },
+          diagnostics:["PRIVATE_DIAGNOSTIC"]
         });
       }
       case "doudian.experience.shops.discover": {
@@ -434,7 +464,9 @@ describe("local Doudian business Workflow acceptance",() => {
     const nodeAssets = [
       "nodes/core/doudian.alliance.shops.discover.node.yaml",
       "nodes/core/doudian.alliance.shop.retired-products.scan.node.yaml",
+      "nodes/core/doudian.alliance.shop.retired-products.fact.persist.node.yaml",
       "nodes/core/doudian.alliance.retired-products.aggregate.node.yaml",
+      "nodes/core/doudian.alliance.retired-products.dataset.prepare.node.yaml",
       "nodes/core/doudian.experience.shops.discover.node.yaml",
       "nodes/core/doudian.experience.shop.snapshot.read.node.yaml",
       "nodes/core/doudian.experience.shop.fact.persist.node.yaml",
@@ -468,19 +500,14 @@ describe("local Doudian business Workflow acceptance",() => {
 
     seedBrowser(store,[
       {
-        id:"doudian.alliance.shops.discover",version:"1.0.0",riskLevel:"R2",
+        id:"doudian.alliance.shops.discover",version:"2.0.0",riskLevel:"R2",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-alliance",adapterVersion:"1.0.0"
+        adapterId:"doudian-alliance",adapterVersion:"2.0.0"
       },
       {
-        id:"doudian.alliance.shop.retired-products.scan",version:"1.0.0",riskLevel:"R2",
+        id:"doudian.alliance.shop.retired-products.scan",version:"2.0.0",riskLevel:"R2",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-alliance",adapterVersion:"1.0.0"
-      },
-      {
-        id:"doudian.alliance.retired-products.aggregate",version:"1.0.0",riskLevel:"R0",
-        permissions:["browser.dom.read","browser.tabs.read"],
-        adapterId:"doudian-alliance",adapterVersion:"1.0.0"
+        adapterId:"doudian-alliance",adapterVersion:"2.0.0"
       },
       {
         id:"doudian.experience.shops.discover",version:"2.0.0",riskLevel:"R1",
@@ -512,7 +539,7 @@ describe("local Doudian business Workflow acceptance",() => {
     const retired = await runTrigger(service,store,{
       id:"doudian-retired-local",appId:"retired-products-monitor",
       workflowId:"doudian.alliance-retired-products-monitor",
-      workflowVersion:"2.0.1",workflowInput:{ maxShops:100 }
+      workflowVersion:"3.0.0",workflowInput:{ maxShops:100 }
     });
     expect(retired).toMatchObject({
       run:{ status:"succeeded",output:{ alert:true,dailyRecord:{ status:"complete_with_items" } } },
@@ -522,6 +549,36 @@ describe("local Doudian business Workflow acceptance",() => {
       }
     });
     expect(store.listBrowserControlLeases(new Date().toISOString())).toEqual([]);
+    const retiredFacts = store.listOperationalFactsForRun(retired.run.id);
+    expect(retiredFacts).toHaveLength(1);
+    expect(retiredFacts[0]?.record).toMatchObject({
+      id:"10001",businessDate:"2026-08-09",status:"complete_with_items",
+      retiredCount:1,
+      evidence:{
+        pageUrl:"https://buyin.jinritemai.com/dashboard/regulation/clear-out",
+        capturedAt:observedAt
+      }
+    });
+    expect(JSON.stringify(retiredFacts[0]?.record)).not.toContain("diagnostic");
+    expect(JSON.stringify(retiredFacts[0]?.record)).not.toContain("session=");
+    const retiredDatasetIntent = object(object(json(retired.run.output)).datasetIntent);
+    expect(store.getOperationalDatasetPublicationLineage(
+      String(retiredDatasetIntent.datasetId),String(retiredDatasetIntent.version)
+    )).toMatchObject({
+      runId:retired.run.id,terminalStatus:"succeeded",quality:"complete",
+      coverage:{ discovered:1,collectable:1,attempted:1,persisted:1,failed:0,skipped:0 }
+    });
+    const retiredAttentionId = `run-business-finding:${retired.run.id}`;
+    expect(store.getAttention(retiredAttentionId)).toMatchObject({
+      sourceRef:{ kind:"workflow-run",runId:retired.run.id },
+      item:{
+        id:retiredAttentionId,runId:retired.run.id,kind:"action",
+        groupKey:"business-finding:retired-products-found",blocking:false
+      }
+    });
+    expect(
+      store.getAttentionDeliveryForAttention(retiredAttentionId)
+    ).toMatchObject({ state:"pending",attentionId:retiredAttentionId });
 
     const experience = await runTrigger(service,store,{
       id:"doudian-experience-local",appId:"experience-score-monitor",
@@ -586,7 +643,6 @@ describe("local Doudian business Workflow acceptance",() => {
     expect(invocations).toEqual([
       "doudian.alliance.shops.discover",
       "doudian.alliance.shop.retired-products.scan",
-      "doudian.alliance.retired-products.aggregate",
       "doudian.experience.shops.discover",
       "doudian.experience.shop.snapshot.read",
       "doudian.shop.context.read",
@@ -778,13 +834,21 @@ describe("local Doudian business Workflow acceptance",() => {
     const providers = new RuntimeProviderRegistry();
     const invocations:string[] = [];
     providers.register(new FixtureProvider(
-      "browser",invocations,"doudian.alliance.shop.retired-products.scan"
+      "browser",invocations,undefined,undefined,{
+        shops:[
+          { key:"id:10001",id:"10001",name:"测试店铺一",status:"active",statusText:"经营中" },
+          { key:"id:10002",id:"10002",name:"测试店铺二",status:"active",statusText:"经营中" }
+        ],
+        failedShopId:"10002"
+      }
     ));
     const service = new LocalCoreService(store,undefined,providers);
     for (const path of [
       "nodes/core/doudian.alliance.shops.discover.node.yaml",
       "nodes/core/doudian.alliance.shop.retired-products.scan.node.yaml",
-      "nodes/core/doudian.alliance.retired-products.aggregate.node.yaml"
+      "nodes/core/doudian.alliance.shop.retired-products.fact.persist.node.yaml",
+      "nodes/core/doudian.alliance.retired-products.aggregate.node.yaml",
+      "nodes/core/doudian.alliance.retired-products.dataset.prepare.node.yaml"
     ]) publish(service,"node",path);
     publish(service,"adapter","adapters/doudian/doudian-alliance.adapter.yaml");
     publish(
@@ -793,26 +857,21 @@ describe("local Doudian business Workflow acceptance",() => {
     );
     seedBrowser(store,[
       {
-        id:"doudian.alliance.shops.discover",version:"1.0.0",riskLevel:"R2",
+        id:"doudian.alliance.shops.discover",version:"2.0.0",riskLevel:"R2",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-alliance",adapterVersion:"1.0.0"
+        adapterId:"doudian-alliance",adapterVersion:"2.0.0"
       },
       {
-        id:"doudian.alliance.shop.retired-products.scan",version:"1.0.0",riskLevel:"R2",
+        id:"doudian.alliance.shop.retired-products.scan",version:"2.0.0",riskLevel:"R2",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-alliance",adapterVersion:"1.0.0"
-      },
-      {
-        id:"doudian.alliance.retired-products.aggregate",version:"1.0.0",riskLevel:"R0",
-        permissions:["browser.dom.read","browser.tabs.read"],
-        adapterId:"doudian-alliance",adapterVersion:"1.0.0"
+        adapterId:"doudian-alliance",adapterVersion:"2.0.0"
       }
     ]);
 
     const result = await runTrigger(service,store,{
       id:"doudian-retired-partial",appId:"retired-products-monitor",
       workflowId:"doudian.alliance-retired-products-monitor",
-      workflowVersion:"2.0.1",workflowInput:{ maxShops:100 }
+      workflowVersion:"3.0.0",workflowInput:{ maxShops:100 }
     });
 
     expect(result).toMatchObject({
@@ -828,9 +887,127 @@ describe("local Doudian business Workflow acceptance",() => {
     expect(invocations).toEqual([
       "doudian.alliance.shops.discover",
       "doudian.alliance.shop.retired-products.scan",
-      "doudian.alliance.retired-products.aggregate"
+      "doudian.alliance.shop.retired-products.scan"
     ]);
+    const intent = object(json(result.run.output)).operationalDatasetPublicationIntentId;
+    expect(typeof intent).toBe("string");
+    expect(store.listOperationalFactsForRun(result.run.id)).toHaveLength(1);
+    const datasetIntent = object(object(json(result.run.output)).datasetIntent);
+    expect(store.getOperationalDatasetPublicationLineage(
+      String(datasetIntent.datasetId),String(datasetIntent.version)
+    )).toMatchObject({
+      runId:result.run.id,terminalStatus:"uncertain",quality:"partial",
+      coverage:{ discovered:2,collectable:2,attempted:2,persisted:1,failed:1,skipped:0 }
+    });
     expect(store.listBrowserControlLeases(new Date().toISOString())).toEqual([]);
+    store.close();
+  });
+
+  it("fails retired-products discovery without Dataset when an active shop lacks an id",async () => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    const providers = new RuntimeProviderRegistry();
+    providers.register(new FixtureProvider(
+      "browser",[],undefined,undefined,{
+        shops:[{
+          key:"name:测试店铺",name:"测试店铺",status:"active",statusText:"经营中"
+        }]
+      }
+    ));
+    const service = new LocalCoreService(store,undefined,providers);
+    for (const path of [
+      "nodes/core/doudian.alliance.shops.discover.node.yaml",
+      "nodes/core/doudian.alliance.shop.retired-products.scan.node.yaml",
+      "nodes/core/doudian.alliance.shop.retired-products.fact.persist.node.yaml",
+      "nodes/core/doudian.alliance.retired-products.aggregate.node.yaml",
+      "nodes/core/doudian.alliance.retired-products.dataset.prepare.node.yaml"
+    ]) publish(service,"node",path);
+    publish(service,"adapter","adapters/doudian/doudian-alliance.adapter.yaml");
+    publish(
+      service,"workflow",
+      "workflows/examples/doudian.alliance-retired-products-monitor.workflow.yaml"
+    );
+    seedBrowser(store,[{
+      id:"doudian.alliance.shops.discover",version:"2.0.0",riskLevel:"R2",
+      permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
+      adapterId:"doudian-alliance",adapterVersion:"2.0.0"
+    },{
+      id:"doudian.alliance.shop.retired-products.scan",version:"2.0.0",riskLevel:"R2",
+      permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
+      adapterId:"doudian-alliance",adapterVersion:"2.0.0"
+    }]);
+
+    const result = await runTrigger(service,store,{
+      id:"doudian-retired-active-no-id",appId:"retired-products-monitor",
+      workflowId:"doudian.alliance-retired-products-monitor",
+      workflowVersion:"3.0.0",workflowInput:{ maxShops:100 }
+    });
+    expect(result.run).toMatchObject({ status:"uncertain" });
+    expect(store.getEngineCheckpoint(result.run.id)?.state).toMatchObject({
+      status:"uncertain",error:{ code:"DOUDIAN_ALLIANCE_DISCOVERY_INCOMPLETE" }
+    });
+    expect(store.listEvents(result.run.id).at(-1)).toMatchObject({
+      payload:{
+        errorCode:"SHOP_IDENTITY_UNCERTAIN",
+        error:{ code:"DOUDIAN_ALLIANCE_DISCOVERY_INCOMPLETE" }
+      }
+    });
+    expect(store.listOperationalFactsForRun(result.run.id)).toEqual([]);
+    expect(store.getPreparedOperationalDatasetPublication(result.run.id)).toBeUndefined();
+    store.close();
+  });
+
+  it("treats a genuinely blocked shop without id as normal skipped coverage",async () => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    const providers = new RuntimeProviderRegistry();
+    providers.register(new FixtureProvider(
+      "browser",[],undefined,undefined,{
+        shops:[
+          { key:"id:10001",id:"10001",name:"测试店铺一",status:"active",statusText:"经营中" },
+          { key:"name:测试店铺二",name:"测试店铺二",status:"blocked",statusText:"已停业" }
+        ]
+      }
+    ));
+    const service = new LocalCoreService(store,undefined,providers);
+    for (const path of [
+      "nodes/core/doudian.alliance.shops.discover.node.yaml",
+      "nodes/core/doudian.alliance.shop.retired-products.scan.node.yaml",
+      "nodes/core/doudian.alliance.shop.retired-products.fact.persist.node.yaml",
+      "nodes/core/doudian.alliance.retired-products.aggregate.node.yaml",
+      "nodes/core/doudian.alliance.retired-products.dataset.prepare.node.yaml"
+    ]) publish(service,"node",path);
+    publish(service,"adapter","adapters/doudian/doudian-alliance.adapter.yaml");
+    publish(
+      service,"workflow",
+      "workflows/examples/doudian.alliance-retired-products-monitor.workflow.yaml"
+    );
+    seedBrowser(store,[{
+      id:"doudian.alliance.shops.discover",version:"2.0.0",riskLevel:"R2",
+      permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
+      adapterId:"doudian-alliance",adapterVersion:"2.0.0"
+    },{
+      id:"doudian.alliance.shop.retired-products.scan",version:"2.0.0",riskLevel:"R2",
+      permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
+      adapterId:"doudian-alliance",adapterVersion:"2.0.0"
+    }]);
+    const result = await runTrigger(service,store,{
+      id:"doudian-retired-blocked-skip",appId:"retired-products-monitor",
+      workflowId:"doudian.alliance-retired-products-monitor",
+      workflowVersion:"3.0.0",workflowInput:{ maxShops:100 }
+    });
+    expect(result.run).toMatchObject({
+      status:"succeeded",
+      output:{ scan:{
+        status:"complete_with_items",discoveredCount:2,collectableCount:1,
+        persistedCount:1,failedCount:0,skippedCount:1
+      } }
+    });
+    const datasetIntent = object(object(json(result.run.output)).datasetIntent);
+    expect(store.getOperationalDatasetPublicationLineage(
+      String(datasetIntent.datasetId),String(datasetIntent.version)
+    )).toMatchObject({
+      quality:"complete",
+      coverage:{ discovered:2,collectable:1,attempted:1,persisted:1,failed:0,skipped:1 }
+    });
     store.close();
   });
 });

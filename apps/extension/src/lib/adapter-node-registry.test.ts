@@ -1,7 +1,14 @@
 import { readFileSync } from "node:fs";
 import { parseWorkflowYaml } from "@bpa/compiler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { executeRegisteredAdapterNode } from "./adapter-node-registry.js";
+import {
+  adapterNodeCommandResultStatus,
+  commandResultPayloadBytes,
+  enforceCommandResultPayloadBound,
+  executeRegisteredAdapterNode
+} from "./adapter-node-registry.js";
+import { MAX_COMMAND_RESULT_PAYLOAD_BYTES } from "./adapter-node-registry.js";
+import { AllianceRetiredDriverError } from "./alliance-retired-background.js";
 
 const driver = vi.hoisted(() => ({
   discoverShopContext: vi.fn(),
@@ -35,6 +42,10 @@ const MockExperienceScoreDriverError = vi.hoisted(
 vi.mock("./alliance-retired-background.js", () => ({
   AllianceRetiredDriverError: class AllianceRetiredDriverError extends Error {
     readonly riskSignals = [];
+
+    constructor(readonly code: string) {
+      super(`safe:${code}`);
+    }
   },
   createAllianceRetiredBrowserDriver: () => driver
 }));
@@ -101,6 +112,7 @@ const discoveryDriverCodes = [
   "BROWSER_DISCONNECTED",
   "CAPTCHA_REQUIRED",
   "COMMAND_CANCELLED",
+  "COMMAND_RESULT_TOO_LARGE",
   "DEADLINE_EXCEEDED",
   "DOUDIAN_EXPERIENCE_DISCOVERY_FAILED",
   "DOUDIAN_EXPERIENCE_MAX_SHOPS_INVALID",
@@ -121,6 +133,7 @@ const readDriverCodes = [
   "BROWSER_DISCONNECTED",
   "CAPTCHA_REQUIRED",
   "COMMAND_CANCELLED",
+  "COMMAND_RESULT_TOO_LARGE",
   "DEADLINE_EXCEEDED",
   "EXPERIENCE_CONTENT_RESPONSE_TIMEOUT",
   "EXPERIENCE_DIMENSION_INCOMPLETE",
@@ -150,6 +163,67 @@ const readRetryableCodes = new Set([
   "PAGE_LOADING"
 ]);
 
+const allianceDiscoveryDriverCodes = [
+  "ALLIANCE_CONTENT_RESPONSE_TIMEOUT",
+  "AUTH_REQUIRED",
+  "BROWSER_DISCONNECTED",
+  "CAPTCHA_REQUIRED",
+  "COMMAND_RESULT_TOO_LARGE",
+  "COMMAND_CANCELLED",
+  "DEADLINE_EXCEEDED",
+  "DOUDIAN_ALLIANCE_DISCOVERY_FAILED",
+  "DOUDIAN_ALLIANCE_MAX_SHOPS_INVALID",
+  "PAGE_LOADING",
+  "PAGE_MISMATCH",
+  "PAGE_URL_INVALID",
+  "RISK_CONTROL",
+  "SESSION_EXPIRED",
+  "SHOP_IDENTITY_AMBIGUOUS",
+  "SHOP_IDENTITY_UNCERTAIN",
+  "SHOP_IDENTITY_UNCONFIRMED",
+  "SHOP_LIMIT_EXCEEDED",
+  "SHOP_LIST_EMPTY",
+  "SHOP_LIST_INCOMPLETE"
+] as const;
+
+const allianceScanDriverCodes = [
+  "ALLIANCE_CONTENT_RESPONSE_TIMEOUT",
+  "ALLIANCE_SOURCE_TAB_MISSING",
+  "ALLIANCE_STAGE_FAILED",
+  "ALLIANCE_TAB_TIMEOUT",
+  "AUTH_REQUIRED",
+  "BROWSER_DISCONNECTED",
+  "CAPTCHA_REQUIRED",
+  "COMMAND_RESULT_TOO_LARGE",
+  "COMMAND_CANCELLED",
+  "DEADLINE_EXCEEDED",
+  "PAGE_LOADING",
+  "PAGE_MISMATCH",
+  "PAGE_URL_INVALID",
+  "PROMOTION_DIALOG_CLOSE_AMBIGUOUS",
+  "PROMOTION_DIALOG_UNRECOGNIZED",
+  "PROMOTION_TAB_MISSING",
+  "RETIRED_PRODUCT_LIMIT_EXCEEDED",
+  "RETIRED_PRODUCT_ROW_CHANGED",
+  "RETIRED_PRODUCTS_MISSING",
+  "RETIRED_PRODUCTS_PAGE_LIMIT_EXCEEDED",
+  "RETIRED_PRODUCTS_TABLE_CHANGED",
+  "RETIRED_TAB_MISSING",
+  "RISK_CONTROL",
+  "SESSION_EXPIRED",
+  "SHOP_CONTEXT_RESTORE_FAILED",
+  "SHOP_IDENTITY_MISMATCH",
+  "SHOP_IDENTITY_UNCERTAIN",
+  "SHOP_SWITCH_NOT_CONFIRMED",
+  "SHOP_TARGET_INVALID"
+] as const;
+
+const allianceRetryableCodes = new Set([
+  "PAGE_LOADING",
+  "BROWSER_DISCONNECTED",
+  "ALLIANCE_TAB_TIMEOUT"
+]);
+
 describe("Adapter Node registry", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -157,6 +231,7 @@ describe("Adapter Node registry", () => {
     driver.openPromotion.mockResolvedValue(undefined);
     driver.openRetiredProducts.mockResolvedValue(undefined);
     driver.cleanupShopTabs.mockResolvedValue(undefined);
+    driver.collectRetiredProducts.mockReset();
     experienceDriver.collectShop.mockReset();
     experienceDriver.discoverShopContext.mockReset();
   });
@@ -167,88 +242,313 @@ describe("Adapter Node registry", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("classifies complete empty, complete items and partial foreach outcomes", async () => {
-    const empty = await executeRegisteredAdapterNode(
-      "doudian.alliance.retired-products.aggregate",
+  it("does not retain the browser aggregate v1 execution path", async () => {
+    await expect(
+      executeRegisteredAdapterNode(
+        "doudian.alliance.retired-products.aggregate",
+        {},
+        context
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("fails alliance discovery when an active shop lacks a stable numeric id", async () => {
+    driver.discoverShopContext.mockResolvedValue({
+      currentShopName: "无ID店铺",
+      shops: [
+        { name: "无ID店铺", status: "active", statusText: "正常营业" }
+      ]
+    });
+
+    const result = await executeRegisteredAdapterNode(
+      "doudian.alliance.shops.discover",
+      { maxShops: 100 },
+      context
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "SHOP_IDENTITY_UNCERTAIN", retryable: false }
+    });
+  });
+
+  it("keeps an id-less blocked alliance shop and skips its scan", async () => {
+    driver.discoverShopContext.mockResolvedValue({
+      currentShopName: sourceShop.name,
+      shops: [
+        sourceShop,
+        { name: "已停业店铺", status: "blocked", statusText: "已停业" }
+      ]
+    });
+    const discovery = await executeRegisteredAdapterNode(
+      "doudian.alliance.shops.discover",
+      { maxShops: 100 },
+      context
+    );
+    const scan = await executeRegisteredAdapterNode(
+      "doudian.alliance.shop.retired-products.scan",
       {
-        foreachOutcome: {
-          total: 1,
-          succeeded: {
-            count: 1,
-            items: [
-              {
-                itemKey: "id:1",
-                output: {
-                  shop: { key: "id:1", name: "店铺一" },
-                  status: "complete",
-                  retiredCount: 0,
-                  products: []
-                }
-              }
-            ]
-          },
-          failed: { count: 0, items: [] },
-          unresolved: { count: 0, items: [] }
-        }
+        shop: {
+          name: "已停业店铺",
+          status: "blocked",
+          statusText: "已停业"
+        },
+        sourceShop
       },
       context
     );
-    expect(empty).toMatchObject({
+
+    expect(discovery).toMatchObject({
       ok: true,
       output: {
-        status: "complete_empty",
-        retiredProductCount: 0,
-        scannedShopCount: 1
+        status: "complete",
+        discoveredCount: 2,
+        collectableCount: 1,
+        shops: [
+          { key: `id:${sourceShop.id}`, status: "active" },
+          { key: "name:已停业店铺", status: "blocked" }
+        ]
       }
     });
-
-    const withItems = await executeRegisteredAdapterNode(
-      "doudian.alliance.retired-products.aggregate",
-      {
-        foreachOutcome: {
-          total: 1,
-          succeeded: {
-            count: 1,
-            items: [
-              {
-                itemKey: "id:1",
-                output: {
-                  shop: { key: "id:1", name: "店铺一" },
-                  status: "complete",
-                  retiredCount: 2,
-                  products: [{}, {}]
-                }
-              }
-            ]
-          },
-          failed: { count: 0, items: [] },
-          unresolved: { count: 0, items: [] }
-        }
-      },
-      context
-    );
-    expect(withItems).toMatchObject({
+    expect(scan).toMatchObject({
+      ok: true,
       output: {
-        status: "complete_with_items",
-        retiredProductCount: 2,
-        affectedShopCount: 1
+        shop: { key: "name:已停业店铺" },
+        status: "skipped",
+        retiredCount: 0,
+        products: [],
+        diagnostics: ["SHOP_NOT_ACTIVE"]
       }
     });
+    expect(driver.switchShop).not.toHaveBeenCalled();
+  });
 
-    const partial = await executeRegisteredAdapterNode(
-      "doudian.alliance.retired-products.aggregate",
-      {
-        foreachOutcome: {
-          total: 2,
-          succeeded: { count: 1, items: [{ itemKey: "id:1", output: {} }] },
-          failed: { count: 1, items: [{ itemKey: "id:2" }] },
-          unresolved: { count: 0, items: [] }
-        }
-      },
+  it("returns the complete v2 retired-products evidence shape", async () => {
+    driver.collectRetiredProducts.mockResolvedValue({
+      shop: { id: targetShop.id, name: targetShop.name },
+      updatedAt: undefined,
+      empty: true,
+      products: []
+    });
+
+    const result = await executeRegisteredAdapterNode(
+      "doudian.alliance.shop.retired-products.scan",
+      { shop: targetShop, sourceShop },
       context
     );
-    expect(partial).toMatchObject({
-      output: { status: "partial", failedShopCount: 1 }
+
+    expect(result).toMatchObject({
+      ok: true,
+      output: {
+        shop: { id: targetShop.id, key: `id:${targetShop.id}` },
+        status: "complete",
+        retiredCount: 0,
+        updatedAt: null,
+        products: [],
+        evidence: {
+          pageUrl:
+            "https://buyin.jinritemai.com/dashboard/regulation/clear-out"
+        },
+        diagnostics: []
+      }
+    });
+    expect(result?.output?.observedAt).toEqual(expect.any(String));
+    expect(result?.output?.evidence).toMatchObject({
+      capturedAt: result?.output?.observedAt
+    });
+  });
+
+  it("keeps the maximum 50-product Node output below the command envelope limit", async () => {
+    const product = {
+      treatmentId: "T".repeat(100),
+      productId: "9".repeat(30),
+      title: "商".repeat(500),
+      status: "已".repeat(100),
+      processedAt: "时".repeat(100),
+      reason: "因".repeat(1000)
+    };
+    driver.collectRetiredProducts.mockResolvedValue({
+      shop: { id: targetShop.id, name: targetShop.name },
+      updatedAt: "更".repeat(100),
+      empty: false,
+      products: Array.from({ length: 50 }, () => ({ ...product }))
+    });
+
+    const result = await executeRegisteredAdapterNode(
+      "doudian.alliance.shop.retired-products.scan",
+      { shop: targetShop, sourceShop },
+      context
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      output: { retiredCount: 50 }
+    });
+    expect(commandResultPayloadBytes(result)).toBeLessThan(512 * 1024);
+    expect(commandResultPayloadBytes(result)).toBeLessThan(
+      MAX_COMMAND_RESULT_PAYLOAD_BYTES
+    );
+  });
+
+  it("fails closed instead of truncating a page above 50 products", async () => {
+    driver.collectRetiredProducts.mockResolvedValue({
+      shop: { id: targetShop.id, name: targetShop.name },
+      empty: false,
+      products: Array.from({ length: 51 }, (_, index) => ({
+        treatmentId: `T-${index}`,
+        title: "商品",
+        status: "已清退",
+        processedAt: "2026/08/09",
+        reason: "原因"
+      }))
+    });
+
+    const result = await executeRegisteredAdapterNode(
+      "doudian.alliance.shop.retired-products.scan",
+      { shop: targetShop, sourceShop },
+      context
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "RETIRED_PRODUCT_LIMIT_EXCEEDED",
+        retryable: false
+      }
+    });
+    expect(result?.output).toBeUndefined();
+  });
+
+  it("replaces an oversized UTF-8 command payload with a static bounded error", () => {
+    const base = {
+      command_seq: 1,
+      command_id: "command-1",
+      node_execution_id: "node-1",
+      idempotency_key: "key-1",
+      fencing_token: 1,
+      status: "succeeded",
+      timing_observation: {},
+      evidence_refs: [],
+      page_epoch: "tab-1:1:nonce"
+    };
+    let low = 0;
+    let high = MAX_COMMAND_RESULT_PAYLOAD_BYTES;
+    while (low + 1 < high) {
+      const middle = Math.floor((low + high) / 2);
+      const candidate = { ...base, output: { value: "界".repeat(middle) } };
+      if (commandResultPayloadBytes(candidate) <= MAX_COMMAND_RESULT_PAYLOAD_BYTES) {
+        low = middle;
+      } else {
+        high = middle;
+      }
+    }
+    const below = { ...base, output: { value: "界".repeat(low) } };
+    const above = { ...base, output: { value: "界".repeat(high) } };
+
+    expect(commandResultPayloadBytes(below)).toBeLessThanOrEqual(
+      MAX_COMMAND_RESULT_PAYLOAD_BYTES
+    );
+    expect(enforceCommandResultPayloadBound(below)).toBe(below);
+    expect(commandResultPayloadBytes(above)).toBeGreaterThan(
+      MAX_COMMAND_RESULT_PAYLOAD_BYTES
+    );
+    expect(enforceCommandResultPayloadBound(above)).toEqual({
+      ...base,
+      status: "failed",
+      error: {
+        code: "COMMAND_RESULT_TOO_LARGE",
+        message: "Command result exceeded the protocol payload limit.",
+        retryable: false
+      }
+    });
+  });
+
+  it.each(allianceDiscoveryDriverCodes)(
+    "keeps alliance discovery code %s inside its Node contract",
+    async (code) => {
+      driver.discoverShopContext.mockRejectedValueOnce(
+        new AllianceRetiredDriverError(code)
+      );
+      const result = await executeRegisteredAdapterNode(
+        "doudian.alliance.shops.discover",
+        { maxShops: 100 },
+        context
+      );
+      expect(result?.error?.code).toBe(code);
+      expect(result?.error?.retryable).toBe(allianceRetryableCodes.has(code));
+      expect(
+        declaredNodeErrors("doudian.alliance.shops.discover.node.yaml")
+      ).toContain(code);
+    }
+  );
+
+  it.each(allianceScanDriverCodes)(
+    "keeps alliance scan code %s inside its Node contract",
+    async (code) => {
+      driver.openPromotion.mockRejectedValueOnce(
+        new AllianceRetiredDriverError(code)
+      );
+      const result = await executeRegisteredAdapterNode(
+        "doudian.alliance.shop.retired-products.scan",
+        { shop: targetShop, sourceShop },
+        context
+      );
+      expect(result?.error?.code).toBe(code);
+      expect(result?.error?.retryable).toBe(allianceRetryableCodes.has(code));
+      expect(
+        declaredNodeErrors(
+          "doudian.alliance.shop.retired-products.scan.node.yaml"
+        )
+      ).toContain(code);
+    }
+  );
+
+  it("maps a content response timeout to a non-retryable uncertain command result", async () => {
+    driver.openPromotion.mockRejectedValueOnce(
+      new AllianceRetiredDriverError("ALLIANCE_CONTENT_RESPONSE_TIMEOUT")
+    );
+    const response = await executeRegisteredAdapterNode(
+      "doudian.alliance.shop.retired-products.scan",
+      { shop: targetShop, sourceShop },
+      context
+    );
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: {
+        code: "ALLIANCE_CONTENT_RESPONSE_TIMEOUT",
+        retryable: false
+      }
+    });
+    expect(adapterNodeCommandResultStatus(response!)).toBe("uncertain");
+  });
+
+  it("never promotes arbitrary alliance driver text to a Node error code", async () => {
+    driver.discoverShopContext.mockRejectedValueOnce(
+      new Error("secret discovery transport text")
+    );
+    driver.openPromotion.mockRejectedValueOnce(
+      new Error("secret scan transport text")
+    );
+
+    const discovery = await executeRegisteredAdapterNode(
+      "doudian.alliance.shops.discover",
+      { maxShops: 100 },
+      context
+    );
+    const scan = await executeRegisteredAdapterNode(
+      "doudian.alliance.shop.retired-products.scan",
+      { shop: targetShop, sourceShop },
+      context
+    );
+
+    expect(discovery?.error).toMatchObject({
+      code: "DOUDIAN_ALLIANCE_DISCOVERY_FAILED",
+      message: "safe:DOUDIAN_ALLIANCE_DISCOVERY_FAILED"
+    });
+    expect(scan?.error).toMatchObject({
+      code: "ALLIANCE_STAGE_FAILED",
+      message: "safe:ALLIANCE_STAGE_FAILED"
     });
   });
 

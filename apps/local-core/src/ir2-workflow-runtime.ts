@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { projectTerminalRunAttention } from "@bpa/attention-core";
+import {
+  parseSucceededRunBusinessAttentionMarker,
+  projectSucceededRunBusinessAttention,
+  projectTerminalRunAttention,
+  type SucceededRunBusinessAttentionMarker
+} from "@bpa/attention-core";
 import {
   createAssistanceTask,
   fromAssistanceTaskPersistenceAggregate,
@@ -119,6 +124,18 @@ function operationalDatasetPublicationIntentId(
     );
   }
   return value;
+}
+
+function operationalAttentionMarker(
+  output: EngineState["output"]
+): SucceededRunBusinessAttentionMarker | undefined {
+  if (output === null || typeof output !== "object" || Array.isArray(output)) {
+    return undefined;
+  }
+  if (!("operationalAttentionMarker" in output)) return undefined;
+  return parseSucceededRunBusinessAttentionMarker(
+    output.operationalAttentionMarker
+  );
 }
 
 function assistanceRequestOutboxId(taskId: string): string {
@@ -752,7 +769,8 @@ export class Ir2WorkflowRuntime {
     const terminalAttention = this.#terminalAttention(
       run,
       nextRunStatus,
-      wakeEvent
+      wakeEvent,
+      transition.state.output
     );
     const result = this.#persistence.submitTaskAndWakeRun({
       task: input.task,
@@ -838,7 +856,8 @@ export class Ir2WorkflowRuntime {
     const terminalAttention = this.#terminalAttention(
       input.run,
       nextRunStatus,
-      event
+      event,
+      input.transition.state.output
     );
     const publicationIntentId = operationalDatasetPublicationIntentId(
       input.transition.state
@@ -870,13 +889,43 @@ export class Ir2WorkflowRuntime {
   #terminalAttention(
     run: RunRecord,
     status: RunStatus,
-    event: ExecutionEventRecord
+    event: ExecutionEventRecord,
+    output: EngineState["output"]
   ):
     | {
         attention: AttentionRecord;
         attentionDelivery: AttentionDeliveryRecord;
+        operationalAttentionMarker?: SucceededRunBusinessAttentionMarker;
       }
     | undefined {
+    const marker = operationalAttentionMarker(output);
+    if (marker && status !== "succeeded") {
+      throw new Error(
+        "Operational Attention marker requires a succeeded terminal Run"
+      );
+    }
+    if (marker) {
+      const item = projectSucceededRunBusinessAttention({
+        id: run.id,
+        marker,
+        updatedAt: event.occurredAt
+      });
+      return {
+        operationalAttentionMarker: marker,
+        attention: {
+          sourceRef: { kind: "workflow-run", runId: run.id },
+          deliveryPolicy: "operator-notification",
+          item,
+          state: "open",
+          revision: 0
+        },
+        attentionDelivery: createTerminalAttentionDelivery({
+          attention: item,
+          workflowId: run.workflowId,
+          workflowVersion: run.workflowVersion
+        })
+      };
+    }
     if (status !== "rejected" && status !== "failed" && status !== "uncertain") {
       return undefined;
     }
@@ -973,7 +1022,8 @@ export class Ir2WorkflowRuntime {
     const terminalAttention = this.#terminalAttention(
       input.run,
       nextRunStatus,
-      wakeEvent
+      wakeEvent,
+      input.transition.state.output
     );
     return this.#persistence.submitTaskAndWakeRun({
       task: assistanceTaskRecord(terminated.task),

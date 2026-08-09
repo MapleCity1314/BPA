@@ -66,7 +66,7 @@ describe("extension capability manifest", () => {
       "exact_tab_binding_v2",
       "active_page_probe_v1"
     ]);
-    expect(report.capabilities).toHaveLength(14);
+    expect(report.capabilities).toHaveLength(13);
     expect(report.capabilities).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -77,6 +77,8 @@ describe("extension capability manifest", () => {
         expect.objectContaining({
           node_id: "doudian.alliance.shop.retired-products.scan",
           adapter_id: "doudian-alliance",
+          adapter_version: "2.0.0",
+          versions: ["2.0.0"],
           routes: expect.arrayContaining([
             {
               origin: "https://fxg.jinritemai.com",
@@ -109,6 +111,13 @@ describe("extension capability manifest", () => {
               observer_capability_id: "doudian.page"
             }
           ]
+        })
+      ])
+    );
+    expect(report.capabilities).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          node_id: "doudian.alliance.retired-products.aggregate"
         })
       ])
     );
@@ -208,7 +217,7 @@ describe("extension capability manifest", () => {
     },
     {
       nodeId: "doudian.alliance.shop.retired-products.scan",
-      nodeVersion: "1.0.0",
+      nodeVersion: "2.0.0",
       currentUrl: "https://fxg.jinritemai.com/ffa/g/list",
       grantedPermissions: [
         "browser.dom.read",
@@ -238,6 +247,18 @@ describe("extension capability manifest", () => {
   });
 
   it.each([
+    {
+      expected: "UNSUPPORTED_NODE_VERSION",
+      nodeId: "doudian.alliance.shop.retired-products.scan",
+      nodeVersion: "1.0.0",
+      currentUrl: "https://fxg.jinritemai.com/ffa/g/list",
+      grantedPermissions: [
+        "browser.dom.read",
+        "browser.dom.write",
+        "browser.tabs.read",
+        "browser.tabs.navigate"
+      ]
+    },
     {
       expected: "UNKNOWN_ACTION",
       nodeId: "doudian.unknown",

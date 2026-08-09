@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAllianceRetiredBrowserDriver } from "./alliance-retired-background.js";
+import {
+  completeCoreCancellationAfterStageStop,
+  createAllianceRetiredBrowserDriver,
+  requestAllianceStageCancellation
+} from "./alliance-retired-background.js";
 
 const shop = {
   id: "10001",
@@ -16,6 +20,7 @@ function installBrowser(
     initialTabs.map((tab) => [Number(tab.id), { ...tab }])
   );
   const removed: number[][] = [];
+  const sentMessages: Array<{ type: string; requestId?: string }> = [];
   const api = {
     tabs: {
       async query(query: { windowId?: number }) {
@@ -36,17 +41,30 @@ function installBrowser(
         _tabId: number,
         message: {
           type: string;
+          requestId?: string;
           request?: { stage?: string };
         }
       ) {
+        sentMessages.push({
+          type: message.type,
+          ...(message.requestId ? { requestId: message.requestId } : {})
+        });
         if (message.type === "bpa.risk.preflight") {
           return { riskSignals: [] };
+        }
+        if (message.type === "bpa.doudian.alliance.cancel-stage") {
+          return {
+            ok: true,
+            requestId: message.requestId,
+            stopped: true
+          };
         }
         const stage = String(message.request?.stage);
         navigate(stage, tabs);
         if (stage === "discover-shops") {
           return {
             ok: true,
+            requestId: message.requestId,
             result: {
               stage,
               shops: [shop],
@@ -57,6 +75,7 @@ function installBrowser(
         if (stage === "collect-retired-products") {
           return {
             ok: true,
+            requestId: message.requestId,
             result: {
               stage,
               page: {
@@ -67,7 +86,11 @@ function installBrowser(
             }
           };
         }
-        return { ok: true, result: { stage, dismissedDialogs: 0 } };
+        return {
+          ok: true,
+          requestId: message.requestId,
+          result: { stage, dismissedDialogs: 0 }
+        };
       },
       async update(tabId: number, update: { url: string }) {
         const current = tabs.get(tabId)!;
@@ -82,7 +105,7 @@ function installBrowser(
     }
   };
   vi.stubGlobal("browser", api);
-  return { tabs, removed };
+  return { tabs, removed, sentMessages };
 }
 
 afterEach(() => {
@@ -90,6 +113,80 @@ afterEach(() => {
 });
 
 describe("alliance retired-products browser navigation", () => {
+  it("emits cancel.effective only after the active stage stopped ack", async () => {
+    let resolveSafeStop!: (value: boolean) => void;
+    const safeStop = new Promise<boolean>((resolve) => {
+      resolveSafeStop = resolve;
+    });
+    const effective = vi.fn();
+    const completion = completeCoreCancellationAfterStageStop({
+      safeStop,
+      onStopped: effective
+    });
+
+    await Promise.resolve();
+    expect(effective).not.toHaveBeenCalled();
+    resolveSafeStop(true);
+    await expect(completion).resolves.toBe(true);
+    expect(effective).toHaveBeenCalledOnce();
+  });
+
+  it("never emits safe-stop effectiveness when the active stage ack fails", async () => {
+    const effective = vi.fn();
+    await expect(
+      completeCoreCancellationAfterStageStop({
+        safeStop: Promise.resolve(false),
+        onStopped: effective
+      })
+    ).resolves.toBe(false);
+    expect(effective).not.toHaveBeenCalled();
+  });
+
+  it("does not start a DOM stage when Core cancels during preflight", async () => {
+    installBrowser(
+      [
+        {
+          id: 1,
+          windowId: 10,
+          active: true,
+          status: "complete",
+          url: "https://fxg.jinritemai.com/ffa/g/list"
+        }
+      ],
+      () => undefined
+    );
+    let resolvePreflight!: (value: { riskSignals: never[] }) => void;
+    const preflight = new Promise<{ riskSignals: never[] }>((resolve) => {
+      resolvePreflight = resolve;
+    });
+    let stageSent = false;
+    let cancelled = false;
+    const originalSendMessage = browser.tabs.sendMessage;
+    browser.tabs.sendMessage = (async (
+      tabId: number,
+      message: { type: string }
+    ) => {
+      if (message.type === "bpa.risk.preflight") return preflight;
+      if (message.type === "bpa.doudian.alliance.stage") stageSent = true;
+      return originalSendMessage(tabId, message);
+    }) as typeof browser.tabs.sendMessage;
+    const driver = createAllianceRetiredBrowserDriver({
+      sourceTabId: 1,
+      deadline: new Date(Date.now() + 10_000).toISOString(),
+      isCancelled: () => cancelled
+    });
+    const discovery = driver.discoverShopContext();
+
+    await Promise.resolve();
+    cancelled = true;
+    resolvePreflight({ riskSignals: [] });
+
+    await expect(discovery).rejects.toMatchObject({
+      code: "COMMAND_CANCELLED"
+    });
+    expect(stageSent).toBe(false);
+  });
+
   it("supports the entire flow navigating in the source tab and restores it", async () => {
     const sourceUrl = "https://fxg.jinritemai.com/ffa/g/list";
     const state = installBrowser(
@@ -181,8 +278,59 @@ describe("alliance retired-products browser navigation", () => {
     expect(state.removed).toEqual([]);
   });
 
+  it("owns and closes an attributed new Buyin tab without an opener", async () => {
+    const state = installBrowser(
+      [
+        {
+          id: 1,
+          windowId: 10,
+          active: true,
+          status: "complete",
+          url: "https://fxg.jinritemai.com/ffa/g/list"
+        }
+      ],
+      (stage, tabs) => {
+        if (stage === "open-promotion") {
+          tabs.set(1, { ...tabs.get(1)!, active: false });
+          tabs.set(2, {
+            id: 2,
+            windowId: 10,
+            active: true,
+            status: "complete",
+            url: "https://buyin.jinritemai.com/dashboard"
+          });
+        }
+        if (stage === "open-product-promotion") {
+          tabs.set(2, {
+            ...tabs.get(2)!,
+            url: "https://buyin.jinritemai.com/dashboard/product/promote-manage"
+          });
+        }
+        if (stage === "open-retired-products") {
+          tabs.set(2, {
+            ...tabs.get(2)!,
+            url: "https://buyin.jinritemai.com/dashboard/regulation/clear-out"
+          });
+        }
+      }
+    );
+    const driver = createAllianceRetiredBrowserDriver({
+      sourceTabId: 1,
+      deadline: new Date(Date.now() + 10_000).toISOString()
+    });
+
+    await driver.discoverShops();
+    await driver.openPromotion(shop);
+    await driver.openRetiredProducts(shop);
+    await driver.collectRetiredProducts(shop);
+    await driver.cleanupShopTabs();
+
+    expect(state.tabs.has(2)).toBe(false);
+    expect(state.removed).toEqual([[2]]);
+  });
+
   it("returns a precise timeout when an injected stage never answers", async () => {
-    installBrowser(
+    const state = installBrowser(
       [{
         id: 1,
         windowId: 10,
@@ -195,11 +343,14 @@ describe("alliance retired-products browser navigation", () => {
     const originalSendMessage = browser.tabs.sendMessage;
     browser.tabs.sendMessage = (async (
       tabId: number,
-      message: { type: string }
+      message: { type: string; requestId?: string }
     ) =>
       message.type === "bpa.risk.preflight"
         ? originalSendMessage(tabId, message)
-        : new Promise(() => undefined)) as typeof browser.tabs.sendMessage;
+        : message.type === "bpa.doudian.alliance.cancel-stage"
+          ? originalSendMessage(tabId, message)
+          : (void originalSendMessage(tabId, message),
+            new Promise(() => undefined))) as typeof browser.tabs.sendMessage;
     const driver = createAllianceRetiredBrowserDriver({
       sourceTabId: 1,
       deadline: new Date(Date.now() + 10_000).toISOString(),
@@ -208,5 +359,52 @@ describe("alliance retired-products browser navigation", () => {
     await expect(driver.discoverShops()).rejects.toMatchObject({
       code: "ALLIANCE_CONTENT_RESPONSE_TIMEOUT"
     });
+    const stageMessage = state.sentMessages.find(
+      (message) => message.type === "bpa.doudian.alliance.stage"
+    );
+    expect(stageMessage?.requestId).toEqual(expect.any(String));
+    expect(state.sentMessages).toContainEqual({
+      type: "bpa.doudian.alliance.cancel-stage",
+      requestId: stageMessage?.requestId
+    });
+  });
+
+  it("maps a rejected source-tab read to BROWSER_DISCONNECTED", async () => {
+    installBrowser([], () => undefined);
+    const driver = createAllianceRetiredBrowserDriver({
+      sourceTabId: 404,
+      deadline: new Date(Date.now() + 10_000).toISOString()
+    });
+
+    await expect(driver.discoverShopContext()).rejects.toMatchObject({
+      code: "BROWSER_DISCONNECTED"
+    });
+  });
+
+  it("does not confirm an active Core cancellation with a mismatched request id ack", async () => {
+    installBrowser(
+      [
+        {
+          id: 1,
+          windowId: 10,
+          active: true,
+          status: "complete",
+          url: "https://fxg.jinritemai.com/ffa/g/list"
+        }
+      ],
+      () => undefined
+    );
+    const originalSendMessage = browser.tabs.sendMessage;
+    browser.tabs.sendMessage = (async (
+      tabId: number,
+      message: { type: string; requestId?: string }
+    ) =>
+      message.type === "bpa.doudian.alliance.cancel-stage"
+        ? { ok: true, requestId: "stale-request", stopped: true }
+        : originalSendMessage(tabId, message)) as typeof browser.tabs.sendMessage;
+
+    await expect(
+      requestAllianceStageCancellation(1, "active-request")
+    ).resolves.toBe(false);
   });
 });

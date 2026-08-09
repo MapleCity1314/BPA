@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
+import {
+  projectSucceededRunBusinessAttention,
+  type SucceededRunBusinessAttentionMarker
+} from "@bpa/attention-core";
 import type {
   AttentionDeliveryRecord,
   AttentionRecord,
@@ -93,12 +97,150 @@ function delivery(): AttentionDeliveryRecord {
   };
 }
 
+const businessMarker: SucceededRunBusinessAttentionMarker = {
+  version: "1",
+  kind: "business-finding",
+  code: "complete_with_items"
+};
+
+function businessAttention(): AttentionRecord {
+  return {
+    sourceRef: { kind: "workflow-run", runId: "run-attention" },
+    deliveryPolicy: "operator-notification",
+    item: projectSucceededRunBusinessAttention({
+      id: "run-attention",
+      marker: businessMarker,
+      updatedAt: terminalAt
+    }),
+    state: "open",
+    revision: 0
+  };
+}
+
+function businessDelivery(): AttentionDeliveryRecord {
+  const item = businessAttention().item;
+  const payload = {
+    attentionId: item.id,
+    runId: "run-attention",
+    workflowId: run().workflowId,
+    workflowVersion: run().workflowVersion,
+    severity: item.kind,
+    title: item.title,
+    requestedAction: item.requestedAction,
+    occurredAt: item.createdAt
+  };
+  return {
+    id: "delivery:attention:run-business-finding:run-attention:operator-notification",
+    attentionId: businessAttention().item.id,
+    channel: "operator-notification",
+    idempotencyKey:
+      "attention:run-business-finding:run-attention:operator-notification",
+    requestDigest: `sha256:${createHash("sha256")
+      .update(JSON.stringify(payload))
+      .digest("hex")}`,
+    payload,
+    state: "pending",
+    revision: 0,
+    attempt: 0,
+    createdAt: terminalAt,
+    updatedAt: terminalAt
+  };
+}
+
 function seed(store: SqlitePersistence): RunRecord {
   const value = run();
   return store.createRun({ run: value, event: event(1, "RUN_CREATED") });
 }
 
 describe("durable Attention delivery schema v21", () => {
+  it("commits a successful business finding and notification atomically", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    const value = seed(store);
+
+    expect(
+      store.commitRunTransition({
+        runId: value.id,
+        expectedRevision: value.revision,
+        nextStatus: "succeeded",
+        output: { operationalAttentionMarker: businessMarker },
+        operationalAttentionMarker: businessMarker,
+        attention: businessAttention(),
+        attentionDelivery: businessDelivery(),
+        event: event(2, "RUN_SUCCEEDED")
+      })
+    ).toMatchObject({ status: "succeeded", revision: 1 });
+    expect(store.queryAttention({ states: ["open"], limit: 20 }).records).toEqual([
+      businessAttention()
+    ]);
+    expect(store.listAttentionDeliveries({ limit: 20 })).toEqual([
+      businessDelivery()
+    ]);
+    store.close();
+  });
+
+  it("rolls back a successful marker without its required delivery pair", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    const value = seed(store);
+
+    expect(() =>
+      store.commitRunTransition({
+        runId: value.id,
+        expectedRevision: value.revision,
+        nextStatus: "succeeded",
+        output: { operationalAttentionMarker: businessMarker },
+        operationalAttentionMarker: businessMarker,
+        event: event(2, "RUN_SUCCEEDED")
+      })
+    ).toThrow(/requires one new Attention delivery pair/u);
+    expect(store.getRun(value.id)).toMatchObject({
+      status: "running",
+      revision: 0
+    });
+    expect(store.listEvents(value.id)).toHaveLength(1);
+    store.close();
+  });
+
+  it("rejects untrusted successful Attention copy and extra marker fields", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    const value = seed(store);
+    const untrusted = businessAttention();
+
+    expect(() =>
+      store.commitRunTransition({
+        runId: value.id,
+        expectedRevision: value.revision,
+        nextStatus: "succeeded",
+        output: { operationalAttentionMarker: businessMarker },
+        operationalAttentionMarker: businessMarker,
+        attention: {
+          ...untrusted,
+          item: { ...untrusted.item, title: "page supplied title" }
+        },
+        attentionDelivery: businessDelivery(),
+        event: event(2, "RUN_SUCCEEDED")
+      })
+    ).toThrow(/controlled projection/u);
+    expect(() =>
+      store.commitRunTransition({
+        runId: value.id,
+        expectedRevision: value.revision,
+        nextStatus: "succeeded",
+        output: {
+          operationalAttentionMarker: {
+            ...businessMarker,
+            title: "page supplied title"
+          }
+        },
+        operationalAttentionMarker: businessMarker,
+        attention: businessAttention(),
+        attentionDelivery: businessDelivery(),
+        event: event(2, "RUN_SUCCEEDED")
+      })
+    ).toThrow(/marker is invalid/u);
+    expect(store.getRun(value.id)).toMatchObject({ status: "running" });
+    store.close();
+  });
+
   it("refuses to migrate an occupied legacy Attention control plane", () => {
     const directory = mkdtempSync(join(tmpdir(), "bpa-attention-v20-"));
     const path = join(directory, "bpa.sqlite3");

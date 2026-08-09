@@ -199,6 +199,25 @@ test("keeps WorkBuddy Windows installation progress machine-readable", async () 
   assert.match(workBuddyInstaller, /LIVE_ACCEPTANCE_RECORD_INVALID/u);
   assert.match(workBuddyInstaller, /recordVerified = \$true/u);
   assert.match(
+    workBuddyInstaller,
+    /workflow = "doudian\.alliance-retired-products-monitor@3\.0\.0"/u
+  );
+  assert.match(workBuddyInstaller, /"--version", "3\.0\.0"/u);
+  assert.match(
+    workBuddyInstaller,
+    /foreach \(\$Asset in \$RequiredAssets\)[\s\S]*?"validate"[\s\S]*?\}\s*foreach \(\$Asset in \$RequiredAssets\)[\s\S]*?"publish"/u
+  );
+  const assetLoops = [...workBuddyInstaller.matchAll(
+    /foreach \(\$Asset in \$RequiredAssets\) \{([\s\S]*?)\r?\n\}/gu
+  )].map((match) => match[1] ?? "");
+  assert.ok(assetLoops.length >= 3);
+  const validationLoop = assetLoops.find((loop) => loop.includes('"validate"'));
+  const publicationLoop = assetLoops.find((loop) => loop.includes('"publish"'));
+  assert.ok(validationLoop);
+  assert.ok(publicationLoop);
+  assert.doesNotMatch(validationLoop, /"publish"/u);
+  assert.doesNotMatch(publicationLoop, /"validate"/u);
+  assert.match(
     localCoreMain,
     /process\.stdout\.write\("BPA migrations completed successfully/u
   );

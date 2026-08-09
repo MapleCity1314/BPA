@@ -2,8 +2,10 @@
 
 > 文档类别：公司部署与远程操作计划。
 > 记录时间：2026-08-09。
-> 实现状态：部分实现；Console Viewer 服务端边界与前端只读形态已形成候选，远程身份、
-> Operator 调用、Mac 业务 Trigger、真实浏览器验收和生产切换尚未完成。
+> 实现状态：部分实现；Console Viewer 服务端边界、前端只读形态、清退商品 Mac 事实/Dataset/
+> Attention vertical slice 与默认禁用 TriggerSpec 已形成代码候选。WorkBuddy 官方交付源码、
+> 10 项保护检查、远程身份、Operator 调用、真实浏览器验收、Trigger 正式启用和生产停旧任务
+> 均尚未完成切换或清退。
 > 上位约束：`docs/normative/bpa-product-form-v1.md`、
 > `docs/normative/bpa-roadmap-v1.md`。
 
@@ -29,9 +31,10 @@ Windows 不安装公司业务 BPA Runtime、Extension、Native Host 或抖店 Ch
 
 ## 1. 两条 Windows 工作流的事实边界
 
-仓库当前只可证明一条 Windows 专属业务交付：
-`doudian.alliance-retired-products-monitor@2.0.1`。其 WorkBuddy Skill、PowerShell
-安装器和两个 CI job 会在 Windows 安装完整 Runtime 并从本机运行。
+现网与历史验收当前只可证明一条 Windows 专属业务交付：
+`doudian.alliance-retired-products-monitor@2.0.1`。本代码候选将仓库中的过渡 WorkBuddy
+Skill、PowerShell 安装器和两个 CI job 同步到 Workflow `3.0.0` 七资产闭包，以保留 canary
+前的修复能力，但该候选尚未部署，不能把它写成现网版本或新的生产证据。
 
 用户指出共有两条需要迁移，但第二条的 Workflow ID、Windows 调度入口、Profile 和
 结果消费者在仓库中均 **待确认**。`doudian.priority-items-readonly-inspect@0.3.0`
@@ -121,10 +124,15 @@ actor 审计和远程操作查询投影。
 
 ### E. 删除旧交付
 
-- 删除清退 WorkBuddy 内置 Runtime/Extension/安装器和业务专属打包脚本；
-- 同一变更窗口移除 `release-workbuddy-skill` 与
-  `validate-workbuddy-skill-windows` 的 CI job、仓库检查和 Branch Protection required
-  contexts；通用 Windows RC 门禁保留。
+- **当前必须保留**：清退 WorkBuddy Skill、内置 Runtime/Extension 安装入口、安装器、
+  业务专属打包/验包脚本、仓库硬门、两个专属 CI job 和 Branch Protection 10 项检查，作为
+  Mac 真实 canary 前的现网修复与回退能力。过渡安装器只发布当前 Node `2.0.0`、Workflow
+  `3.0.0` 闭包，不保留旧版本兼容资产；本计划阶段不部署该 Windows 包。
+- **canary 后独立 PR**：Mac 登录态真实 E2E 和生产接管成立后，才删除上述业务旧交付；通用
+  Windows Runtime RC 门禁仍保留。随后单独审计是否可移除 `release-workbuddy-skill` 与
+  `validate-workbuddy-skill-windows` 两个 required contexts，其他保护不变。
+- **待生产授权完成**：在运营 Windows 官方界面停止旧 WorkBuddy automation；确认没有运行中
+  任务并保全记录后，再判断其 Runtime 是否专用并卸载。源码候选不等于生产旧任务已停止。
 
 ## 7. 阶段反思门
 

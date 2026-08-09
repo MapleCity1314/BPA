@@ -605,6 +605,47 @@ describe("deterministic Trigger Runtime", () => {
         nextAttemptAt: "2026-08-05T00:02:01.000Z"
       })
     ]);
+
+    const secondRunningOccurrence = secondPass.find(
+      (item) => item.status === "running"
+    )!;
+    const secondRunningAttempt = store.listActiveTriggerAttempts(
+      secondRunningOccurrence.triggerId
+    )[0]!;
+    const secondRunningRun = store.getRun(secondRunningAttempt.workflowRunId!)!;
+    current = new Date("2026-08-05T00:02:02.000Z");
+    finishRun(store, secondRunningRun, "succeeded", current.toISOString());
+    engine.tick();
+
+    const thirdPass = specifications.map(([id]) =>
+      store.listTriggerOccurrences(id)[0]!
+    );
+    expect(thirdPass.filter((item) => item.status === "terminal")).toHaveLength(2);
+    expect(thirdPass.filter((item) => item.status === "running")).toHaveLength(1);
+    expect(thirdPass.filter((item) => item.status === "deferred")).toEqual([]);
+
+    const thirdRunningOccurrence = thirdPass.find(
+      (item) => item.status === "running"
+    )!;
+    const thirdRunningAttempt = store.listActiveTriggerAttempts(
+      thirdRunningOccurrence.triggerId
+    )[0]!;
+    const thirdRunningRun = store.getRun(thirdRunningAttempt.workflowRunId!)!;
+    current = new Date("2026-08-05T00:03:03.000Z");
+    finishRun(store, thirdRunningRun, "succeeded", current.toISOString());
+    engine.tick();
+
+    expect(
+      specifications.map(([id]) => store.listTriggerOccurrences(id)[0])
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "terminal", terminalOutcome: "complete" }),
+        expect.objectContaining({ status: "terminal", terminalOutcome: "complete" }),
+        expect.objectContaining({ status: "terminal", terminalOutcome: "complete" })
+      ])
+    );
+    expect(store.listTriggerLeases(current.toISOString())).toEqual([]);
+    expect(store.listBrowserControlLeases(current.toISOString())).toEqual([]);
     store.close();
   });
 

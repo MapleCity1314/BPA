@@ -1,0 +1,91 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: doudian.alliance.shop.retired-products.fact.persist
+  version: 1.0.0
+  title: 持久化单店清退商品事实
+  description: 按运行内稳定调用身份幂等保存一个完整逐店清退扫描；重试不得生成第二条事实，也不得覆盖冲突内容。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [scan]
+  properties:
+    scan:
+      type: object
+      additionalProperties: false
+      required: [shop, status, retiredCount, updatedAt, observedAt, products, evidence, diagnostics]
+      properties:
+        shop:
+          type: object
+          additionalProperties: false
+          required: [key, id, name, status, statusText]
+          properties:
+            key: { type: string, pattern: "^id:[0-9]{5,30}$" }
+            id: { type: string, pattern: "^[0-9]{5,30}$" }
+            name: { type: string, minLength: 2, maxLength: 80 }
+            status: { const: active }
+            statusText: { type: string, minLength: 1, maxLength: 200 }
+        status: { const: complete }
+        retiredCount: { type: integer, minimum: 0, maximum: 50 }
+        updatedAt: { type: [string, "null"], maxLength: 100 }
+        observedAt: { type: string, format: date-time }
+        products:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            additionalProperties: false
+            required: [treatmentId, title, status, processedAt, reason]
+            properties:
+              treatmentId: { type: string, minLength: 1, maxLength: 100 }
+              productId: { type: string, pattern: "^[0-9]{5,30}$" }
+              title: { type: string, minLength: 1, maxLength: 500 }
+              status: { type: string, minLength: 1, maxLength: 100 }
+              processedAt: { type: string, minLength: 1, maxLength: 100 }
+              reason: { type: string, maxLength: 1000 }
+        evidence:
+          type: object
+          additionalProperties: false
+          required: [pageUrl, capturedAt]
+          properties:
+            pageUrl: { type: string, format: uri, maxLength: 1000 }
+            capturedAt: { type: string, format: date-time }
+        diagnostics:
+          type: array
+          maxItems: 100
+          items: { type: string, maxLength: 500 }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [status, businessDate, shop, observedAt, retiredCount, factRef, recordDigest, inserted]
+  properties:
+    status: { enum: [complete_empty, complete_with_items] }
+    businessDate: { type: string, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+    shop:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: { type: string, pattern: "^[0-9]{5,30}$" }
+        name: { type: string, minLength: 2, maxLength: 80 }
+    observedAt: { type: string, format: date-time }
+    retiredCount: { type: integer, minimum: 0, maximum: 50 }
+    factRef:
+      type: object
+      additionalProperties: false
+      required: [factKey, businessDate, subjectId]
+      properties:
+        factKey: { type: string, minLength: 1, maxLength: 500 }
+        businessDate: { type: string, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+        subjectId: { type: string, pattern: "^[0-9]{5,30}$" }
+    recordDigest: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+    inserted: { type: boolean }
+risk:
+  level: R1
+  permissions: [alliance.retired.fact.write]
+execution:
+  timeoutDefault: 30s
+  idempotency: verified_write
+  cancellable: true
+errors: [ALLIANCE_RETIRED_FACT_INVALID, ALLIANCE_RETIRED_FACT_PERMISSION_MISMATCH, ALLIANCE_RETIRED_FACT_SCOPE_MISMATCH, ALLIANCE_RETIRED_FACT_IDEMPOTENCY_CONFLICT, ALLIANCE_RETIRED_FACT_FENCE_INVALID, ALLIANCE_RETIRED_FACT_STORE_FAILED]

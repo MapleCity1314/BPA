@@ -47,7 +47,15 @@ import {
   type PageObservationState
 } from "../lib/page-observer-registry";
 import { resolveNavigationTarget } from "../lib/navigation-target";
-import { executeRegisteredAdapterNode } from "../lib/adapter-node-registry";
+import {
+  adapterNodeCommandResultStatus,
+  enforceCommandResultPayloadBound,
+  executeRegisteredAdapterNode
+} from "../lib/adapter-node-registry";
+import {
+  completeCoreCancellationAfterStageStop,
+  requestAllianceStageCancellation
+} from "../lib/alliance-retired-background";
 import {
   ContentScriptRecovery,
   contentScriptFailureReason
@@ -85,6 +93,11 @@ export default defineBackground(() => {
   const activeTabCommands = new Map<number, string>();
   const managedTabs = new ManagedTabLifecycle();
   const cancelledCommands = new Set<string>();
+  const activeAllianceStages = new Map<
+    string,
+    { readonly tabId: number; readonly requestId: string }
+  >();
+  const cancellationStopBarriers = new Map<string, Promise<boolean>>();
   const pacingReservations = new Map<string, number>();
   const observedTabs = new Map<
     number,
@@ -905,10 +918,22 @@ export default defineBackground(() => {
           setTimeout(resolve, reservation.waitMs)
         );
       }
-      if (cancelledCommands.delete(commandId)) {
-        await removePendingCommandStart(commandId);
-        await releaseCommand();
-        sendCancelled();
+      if (cancelledCommands.has(commandId)) {
+        const safeStop =
+          cancellationStopBarriers.get(commandId) ?? Promise.resolve(true);
+        cancelledCommands.delete(commandId);
+        cancellationStopBarriers.delete(commandId);
+        const completed = await completeCoreCancellationAfterStageStop({
+          safeStop,
+          onStopped: async () => {
+            await removePendingCommandStart(commandId);
+            await releaseCommand();
+            sendCancelled();
+          }
+        });
+        if (!completed) {
+          throw new Error("BROWSER_DISCONNECTED");
+        }
         return;
       }
       if (Date.now() >= Date.parse(payload.deadline)) {
@@ -1061,7 +1086,17 @@ export default defineBackground(() => {
           {
             sourceTabId: tab.id,
             deadline: String(payload.deadline),
-            isCancelled: () => cancelledCommands.has(commandId)
+            isCancelled: () => cancelledCommands.has(commandId),
+            onAllianceStageStarted: (stage) => {
+              activeAllianceStages.set(commandId, stage);
+            },
+            onAllianceStageStopped: (requestId) => {
+              if (
+                activeAllianceStages.get(commandId)?.requestId === requestId
+              ) {
+                activeAllianceStages.delete(commandId);
+              }
+            }
           }
         );
         if (registeredResponse) {
@@ -1159,24 +1194,36 @@ export default defineBackground(() => {
           : {})
       };
     }
-    if (cancelledCommands.delete(commandId)) {
-      await releaseCommand();
-      sendCancelled();
-      return;
+    if (cancelledCommands.has(commandId)) {
+      const safeStop =
+        cancellationStopBarriers.get(commandId) ?? Promise.resolve(true);
+      cancelledCommands.delete(commandId);
+      cancellationStopBarriers.delete(commandId);
+      const completed = await completeCoreCancellationAfterStageStop({
+        safeStop,
+        onStopped: async () => {
+          await releaseCommand();
+          sendCancelled();
+        }
+      });
+      if (!completed) {
+        adapterResponse = {
+          ok: false,
+          error: {
+            code: "BROWSER_DISCONNECTED",
+            message: "Active Alliance stage cancellation was not confirmed.",
+            retryable: false
+          }
+        };
+      } else return;
     }
-    const resultPayload = {
+    const resultPayload = enforceCommandResultPayloadBound({
         command_seq: payload.command_seq,
         command_id: payload.command_id,
         node_execution_id: payload.node_execution_id,
         idempotency_key: payload.idempotency_key,
         fencing_token: payload.fencing_token,
-        status: adapterResponse.ok
-          ? "succeeded"
-          : firstBlockingRiskSignal(adapterResponse.riskSignals ?? [])
-            ? "rejected"
-            : adapterResponse.error?.code === "NAVIGATION_UNCERTAIN"
-              ? "uncertain"
-            : "failed",
+        status: adapterNodeCommandResultStatus(adapterResponse),
         ...(adapterResponse.output
           ? {
               output: {
@@ -1212,7 +1259,7 @@ export default defineBackground(() => {
         },
         evidence_refs: [] as string[],
         page_epoch: pageEpoch
-      };
+      });
     try {
       const evidenceId = `evidence-${crypto.randomUUID()}`;
       const pageUrl = new URL(executionUrl);
@@ -1258,11 +1305,11 @@ export default defineBackground(() => {
     } finally {
       await releaseCommand();
     }
-    if (adapterResponse.ok) {
+    if (resultPayload.status === "succeeded") {
       await assistancePanel.remove(String(payload.node_execution_id));
     } else {
       const blockingRisk = firstBlockingRiskSignal(
-        adapterResponse.riskSignals ?? []
+        resultPayload.risk_signals ?? []
       );
       const actionRequired = Boolean(
         blockingRisk &&
@@ -1285,15 +1332,15 @@ export default defineBackground(() => {
             : "adapter_anomaly_review",
         summaryCode: actionRequired
           ? "authorization_required"
-          : adapterResponse.error?.code === "PAGE_CONTEXT_CHANGED" ||
-              adapterResponse.error?.code === "PAGE_EPOCH_MISMATCH"
+          : resultPayload.error?.code === "PAGE_CONTEXT_CHANGED" ||
+              resultPayload.error?.code === "PAGE_EPOCH_MISMATCH"
             ? "page_attention"
             : "adapter_attention"
       });
     }
     await updateStatus({
       currentTask: payload.node_execution_id,
-      lastError: adapterResponse.error?.message
+      lastError: resultPayload.error?.message
     });
   };
 
@@ -1411,6 +1458,13 @@ export default defineBackground(() => {
           (entry) => entry.commandId === commandId
         );
         const actionStarted = activeCommands.has(commandId);
+        const activeAllianceStage = activeAllianceStages.get(commandId);
+        const safeStop = activeAllianceStage
+          ? requestAllianceStageCancellation(
+              activeAllianceStage.tabId,
+              activeAllianceStage.requestId
+            )
+          : Promise.resolve(true);
         send(
           envelope(
             "cancel.ack",
@@ -1427,20 +1481,28 @@ export default defineBackground(() => {
         );
         if (!pending) {
           cancelledCommands.add(commandId);
+          cancellationStopBarriers.set(commandId, safeStop);
           if (!actionStarted) {
-            send(
-              envelope(
-                "cancel.effective",
-                {
-                  command_id: commandId,
-                  node_execution_id: message.payload.node_execution_id,
-                  fencing_token: message.payload.fencing_token,
-                  status: "cancelled",
-                  safe_stop: true
-                },
-                message.trace_id
-              )
-            );
+            cancelledCommands.delete(commandId);
+            cancellationStopBarriers.delete(commandId);
+            await completeCoreCancellationAfterStageStop({
+              safeStop,
+              onStopped: () => {
+                send(
+                  envelope(
+                    "cancel.effective",
+                    {
+                      command_id: commandId,
+                      node_execution_id: message.payload.node_execution_id,
+                      fencing_token: message.payload.fencing_token,
+                      status: "cancelled",
+                      safe_stop: true
+                    },
+                    message.trace_id
+                  )
+                );
+              }
+            });
           }
         }
         break;

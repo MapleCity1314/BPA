@@ -20,6 +20,7 @@ export type ExperienceScoreBrowserErrorCode =
   | "BROWSER_DISCONNECTED"
   | "CAPTCHA_REQUIRED"
   | "COMMAND_CANCELLED"
+  | "COMMAND_RESULT_TOO_LARGE"
   | "DEADLINE_EXCEEDED"
   | "DOUDIAN_EXPERIENCE_DISCOVERY_FAILED"
   | "DOUDIAN_EXPERIENCE_MAX_SHOPS_INVALID"
@@ -85,6 +86,7 @@ const ERROR_MESSAGES: Readonly<Record<ExperienceScoreBrowserErrorCode, string>> 
   BROWSER_DISCONNECTED: "浏览器标签页或内容脚本暂不可用。",
   CAPTCHA_REQUIRED: "抖店页面要求人工完成验证。",
   COMMAND_CANCELLED: "体验分采集命令已取消。",
+  COMMAND_RESULT_TOO_LARGE: "体验分结果超过浏览器协议载荷上限。",
   DEADLINE_EXCEEDED: "体验分采集已超过执行期限。",
   DOUDIAN_EXPERIENCE_DISCOVERY_FAILED: "体验分店铺发现失败。",
   DOUDIAN_EXPERIENCE_MAX_SHOPS_INVALID: "体验分店铺数量上限无效。",

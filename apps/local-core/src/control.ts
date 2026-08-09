@@ -88,6 +88,7 @@ import {
 import { PackagingDatasetService } from "./dataset-service.js";
 import { DatasetRuntimeProvider } from "./dataset-runtime-provider.js";
 import { ExperienceDataRuntimeProvider } from "./experience-data-runtime-provider.js";
+import { AllianceRetiredDataRuntimeProvider } from "./alliance-retired-data-runtime-provider.js";
 import { PACKAGING_DATASET_PROFILE } from "@bpa/packaging-dataset";
 import {
   TEAM_WORKER_CODE_DIGEST,
@@ -126,6 +127,17 @@ function isExperienceDataNode(id: string, version: string): boolean {
     (id === "doudian.experience.shop.fact.persist" && version === "1.0.0") ||
     (id === "doudian.experience.daily.aggregate" && version === "2.0.0") ||
     (id === "doudian.experience.daily.dataset.prepare" && version === "1.0.0")
+  );
+}
+
+function isAllianceRetiredDataNode(id: string, version: string): boolean {
+  return (
+    (id === "doudian.alliance.shop.retired-products.fact.persist" &&
+      version === "1.0.0") ||
+    (id === "doudian.alliance.retired-products.aggregate" &&
+      version === "2.0.0") ||
+    (id === "doudian.alliance.retired-products.dataset.prepare" &&
+      version === "1.0.0")
   );
 }
 
@@ -219,6 +231,9 @@ export class LocalCoreService {
     }
     if (!providers.list().includes("experience-data")) {
       providers.register(new ExperienceDataRuntimeProvider(persistence));
+    }
+    if (!providers.list().includes("alliance-retired-data")) {
+      providers.register(new AllianceRetiredDataRuntimeProvider(persistence));
     }
     if (!providers.list().includes("team")) {
       const packagedWorker = resolve(
@@ -1953,6 +1968,8 @@ export class LocalCoreService {
               ? "dataset"
               : isExperienceDataNode(id, version)
                 ? "experience-data"
+                : isAllianceRetiredDataNode(id, version)
+                  ? "alliance-retired-data"
                 : definition.runtime.replace(/^engine_/, ""),
           adapters: adapter
             ? [

@@ -207,27 +207,37 @@ $RequiredAssets = @(
   @{
     type = "node"
     file = "doudian.alliance.shops.discover.node.yaml"
-    sha256 = "0a3d73ade57e0af917d95b4f34753fcbcfc885a0929ec68eb218010f0dde7afb"
+    sha256 = "32c528191ff91a4c7710d5d5e21353f757f9ffd5a20d829dfd07a6b68cb695d7"
   },
   @{
     type = "node"
     file = "doudian.alliance.shop.retired-products.scan.node.yaml"
-    sha256 = "4865d046a6496dd07a1285e20bb580fdf64d53759b8b015bb335cdc001aefd20"
+    sha256 = "c2e9d450ece2568e9f8004643473d8895f3e2cdad915458fb212a37ff9964473"
+  },
+  @{
+    type = "node"
+    file = "doudian.alliance.shop.retired-products.fact.persist.node.yaml"
+    sha256 = "99a41085abb01818ffbf9084c0dab4f4c9b856305d9759cb0f1ef9ccffc7c739"
   },
   @{
     type = "node"
     file = "doudian.alliance.retired-products.aggregate.node.yaml"
-    sha256 = "3828a3519fce367625c882b24eb26db1c4062c5ae907cdbc603a1014333967ef"
+    sha256 = "8b75686f797c21d71d6f099818ae2f4219d03ec4daf968645b777a948cc8aaf6"
+  },
+  @{
+    type = "node"
+    file = "doudian.alliance.retired-products.dataset.prepare.node.yaml"
+    sha256 = "176f386bb4c0e0585d76f0265927b56948f4993ddcf415b1355ce1e413381ad3"
   },
   @{
     type = "adapter"
     file = "doudian-alliance.adapter.yaml"
-    sha256 = "295dc30c53620d8f0a0503780a59edcb16ca138c93a14da6306940d48df5df02"
+    sha256 = "86e7530191ef13433da5ec86f5ded00d832d3605fb9c0b139e6f424957a559e4"
   },
   @{
     type = "workflow"
     file = "doudian.alliance-retired-products-monitor.workflow.yaml"
-    sha256 = "7d8e11d2a5b2a1184f02789553413cc92b8b42a1304d3ff3c4a4f86c88f93ae2"
+    sha256 = "f785df76afaca27e9b5acc28c8914f63623f628690ed73c7b6ae3e5033dc2c8e"
   }
 )
 foreach ($Asset in $RequiredAssets) {
@@ -369,7 +379,7 @@ $CapableSessions = @(
     -not $DisconnectedAt -and $CapabilityDigest -and
     @($Capabilities | Where-Object {
       $_.nodeId -eq "doudian.alliance.shops.discover" -and
-      $_.nodeVersion -eq "1.0.0"
+      $_.nodeVersion -eq "2.0.0"
     }).Count -gt 0
   }
 )
@@ -458,7 +468,7 @@ $Configuration = [ordered]@{
   runtimeIdentity = $RequiredIdentity
   bpaCommand = $BpaCommand
   recordsDir = $RecordsRoot
-  workflow = "doudian.alliance-retired-products-monitor@2.0.1"
+  workflow = "doudian.alliance-retired-products-monitor@3.0.0"
   maxShops = 100
   schedule = "daily 13:00"
   timezone = "Asia/Shanghai"
@@ -505,7 +515,7 @@ $InputJson = @{ maxShops = $EffectiveMaxShops } | ConvertTo-Json -Compress
 $Arguments = @(
   "workflow-run",
   "doudian.alliance-retired-products-monitor",
-  "--version", "2.0.1",
+  "--version", "3.0.0",
   "--input-file", $InputFile,
   "--wait-seconds", "28800"
 )
@@ -944,6 +954,9 @@ foreach ($Asset in $RequiredAssets) {
     $BpaCommand `
     @("validate", $Asset.type, $AssetPath) `
     "Validate $($Asset.type)" | Out-Null
+}
+foreach ($Asset in $RequiredAssets) {
+  $AssetPath = Join-Path $WorkflowAssetsRoot $Asset.file
   Invoke-Bpa `
     $BpaCommand `
     @("publish", $Asset.type, $AssetPath, "--yes") `

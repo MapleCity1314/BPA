@@ -1,0 +1,64 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: doudian.alliance.retired-products.dataset.prepare
+  version: 1.0.0
+  title: 准备每日清退商品 Dataset 发布意图
+  description: 为完整或部分完成且至少含一条持久化逐店事实的 Run 生成确定性发布意图；本 Node 不提前发布 Dataset。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [daily]
+  properties:
+    daily:
+      type: object
+      additionalProperties: false
+      required: [status, businessDate, observedAt, discoveredCount, collectableCount, attemptedCount, persistedCount, failedCount, skippedCount, affectedShopCount, retiredProductCount, factRefs, shops, foreachOutcome]
+      properties:
+        status: { enum: [complete_empty, complete_with_items, partial] }
+        businessDate: { type: string, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+        observedAt: { type: string, format: date-time }
+        discoveredCount: { type: integer, minimum: 1, maximum: 100 }
+        collectableCount: { type: integer, minimum: 0, maximum: 100 }
+        attemptedCount: { type: integer, minimum: 0, maximum: 100 }
+        persistedCount: { type: integer, minimum: 1, maximum: 100 }
+        failedCount: { type: integer, minimum: 0, maximum: 100 }
+        skippedCount: { type: integer, minimum: 0, maximum: 100 }
+        affectedShopCount: { type: integer, minimum: 0, maximum: 100 }
+        retiredProductCount: { type: integer, minimum: 0, maximum: 5000 }
+        factRefs:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            additionalProperties: false
+            required: [factKey, businessDate, subjectId, recordDigest]
+            properties:
+              factKey: { type: string, minLength: 1, maxLength: 500 }
+              businessDate: { type: string, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+              subjectId: { type: string, pattern: "^[0-9]{5,30}$" }
+              recordDigest: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        shops: { type: array, maxItems: 100 }
+        foreachOutcome: { type: object }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [status, datasetStatus, publicationIntentId, datasetId, version, recordCount, recordsDigest]
+  properties:
+    status: { const: prepared }
+    datasetStatus: { enum: [complete, partial] }
+    publicationIntentId: { type: string, minLength: 1, maxLength: 200 }
+    datasetId: { const: doudian-alliance-retired-products-daily }
+    version: { type: string, pattern: "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)-run\\.[0-9a-z]{8,32}$" }
+    recordCount: { type: integer, minimum: 1, maximum: 100 }
+    recordsDigest: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+risk:
+  level: R1
+  permissions: [alliance.retired.dataset.prepare]
+execution:
+  timeoutDefault: 30s
+  idempotency: verified_write
+  cancellable: true
+errors: [ALLIANCE_RETIRED_DATASET_INCOMPLETE, ALLIANCE_RETIRED_DATASET_FACT_MISMATCH, ALLIANCE_RETIRED_DATASET_PERMISSION_MISMATCH, ALLIANCE_RETIRED_DATASET_INTENT_CONFLICT, ALLIANCE_RETIRED_DATASET_FENCE_INVALID, ALLIANCE_RETIRED_DATASET_TOO_LARGE, ALLIANCE_RETIRED_DATASET_PREPARE_FAILED]

@@ -67,6 +67,21 @@ export interface TerminalTriggerOccurrenceAttentionInput {
   readonly updatedAt: string;
 }
 
+export interface SucceededRunBusinessAttentionMarker {
+  readonly version: "1";
+  readonly kind: "business-finding";
+  readonly code: string;
+}
+
+export interface SucceededRunBusinessAttentionInput {
+  readonly id: string;
+  readonly marker: SucceededRunBusinessAttentionMarker;
+  readonly updatedAt: string;
+}
+
+const BUSINESS_ATTENTION_MARKER_KEYS = ["code", "kind", "version"] as const;
+const BUSINESS_ATTENTION_CODE = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
+
 const AUTHENTICATION_CODES = new Set([
   "AUTH_REQUIRED",
   "CAPTCHA_REQUIRED",
@@ -98,6 +113,59 @@ function diagnosticCodes(value: unknown): string[] {
       return typeof parsed?.code === "string" ? [parsed.code] : [];
     })
   ];
+}
+
+/**
+ * Parses the only marker shape allowed to request operator Attention from a
+ * successful Run. The marker is an identifier, never dashboard copy.
+ */
+export function parseSucceededRunBusinessAttentionMarker(
+  value: unknown
+): SucceededRunBusinessAttentionMarker {
+  const source = record(value);
+  const keys = source ? Object.keys(source).toSorted() : [];
+  if (
+    !source ||
+    keys.length !== BUSINESS_ATTENTION_MARKER_KEYS.length ||
+    keys.some((key, index) => key !== BUSINESS_ATTENTION_MARKER_KEYS[index]) ||
+    source.version !== "1" ||
+    source.kind !== "business-finding" ||
+    typeof source.code !== "string" ||
+    !BUSINESS_ATTENTION_CODE.test(source.code)
+  ) {
+    throw new Error("Succeeded Run business Attention marker is invalid");
+  }
+  return Object.freeze({
+    version: "1",
+    kind: "business-finding",
+    code: source.code
+  });
+}
+
+/**
+ * Converts a validated successful-Run marker into controlled, secret-free
+ * operator copy. Marker values can group the item but cannot become UI text.
+ */
+export function projectSucceededRunBusinessAttention(
+  input: SucceededRunBusinessAttentionInput
+): AttentionItem {
+  const marker = parseSucceededRunBusinessAttentionMarker(input.marker);
+  return createAttentionItem({
+    id: `run-business-finding:${input.id}`,
+    runId: input.id,
+    stageKey: "run",
+    groupKey: `business-finding:${marker.code}`,
+    kind: "action",
+    source: "business-rule",
+    title: "工作流发现待处理事项",
+    reason: "工作流已成功完成，并发现需要运营处理的业务事项。",
+    requestedAction: "查看本次运行结果与证据，并按业务流程处理。",
+    blocking: false,
+    batchable: false,
+    attemptedActions: [],
+    resumesAutomatically: false,
+    createdAt: input.updatedAt
+  });
 }
 
 /**

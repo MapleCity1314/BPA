@@ -350,6 +350,77 @@ describe("deterministic IR2 engine", () => {
     });
   });
 
+  it("drops completed foreach item intermediates before checkpointing the next item", () => {
+    const base = planWithForeach();
+    const foreach = base.steps.items;
+    if (foreach?.kind !== "foreach") throw new Error("fixture changed");
+    const inspect = foreach.body.steps.inspect;
+    if (inspect?.kind !== "call") throw new Error("fixture changed");
+    const persistRoutes: CallRoutes = {
+      succeeded: "item_ok",
+      failed: "item_failed",
+      timed_out: "item_failed",
+      rejected: "item_rejected",
+      cancelled: "item_failed",
+      uncertain: "item_uncertain"
+    };
+    const compactPlan: ExecutionPlan = {
+      ...base,
+      steps: {
+        ...base.steps,
+        items: {
+          ...foreach,
+          body: {
+            ...foreach.body,
+            steps: {
+              ...foreach.body.steps,
+              inspect: {
+                ...inspect,
+                routes: { ...inspect.routes, succeeded: "persist" }
+              },
+              persist: call("persist", persistRoutes)
+            }
+          }
+        }
+      }
+    };
+    const engine = new DeterministicWorkflowEngine(compactPlan, dependencies());
+    let transition = engine.start("run-compact", {
+      items: [
+        { id: "a" },
+        { id: "b" }
+      ]
+    });
+    const inspectCall = transition.state.active;
+    if (inspectCall?.kind !== "call") throw new Error("fixture changed");
+    transition = engine.acceptRuntimeOutcome({
+      state: transition.state,
+      invocationId: inspectCall.invocation.invocationId,
+      fencingToken: 1,
+      outcome: succeeded({ large: "private-intermediate".repeat(10_000) })
+    });
+    expect(JSON.stringify(transition.state)).toContain("private-intermediate");
+    const persistCall = transition.state.active;
+    if (persistCall?.kind !== "call") throw new Error("fixture changed");
+    transition = engine.acceptRuntimeOutcome({
+      state: transition.state,
+      invocationId: persistCall.invocation.invocationId,
+      fencingToken: 1,
+      outcome: succeeded({ factKey: "fact:a" })
+    });
+    expect(transition.state.active).toMatchObject({
+      kind: "call",
+      invocation: { identity: { iterationKey: "b", stepKey: "inspect" } }
+    });
+    expect(JSON.stringify(transition.state)).not.toContain(
+      "private-intermediate"
+    );
+    expect(Object.keys(transition.state.stepOutputs)).toEqual([]);
+    expect(Buffer.byteLength(JSON.stringify(transition.state), "utf8")).toBeLessThan(
+      16 * 1024
+    );
+  });
+
   it("persists frozen foreach items across recovery and source growth 105→106", () => {
     const deps = dependencies();
     const source = {

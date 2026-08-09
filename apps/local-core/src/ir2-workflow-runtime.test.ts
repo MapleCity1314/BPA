@@ -384,6 +384,83 @@ describe("Local Core IR2 runtime", () => {
     persistence.close();
   });
 
+  it("keeps a business-finding Run succeeded and queues operator Attention", async () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const providers = new RuntimeProviderRegistry();
+    const marker = {
+      version: "1",
+      kind: "business-finding",
+      code: "complete_with_items"
+    } as const;
+    providers.register({
+      id: "business-provider",
+      supports: () => true,
+      invoke: async () => ({
+        status: "succeeded" as const,
+        output: { recovered: true, operationalAttentionMarker: marker },
+        evidence: [],
+        riskSignals: []
+      })
+    });
+    const businessOutputSchema = {
+      type: "object",
+      required: ["recovered", "operationalAttentionMarker"],
+      additionalProperties: false,
+      properties: {
+        recovered: { type: "boolean" },
+        operationalAttentionMarker: {
+          type: "object",
+          required: ["version", "kind", "code"],
+          additionalProperties: false,
+          properties: {
+            version: { const: "1" },
+            kind: { const: "business-finding" },
+            code: { const: "complete_with_items" }
+          }
+        }
+      }
+    } as const;
+    const runtime = new Ir2WorkflowRuntime(persistence, providers, {
+      now: () => 1_000,
+      id: ids(),
+      random: () => 0.5
+    });
+    const run = runtime.start(
+      plan("business-provider", {
+        schemaContract: contract(validInputSchema, businessOutputSchema)
+      }),
+      {}
+    );
+
+    await expect(runtime.drainOnce()).resolves.toBe(1);
+    expect(persistence.getRun(run.id)).toMatchObject({
+      status: "succeeded",
+      revision: 1,
+      output: { recovered: true, operationalAttentionMarker: marker }
+    });
+    expect(
+      persistence.queryAttention({ states: ["open"], limit: 20 }).records
+    ).toEqual([
+      expect.objectContaining({
+        deliveryPolicy: "operator-notification",
+        item: expect.objectContaining({
+          runId: run.id,
+          groupKey: "business-finding:complete_with_items",
+          kind: "action",
+          source: "business-rule",
+          blocking: false
+        })
+      })
+    ]);
+    expect(persistence.listAttentionDeliveries({ limit: 20 })).toEqual([
+      expect.objectContaining({
+        channel: "operator-notification",
+        state: "pending"
+      })
+    ]);
+    persistence.close();
+  });
+
   it("hydrates frozen Resource Bindings and validates them before Provider dispatch", async () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const providers = new RuntimeProviderRegistry();

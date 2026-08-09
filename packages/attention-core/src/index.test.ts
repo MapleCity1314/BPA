@@ -3,6 +3,8 @@ import {
   aggregateAttentionItems,
   attentionRequiresInterruption,
   createAttentionItem,
+  parseSucceededRunBusinessAttentionMarker,
+  projectSucceededRunBusinessAttention,
   projectTerminalTriggerOccurrenceAttention,
   projectTerminalRunAttention,
   type AttentionItem
@@ -136,5 +138,54 @@ describe("AttentionItem", () => {
       resumesAutomatically: false
     });
     expect(attention.requestedAction).toContain("不要自动重试");
+  });
+
+  it("projects a successful business finding with controlled static copy", () => {
+    const attention = projectSucceededRunBusinessAttention({
+      id: "run-business-finding",
+      marker: {
+        version: "1",
+        kind: "business-finding",
+        code: "items-found"
+      },
+      updatedAt: "2026-08-09T06:00:00.000Z"
+    });
+
+    expect(attention).toMatchObject({
+      id: "run-business-finding:run-business-finding",
+      runId: "run-business-finding",
+      stageKey: "run",
+      groupKey: "business-finding:items-found",
+      kind: "action",
+      source: "business-rule",
+      blocking: false,
+      resumesAutomatically: false
+    });
+    expect(JSON.stringify(attention)).not.toContain("workflowId");
+  });
+
+  it("rejects business markers with extra, unsafe or oversized fields", () => {
+    expect(() =>
+      parseSucceededRunBusinessAttentionMarker({
+        version: "1",
+        kind: "business-finding",
+        code: "items-found",
+        title: "untrusted page copy"
+      })
+    ).toThrow(/marker is invalid/u);
+    expect(() =>
+      parseSucceededRunBusinessAttentionMarker({
+        version: "1",
+        kind: "business-finding",
+        code: "items found"
+      })
+    ).toThrow(/marker is invalid/u);
+    expect(() =>
+      parseSucceededRunBusinessAttentionMarker({
+        version: "1",
+        kind: "business-finding",
+        code: "a".repeat(65)
+      })
+    ).toThrow(/marker is invalid/u);
   });
 });

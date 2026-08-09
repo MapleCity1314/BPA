@@ -8,9 +8,9 @@
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- Git 基线：截至 2026-08-09，PR #2–#24 均已在 required checks 通过后进入 `main`；
-  最新基线为 PR #24 merge commit `e4db9f0829829dde6955cc2f3212a34ad5c84d60`。阶段 0 结构收敛、资源观测、清退商品
-  Mac 目标约束、爆款图片来源闭包校验和体验分候选均已进入主线。
+- Git 基线：截至 2026-08-09，PR #2–#25 均已在 required checks 通过后进入 `main`；
+  最新基线为 PR #25 merge commit `152ffbf6e7719cd76c42551ec095709998689f78`。阶段 0 结构收敛、资源观测、单浏览器常驻候选、
+  爆款图片来源闭包校验和体验分事实链均已进入主线。
 - GitHub `main` 已启用管理员同样受约束的 Branch Protection：必须走 Pull Request、
   与主线同步、解决 review conversation，并通过 macOS、Windows、性能、双架构发布、
   可复现性和 WorkBuddy 交付共 10 个 required checks；禁止 force-push 和删除主线。
@@ -217,10 +217,21 @@ Docs PR 验证不再与 Pages deploy 共用全局并发锁。当前后续候选�
 
 当前证据：
 
-- 已有 `doudian.alliance-retired-products-monitor` Workflow；
-- 已有逐店扫描和汇总 Node；
-- 已有 Doudian Alliance Adapter、Extension 执行端与 fixture 测试；
-- 安装/CI 证据存在，但登录态真实页面完整 E2E 尚不能据此判定完成。
+- 本代码候选已将 `doudian.alliance-retired-products-monitor` 升为 `3.0.0`，逐店浏览器
+  扫描成功后立即写入 Run-scoped Operational Fact；
+- Core 使用持久事实而非浏览器汇总判断 complete/partial/failed，并在完整或至少一店成功的
+  部分结果上准备不可变 Dataset；Run 终态、Dataset、审计和 lineage 原子提交；
+- `complete_with_items` 仍为成功 Run，但会通过严格业务 marker 原子创建 Attention 与待投递
+  Delivery；空结果不会制造业务告警；
+- active 店铺缺稳定数字 ID 会 fail closed；单店最多接受 50 条清退记录，Extension 最终结果
+  另受 480 KiB UTF-8 硬门保护；Dataset canonical source 超过 16 MiB 会保留事实、拒绝创建
+  staging/intent；
+- 已新增 `15:00`、`run_once`、默认禁用且只绑定部署 placeholder 的 Mac TriggerSpec 模板；
+  真实 `browserInstanceId` 和实测 p95 通过前不得发布启用；
+- 已有 Doudian Alliance Adapter `2.0.0`、Extension 执行端与 Core/Provider fixture 测试；
+- Windows WorkBuddy Skill、安装器、业务打包/验包器和两个专属 CI job 继续保留，作为
+  Mac 真实 canary 前的现网修复与回退能力；过渡安装器同步发布 Node `2.0.0`、Workflow
+  `3.0.0` 当前闭包，但本代码变更不会部署它；登录态真实页面完整 E2E 尚不能据此判定完成。
 
 2026-08-07 的交付候选进一步收紧 `ready`：安装器必须重新读取 smoke test 写入的
 日记录，核对最后一次 Run、完整扫描状态、已发现/已扫描店铺数相等且失败店铺为 0，
@@ -229,11 +240,18 @@ Docs PR 验证不再与 Pages deploy 共用全局并发锁。当前后续候选�
 
 2026-08-07 后续产品决定将清退商品的正式部署目标改为公司 Mac，与库存、体验分和
 后续抖店工作流共享一个 BPA 管理的 Chrome 实例、Profile、`browserInstanceId` 与账号级
-并发键。Windows WorkBuddy 包只保留为历史交付证据，不再是生产接管目标，也不得继续
-驱动新的平台特例。当前仍未部署该 Mac 版本；本机 fixture/Workflow 验证不能替代公司
-Mac 上的登录态真实页面 E2E。
+并发键。Windows WorkBuddy 官方交付源码、安装器、业务打包/验包器、两个专属 CI job 与
+Branch Protection 的 10 项检查继续保留，直到公司 Mac 登录态真实 canary 与生产接管成立。
+当前仍未部署该 Mac 版本；停止旧 WorkBuddy 任务及删除旧交付必须是 canary 后独立 PR 与
+另行授权的生产窗口，不能由本代码候选提前完成。
 
 剩余验收：真实登录页逐店完整扫描、分页、店铺恢复、失败语义、证据链和告警回归。
+
+本阶段反思：消除的真实风险是浏览器汇总假持久化、Windows 日记录单点和成功发现无平台
+Attention；当前证据仍属于 Node/Provider/Runtime fixture 与本机门禁，不是生产或真实页面
+证据；旧 WorkBuddy 交付和 10 项保护检查仍完整保留，避免在 Mac canary 前失去现网修复能力；
+目标控制面是 Mac Trigger，但运营 Windows 上旧任务是否仍运行待生产核验；下一最高收益瓶颈
+是同一受管 Profile 的真实登录 E2E，而不是继续增加业务节点。
 
 ### 5.2 库存监控工作流
 

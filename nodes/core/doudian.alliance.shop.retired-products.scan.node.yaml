@@ -2,9 +2,9 @@ apiVersion: bpa/v1alpha2
 kind: Node
 metadata:
   id: doudian.alliance.shop.retired-products.scan
-  version: 1.0.0
+  version: 2.0.0
   title: 单店采集精选联盟已清退商品
-  description: 切换到一个明确店铺，从抖店入口进入精选联盟，采集清退商品后恢复源店铺。
+  description: 切换到一个具有稳定身份的经营中店铺，从抖店入口进入精选联盟，只读采集清退商品并恢复源店铺。
 runtime: browser
 inputSchema:
   type: object
@@ -18,33 +18,70 @@ inputSchema:
       type: object
       additionalProperties: false
       required: [key, name, status, statusText]
+      allOf:
+        - if:
+            properties: { status: { const: active } }
+            required: [status]
+          then:
+            required: [id]
+            properties:
+              id: { type: string, pattern: "^[0-9]{5,30}$" }
       properties:
         key: { type: string, minLength: 3, maxLength: 120 }
         id: { type: string, pattern: "^[0-9]{5,30}$" }
         name: { type: string, minLength: 2, maxLength: 80 }
         status: { enum: [active, blocked] }
-        statusText: { type: string, maxLength: 200 }
+        statusText: { type: string, minLength: 1, maxLength: 200 }
 outputSchema:
   type: object
   additionalProperties: false
-  required: [shop, status, retiredCount, products]
+  required: [shop, status, retiredCount, products, diagnostics]
+  allOf:
+    - if:
+        properties: { status: { const: complete } }
+        required: [status]
+      then:
+        required: [observedAt, updatedAt, evidence]
+        properties:
+          updatedAt: { type: [string, "null"], maxLength: 100 }
+          observedAt: { type: string, format: date-time }
+          evidence:
+            type: object
+            additionalProperties: false
+            required: [pageUrl, capturedAt]
+            properties:
+              pageUrl: { type: string, format: uri, maxLength: 1000 }
+              capturedAt: { type: string, format: date-time }
+      else:
+        properties:
+          retiredCount: { const: 0 }
+          products: { type: array, maxItems: 0 }
   properties:
     shop:
       type: object
       additionalProperties: false
       required: [key, name, status, statusText]
+      allOf:
+        - if:
+            properties: { status: { const: active } }
+            required: [status]
+          then:
+            required: [id]
+            properties:
+              id: { type: string, pattern: "^[0-9]{5,30}$" }
       properties:
         key: { type: string, minLength: 3, maxLength: 120 }
         id: { type: string, pattern: "^[0-9]{5,30}$" }
         name: { type: string, minLength: 2, maxLength: 80 }
         status: { enum: [active, blocked] }
-        statusText: { type: string, maxLength: 200 }
+        statusText: { type: string, minLength: 1, maxLength: 200 }
     status: { enum: [complete, skipped] }
-    retiredCount: { type: integer, minimum: 0, maximum: 500 }
-    updatedAt: { type: string, maxLength: 100 }
+    retiredCount: { type: integer, minimum: 0, maximum: 50 }
+    updatedAt: { type: [string, "null"], maxLength: 100 }
+    observedAt: { type: string, format: date-time }
     products:
       type: array
-      maxItems: 500
+      maxItems: 50
       items:
         type: object
         additionalProperties: false
@@ -53,16 +90,20 @@ outputSchema:
           treatmentId: { type: string, minLength: 1, maxLength: 100 }
           productId: { type: string, pattern: "^[0-9]{5,30}$" }
           title: { type: string, minLength: 1, maxLength: 500 }
-          status: { type: string, maxLength: 100 }
-          processedAt: { type: string, maxLength: 100 }
+          status: { type: string, minLength: 1, maxLength: 100 }
+          processedAt: { type: string, minLength: 1, maxLength: 100 }
           reason: { type: string, maxLength: 1000 }
-    error:
+    evidence:
       type: object
       additionalProperties: false
-      required: [code, message]
+      required: [pageUrl, capturedAt]
       properties:
-        code: { type: string, minLength: 1, maxLength: 200 }
-        message: { type: string, maxLength: 1000 }
+        pageUrl: { type: string, format: uri, maxLength: 1000 }
+        capturedAt: { type: string, format: date-time }
+    diagnostics:
+      type: array
+      maxItems: 100
+      items: { type: string, maxLength: 500 }
 risk:
   level: R2
   permissions: [browser.dom.read, browser.dom.write, browser.tabs.read, browser.tabs.navigate]
@@ -85,34 +126,34 @@ execution:
       minIntervalMs: 1000
       maxQueueMs: 10000
 errors:
+  - ALLIANCE_CONTENT_RESPONSE_TIMEOUT
+  - ALLIANCE_SOURCE_TAB_MISSING
+  - ALLIANCE_STAGE_FAILED
+  - ALLIANCE_TAB_TIMEOUT
   - AUTH_REQUIRED
+  - BROWSER_DISCONNECTED
   - CAPTCHA_REQUIRED
-  - RISK_CONTROL
-  - SESSION_EXPIRED
-  - PAGE_CONTEXT_CHANGED
+  - COMMAND_RESULT_TOO_LARGE
+  - COMMAND_CANCELLED
+  - DEADLINE_EXCEEDED
+  - PAGE_LOADING
   - PAGE_MISMATCH
   - PAGE_URL_INVALID
-  - ALLIANCE_STAGE_FAILED
-  - ALLIANCE_SOURCE_TAB_MISSING
-  - ALLIANCE_TAB_TIMEOUT
+  - PROMOTION_DIALOG_CLOSE_AMBIGUOUS
+  - PROMOTION_DIALOG_UNRECOGNIZED
   - PROMOTION_TAB_MISSING
-  - RETIRED_TAB_MISSING
-  - RETIRED_PRODUCTS_MISSING
-  - RETIRED_PRODUCTS_PAGE_LOADING
-  - RETIRED_PRODUCTS_PAGE_LIMIT_EXCEEDED
-  - RETIRED_PRODUCTS_TABLE_CHANGED
   - RETIRED_PRODUCT_LIMIT_EXCEEDED
   - RETIRED_PRODUCT_ROW_CHANGED
-  - SHOP_TARGET_INVALID
-  - SHOP_TARGET_TIMEOUT
-  - SHOP_SWITCH_DIALOG_TIMEOUT
-  - SHOP_SWITCH_NOT_CONFIRMED
-  - SHOP_IDENTITY_AMBIGUOUS
-  - SHOP_IDENTITY_MISMATCH
+  - RETIRED_PRODUCTS_MISSING
+  - RETIRED_PRODUCTS_PAGE_LIMIT_EXCEEDED
+  - RETIRED_PRODUCTS_TABLE_CHANGED
+  - RETIRED_TAB_MISSING
+  - RISK_CONTROL
+  - SESSION_EXPIRED
   - SHOP_CONTEXT_RESTORE_FAILED
-  - PROMOTION_DIALOG_UNRECOGNIZED
-  - PROMOTION_DIALOG_CLOSE_AMBIGUOUS
-  - DEADLINE_EXCEEDED
-  - COMMAND_CANCELLED
+  - SHOP_IDENTITY_MISMATCH
+  - SHOP_IDENTITY_UNCERTAIN
+  - SHOP_SWITCH_NOT_CONFIRMED
+  - SHOP_TARGET_INVALID
 evidence: { required: [result, error] }
-adapter: { id: doudian-alliance, versions: [1.0.0] }
+adapter: { id: doudian-alliance, versions: [2.0.0] }
