@@ -58,8 +58,9 @@ succeeded | rejected | failed | timed_out | cancelled | uncertain
 Cancel 不是回滚。写动作已经开始且无法确认副作用时必须返回 `uncertain`。
 
 `heartbeat.pong.resource_usage` 只包含白名单计数：活跃命令、标签页命令、Alliance stage、
-取消请求与停止屏障、观察标签页、受管标签页，以及 pacing reservation 和 probe generation
-的当前数量、容量和 TTL。Core 必须校验固定容量及计数守恒；畸形或过界心跳不能成为资源曲线证据。
+取消请求与停止屏障、观察标签页、受管标签页及其预留槽位/容量，以及 pacing reservation 和
+probe generation 的当前数量、容量和 TTL。Core 必须校验固定容量及计数守恒；畸形或过界
+心跳不能成为资源曲线证据。
 
 ## Evidence
 

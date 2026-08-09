@@ -15,11 +15,11 @@ capabilities:
     nodeVersions: [2.0.0]
     handlerId: doudian.experience.shops.discover
     handlerVersion: 2.0.0
-    implementationDigest: sha256:64f13cb858967ccc1fd077495b6f46d164510b327fb88f6f18e2ae71d0cf3b22
+    implementationDigest: sha256:3eb970f4d2192dcb09ccb178011767387c6965f0f34447bd976b8fb7b255f11d
     permissions: [browser.dom.read, browser.dom.write, browser.tabs.read, browser.tabs.navigate]
   - nodeId: doudian.experience.shop.snapshot.read
     nodeVersions: [2.0.0]
     handlerId: doudian.experience.shop.snapshot.read
     handlerVersion: 2.0.0
-    implementationDigest: sha256:64f13cb858967ccc1fd077495b6f46d164510b327fb88f6f18e2ae71d0cf3b22
+    implementationDigest: sha256:3eb970f4d2192dcb09ccb178011767387c6965f0f34447bd976b8fb7b255f11d
     permissions: [browser.dom.read, browser.dom.write, browser.tabs.read, browser.tabs.navigate]

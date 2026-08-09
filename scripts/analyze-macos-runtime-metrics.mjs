@@ -402,6 +402,8 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         extension.observedTabs,
         extension.observationCapacity,
         extension.managedTabs,
+        extension.managedTabReservations,
+        extension.managedTabCapacity,
         pacingReservations.active,
         pacingReservations.capacity,
         pacingReservations.ttlMs,
@@ -421,6 +423,9 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         extension.cancellationRequests &&
       extension.observationCapacity >= 1 &&
       extension.observedTabs <= extension.observationCapacity &&
+      extension.managedTabCapacity === 8 &&
+      extension.managedTabs + extension.managedTabReservations <=
+        extension.managedTabCapacity &&
       pacingReservations.capacity >= 1 &&
       pacingReservations.active <= pacingReservations.capacity &&
       pacingReservations.ttlMs >= 1 &&
@@ -525,6 +530,11 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
           (metrics) => metrics.browserGateway.extension.managedTabs,
           "Extension managedTabs"
         ),
+        managedTabReservations: summarize(
+          (metrics) =>
+            metrics.browserGateway.extension.managedTabReservations,
+          "Extension managedTabReservations"
+        ),
         pacingReservations: summarize(
           (metrics) =>
             metrics.browserGateway.extension.pacingReservations.active,
@@ -537,6 +547,11 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         observationCapacity: complete
           ? [...new Set(measured.map(({ metrics }) =>
               metrics.browserGateway.extension.observationCapacity
+            ))]
+          : [],
+        managedTabCapacity: complete
+          ? [...new Set(measured.map(({ metrics }) =>
+              metrics.browserGateway.extension.managedTabCapacity
             ))]
           : [],
         pacingCapacity: complete

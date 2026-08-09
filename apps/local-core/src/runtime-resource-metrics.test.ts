@@ -47,6 +47,8 @@ const browserGateway = {
     observedTabs: 2,
     observationCapacity: 64,
     managedTabs: 0,
+    managedTabReservations: 0,
+    managedTabCapacity: 8,
     pacingReservations: { active: 1, capacity: 64, ttlMs: 120_000 },
     probes: { active: 1, capacity: 32, ttlMs: 30_000 }
   }

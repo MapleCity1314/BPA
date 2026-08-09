@@ -436,6 +436,8 @@ export interface ExtensionResourceUsage {
   observed_tabs: number;
   observation_capacity: 64;
   managed_tabs: number;
+  managed_tab_reservations: number;
+  managed_tab_capacity: 8;
   pacing_reservations: {
     active: number;
     capacity: 64;

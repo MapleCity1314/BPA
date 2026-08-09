@@ -184,6 +184,8 @@
         "observed_tabs",
         "observation_capacity",
         "managed_tabs",
+        "managed_tab_reservations",
+        "managed_tab_capacity",
         "pacing_reservations",
         "probes"
       ],
@@ -195,7 +197,9 @@
         "cancellation_stop_barriers": { "type": "integer", "minimum": 0, "maximum": 32 },
         "observed_tabs": { "type": "integer", "minimum": 0, "maximum": 64 },
         "observation_capacity": { "const": 64 },
-        "managed_tabs": { "type": "integer", "minimum": 0 },
+        "managed_tabs": { "type": "integer", "minimum": 0, "maximum": 8 },
+        "managed_tab_reservations": { "type": "integer", "minimum": 0, "maximum": 8 },
+        "managed_tab_capacity": { "const": 8 },
         "pacing_reservations": {
           "type": "object",
           "additionalProperties": false,

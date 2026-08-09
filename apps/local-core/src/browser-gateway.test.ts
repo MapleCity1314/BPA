@@ -35,6 +35,8 @@ const extensionResourceUsage = {
   observed_tabs: 2,
   observation_capacity: 64,
   managed_tabs: 0,
+  managed_tab_reservations: 0,
+  managed_tab_capacity: 8,
   pacing_reservations: { active: 1, capacity: 64, ttl_ms: 120_000 },
   probes: { active: 1, capacity: 32, ttl_ms: 30_000 }
 };
@@ -287,6 +289,36 @@ describe("local browser gateway", () => {
       }
     });
     expect(gateway.status().lastError).toBeUndefined();
+
+    gateway.tick(new Date("2026-08-10T00:01:20.000Z"));
+    const invariantHeartbeat = outgoing.findLast(
+      (message) => message.type === "heartbeat.ping"
+    )!;
+    gateway.handle(
+      {
+        protocol: "bpa.browser/2",
+        version: "2.0.0",
+        message_id: "heartbeat-managed-tab-invariant",
+        session_id: sessionId,
+        seq: 5,
+        sent_at: "2026-08-10T00:01:20.100Z",
+        type: "heartbeat.pong",
+        trace_id: "trace-heartbeat-test",
+        payload: {
+          nonce: invariantHeartbeat.payload.nonce,
+          resource_usage: {
+            ...extensionResourceUsage,
+            managed_tabs: 8,
+            managed_tab_reservations: 1
+          }
+        }
+      },
+      connectionId
+    );
+    expect(gateway.status()).toMatchObject({
+      resourceUsage: { extension: null },
+      lastError: "BROWSER_EXTENSION_RESOURCE_USAGE_INVALID"
+    });
     persistence.close();
   });
 

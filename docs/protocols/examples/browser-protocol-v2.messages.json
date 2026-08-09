@@ -256,6 +256,8 @@
         "observed_tabs": 2,
         "observation_capacity": 64,
         "managed_tabs": 0,
+        "managed_tab_reservations": 0,
+        "managed_tab_capacity": 8,
         "pacing_reservations": {
           "active": 1,
           "capacity": 64,

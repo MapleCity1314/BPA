@@ -219,6 +219,10 @@ function coreMetrics(path) {
     safeInteger(extension.observationCapacity, 1) &&
     extension.observedTabs <= extension.observationCapacity &&
     safeInteger(extension.managedTabs) &&
+    safeInteger(extension.managedTabReservations) &&
+    extension.managedTabCapacity === 8 &&
+    extension.managedTabs + extension.managedTabReservations <=
+      extension.managedTabCapacity &&
     safeInteger(pacingReservations?.active) &&
     safeInteger(pacingReservations?.capacity, 1) &&
     pacingReservations.active <= pacingReservations.capacity &&
@@ -266,6 +270,8 @@ function coreMetrics(path) {
         observedTabs: extension.observedTabs,
         observationCapacity: extension.observationCapacity,
         managedTabs: extension.managedTabs,
+        managedTabReservations: extension.managedTabReservations,
+        managedTabCapacity: extension.managedTabCapacity,
         pacingReservations: {
           active: pacingReservations.active,
           capacity: pacingReservations.capacity,
