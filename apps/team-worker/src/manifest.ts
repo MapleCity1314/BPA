@@ -56,34 +56,6 @@ export const TEAM_WORKER_HANDLER_MANIFEST = [
     )
   },
   {
-    ref: "ecommerce.category-space.build@1.0.0",
-    implementationDigest: implementationDigest(
-      "ecommerce.category-space.build@1.0.0",
-      "ecommerce-category-space-v1:modal-platform-category"
-    )
-  },
-  {
-    ref: "ecommerce.comparable-pool.build@1.0.0",
-    implementationDigest: implementationDigest(
-      "ecommerce.comparable-pool.build@1.0.0",
-      "ecommerce-comparable-pool-v1:ready-pack-category"
-    )
-  },
-  {
-    ref: "ecommerce.evidence.evaluate@1.0.0",
-    implementationDigest: implementationDigest(
-      "ecommerce.evidence.evaluate@1.0.0",
-      "ecommerce-evidence-v1:range-preserving-e1-e2"
-    )
-  },
-  {
-    ref: "ecommerce.reference-pack.build@1.0.0",
-    implementationDigest: implementationDigest(
-      "ecommerce.reference-pack.build@1.0.0",
-      "ecommerce-reference-pack-v1:asset-ref-only"
-    )
-  },
-  {
     ref: "ecommerce.discovery.merge@1.0.0",
     implementationDigest: implementationDigest(
       "ecommerce.discovery.merge@1.0.0",
@@ -112,10 +84,10 @@ export const TEAM_WORKER_HANDLER_MANIFEST = [
     )
   },
   {
-    ref: "ecommerce.discovery.reference-pack.build@1.0.0",
+    ref: "ecommerce.discovery.reference-pack.build@2.0.0",
     implementationDigest: implementationDigest(
-      "ecommerce.discovery.reference-pack.build@1.0.0",
-      "remote-main-image-candidates:pending-download:v1"
+      "ecommerce.discovery.reference-pack.build@2.0.0",
+      "remote-main-image-candidates:bounded-no-untrusted-run-lineage:v2"
     )
   },
   {

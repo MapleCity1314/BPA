@@ -1,12 +1,8 @@
 import {
-  buildCategorySpace,
-  buildComparablePool,
   buildDiscoveryCategorySpace,
   buildDiscoveryComparablePool,
   buildDiscoveryReferencePack,
-  buildReferencePack,
   evaluateDiscoveryEvidence,
-  evaluateViralEvidence,
   mergeMarketplaceProbes,
   normalizeProductIntent
 } from "@bpa/ecommerce-evidence-domain";
@@ -64,14 +60,6 @@ export const REPORT_ISSUE_BUILD_HANDLER_REF =
   "report.issue.build@1.0.0";
 export const ECOMMERCE_INTENT_NORMALIZE_HANDLER_REF =
   "ecommerce.intent.normalize@1.0.0";
-export const ECOMMERCE_CATEGORY_SPACE_BUILD_HANDLER_REF =
-  "ecommerce.category-space.build@1.0.0";
-export const ECOMMERCE_COMPARABLE_POOL_BUILD_HANDLER_REF =
-  "ecommerce.comparable-pool.build@1.0.0";
-export const ECOMMERCE_EVIDENCE_EVALUATE_HANDLER_REF =
-  "ecommerce.evidence.evaluate@1.0.0";
-export const ECOMMERCE_REFERENCE_PACK_BUILD_HANDLER_REF =
-  "ecommerce.reference-pack.build@1.0.0";
 export const ECOMMERCE_DISCOVERY_MERGE_HANDLER_REF =
   "ecommerce.discovery.merge@1.0.0";
 export const ECOMMERCE_DISCOVERY_CATEGORY_SPACE_BUILD_HANDLER_REF =
@@ -81,7 +69,7 @@ export const ECOMMERCE_DISCOVERY_COMPARABLE_POOL_BUILD_HANDLER_REF =
 export const ECOMMERCE_DISCOVERY_EVIDENCE_EVALUATE_HANDLER_REF =
   "ecommerce.discovery.evidence.evaluate@1.0.0";
 export const ECOMMERCE_DISCOVERY_REFERENCE_PACK_BUILD_HANDLER_REF =
-  "ecommerce.discovery.reference-pack.build@1.0.0";
+  "ecommerce.discovery.reference-pack.build@2.0.0";
 export const SALES_DEMAND_FORECAST_HANDLER_REF =
   "sales-demand.forecast@1.0.0";
 export const INVENTORY_CHANNEL_ESTIMATE_HANDLER_REF =
@@ -329,50 +317,6 @@ export const teamHandlerRegistry = new TeamHandlerRegistry([
     }
   },
   {
-    node: { id: "ecommerce.category-space.build", version: "1.0.0" },
-    implementationDigest: manifestDigest(
-      ECOMMERCE_CATEGORY_SPACE_BUILD_HANDLER_REF
-    ),
-    invoke(input, signal) {
-      return domainResult("Ecommerce category-space building", signal, () =>
-        buildCategorySpace(input)
-      );
-    }
-  },
-  {
-    node: { id: "ecommerce.comparable-pool.build", version: "1.0.0" },
-    implementationDigest: manifestDigest(
-      ECOMMERCE_COMPARABLE_POOL_BUILD_HANDLER_REF
-    ),
-    invoke(input, signal) {
-      return domainResult("Ecommerce comparable-pool building", signal, () =>
-        buildComparablePool(input)
-      );
-    }
-  },
-  {
-    node: { id: "ecommerce.evidence.evaluate", version: "1.0.0" },
-    implementationDigest: manifestDigest(
-      ECOMMERCE_EVIDENCE_EVALUATE_HANDLER_REF
-    ),
-    invoke(input, signal) {
-      return domainResult("Ecommerce evidence evaluation", signal, () =>
-        evaluateViralEvidence(input)
-      );
-    }
-  },
-  {
-    node: { id: "ecommerce.reference-pack.build", version: "1.0.0" },
-    implementationDigest: manifestDigest(
-      ECOMMERCE_REFERENCE_PACK_BUILD_HANDLER_REF
-    ),
-    invoke(input, signal) {
-      return domainResult("Ecommerce reference-pack building", signal, () =>
-        buildReferencePack(input)
-      );
-    }
-  },
-  {
     node: { id: "ecommerce.discovery.merge", version: "1.0.0" },
     implementationDigest: manifestDigest(ECOMMERCE_DISCOVERY_MERGE_HANDLER_REF),
     invoke(input, signal) {
@@ -415,7 +359,7 @@ export const teamHandlerRegistry = new TeamHandlerRegistry([
     }
   },
   {
-    node: { id: "ecommerce.discovery.reference-pack.build", version: "1.0.0" },
+    node: { id: "ecommerce.discovery.reference-pack.build", version: "2.0.0" },
     implementationDigest: manifestDigest(
       ECOMMERCE_DISCOVERY_REFERENCE_PACK_BUILD_HANDLER_REF
     ),

@@ -1,10 +1,12 @@
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LocalAssetStore } from "@bpa/asset-store-local";
 import {
   ControlClient,
   resolveControlSocketPath,
   UnixSocketControlTransport
 } from "@bpa/control-client";
+import { resolveDefaultBpaHome } from "@bpa/platform-runtime";
 import { UdsControlBackend } from "./control-backend.js";
 import { startConsoleHost } from "./server.js";
 import { UnixSocketStagingUploader } from "./staging-uploader.js";
@@ -15,6 +17,10 @@ const appRoot =
 
 const socketPath =
   process.env.BPA_SOCKET?.trim() || resolveControlSocketPath();
+const bpaRoot = resolveDefaultBpaHome(
+  process.env.BPA_HOME ? { bpaHome: process.env.BPA_HOME } : {}
+);
+const assetStore = new LocalAssetStore({ dataDirectory: join(bpaRoot, "data") });
 const configuredAccessMode = process.env.BPA_CONSOLE_ACCESS_MODE?.trim();
 if (
   configuredAccessMode !== undefined &&
@@ -35,7 +41,8 @@ const handle = await startConsoleHost({
     ...(process.env.BPA_ACTOR_ID?.trim()
       ? { actorId: process.env.BPA_ACTOR_ID.trim() }
       : {}),
-    stagingUploader: new UnixSocketStagingUploader()
+    stagingUploader: new UnixSocketStagingUploader(),
+    assetReader: assetStore
   }),
   staticRoot: appRoot,
   accessMode

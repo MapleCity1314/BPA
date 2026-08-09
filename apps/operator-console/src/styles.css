@@ -717,6 +717,48 @@ details code {
   background: #f2effb;
 }
 
+.reference-curation {
+  display: grid;
+  gap: 14px;
+  width: 100%;
+}
+
+.reference-curation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.reference-curation fieldset {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #d8e0da;
+  border-radius: 12px;
+}
+
+.reference-curation fieldset > img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #f3f5f3;
+}
+
+.reference-curation .reference-select {
+  display: flex;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.reference-curation textarea {
+  width: 100%;
+  resize: vertical;
+}
+
 form label,
 .inline-form label {
   display: grid;
@@ -948,6 +990,28 @@ button:disabled {
   margin-bottom: 6px;
   color: #65736b;
   font-size: 13px;
+}
+
+.reference-boundary {
+  color: var(--warning-text, #8a5a00);
+  font-weight: 650;
+}
+
+.reference-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+  max-width: 520px;
+}
+
+.reference-preview-grid img {
+  aspect-ratio: 1;
+  width: 100%;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
 }
 
 .task-card small {

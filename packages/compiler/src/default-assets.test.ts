@@ -286,6 +286,26 @@ describe("published default asset sources", () => {
       })
     ).toBe(false);
 
+    const evidenceWorkflow = loadYaml<WorkflowDefinitionV1Alpha3>(
+      "workflows/examples/ecommerce.cross-platform-evidence-probe.workflow.yaml"
+    );
+    const evidenceInput = JSON.parse(
+      readFileSync(
+        new URL(
+          "workflows/examples/ecommerce.cross-platform-evidence-probe.input.json",
+          root
+        ),
+        "utf8"
+      )
+    ) as Record<string, unknown>;
+    const validateEvidenceInput = compileDataValidator(
+      evidenceWorkflow.spec.inputSchema
+    );
+    expect(validateEvidenceInput(evidenceInput)).toBe(true);
+    expect(
+      validateEvidenceInput({ ...evidenceInput, sourceRunId: "forged-run" })
+    ).toBe(false);
+
     const doudianWorkflow = loadYaml<WorkflowDefinitionV1Alpha3>(
       "workflows/examples/doudian.shop-context-observe.workflow.yaml"
     );

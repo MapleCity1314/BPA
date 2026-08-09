@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   ArtifactRef,
+  CallStep,
   CallRoutes,
   ExecutionPlan,
   ExecutionStep,
@@ -39,7 +40,7 @@ const permissions: PermissionSnapshot = {
   domains: []
 };
 
-function call(key: string, routes: CallRoutes): ExecutionStep {
+function call(key: string, routes: CallRoutes): CallStep {
   return {
     kind: "call",
     key,
@@ -295,6 +296,93 @@ function succeeded(output: unknown) {
 }
 
 describe("deterministic IR2 engine", () => {
+  it("freezes Runtime Evidence and binds it into the next invocation", () => {
+    const failed: ExecutionStep = {
+      kind: "terminal",
+      key: "failed",
+      status: "failed",
+      errorCode: "FAILED"
+    };
+    const routes: CallRoutes = {
+      succeeded: "consume",
+      failed: "failed",
+      timed_out: "failed",
+      rejected: "failed",
+      cancelled: "failed",
+      uncertain: "failed"
+    };
+    const consumeRoutes: CallRoutes = {
+      ...routes,
+      succeeded: "done"
+    };
+    const plan: ExecutionPlan = {
+      irVersion: "bpa.workflow-ir/2",
+      workflow: {
+        id: "test.evidence-binding",
+        version: "1.0.0",
+        digest: digest("e")
+      },
+      artifactClosure: { entries: [node] },
+      riskSnapshot: [],
+      limits: { maxDepth: 0, maxStepExecutions: 4 },
+      entry: "capture",
+      steps: {
+        capture: {
+          ...call("capture", routes),
+          input: { kind: "literal", value: null }
+        },
+        consume: {
+          ...call("consume", consumeRoutes),
+          input: {
+            kind: "reference",
+            source: "step_evidence",
+            stepKey: "capture",
+            path: []
+          }
+        },
+        done: { kind: "terminal", key: "done", status: "succeeded" },
+        failed
+      }
+    };
+    const engine = new DeterministicWorkflowEngine(plan, dependencies());
+    const waiting = engine.start("run-evidence-binding", {});
+    const capture = waiting.state.active;
+    if (capture?.kind !== "call") throw new Error("fixture changed");
+
+    const consuming = engine.acceptRuntimeOutcome({
+      state: waiting.state,
+      invocationId: capture.invocation.invocationId,
+      fencingToken: capture.invocation.fencingToken,
+      outcome: {
+        status: "succeeded",
+        output: { products: 3 },
+        evidence: [
+          {
+            evidenceId: "evidence:browser:1",
+            digest: `sha256:${digest("1")}`,
+            classification: "sensitive"
+          }
+        ],
+        riskSignals: []
+      }
+    });
+    const consume = consuming.state.active;
+    if (consume?.kind !== "call") throw new Error("fixture changed");
+    expect(consume.invocation.input).toEqual([
+      {
+        evidenceId: "evidence:browser:1",
+        digest: `sha256:${digest("1")}`,
+        classification: "sensitive"
+      }
+    ]);
+    expect(
+      engine.resume(structuredClone(consuming.state)).state.active
+    ).toMatchObject({
+      kind: "call",
+      invocation: { input: consume.invocation.input }
+    });
+  });
+
   it("runs sequential foreach and emits detached assistance without pausing", () => {
     const deps = dependencies();
     const engine = new DeterministicWorkflowEngine(planWithForeach(), deps);
@@ -1146,14 +1234,26 @@ describe("deterministic IR2 engine", () => {
     active = waiting.state.active;
     if (active?.kind !== "call") throw new Error("fixture changed");
     deps.now.value += 2;
-    expect(
-      durationEngine.acceptRuntimeOutcome({
-        state: waiting.state,
-        invocationId: active.invocation.invocationId,
-        fencingToken: 1,
-        outcome: succeeded(null)
-      }).state.status
-    ).toBe("failed");
+    const stoppedAtDeadline = durationEngine.acceptRuntimeOutcome({
+      state: waiting.state,
+      invocationId: active.invocation.invocationId,
+      fencingToken: 1,
+      outcome: {
+        ...succeeded({ completed: true }),
+        evidence: [
+          {
+            evidenceId: "evidence:deadline-scoped",
+            digest: `sha256:${digest("deadline")}`,
+            classification: "sensitive"
+          }
+        ]
+      }
+    });
+    expect(stoppedAtDeadline.state.status).toBe("failed");
+    expect(stoppedAtDeadline.state.stepOutputs).toEqual({});
+    expect(JSON.stringify(stoppedAtDeadline.state)).not.toContain(
+      "evidence:deadline-scoped"
+    );
   });
 
   it("copies immutable Call resource mappings into every invocation", () => {

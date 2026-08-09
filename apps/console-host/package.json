@@ -13,9 +13,11 @@
     "test": "vitest run src"
   },
   "dependencies": {
+    "@bpa/asset-store-local": "workspace:*",
     "@bpa/control-client": "workspace:*",
     "@bpa/operator-console-contracts": "workspace:*",
-    "@bpa/platform-runtime": "workspace:*"
+    "@bpa/platform-runtime": "workspace:*",
+    "fflate": "^0.8.2"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

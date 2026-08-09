@@ -352,11 +352,11 @@ export function buildDiscoveryReferencePack(input: unknown): JsonObject {
       downloadStatus: "PENDING",
       evidenceLevel: "E1",
       useBoundary: "仅作为待下载参考图候选；完成内容摘要、去重和人工精选前不能进入生成任务。"
-    }));
+    }))
+    .slice(0, 20);
   return {
-    schemaVersion: "reference-asset-pack/v0.3",
+    schemaVersion: "reference-asset-pack/v0.4",
     packId: text(candidate.packId, "packId", 200),
-    sourceRunId: text(candidate.sourceRunId, "sourceRunId", 200),
     status: selectedAssets.length > 0 ? "PROVISIONAL_REMOTE_ASSETS" : "NO_REMOTE_ASSET",
     summary: {
       discoveredProductCount: products.length,

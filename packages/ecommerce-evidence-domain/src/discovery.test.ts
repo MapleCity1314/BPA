@@ -70,7 +70,6 @@ describe("cross-platform discovery evidence chain", () => {
     });
     const pack = buildDiscoveryReferencePack({
       packId: "pack-jianbing-smoke",
-      sourceRunId: "run-jianbing-smoke",
       discovery,
       comparablePool,
       evidence
@@ -84,7 +83,11 @@ describe("cross-platform discovery evidence chain", () => {
       rejectedProducts: [expect.objectContaining({ discoveryId: "JD:j1" })]
     });
     expect(evidence).toMatchObject({ maximumEstablishedLevel: "E1" });
-    expect(pack).toMatchObject({ status: "PROVISIONAL_REMOTE_ASSETS" });
+    expect(pack).toMatchObject({
+      schemaVersion: "reference-asset-pack/v0.4",
+      status: "PROVISIONAL_REMOTE_ASSETS"
+    });
+    expect(pack).not.toHaveProperty("sourceRunId");
   });
 
   it("rejects a parser-empty probe that is not an explicit platform empty state", () => {

@@ -117,7 +117,8 @@ const workflow = (): WorkflowDefinitionV1Alpha2 => ({
           kind: "wait.assistance",
           use: "assist.packaging-match.review@1.0.0",
           with: {
-            matches: "${steps.inspect_products.output}"
+            matches: "${steps.inspect_products.output}",
+            evidence: "${steps.collect.evidence}"
           },
           blocking: true,
           deadline: "10m",
@@ -210,6 +211,20 @@ describe("IR2 compiler", () => {
         kind: "object",
         entries: {
           product: { kind: "reference", source: "scope_item" }
+        }
+      }
+    });
+    expect(plan.steps.review).toMatchObject({
+      kind: "wait.assistance",
+      input: {
+        kind: "object",
+        entries: {
+          evidence: {
+            kind: "reference",
+            source: "step_evidence",
+            stepKey: "collect",
+            path: []
+          }
         }
       }
     });

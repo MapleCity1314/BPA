@@ -47,6 +47,7 @@ export interface OperatorConsoleApi {
   getEvidenceLineage(runId: string): Promise<EvidenceLineageView>;
   listDownloads(runId?: string): Promise<DownloadView[]>;
   downloadUrl(downloadId: string): string;
+  previewUrl(downloadId: string, assetId: string): string;
   startDesignMode(
     input: DesignModeGrantInput
   ): Promise<DesignModeGrantView>;
@@ -258,6 +259,10 @@ export class HttpOperatorConsoleApi implements OperatorConsoleApi {
 
   downloadUrl(downloadId: string) {
     return `/api/downloads/${encodeURIComponent(downloadId)}`;
+  }
+
+  previewUrl(downloadId: string, assetId: string) {
+    return `/api/downloads/${encodeURIComponent(downloadId)}/assets/${encodeURIComponent(assetId)}`;
   }
 
   startDesignMode(input: DesignModeGrantInput) {

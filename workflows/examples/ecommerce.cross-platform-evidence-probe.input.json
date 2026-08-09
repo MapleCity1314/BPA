@@ -13,7 +13,6 @@
   },
   "poolId": "pool-prepackaged-jianbing-20260802",
   "packId": "pack-prepackaged-jianbing-20260802",
-  "sourceRunId": "run-prepackaged-jianbing-smoke-20260802",
   "observedAt": "2026-08-02T18:00:00+08:00",
   "comparisonRules": {
     "coreTerms": ["煎饼", "软煎饼", "杂粮煎饼"],

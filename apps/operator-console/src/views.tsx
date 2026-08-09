@@ -10,6 +10,7 @@ import type {
   EvidenceLineageView,
   RecoverySessionView,
   RunView,
+  SubmitTaskInput,
   TaskView,
   WorkflowSummary
 } from "@bpa/operator-console-contracts";
@@ -720,6 +721,174 @@ export function RunTimelineView({
   );
 }
 
+type ReferenceRole = NonNullable<
+  NonNullable<SubmitTaskInput["referenceCuration"]>["selectedAssets"][number]
+>["role"];
+
+function ReferenceCurationEditor({
+  busy,
+  curation,
+  onSubmit
+}: {
+  busy: boolean;
+  curation: NonNullable<TaskView["referenceCuration"]>;
+  onSubmit(input: SubmitTaskInput): Promise<void>;
+}) {
+  const roles: Array<{ value: ReferenceRole; label: string }> = [
+    { value: "COMPOSITION_TEMPLATE", label: "构图模板" },
+    { value: "PACKAGING_FACT", label: "包装观察" },
+    { value: "PRODUCT_FACT", label: "产品观察" },
+    { value: "TEXTURE_MATERIAL", label: "质感素材" }
+  ];
+  const [drafts, setDrafts] = useState(() =>
+    Object.fromEntries(
+      curation.assets.map((asset) => [
+        asset.assetId,
+        {
+          selected: false,
+          role: "COMPOSITION_TEMPLATE" as ReferenceRole,
+          reason: "",
+          prohibited: "不得据此推断版权、销量或产品真实性"
+        }
+      ])
+    )
+  );
+  const selectedAssets = curation.assets.flatMap((asset) => {
+    const draft = drafts[asset.assetId];
+    if (!draft?.selected) return [];
+    const prohibitedInferences = draft.prohibited
+      .split("\n")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return [{
+      assetId: asset.assetId,
+      role: draft.role,
+      reason: draft.reason.trim(),
+      prohibitedInferences
+    }];
+  });
+  const ready =
+    selectedAssets.length > 0 &&
+    selectedAssets.every(
+      (asset) =>
+        asset.reason.length > 0 && asset.prohibitedInferences.length > 0
+    );
+  return (
+    <div className="reference-curation">
+      <p className="reference-boundary">
+        权利未评估 · 仅限内部参考 · 未选择的候选将明确记为不采用
+      </p>
+      <div className="reference-curation-grid">
+        {curation.assets.map((asset) => {
+          const draft = drafts[asset.assetId]!;
+          return (
+            <fieldset key={asset.assetId}>
+              <img
+                alt={`${asset.platform} 候选参考图`}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                src={asset.previewUrl}
+              />
+              <label className="reference-select">
+                <input
+                  checked={draft.selected}
+                  disabled={busy}
+                  onChange={(event) =>
+                    setDrafts((current) => ({
+                      ...current,
+                      [asset.assetId]: {
+                        ...current[asset.assetId]!,
+                        selected: event.target.checked
+                      }
+                    }))
+                  }
+                  type="checkbox"
+                />
+                采用这张图
+              </label>
+              <small>{asset.platform} · {asset.discoveryId}</small>
+              {draft.selected ? (
+                <>
+                  <label>
+                    参考角色
+                    <select
+                      disabled={busy}
+                      value={draft.role}
+                      onChange={(event) =>
+                        setDrafts((current) => ({
+                          ...current,
+                          [asset.assetId]: {
+                            ...current[asset.assetId]!,
+                            role: event.target.value as ReferenceRole
+                          }
+                        }))
+                      }
+                    >
+                      {roles.map((role) => (
+                        <option key={role.value} value={role.value}>
+                          {role.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    采用理由
+                    <input
+                      disabled={busy}
+                      maxLength={500}
+                      onChange={(event) =>
+                        setDrafts((current) => ({
+                          ...current,
+                          [asset.assetId]: {
+                            ...current[asset.assetId]!,
+                            reason: event.target.value
+                          }
+                        }))
+                      }
+                      placeholder="只描述允许参考的视觉关系"
+                      value={draft.reason}
+                    />
+                  </label>
+                  <label>
+                    禁止推断（每行一条）
+                    <textarea
+                      disabled={busy}
+                      maxLength={3000}
+                      onChange={(event) =>
+                        setDrafts((current) => ({
+                          ...current,
+                          [asset.assetId]: {
+                            ...current[asset.assetId]!,
+                            prohibited: event.target.value
+                          }
+                        }))
+                      }
+                      rows={3}
+                      value={draft.prohibited}
+                    />
+                  </label>
+                </>
+              ) : null}
+            </fieldset>
+          );
+        })}
+      </div>
+      <button
+        disabled={busy || !ready}
+        onClick={() =>
+          void onSubmit({
+            decision: "publish_selection",
+            referenceCuration: { selectedAssets }
+          })
+        }
+        type="button"
+      >
+        发布内部参考包
+      </button>
+    </div>
+  );
+}
+
 export function TaskCenter({
   api,
   alerts,
@@ -756,11 +925,11 @@ export function TaskCenter({
   const [selectedRecoveryPageId, setSelectedRecoveryPageId] = useState(
     recoveryPages[0]?.id ?? ""
   );
-  async function submit(task: TaskView, decision: string) {
+  async function submit(task: TaskView, input: SubmitTaskInput) {
     setBusyId(task.id);
     setMessage("");
     try {
-      await api.submitTask(task.id, { decision });
+      await api.submitTask(task.id, input);
       setMessage("已记录处理结果，流程将从原位置继续。");
       await onCompleted();
     } catch (error) {
@@ -939,20 +1108,28 @@ export function TaskCenter({
                 <p>{task.guidance}</p>
                 {task.dueAt ? <small>建议在 {formatTime(task.dueAt)} 前完成</small> : null}
               </div>
-              <div className="choice-row">
-                {(task.choices ?? [{ value: "confirmed", label: "确认完成" }]).map(
-                  (choice) => (
-                    <button
-                      disabled={busyId === task.id}
-                      key={choice.value}
-                      onClick={() => void submit(task, choice.value)}
-                      type="button"
-                    >
-                      {choice.label}
-                    </button>
-                  )
-                )}
-              </div>
+              {task.referenceCuration ? (
+                <ReferenceCurationEditor
+                  busy={busyId === task.id}
+                  curation={task.referenceCuration}
+                  onSubmit={(input) => submit(task, input)}
+                />
+              ) : (
+                <div className="choice-row">
+                  {(task.choices ?? [{ value: "confirmed", label: "确认完成" }]).map(
+                    (choice) => (
+                      <button
+                        disabled={busyId === task.id}
+                        key={choice.value}
+                        onClick={() => void submit(task, { decision: choice.value })}
+                        type="button"
+                      >
+                        {choice.label}
+                      </button>
+                    )
+                  )}
+                </div>
+              )}
             </article>
           ))}
         </div>
@@ -1139,6 +1316,24 @@ export function ReportsView({
                 <StatusPill tone={download.kind}>{download.kind === "report" ? "检查报告" : "参考资产包"}</StatusPill>
                 <h3>{download.title}</h3>
                 <p>{download.fileName} · {Math.ceil(download.sizeBytes / 1024)} KiB</p>
+                {download.kind === "reference_pack" ? (
+                  <>
+                    <p className="reference-boundary">
+                      权利未评估 · 仅限内部参考 · 禁止外发
+                    </p>
+                    <div className="reference-preview-grid">
+                      {download.assetIds.map((assetId) => (
+                        <img
+                          alt="受限参考图预览"
+                          key={assetId}
+                          loading="lazy"
+                          referrerPolicy="no-referrer"
+                          src={api.previewUrl(download.id, assetId)}
+                        />
+                      ))}
+                    </div>
+                  </>
+                ) : null}
               </div>
               <a className="download-button" href={api.downloadUrl(download.id)}>
                 下载

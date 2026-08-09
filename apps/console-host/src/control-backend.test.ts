@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { unzipSync } from "fflate";
 import { describe, expect, it, vi } from "vitest";
 import {
   CONSOLE_CONTROL_METHODS,
@@ -54,14 +56,16 @@ function backend(
       digest: string;
       sizeBytes: number;
     }>;
-  }
+  },
+  assetReader?: { read(storageRef: string): Uint8Array }
 ) {
   return new UdsControlBackend(client, {
     actorId: "operator:test",
     operationId: operationIds(),
     now: () => new Date("2026-07-30T04:00:00.000Z"),
     leaseDurationMs: 60_000,
-    ...(stagingUploader ? { stagingUploader } : {})
+    ...(stagingUploader ? { stagingUploader } : {}),
+    ...(assetReader ? { assetReader } : {})
   });
 }
 
@@ -797,6 +801,118 @@ describe("UdsControlBackend", () => {
     ]);
   });
 
+  it("projects reference candidates and submits a complete human curation", async () => {
+    const materializedAsset = (assetId: string, platform: "DOUYIN" | "TAOBAO") => ({
+      discoveryId: `${platform}:product-${assetId}`,
+      platform,
+      sourceEvidenceId: `evidence:${platform.toLowerCase()}`,
+      assetId,
+      digest: `sha256:${(platform === "DOUYIN" ? "a" : "b").repeat(64)}`,
+      sizeBytes: 4,
+      mediaType: "image/jpeg",
+      observedRemoteUrl: platform === "DOUYIN"
+        ? "https://p3.ecombdimg.com/source.jpg"
+        : "https://img.alicdn.com/source.jpg",
+      sourceUrl: platform === "DOUYIN"
+        ? "https://p3.ecombdimg.com/final.jpg"
+        : "https://img.alicdn.com/final.jpg",
+      sourcePageUrl: platform === "DOUYIN"
+        ? "https://www.douyin.com/search/type?type=product"
+        : "https://s.taobao.com/search?q=food",
+      role: "UNASSIGNED_REFERENCE_CANDIDATE",
+      rightsStatus: "not_assessed",
+      allowedUse: "internal_reference_only"
+    });
+    const assets = [
+      materializedAsset("asset-1", "DOUYIN"),
+      materializedAsset("asset-2", "TAOBAO")
+    ];
+    const client = new FakeRequester()
+      .respond(CONSOLE_CONTROL_METHODS.taskList, [{
+        taskId: "task-curation",
+        runId: "run-curation",
+        mode: "human_confirm",
+        status: "queued",
+        profile: { id: "reference_asset_curation", version: "1.0.0" },
+        input: {
+          packId: "pack-curation",
+          materialization: {
+            schemaVersion: "reference-asset-materialization/v1",
+            materializationExportId: "export-materialization",
+            packId: "pack-curation",
+            sourceRunId: "run-curation",
+            status: "materialized_internal_reference",
+            rightsStatus: "not_assessed",
+            allowedUse: "internal_reference_only",
+            sourceEvidenceDigest: `sha256:${"c".repeat(64)}`,
+            assetCount: 2,
+            assets,
+            blockers: [
+              "SOURCE_RIGHTS_NOT_ASSESSED",
+              "HUMAN_ROLE_CURATION_REQUIRED"
+            ]
+          }
+        },
+        deadline: "2026-07-30T05:00:00.000Z",
+        outputSchema: { type: "object" }
+      }])
+      .respond(CONSOLE_CONTROL_METHODS.taskClaim, {
+        ok: true,
+        task: {
+          taskId: "task-curation",
+          lease: { fencingToken: 9 }
+        }
+      })
+      .respond(CONSOLE_CONTROL_METHODS.taskSubmit, { ok: true });
+    const adapter = backend(client);
+
+    await expect(adapter.listTasks()).resolves.toMatchObject([{
+      id: "task-curation",
+      title: "确认参考图片角色与使用边界",
+      referenceCuration: {
+        packId: "pack-curation",
+        materializationExportId: "export-materialization",
+        rightsStatus: "not_assessed",
+        allowedUse: "internal_reference_only",
+        assets: [
+          {
+            assetId: "asset-1",
+            platform: "DOUYIN",
+            previewUrl: "/api/downloads/export-materialization/assets/asset-1"
+          },
+          { assetId: "asset-2", platform: "TAOBAO" }
+        ]
+      }
+    }]);
+    await adapter.submitTask("task-curation", {
+      decision: "publish_selection",
+      referenceCuration: {
+        selectedAssets: [{
+          assetId: "asset-1",
+          role: "COMPOSITION_TEMPLATE",
+          reason: "只参考主体与留白关系",
+          prohibitedInferences: ["不得推断版权或销量"]
+        }]
+      }
+    });
+    expect(client.calls.at(-1)).toMatchObject({
+      method: "assistance.task.submit",
+      params: {
+        output: {
+          packId: "pack-curation",
+          selectedAssets: [{
+            assetId: "asset-1",
+            role: "COMPOSITION_TEMPLATE",
+            reason: "只参考主体与留白关系",
+            allowedTransferDimensions: ["composition"],
+            prohibitedInferences: ["不得推断版权或销量"]
+          }],
+          rejectedAssetIds: ["asset-2"]
+        }
+      }
+    });
+  });
+
   it("acknowledges terminal attention with its current revision", async () => {
     const client = new FakeRequester().respond(
       CONSOLE_CONTROL_METHODS.attentionAcknowledge,
@@ -817,7 +933,11 @@ describe("UdsControlBackend", () => {
     ]);
   });
 
-  it("locks future metadata methods while refusing file bytes on control", async () => {
+  it("keeps upload bytes off control while reading verified download bytes from local CAS", async () => {
+    const downloadBody = new TextEncoder().encode("report");
+    const downloadDigest = `sha256:${createHash("sha256")
+      .update(downloadBody)
+      .digest("hex")}`;
     const client = new FakeRequester()
       .respond(CONSOLE_CONTROL_METHODS.stagingLeaseCreate, {
         leaseId: "lease-1",
@@ -845,13 +965,31 @@ describe("UdsControlBackend", () => {
           title: "研究报告",
           fileName: "report.json",
           sizeBytes: 123,
-          createdAt: "2026-07-30T03:00:00.000Z"
+          createdAt: "2026-07-30T03:00:00.000Z",
+          assetIds: ["asset-report"]
         }
       ])
       .respond(CONSOLE_CONTROL_METHODS.downloadGet, {
-        capability: "pending"
+        manifestVersion: "bpa.download-manifest/1",
+        id: "download-1",
+        runId: "run-1",
+        kind: "report",
+        title: "研究报告",
+        fileName: "report.json",
+        sizeBytes: downloadBody.byteLength,
+        createdAt: "2026-07-30T03:00:00.000Z",
+        assetIds: ["asset-report"],
+        assets: [{
+          assetId: "asset-report",
+          digest: downloadDigest,
+          sizeBytes: downloadBody.byteLength,
+          mediaType: "application/json",
+          storageRef: `asset-store:${downloadDigest}`
+        }]
       });
-    const adapter = backend(client);
+    const adapter = backend(client, undefined, {
+      read: vi.fn(() => downloadBody)
+    });
     await expect(
       adapter.createStagingLease({
         fileName: "master.xlsx",
@@ -872,9 +1010,11 @@ describe("UdsControlBackend", () => {
     await expect(adapter.listDownloads("run-1")).resolves.toMatchObject([
       { id: "download-1", kind: "report" }
     ]);
-    await expect(adapter.getDownload("download-1")).rejects.toThrow(
-      "文件内容不会通过控制协议发送"
-    );
+    await expect(adapter.getDownload("download-1")).resolves.toEqual({
+      fileName: "report.json",
+      mediaType: "application/json",
+      body: downloadBody
+    });
     expect(client.calls).toEqual([
       {
         method: "staging.lease.create",
@@ -889,6 +1029,148 @@ describe("UdsControlBackend", () => {
       { method: "download.list", params: { runId: "run-1" } },
       { method: "download.get", params: { downloadId: "download-1" } }
     ]);
+  });
+
+  it("builds a rights-bounded reference ZIP and serves a digest-verified preview", async () => {
+    const body = new Uint8Array([0xff, 0xd8, 0xff, 0xee]);
+    const digest = `sha256:${createHash("sha256").update(body).digest("hex")}`;
+    const manifest = {
+        manifestVersion: "bpa.download-manifest/1",
+        id: "reference-1",
+        runId: "run-1",
+        kind: "reference_pack",
+        title: "参考资产包",
+        fileName: "reference-1.zip",
+        sizeBytes: body.byteLength,
+        createdAt: "2026-07-30T03:00:00.000Z",
+        assetIds: ["asset-1"],
+        rightsStatus: "not_assessed",
+        allowedUse: "internal_reference_only",
+        blockers: ["SOURCE_RIGHTS_NOT_ASSESSED"],
+        assets: [{
+          assetId: "asset-1",
+          digest,
+          sizeBytes: body.byteLength,
+          mediaType: "image/jpeg",
+          storageRef: `asset-store:${digest}`
+        }],
+        referencePack: {
+          schemaVersion: "reference-asset-pack/v1",
+          exportId: "reference-1",
+          packId: "pack-1",
+          sourceRunId: "run-1",
+          status: "ready_internal_reference",
+          rightsStatus: "not_assessed",
+          allowedUse: "internal_reference_only",
+          assetCount: 1,
+          assets: [{
+            assetId: "asset-1",
+            digest,
+            sizeBytes: body.byteLength,
+            mediaType: "image/jpeg",
+            platform: "DOUYIN",
+            discoveryId: "DOUYIN:product-1",
+            sourceUrl: "https://cdn.ecombdimg.com/image-1.jpg",
+            sourcePageUrl: "https://www.douyin.com/search/type?type=product",
+            sourceEvidenceId: "evidence:browser:1",
+            role: "COMPOSITION_TEMPLATE",
+            reason: "只参考构图层级",
+            allowedTransferDimensions: ["composition"],
+            prohibitedInferences: ["不得据此推断版权或销量"],
+            rightsStatus: "not_assessed",
+            allowedUse: "internal_reference_only"
+          }],
+          blockers: ["SOURCE_RIGHTS_NOT_ASSESSED"]
+        }
+      };
+    const client = new FakeRequester().respond(
+      CONSOLE_CONTROL_METHODS.downloadGet,
+      manifest,
+      manifest
+    );
+    const reader = { read: vi.fn(() => body) };
+    const adapter = backend(client, undefined, reader);
+    const download = await adapter.getDownload("reference-1");
+    expect(download).toMatchObject({
+      fileName: "reference-1.zip",
+      mediaType: "application/zip"
+    });
+    const archive = unzipSync(download.body);
+    expect(Object.keys(archive).sort()).toEqual([
+      "assets/01-asset-1.jpg",
+      "manifest.json"
+    ]);
+    expect(JSON.parse(new TextDecoder().decode(archive["manifest.json"]))).toMatchObject({
+      rightsStatus: "not_assessed",
+      allowedUse: "internal_reference_only",
+      blockers: ["SOURCE_RIGHTS_NOT_ASSESSED"]
+    });
+    await expect(
+      adapter.getDownloadAsset("reference-1", "asset-1")
+    ).resolves.toEqual({
+      fileName: "asset-1",
+      mediaType: "image/jpeg",
+      body
+    });
+    expect(reader.read).toHaveBeenCalledWith(`asset-store:${digest}`);
+
+    const tamperedClient = new FakeRequester().respond(
+      CONSOLE_CONTROL_METHODS.downloadGet,
+      manifest
+    );
+    await expect(
+      backend(tamperedClient, undefined, {
+        read: () => new Uint8Array([0xff, 0xd8, 0xff, 0x00])
+      }).getDownload("reference-1")
+    ).rejects.toThrow("摘要校验失败");
+
+    const malformedClient = new FakeRequester().respond(
+      CONSOLE_CONTROL_METHODS.downloadGet,
+      {
+        ...manifest,
+        referencePack: {
+          ...manifest.referencePack,
+          internalPath: "/private/cas/asset-1"
+        }
+      }
+    );
+    await expect(
+      backend(malformedClient, undefined, reader).getDownload("reference-1")
+    ).rejects.toThrow("校验参考资产包边界");
+
+    const wrongSourceClient = new FakeRequester().respond(
+      CONSOLE_CONTROL_METHODS.downloadGet,
+      {
+        ...manifest,
+        referencePack: {
+          ...manifest.referencePack,
+          assets: [{
+            ...manifest.referencePack.assets[0],
+            sourceUrl: "https://example.com/unbound.jpg"
+          }]
+        }
+      }
+    );
+    await expect(
+      backend(wrongSourceClient, undefined, reader).getDownload("reference-1")
+    ).rejects.toThrow("校验参考资产包边界");
+
+    const oversized = 5 * 1024 * 1024 + 1;
+    const oversizedClient = new FakeRequester().respond(
+      CONSOLE_CONTROL_METHODS.downloadGet,
+      {
+        ...manifest,
+        sizeBytes: oversized,
+        assets: [{ ...manifest.assets[0], sizeBytes: oversized }],
+        referencePack: {
+          ...manifest.referencePack,
+          assets: [{ ...manifest.referencePack.assets[0], sizeBytes: oversized }]
+        }
+      }
+    );
+    await expect(
+      backend(oversizedClient, undefined, reader).getDownload("reference-1")
+    ).rejects.toThrow("校验下载清单");
   });
 
   it("sends upload bytes only through the dedicated staging channel", async () => {

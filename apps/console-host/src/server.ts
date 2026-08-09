@@ -324,12 +324,82 @@ function parseExpectedRevision(value: unknown): number {
 
 function parseTaskInput(value: unknown): SubmitTaskInput {
   const record = asRecord(value);
+  const allowed = new Set(["decision", "note", "referenceCuration"]);
+  if (Object.keys(record).some((key) => !allowed.has(key))) {
+    throw new HttpError(400, "INVALID_REQUEST", "任务处理结果包含未知字段。");
+  }
   const decision = requiredString(record, "decision", 256);
   const note = record.note;
   if (note !== undefined && (typeof note !== "string" || note.length > 4000)) {
     throw new HttpError(400, "INVALID_REQUEST", "备注内容无效。");
   }
-  return { decision, ...(typeof note === "string" ? { note } : {}) };
+  const referenceCuration = record.referenceCuration;
+  if (referenceCuration === undefined) {
+    return { decision, ...(typeof note === "string" ? { note } : {}) };
+  }
+  const curation = asRecord(referenceCuration);
+  if (
+    decision !== "publish_selection" ||
+    note !== undefined ||
+    Object.keys(curation).length !== 1 ||
+    !Array.isArray(curation.selectedAssets) ||
+    curation.selectedAssets.length < 1 ||
+    curation.selectedAssets.length > 20
+  ) {
+    throw new HttpError(400, "INVALID_REQUEST", "参考图片策展结果无效。");
+  }
+  const roles = new Set([
+    "COMPOSITION_TEMPLATE",
+    "PACKAGING_FACT",
+    "PRODUCT_FACT",
+    "TEXTURE_MATERIAL"
+  ]);
+  const selectedAssets = curation.selectedAssets.map((value) => {
+    const item = asRecord(value);
+    if (
+      Object.keys(item).some(
+        (key) =>
+          !["assetId", "role", "reason", "prohibitedInferences"].includes(key)
+      ) ||
+      Object.keys(item).length !== 4 ||
+      typeof item.assetId !== "string" ||
+      item.assetId.length < 1 ||
+      item.assetId.length > 300 ||
+      typeof item.role !== "string" ||
+      !roles.has(item.role) ||
+      typeof item.reason !== "string" ||
+      item.reason.length < 1 ||
+      item.reason.length > 500 ||
+      !Array.isArray(item.prohibitedInferences) ||
+      item.prohibitedInferences.length < 1 ||
+      item.prohibitedInferences.length > 10 ||
+      new Set(item.prohibitedInferences).size !== item.prohibitedInferences.length ||
+      item.prohibitedInferences.some(
+        (entry) =>
+          typeof entry !== "string" || entry.length < 1 || entry.length > 300
+      )
+    ) {
+      throw new HttpError(400, "INVALID_REQUEST", "参考图片策展结果无效。");
+    }
+    return {
+      assetId: item.assetId,
+      role: item.role as
+        | "COMPOSITION_TEMPLATE"
+        | "PACKAGING_FACT"
+        | "PRODUCT_FACT"
+        | "TEXTURE_MATERIAL",
+      reason: item.reason,
+      prohibitedInferences: [...item.prohibitedInferences] as string[]
+    };
+  });
+  if (new Set(selectedAssets.map((item) => item.assetId)).size !== selectedAssets.length) {
+    throw new HttpError(400, "INVALID_REQUEST", "参考图片策展结果存在重复图片。");
+  }
+  return {
+    decision,
+    ...(typeof note === "string" ? { note } : {}),
+    referenceCuration: { selectedAssets }
+  };
 }
 
 function parseLeaseInput(value: unknown): StagingLeaseRequest {
@@ -872,6 +942,29 @@ export async function startConsoleHost(
                 }))
               : downloads
           );
+          return;
+        }
+        const downloadAssetMatch =
+          /^\/api\/downloads\/([^/]+)\/assets\/([^/]+)$/.exec(path);
+        if (request.method === "GET" && downloadAssetMatch) {
+          getSession(request);
+          if (accessMode === "viewer") {
+            throw new HttpError(
+              403,
+              "VIEWER_PREVIEW_FORBIDDEN",
+              "远程只读会话尚未获得受限图片预览授权。"
+            );
+          }
+          const asset = await options.backend.getDownloadAsset(
+            decodeURIComponent(downloadAssetMatch[1]!),
+            decodeURIComponent(downloadAssetMatch[2]!)
+          );
+          response.statusCode = 200;
+          response.setHeader("Content-Type", asset.mediaType);
+          response.setHeader("Content-Length", String(asset.body.byteLength));
+          response.setHeader("Cache-Control", "private, no-store");
+          response.setHeader("Content-Disposition", "inline");
+          response.end(asset.body);
           return;
         }
         const downloadMatch = /^\/api\/downloads\/([^/]+)$/.exec(path);

@@ -1,15 +1,15 @@
 # BPA 长期产品执行状态 v1
 
 > 文档类别：当前执行状态与阶段证据索引。
-> 初始记录时间：2026-08-06；最近更新：2026-08-09。
+> 初始记录时间：2026-08-06；最近更新：2026-08-10。
 > 权威等级：current-state。本文件记录"现在做到哪里"，产品边界和阶段顺序分别以
 > `docs/normative/bpa-product-form-v1.md` 与 `docs/normative/bpa-roadmap-v1.md` 为准。
 
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- Git 基线：截至 2026-08-09，PR #2–#26 均已在 required checks 通过后进入 `main`；
-  最新基线为 PR #26 merge commit `8999fbfa49de45292274a59f6ebe2319c01bbeda`。阶段 0 结构收敛、资源观测、单浏览器常驻候选、
+- Git 基线：截至 2026-08-10，PR #2–#31 均已在 required checks 通过后进入 `main`；
+  最新基线为 PR #31 merge commit `a54be4e514d8632301b1fe6abf1c702b486147f6`。阶段 0 结构收敛、资源观测、单浏览器常驻候选、
   爆款图片来源闭包校验、体验分事实链和清退商品 Mac Runtime 候选均已进入主线。
 - GitHub `main` 已启用管理员同样受约束的 Branch Protection：必须走 Pull Request、
   与主线同步、解决 review conversation，并通过 macOS、Windows、性能、双架构发布、
@@ -438,11 +438,28 @@ plist、Native Host manifest、Extension 与 v12 数据库，删除了新 Runtim
 
 ### 5.3 爆款图片证据流
 
-当前证据：
+当前代码候选已经删除只信任预制 `sourceRunId`、本地 path 和 SHA 的
+`ecommerce.evidence-chain-replay` 旧执行路径，并以
+`ecommerce.cross-platform-evidence-probe@2.0.0` 形成单一正式入口：
 
-- 已有 `ecommerce.evidence-chain-replay` Workflow；
-- 已有证据评估、可比池、参考包和内容寻址相关领域能力；
-- 已有预制输入 fixture，但它不能证明真实页面图片资产已采集并可复用。
+- Engine 可冻结每个 Browser Call 返回的 Runtime Evidence，并通过
+  `${steps.<key>.evidence}` 把不可变 EvidenceRef 绑定给下游；恢复 checkpoint 后绑定不变；
+- 三平台搜索结果先保持 E1 可见事实，再由独立 `ecommerce-evidence` Provider 核对
+  同 Run、Evidence digest、平台、商品、页面 URL 和图片 URL；只允许固定公共图片 CDN，
+  单图最大 5 MiB、单包最多 20 张；
+- 下载内容按 SHA-256 写入 BPA CAS，SourceRecord、AssetRecord、Browser Evidence 和 Export
+  保留可追溯关系；业务输入不能指定权威 Run lineage；
+- Operator Console 任务中心会投影本 Run 的 CAS 候选图；人工必须逐图确认
+  `COMPOSITION_TEMPLATE`、`PACKAGING_FACT`、`PRODUCT_FACT` 或 `TEXTURE_MATERIAL`
+  角色、采用理由和禁止推断，Core 再从角色生成受控允许迁移维度，未确认不发布；
+- 发布物固定为 `rightsStatus=not_assessed`、`allowedUse=internal_reference_only`，
+  Console Host 从本机 CAS 回读并重新校验大小和 SHA-256 后生成 ZIP；Operator 可安全预览，
+  Viewer 对受限预览和下载均为 403，不存在控制协议传输大文件或外发回退。
+
+本机代码验收已覆盖三平台 Evidence→3 张 CAS 图片→人工选择 1 张→内部参考 Export 的
+真实 Runtime/SQLite/Console Assistance/候选预览/下载纵切，以及 Evidence URL 漂移、摘要、
+策展结构和 viewer 权限反例。
+这仍不是已登录真实 Chrome、真实平台图片下载、来源授权或生产部署证据。
 
 2026-08-07 对归档的 2026-07-29 预包装煎饼 smoke 包执行了新的只读闭包校验：
 3 个入选主图均能在各自来源 manifest 中找到，文件签名、媒体类型和 SHA-256 与
@@ -451,8 +468,9 @@ Workflow fixture 一致，且来源 URL 均属于抖音商品图片 CDN。闭包
 内部参考，不能写成“来源授权已完成”。该校验也没有把原图导入 BPA CAS，不能据此声称
 控制台已经可以下载参考包。
 
-剩余验收：在明确授权和 Page Binding 下采集原图、来源、时间、业务指标与页面证据，
-形成可下载的参考资产包，并完成回放、去重、权限、失效和 Web 控制台展示。
+剩余验收：在明确 Page Binding 和人工确认下做一次真实三平台灰度；核对页面风控、
+图片 CDN 重定向、CAS 留存/失效、Console 预览与 ZIP 内容。权利未评估时始终只允许
+`internal_reference_only`，任何外发请求必须停止并进入独立权利审核，不得由灰度自动升级。
 
 ## 6. GitHub 提交规则
 

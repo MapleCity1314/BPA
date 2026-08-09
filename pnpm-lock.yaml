@@ -148,6 +148,9 @@ importers:
 
   apps/console-host:
     dependencies:
+      '@bpa/asset-store-local':
+        specifier: workspace:*
+        version: link:../../packages/asset-store-local
       '@bpa/control-client':
         specifier: workspace:*
         version: link:../../packages/control-client
@@ -157,6 +160,9 @@ importers:
       '@bpa/platform-runtime':
         specifier: workspace:*
         version: link:../../packages/platform-runtime
+      fflate:
+        specifier: ^0.8.2
+        version: 0.8.3
     devDependencies:
       '@types/node':
         specifier: ^24.10.1

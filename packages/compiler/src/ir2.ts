@@ -102,7 +102,7 @@ const FORBIDDEN_AUTHORING_KEYS = new Set([
   "screeny"
 ]);
 const BINDING_PATTERN =
-  /^\$\{(input|item|index|steps\.([a-z][a-z0-9_]*)\.output)((?:\.[A-Za-z_][A-Za-z0-9_]*)*)\}$/;
+  /^\$\{(input|item|index|steps\.([a-z][a-z0-9_]*)\.(output|evidence))((?:\.[A-Za-z_][A-Za-z0-9_]*)*)\}$/;
 
 function splitRef(reference: string): [string, string] {
   const at = reference.lastIndexOf("@");
@@ -207,7 +207,7 @@ function compileBindingString(value: string, path: string): BindingValue {
   const match = BINDING_PATTERN.exec(value);
   if (!match) return { kind: "literal", value };
   const root = match[1]!;
-  const segments = pathSegments(match[3] ?? "");
+  const segments = pathSegments(match[4] ?? "");
   if (root === "index") {
     throw new WorkflowCompileError([
       `${path} uses index binding; IR2 requires stable itemKey data instead`
@@ -221,7 +221,7 @@ function compileBindingString(value: string, path: string): BindingValue {
   }
   return {
     kind: "reference",
-    source: "step_output",
+    source: match[3] === "evidence" ? "step_evidence" : "step_output",
     stepKey: match[2]!,
     path: segments
   };
