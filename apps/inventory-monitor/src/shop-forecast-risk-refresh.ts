@@ -5,7 +5,11 @@ import {
   type ChannelShareEstimate,
   type DemandForecast
 } from "@bpa/inventory-domain";
-import type { InventoryRepository, LeaseFence } from "./repository.js";
+import type {
+  InventoryEffectIdentity,
+  InventoryRepository,
+  LeaseFence
+} from "./repository.js";
 
 export class InventoryShopForecastRiskPartialCommitError extends Error {
   readonly code = "INVENTORY_SHOP_FORECAST_RISK_PARTIAL_COMMIT";
@@ -68,6 +72,7 @@ export async function refreshShopForecastRisk(input: {
   readonly unresolvedSnapshots: number;
   readonly snapshotReceipts: readonly unknown[];
   readonly lease: LeaseFence;
+  readonly effect:InventoryEffectIdentity;
   readonly repository: InventoryRepository;
 }): Promise<Record<string, unknown>> {
   const attemptedSnapshots = count(input.attemptedSnapshots,"attemptedSnapshots");
@@ -96,6 +101,27 @@ export async function refreshShopForecastRisk(input: {
     new Set(succeeded.map(({ snapshotId }) => snapshotId)).size !== succeeded.length) {
     throw new Error("snapshots receipts must be unique");
   }
+  let failedProducts = 0;
+  let forecastAttempted = 0;
+  let forecastPersisted = 0;
+  let riskAttempted = 0;
+  let riskPersisted = 0;
+  const severities = { normal:0,warning:0,critical:0,unknown:0 };
+  const progress = () => ({
+    attemptedProducts:succeeded.length,
+    completedProducts:riskPersisted,
+    partialProducts:0,
+    failedProducts,
+    forecastWrites:{ attempted:forecastAttempted,persisted:forecastPersisted },
+    riskWrites:{ attempted:riskAttempted,persisted:riskPersisted },
+    severities
+  });
+  const replay = await input.repository.beginInventoryEffect(
+    input.effect,"inventory.shop.forecast-risk.refresh",{
+      ...progress()
+    },input.lease
+  );
+  if (replay) return replay;
   const verified = await input.repository.verifiedSnapshotFacts({
     shopId:input.shop.id,
     receipts:succeeded
@@ -104,20 +130,22 @@ export async function refreshShopForecastRisk(input: {
     `${entry.productId}\u0000${entry.snapshotId}`,
     entry
   ]));
-  let failedProducts = 0;
-  let forecastAttempted = 0;
-  let forecastPersisted = 0;
-  let riskAttempted = 0;
-  let riskPersisted = 0;
-  const severities = { normal:0,warning:0,critical:0,unknown:0 };
   for (const { productId,snapshotId } of succeeded) {
     const verifiedSnapshot = verifiedByReceipt.get(`${productId}\u0000${snapshotId}`);
     if (!verifiedSnapshot) {
       failedProducts += 1;
+      await input.repository.recordInventoryEffectItem(
+        input.effect,{
+          productId,snapshotId,status:"failed",code:"SNAPSHOT_RECEIPT_NOT_FOUND",
+          forecastAttempted:0,riskAttempted:0
+        },
+        input.lease
+      );
       continue;
     }
     const envelope = verifiedSnapshot.envelope;
     let productForecastAttempted = 0;
+    let productRiskAttempted = 0;
     try {
       const forecastInputs = await input.repository.forecastInputs({
         shopId: input.shop.id,
@@ -167,9 +195,11 @@ export async function refreshShopForecastRisk(input: {
       productForecastAttempted = persistableForecasts.length;
       forecastAttempted += productForecastAttempted;
       riskAttempted += 1;
+      productRiskAttempted = 1;
       const persisted = await input.repository.persistForecastRiskProduct({
         forecasts: persistableForecasts,
-        risk: { snapshotId,shopId:input.shop.id,productId,evaluation }
+        risk: { snapshotId,shopId:input.shop.id,productId,evaluation },
+        effect:input.effect
       },input.lease);
       forecastPersisted += persisted.forecastIds.length;
       riskPersisted += 1;
@@ -177,10 +207,17 @@ export async function refreshShopForecastRisk(input: {
     } catch (error) {
       if (uncertainTransaction(error)) throw new InventoryShopForecastRiskPartialCommitError();
       failedProducts += 1;
+      await input.repository.recordInventoryEffectItem(
+        input.effect,{
+          productId,snapshotId,status:"failed",code:errorCode(error),
+          forecastAttempted:productForecastAttempted,riskAttempted:productRiskAttempted
+        },
+        input.lease
+      );
     }
   }
   const completedProducts = riskPersisted;
-  return {
+  const result = {
     status: failedProducts === 0 ? "complete" : "partial",
     attemptedProducts:succeeded.length,
     completedProducts,
@@ -190,4 +227,8 @@ export async function refreshShopForecastRisk(input: {
     riskWrites:{ attempted:riskAttempted,persisted:riskPersisted },
     severities
   };
+  await input.repository.completeForecastRiskEffect(
+    input.effect,result,input.lease
+  );
+  return result;
 }

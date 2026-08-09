@@ -1092,6 +1092,13 @@ export interface TriggerAttemptRecord {
   updatedAt: string;
 }
 
+export interface TriggeredWorkflowExecutionRecord {
+  scheduledAt: string;
+  occurrenceStatus: TriggerOccurrenceStatus;
+  occurrenceTerminalOutcome?: TriggerTerminalOutcome;
+  run?: RunRecord;
+}
+
 export interface TriggerScheduleStateRecord {
   triggerId: string;
   triggerVersion: string;
@@ -1192,6 +1199,75 @@ export interface ExternalDomainLeaseStore {
   listExternalDomainLeasesNeedingRelease(): ExternalDomainLeaseRecord[];
 }
 
+export interface RuntimeInvocationOutboxRecord {
+  readonly outboxId: string;
+  readonly invocation: JsonValue;
+  readonly createdAt: string;
+  readonly acknowledgedAt?: string;
+}
+
+export type InventoryEffectReconciliationClassification =
+  | "all_terminal"
+  | "not_committed"
+  | "abandoned_staging"
+  | "confirmed_partial"
+  | "mixed";
+
+export interface InventoryEffectReconciliationRecord {
+  readonly requestId: string;
+  readonly resolutionToken: string;
+  readonly runId: string;
+  readonly ownerId: string;
+  readonly fencingToken: number;
+  readonly leaseRevision: number;
+  readonly expectedEffectSetDigest: string;
+  readonly remoteReportDigest: string;
+  readonly expectedEffectCount: number;
+  readonly remoteEffectCount: number;
+  readonly succeededEffectCount: number;
+  readonly failedEffectCount: number;
+  readonly missingEffectCount: number;
+  readonly succeededItemCount: number;
+  readonly failedItemCount: number;
+  readonly classification: InventoryEffectReconciliationClassification;
+  readonly inspectedAt: string;
+  readonly resolvedAt: string;
+  readonly resolvedBy: string;
+}
+
+export interface InventoryEffectReconciliationStore {
+  listRuntimeInvocationsForRun(runId: string): RuntimeInvocationOutboxRecord[];
+  commitInventoryEffectReconciliation(input: {
+    readonly requestId: string;
+    readonly resolutionToken: string;
+    readonly runId: string;
+    readonly ownerId: string;
+    readonly fencingToken: number;
+    readonly expectedLeaseRevision: number;
+    readonly expectedEffectSetDigest: string;
+    readonly remoteReportDigest: string;
+    readonly expectedEffectCount: number;
+    readonly remoteEffectCount: number;
+    readonly succeededEffectCount: number;
+    readonly failedEffectCount: number;
+    readonly missingEffectCount: number;
+    readonly succeededItemCount: number;
+    readonly failedItemCount: number;
+    readonly classification: InventoryEffectReconciliationClassification;
+    readonly inspectedAt: string;
+    readonly resolvedAt: string;
+    readonly resolvedBy: string;
+  }): { readonly status: "created" | "duplicate"; readonly record: InventoryEffectReconciliationRecord };
+  getInventoryEffectReconciliation(
+    requestId: string
+  ): InventoryEffectReconciliationRecord | undefined;
+  getInventoryEffectReconciliationByResolutionToken(
+    resolutionToken: string
+  ): InventoryEffectReconciliationRecord | undefined;
+  getLatestInventoryEffectReconciliation():
+    InventoryEffectReconciliationRecord | undefined;
+}
+
 export interface BrowserControlLeaseRecord {
   resourceId: string;
   ownerId: string;
@@ -1282,6 +1358,11 @@ export interface TriggerStore {
   getTriggerAttempt(attemptId: string): TriggerAttemptRecord | undefined;
   listTriggerAttempts(occurrenceId: string): TriggerAttemptRecord[];
   listActiveTriggerAttempts(triggerId?: string): TriggerAttemptRecord[];
+  getLatestTriggeredWorkflowExecution(input: {
+    appId: string;
+    workflowId: string;
+    workflowVersion: string;
+  }): TriggeredWorkflowExecutionRecord | undefined;
   getTriggerScheduleState(
     triggerId: string,
     triggerVersion: string
@@ -1768,7 +1849,8 @@ export interface Persistence
     BrowserObservationStore,
     GatewayCommandStore,
     TriggerStore,
-    ExternalDomainLeaseStore {
+    ExternalDomainLeaseStore,
+    InventoryEffectReconciliationStore {
   health(): {
     adapter: string;
     schemaVersion: number;

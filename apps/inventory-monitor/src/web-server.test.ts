@@ -66,6 +66,7 @@ describe("inventory review server", () => {
       expect(pageBody).toContain("风险处置队列");
       expect(pageBody.indexOf("风险处置队列")).toBeLessThan(pageBody.indexOf("P90 预测回测"));
       expect(pageBody).toContain("P90 预测回测");
+      expect(pageBody).toContain("正式库存周期");
       expect(pageBody).not.toContain("影子");
       const clientScript = await fetch(`http://127.0.0.1:${server.port}/app.js`).then((response) => response.text());
       expect(clientScript).toContain("data-copy-id");
@@ -80,8 +81,9 @@ describe("inventory review server", () => {
       expect(clientScript).toContain("SESSION_REQUIRED");
       expect(clientScript).toContain("系统将在 5 秒后自动重试");
       expect(clientScript).toContain("scheduleReconnect");
-      expect(clientScript).toContain("部分成功");
-      expect(clientScript).toContain("已自动回退到历史订单同步");
+      expect(clientScript).toContain("部分完成");
+      expect(clientScript).toContain("未终态前不回显上一轮健康结论");
+      expect(clientScript).not.toContain("schedulesHtml");
       expect(clientScript).toContain("dataQualityGroups");
       expect(clientScript).toContain("运行与控制提醒");
       expect(clientScript).toContain("控制记录待核对");
@@ -173,11 +175,26 @@ describe("inventory review server", () => {
   it("isolates overview queries to the selected configured shop", async () => {
     const repository = {
       collectionControlHealth:vi.fn(async () => healthyControl()),
-      overview: vi.fn(async (shopId: string) => ({ shopId,counts:{ products:0,skus:0,incidents:0 } })),
+      overview: vi.fn(async (shopId: string) => ({
+        shopId,
+        counts:{ products:0,skus:0,incidents:0 },
+        schedules:[{ status:"succeeded",scheduled_for:"2026-08-09T07:00:00.000Z" }]
+      })),
       reviewIncident: vi.fn(async () => undefined)
     };
-    const server = await startInventoryWebServer({
-      repository,
+      const server = await startInventoryWebServer({
+        repository,
+        runtimeProductionCycleSummary:vi.fn(async () => ({
+          state:"in-progress" as const,
+          workflowVersion:"1.0.0" as const,
+          scheduledAt:"2026-08-10T07:00:00.000Z",
+          observedAt:null,
+          reasonCode:null,
+          coverage:null,
+          inventory:null,
+          risk:null,
+          attentionRequired:false
+        })),
       shops:[
         { id:"shop-1",name:"一号店",browserInstanceId:"browser-1" },
         { id:"shop-2",name:"二号店",browserInstanceId:"browser-2" }
@@ -195,11 +212,14 @@ describe("inventory review server", () => {
         headers:{ cookie:cookie! }
       });
       expect(selected.status).toBe(200);
-      await expect(selected.json()).resolves.toMatchObject({
+      const selectedBody = await selected.json() as Record<string,unknown>;
+      expect(selectedBody).toMatchObject({
         shopId:"shop-2",
         selectedShop:{ id:"shop-2",name:"二号店" },
-        shops:[{ id:"shop-1",name:"一号店" },{ id:"shop-2",name:"二号店" }]
+        shops:[{ id:"shop-1",name:"一号店" },{ id:"shop-2",name:"二号店" }],
+        productionCycle:{ state:"in-progress",scheduledAt:"2026-08-10T07:00:00.000Z" }
       });
+      expect(selectedBody).not.toHaveProperty("schedules");
       expect(repository.overview).toHaveBeenLastCalledWith("shop-2");
       const rejected = await fetch(`http://127.0.0.1:${server.port}/api/overview?shopId=shop-3`,{
         headers:{ cookie:cookie! }
@@ -362,6 +382,9 @@ describe("inventory review server", () => {
       repository,shopId:"shop-1",port:0,
       runtimeAttentionReminders:vi.fn(async () => {
         throw new Error("socket /private/internal/core.sock unavailable");
+      }),
+      runtimeProductionCycleSummary:vi.fn(async () => {
+        throw new Error("socket /private/internal/core.sock unavailable");
       })
     });
     try {
@@ -379,6 +402,10 @@ describe("inventory review server", () => {
         title:"BPA 触发状态暂不可读",
         notificationEligible:false
       })]));
+      expect(overview.productionCycle).toEqual({
+        state:"unavailable",
+        reasonCode:"CORE_UNAVAILABLE"
+      });
       expect(JSON.stringify(overview)).not.toContain("/private/internal/core.sock");
     } finally {
       await server.close();

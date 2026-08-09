@@ -1932,5 +1932,39 @@ export const migrations: Migration[] = [
         ON external_domain_leases(state, expires_at, updated_at, request_id)
         WHERE state != 'released';
     `
+  },
+  {
+    version: 25,
+    sql: `
+      CREATE TABLE external_domain_lease_reconciliations (
+        request_id TEXT PRIMARY KEY
+          REFERENCES external_domain_leases(request_id) ON DELETE RESTRICT,
+        resolution_token TEXT NOT NULL UNIQUE,
+        workflow_run_id TEXT NOT NULL
+          REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        owner_id TEXT NOT NULL,
+        fencing_token INTEGER NOT NULL CHECK (fencing_token >= 1),
+        lease_revision INTEGER NOT NULL CHECK (lease_revision >= 0),
+        expected_effect_set_digest TEXT NOT NULL,
+        remote_report_digest TEXT NOT NULL,
+        expected_effect_count INTEGER NOT NULL CHECK (expected_effect_count >= 0),
+        remote_effect_count INTEGER NOT NULL CHECK (remote_effect_count >= 0),
+        succeeded_effect_count INTEGER NOT NULL CHECK (succeeded_effect_count >= 0),
+        failed_effect_count INTEGER NOT NULL CHECK (failed_effect_count >= 0),
+        missing_effect_count INTEGER NOT NULL CHECK (missing_effect_count >= 0),
+        succeeded_item_count INTEGER NOT NULL CHECK (succeeded_item_count >= 0),
+        failed_item_count INTEGER NOT NULL CHECK (failed_item_count >= 0),
+        classification TEXT NOT NULL CHECK (classification IN (
+          'all_terminal', 'not_committed', 'abandoned_staging',
+          'confirmed_partial', 'mixed'
+        )),
+        inspected_at TEXT NOT NULL,
+        resolved_at TEXT NOT NULL,
+        resolved_by TEXT NOT NULL
+      ) STRICT;
+
+      CREATE INDEX external_domain_lease_reconciliations_state
+        ON external_domain_lease_reconciliations(resolved_at, request_id);
+    `
   }
 ];

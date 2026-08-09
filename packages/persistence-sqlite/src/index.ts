@@ -70,6 +70,8 @@ import {
   type ExecutionEventRecord,
   type ExternalDomainLeaseMutationResult,
   type ExternalDomainLeaseRecord,
+  type InventoryEffectReconciliationClassification,
+  type InventoryEffectReconciliationRecord,
   type GatewayCommandRecord,
   type InboxMessageRecord,
   type IterationInstanceRecord,
@@ -94,6 +96,7 @@ import {
   type RunPlanSnapshotRecord,
   type RunStatus,
   type RunTransitionInput,
+  type RuntimeInvocationOutboxRecord,
   type SucceededRunBusinessAttentionMarker,
   type SaveCandidateBundleInput,
   type ResourceAuthentication,
@@ -3890,6 +3893,38 @@ export class SqlitePersistence implements Persistence {
     return rows.map((row) => this.#readOutbox(row));
   }
 
+  listRuntimeInvocationsForRun(runId: string): RuntimeInvocationOutboxRecord[] {
+    assertAuthoringId(runId, "runId");
+    const rows = this.#db
+      .prepare(
+        `SELECT id,payload_json,created_at,acknowledged_at
+         FROM engine_outbox
+         WHERE topic='runtime.invoke'
+           AND json_extract(payload_json,'$.kind')='runtime.invoke'
+           AND json_extract(payload_json,'$.invocation.identity.runId')=?
+         ORDER BY created_at,id`
+      )
+      .all(runId) as SqlRow[];
+    return rows.map((row) => {
+      const payload = parseJson(row.payload_json) as {
+        invocation?: unknown;
+      };
+      if (!payload || typeof payload !== "object" ||
+        payload.invocation === undefined) {
+        throw new Error("Runtime invocation outbox payload is invalid");
+      }
+      assertJsonCompatible(payload.invocation, "runtime invocation");
+      return {
+        outboxId:String(row.id),
+        invocation:payload.invocation as JsonValue,
+        createdAt:String(row.created_at),
+        ...(row.acknowledged_at == null
+          ? {}
+          : { acknowledgedAt:String(row.acknowledged_at) })
+      };
+    });
+  }
+
   listPendingGatewayCommands(afterCommandSeq = 0): GatewayCommandRecord[] {
     const rows = this.#db
       .prepare(
@@ -6591,6 +6626,169 @@ export class SqlitePersistence implements Persistence {
     ).map((row) => this.#readExternalDomainLease(row));
   }
 
+  commitInventoryEffectReconciliation(input: {
+    requestId: string;
+    resolutionToken: string;
+    runId: string;
+    ownerId: string;
+    fencingToken: number;
+    expectedLeaseRevision: number;
+    expectedEffectSetDigest: string;
+    remoteReportDigest: string;
+    expectedEffectCount: number;
+    remoteEffectCount: number;
+    succeededEffectCount: number;
+    failedEffectCount: number;
+    missingEffectCount: number;
+    succeededItemCount: number;
+    failedItemCount: number;
+    classification: InventoryEffectReconciliationClassification;
+    inspectedAt: string;
+    resolvedAt: string;
+    resolvedBy: string;
+  }): { status: "created" | "duplicate"; record: InventoryEffectReconciliationRecord } {
+    assertAuthoringId(input.requestId,"requestId");
+    assertDigest(input.resolutionToken,"resolutionToken");
+    assertAuthoringId(input.runId,"runId");
+    assertAuthoringId(input.ownerId,"ownerId");
+    assertRevision(input.expectedLeaseRevision,"expectedLeaseRevision");
+    assertDigest(input.expectedEffectSetDigest,"expectedEffectSetDigest");
+    assertDigest(input.remoteReportDigest,"remoteReportDigest");
+    assertTimestamp(input.inspectedAt,"inspectedAt");
+    assertTimestamp(input.resolvedAt,"resolvedAt");
+    assertAuthoringId(input.resolvedBy,"resolvedBy");
+    if (Date.parse(input.resolvedAt) < Date.parse(input.inspectedAt)) {
+      throw new Error("resolvedAt must not be before inspectedAt");
+    }
+    if (!Number.isSafeInteger(input.fencingToken) || input.fencingToken < 1) {
+      throw new Error("fencingToken must be a positive safe integer");
+    }
+    const counts = [
+      input.expectedEffectCount,input.remoteEffectCount,
+      input.succeededEffectCount,input.failedEffectCount,input.missingEffectCount,
+      input.succeededItemCount,input.failedItemCount
+    ];
+    if (counts.some((value) => !Number.isSafeInteger(value) || value < 0) ||
+      input.remoteEffectCount !== input.succeededEffectCount + input.failedEffectCount ||
+      input.expectedEffectCount !== input.remoteEffectCount + input.missingEffectCount) {
+      throw new Error("Inventory effect reconciliation counts do not conserve");
+    }
+    const existing = this.getInventoryEffectReconciliation(input.requestId);
+    if (existing) {
+      const stableIdentityMatches =
+        existing.resolutionToken === input.resolutionToken &&
+        existing.runId === input.runId && existing.ownerId === input.ownerId &&
+        existing.fencingToken === input.fencingToken &&
+        existing.leaseRevision === input.expectedLeaseRevision &&
+        existing.expectedEffectSetDigest === input.expectedEffectSetDigest &&
+        existing.remoteReportDigest === input.remoteReportDigest &&
+        existing.expectedEffectCount === input.expectedEffectCount &&
+        existing.remoteEffectCount === input.remoteEffectCount &&
+        existing.succeededEffectCount === input.succeededEffectCount &&
+        existing.failedEffectCount === input.failedEffectCount &&
+        existing.missingEffectCount === input.missingEffectCount &&
+        existing.succeededItemCount === input.succeededItemCount &&
+        existing.failedItemCount === input.failedItemCount &&
+        existing.classification === input.classification;
+      const currentLease = this.getExternalDomainLease(input.requestId);
+      if (stableIdentityMatches && currentLease?.state === "released") {
+        return { status:"duplicate",record:existing };
+      }
+      throw new ExternalDomainLeaseConflictError(
+        "Inventory effect reconciliation already differs"
+      );
+    }
+    const lease = this.getExternalDomainLease(input.requestId);
+    const run = this.getRun(input.runId);
+    const attempt = lease?.triggerAttemptId
+      ? this.getTriggerAttempt(lease.triggerAttemptId)
+      : undefined;
+    if (!lease || lease.state !== "reconciliation_required" ||
+      lease.revision !== input.expectedLeaseRevision ||
+      lease.runId !== input.runId || lease.ownerId !== input.ownerId ||
+      lease.triggerAttemptId !== input.ownerId ||
+      lease.fencingToken !== input.fencingToken ||
+      run?.status !== "uncertain" || attempt?.status !== "running" ||
+      attempt.workflowRunId !== input.runId) {
+      throw new ExternalDomainLeaseConflictError(
+        "Inventory effect reconciliation ownership is invalid"
+      );
+    }
+    return this.#db.transaction(() => {
+      this.#db.prepare(
+        `INSERT INTO external_domain_lease_reconciliations(
+           request_id,resolution_token,workflow_run_id,owner_id,fencing_token,lease_revision,
+           expected_effect_set_digest,remote_report_digest,
+           expected_effect_count,remote_effect_count,succeeded_effect_count,
+           failed_effect_count,missing_effect_count,succeeded_item_count,
+           failed_item_count,classification,inspected_at,resolved_at,resolved_by
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).run(
+        input.requestId,input.resolutionToken,input.runId,input.ownerId,input.fencingToken,
+        input.expectedLeaseRevision,input.expectedEffectSetDigest,
+        input.remoteReportDigest,input.expectedEffectCount,input.remoteEffectCount,
+        input.succeededEffectCount,input.failedEffectCount,input.missingEffectCount,
+        input.succeededItemCount,input.failedItemCount,input.classification,
+        input.inspectedAt,input.resolvedAt,input.resolvedBy
+      );
+      this.#inject("external_domain_lease_reconciliation.resolve.after_audit");
+      const updatedLease = this.#db.prepare(
+        `UPDATE external_domain_leases
+         SET state='released',revision=revision+1,released_at=?,updated_at=?,
+             diagnostic='External inventory effects were reconciled.'
+         WHERE request_id=? AND revision=? AND state='reconciliation_required'`
+      ).run(
+        input.resolvedAt,input.resolvedAt,input.requestId,input.expectedLeaseRevision
+      );
+      if (updatedLease.changes !== 1) {
+        throw new RevisionConflictError("External domain lease revision changed");
+      }
+      this.#insertAudit(
+        "external-domain-lease.reconciliation.resolved",
+        input.resolvedBy,
+        input.requestId,
+        {
+          runId:input.runId,
+          expectedEffectSetDigest:input.expectedEffectSetDigest,
+          remoteReportDigest:input.remoteReportDigest,
+          classification:input.classification
+        }
+      );
+      return {
+        status:"created" as const,
+        record:this.getInventoryEffectReconciliation(input.requestId)!
+      };
+    }).immediate();
+  }
+
+  getInventoryEffectReconciliation(
+    requestId: string
+  ): InventoryEffectReconciliationRecord | undefined {
+    const row = this.#db.prepare(
+      "SELECT * FROM external_domain_lease_reconciliations WHERE request_id=?"
+    ).get(requestId) as SqlRow | undefined;
+    return row ? this.#readInventoryEffectReconciliation(row) : undefined;
+  }
+
+  getInventoryEffectReconciliationByResolutionToken(
+    resolutionToken: string
+  ): InventoryEffectReconciliationRecord | undefined {
+    assertDigest(resolutionToken,"resolutionToken");
+    const row = this.#db.prepare(
+      "SELECT * FROM external_domain_lease_reconciliations WHERE resolution_token=?"
+    ).get(resolutionToken) as SqlRow | undefined;
+    return row ? this.#readInventoryEffectReconciliation(row) : undefined;
+  }
+
+  getLatestInventoryEffectReconciliation():
+    InventoryEffectReconciliationRecord | undefined {
+    const row = this.#db.prepare(
+      `SELECT * FROM external_domain_lease_reconciliations
+       ORDER BY resolved_at DESC,request_id DESC LIMIT 1`
+    ).get() as SqlRow | undefined;
+    return row ? this.#readInventoryEffectReconciliation(row) : undefined;
+  }
+
   acquireTriggerLease(input: {
     concurrencyKey: string;ownerId: string;now: string;ttlSeconds: number;
   }): BrowserControlLeaseRecord | undefined {
@@ -6736,6 +6934,119 @@ export class SqlitePersistence implements Persistence {
           )
           .all(...statuses, limit)) as SqlRow[];
     return rows.map((row) => this.#readRun(row));
+  }
+
+  getLatestTriggeredWorkflowExecution(input: {
+    appId: string;
+    workflowId: string;
+    workflowVersion: string;
+  }): {
+    scheduledAt:string;
+    occurrenceStatus:"pending"|"deferred"|"running"|"terminal";
+    occurrenceTerminalOutcome?:
+      | "complete"|"partial"|"blocked"|"degraded"|"rejected"
+      | "uncertain"|"cancelled"|"failed"|"skipped"|"missed";
+    run?:RunRecord;
+  } | undefined {
+    const appId = input.appId.trim();
+    const workflowId = input.workflowId.trim();
+    const workflowVersion = input.workflowVersion.trim();
+    if (
+      !appId || appId.length > 200 ||
+      !workflowId || workflowId.length > 500 ||
+      !workflowVersion || workflowVersion.length > 100
+    ) {
+      throw new Error("Triggered Workflow execution query is invalid");
+    }
+    const row = this.#db.prepare(
+      `WITH latest_occurrence AS (
+         SELECT occurrence.*
+         FROM trigger_occurrences occurrence
+         INNER JOIN trigger_spec_versions version
+           ON version.trigger_id=occurrence.trigger_id
+          AND version.trigger_version=occurrence.trigger_version
+         WHERE json_extract(version.spec_json,'$.appId')=?
+           AND json_extract(version.spec_json,'$.workflow.id')=?
+           AND json_extract(version.spec_json,'$.workflow.version')=?
+         ORDER BY occurrence.scheduled_at DESC,
+                  occurrence.created_at DESC,
+                  occurrence.occurrence_id DESC
+         LIMIT 1
+       ), latest_attempt AS (
+         SELECT attempt.*
+         FROM trigger_attempts attempt
+         INNER JOIN latest_occurrence occurrence
+           ON occurrence.occurrence_id=attempt.occurrence_id
+         ORDER BY attempt.attempt_number DESC,attempt.attempt_id DESC
+         LIMIT 1
+       )
+       SELECT run.*,
+              occurrence.scheduled_at AS trigger_scheduled_at,
+              occurrence.status AS trigger_occurrence_status,
+              occurrence.terminal_outcome AS trigger_terminal_outcome,
+              attempt.workflow_run_id AS linked_workflow_run_id
+       FROM latest_occurrence occurrence
+       LEFT JOIN latest_attempt attempt ON TRUE
+       LEFT JOIN workflow_runs run ON run.id=attempt.workflow_run_id`
+    ).get(
+      appId,
+      workflowId,
+      workflowVersion
+    ) as (SqlRow & {
+      trigger_scheduled_at:string;
+      trigger_occurrence_status:string;
+      trigger_terminal_outcome:string|null;
+      linked_workflow_run_id:string|null;
+    }) | undefined;
+    if (!row) return undefined;
+    const hasLinkedRun=row.linked_workflow_run_id!=null;
+    const occurrenceStatus=String(row.trigger_occurrence_status);
+    const occurrenceTerminalOutcome=row.trigger_terminal_outcome==null
+      ? undefined
+      : String(row.trigger_terminal_outcome);
+    const allowedOccurrenceStatuses=["pending","deferred","running","terminal"];
+    const allowedTerminalOutcomes=[
+      "complete","partial","blocked","degraded","rejected","uncertain",
+      "cancelled","failed","skipped","missed"
+    ];
+    const runStatus=hasLinkedRun ? String(row.status) : undefined;
+    const expectedRunOutcome:Record<string,string>={
+      succeeded:"complete",
+      uncertain:"uncertain",
+      failed:"failed",
+      rejected:"rejected",
+      cancelled:"cancelled"
+    };
+    const terminalWithoutRunOutcomes=["blocked","failed","skipped","missed"];
+    if (
+      !allowedOccurrenceStatuses.includes(occurrenceStatus) ||
+      (occurrenceStatus==="terminal")!==
+        (occurrenceTerminalOutcome!==undefined) ||
+      (occurrenceTerminalOutcome!==undefined &&
+        !allowedTerminalOutcomes.includes(occurrenceTerminalOutcome)) ||
+      hasLinkedRun && (
+        row.id==null || row.workflow_id!==workflowId ||
+        row.workflow_version!==workflowVersion
+      ) ||
+      (hasLinkedRun && occurrenceStatus!=="running" && occurrenceStatus!=="terminal") ||
+      (hasLinkedRun && occurrenceStatus==="terminal" &&
+        expectedRunOutcome[runStatus!]!==occurrenceTerminalOutcome) ||
+      (!hasLinkedRun && occurrenceStatus==="terminal" &&
+        !terminalWithoutRunOutcomes.includes(occurrenceTerminalOutcome!))
+    ) {
+      throw new Error("Triggered Workflow execution attribution is invalid");
+    }
+    return {
+      scheduledAt:String(row.trigger_scheduled_at),
+      occurrenceStatus:occurrenceStatus as
+        "pending"|"deferred"|"running"|"terminal",
+      ...(occurrenceTerminalOutcome===undefined
+        ? {}
+        : { occurrenceTerminalOutcome:occurrenceTerminalOutcome as
+          | "complete"|"partial"|"blocked"|"degraded"|"rejected"
+          | "uncertain"|"cancelled"|"failed"|"skipped"|"missed" }),
+      ...(hasLinkedRun ? { run:this.#readRun(row) } : {})
+    };
   }
 
   getAttention(id: string): AttentionRecord | undefined {
@@ -9756,6 +10067,33 @@ export class SqlitePersistence implements Persistence {
       ...(row.released_at == null
         ? {}
         : { releasedAt: String(row.released_at) })
+    };
+  }
+
+  #readInventoryEffectReconciliation(
+    row: SqlRow
+  ): InventoryEffectReconciliationRecord {
+    return {
+      requestId:String(row.request_id),
+      resolutionToken:String(row.resolution_token),
+      runId:String(row.workflow_run_id),
+      ownerId:String(row.owner_id),
+      fencingToken:Number(row.fencing_token),
+      leaseRevision:Number(row.lease_revision),
+      expectedEffectSetDigest:String(row.expected_effect_set_digest),
+      remoteReportDigest:String(row.remote_report_digest),
+      expectedEffectCount:Number(row.expected_effect_count),
+      remoteEffectCount:Number(row.remote_effect_count),
+      succeededEffectCount:Number(row.succeeded_effect_count),
+      failedEffectCount:Number(row.failed_effect_count),
+      missingEffectCount:Number(row.missing_effect_count),
+      succeededItemCount:Number(row.succeeded_item_count),
+      failedItemCount:Number(row.failed_item_count),
+      classification:String(row.classification) as
+        InventoryEffectReconciliationClassification,
+      inspectedAt:String(row.inspected_at),
+      resolvedAt:String(row.resolved_at),
+      resolvedBy:String(row.resolved_by)
     };
   }
 

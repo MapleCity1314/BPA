@@ -51,6 +51,120 @@ export interface LeaseFence {
   readonly fencingToken: number;
 }
 
+export type InventoryEffectOperation =
+  | "sales-demand.sync"
+  | "inventory.snapshot.persist"
+  | "inventory.shop.forecast-risk.refresh";
+
+export interface InventoryEffectIdentity {
+  readonly effectId: string;
+  readonly inputDigest: string;
+  readonly identityDigest:string;
+  readonly runId:string;
+  readonly invocationId:string;
+  readonly idempotencyKey:string;
+  readonly leaseRequestId:string;
+}
+
+export interface InventoryEffectReceipt extends InventoryEffectIdentity {
+  readonly operation: InventoryEffectOperation;
+  readonly status: "running" | "succeeded" | "failed";
+  readonly progress: Record<string, unknown>;
+  readonly result: Record<string, unknown> | null;
+  readonly errorCode: string | null;
+  readonly updatedAt: string;
+  readonly completedAt: string | null;
+}
+
+export interface InventoryEffectSummary {
+  readonly effectId:string;
+  readonly operation:InventoryEffectOperation;
+  readonly inputDigest:string;
+  readonly identityDigest:string;
+  readonly runId:string;
+  readonly leaseRequestId:string;
+  readonly status:"running"|"succeeded"|"failed";
+  readonly progressCounts:Readonly<Record<string,number>>;
+  readonly itemCounts:{ readonly succeeded:number;readonly failed:number };
+  readonly resultDigest:string|null;
+  readonly errorCode:string|null;
+  readonly updatedAt:string;
+  readonly completedAt:string|null;
+}
+
+export interface InventoryEffectPage {
+  readonly status:"empty"|"available";
+  readonly items:readonly InventoryEffectSummary[];
+  readonly nextCursor:{
+    readonly operation:InventoryEffectOperation;
+    readonly effectId:string;
+  }|null;
+  readonly totalCount:number;
+  readonly reportDigest:string;
+}
+
+export interface InventoryEffectReconciliationResult {
+  readonly effectId: string;
+  readonly operation: InventoryEffectOperation;
+  readonly status: "succeeded" | "failed";
+  readonly classification:
+    | "already_terminal"
+    | "abandoned_staging"
+    | "not_committed"
+    | "confirmed_partial";
+}
+
+interface ForecastEffectItemRow {
+  readonly status:"succeeded"|"failed";
+  readonly counts:Record<string,unknown>;
+}
+
+function aggregateForecastEffectItems(rows:readonly ForecastEffectItemRow[]) {
+  const number = (counts:Record<string,unknown>,key:string) => {
+    const value = Number(counts[key]);
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error("INVENTORY_EFFECT_ITEM_COUNTS_INVALID");
+    }
+    return value;
+  };
+  const aggregate = {
+    completedProducts:0,failedProducts:0,
+    forecastAttempted:0,forecastPersisted:0,
+    riskAttempted:0,riskPersisted:0,
+    severities:{ normal:0,warning:0,critical:0,unknown:0 }
+  };
+  for (const item of rows) {
+    const completed = number(item.counts,"completedProducts");
+    const failed = number(item.counts,"failedProducts");
+    const forecastAttempted = number(item.counts,"forecastAttempted");
+    const forecastPersisted = number(item.counts,"forecastPersisted");
+    const riskAttempted = number(item.counts,"riskAttempted");
+    const riskPersisted = number(item.counts,"riskPersisted");
+    const severity = item.counts.severity;
+    if ((item.status === "succeeded" &&
+      (completed !== 1 || failed !== 0 || riskAttempted !== 1 ||
+        riskPersisted !== 1 || typeof severity !== "string")) ||
+      (item.status === "failed" &&
+      (completed !== 0 || failed !== 1 || forecastPersisted !== 0 ||
+        riskAttempted > 1 || riskPersisted !== 0 || severity !== null)) ||
+      forecastPersisted > forecastAttempted) {
+      throw new Error("INVENTORY_EFFECT_ITEM_COUNTS_INVALID");
+    }
+    aggregate.completedProducts += completed;
+    aggregate.failedProducts += failed;
+    aggregate.forecastAttempted += forecastAttempted;
+    aggregate.forecastPersisted += forecastPersisted;
+    aggregate.riskAttempted += riskAttempted;
+    aggregate.riskPersisted += riskPersisted;
+    if (typeof severity === "string" && severity in aggregate.severities) {
+      aggregate.severities[severity as keyof typeof aggregate.severities] += 1;
+    } else if (severity !== null) {
+      throw new Error("INVENTORY_EFFECT_ITEM_COUNTS_INVALID");
+    }
+  }
+  return aggregate;
+}
+
 export interface DomainLeaseGrant extends LeaseFence {
   readonly serverNow: string;
   readonly expiresAt: string;
@@ -520,6 +634,525 @@ export class InventoryRepository {
     if (result.rowCount !== 1) throw new Error("SCHEDULER_LEASE_LOST");
   }
 
+  private async lockInventoryEffect(
+    client: PoolClient,
+    effect: InventoryEffectIdentity,
+    operation: InventoryEffectOperation,
+    fence:LeaseFence,
+    requireRunning = true
+  ): Promise<InventoryEffectReceipt> {
+    const result = await client.query<{
+      effect_id:string;operation:InventoryEffectOperation;input_digest:string;
+      identity_digest:string;run_id:string;invocation_id:string;
+      idempotency_key:string;lease_request_id:string;
+      lease_key:string;holder_id:string;fencing_token:string;
+      status:"running"|"succeeded"|"failed";progress:Record<string,unknown>;
+      result:Record<string,unknown>|null;error_code:string|null;
+      updated_at:Date;completed_at:Date|null;
+    }>(
+      `SELECT effect_id,operation,input_digest,identity_digest,run_id,invocation_id,
+              idempotency_key,lease_request_id,lease_key,holder_id,fencing_token::text,
+              status,progress,result,error_code,
+              updated_at,completed_at
+       FROM ops.inventory_effect WHERE effect_id=$1 FOR UPDATE`,
+      [effect.effectId]
+    );
+    const current = row(result.rows,"inventory effect");
+    if (current.operation !== operation || current.input_digest !== effect.inputDigest ||
+      current.identity_digest !== effect.identityDigest || current.run_id !== effect.runId ||
+      current.invocation_id !== effect.invocationId ||
+      current.idempotency_key !== effect.idempotencyKey ||
+      current.lease_request_id !== effect.leaseRequestId ||
+      current.lease_key !== fence.leaseKey || current.holder_id !== fence.holderId ||
+      Number(current.fencing_token) !== fence.fencingToken) {
+      throw new Error("INVENTORY_EFFECT_ID_CONFLICT");
+    }
+    if (requireRunning && current.status !== "running") {
+      throw new Error("INVENTORY_EFFECT_STATE_CONFLICT");
+    }
+    return {
+      effectId:current.effect_id,operation:current.operation,
+      inputDigest:current.input_digest,identityDigest:current.identity_digest,
+      runId:current.run_id,invocationId:current.invocation_id,
+      idempotencyKey:current.idempotency_key,leaseRequestId:current.lease_request_id,
+      status:current.status,
+      progress:current.progress,result:current.result,errorCode:current.error_code,
+      updatedAt:current.updated_at.toISOString(),
+      completedAt:current.completed_at?.toISOString() ?? null
+    };
+  }
+
+  private async claimInventoryEffect(
+    client: PoolClient,
+    effect: InventoryEffectIdentity,
+    operation: InventoryEffectOperation,
+    progress: Record<string,unknown>,
+    fence:LeaseFence
+  ): Promise<InventoryEffectReceipt | undefined> {
+    const acquisition = await client.query(
+      `SELECT 1 FROM ops.lease_acquisition_request
+       WHERE lease_key=$1 AND request_id=$2 AND holder_id=$3 AND fencing_token=$4`,
+      [fence.leaseKey,effect.leaseRequestId,fence.holderId,fence.fencingToken]
+    );
+    if (acquisition.rowCount !== 1) throw new Error("INVENTORY_EFFECT_LEASE_IDENTITY_INVALID");
+    const inserted = await client.query(
+      `INSERT INTO ops.inventory_effect(
+         effect_id,operation,input_digest,identity_digest,run_id,invocation_id,
+         idempotency_key,lease_request_id,lease_key,holder_id,fencing_token,status,progress
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'running',$12)
+       ON CONFLICT(effect_id) DO NOTHING`,
+      [effect.effectId,operation,effect.inputDigest,effect.identityDigest,effect.runId,
+       effect.invocationId,effect.idempotencyKey,effect.leaseRequestId,
+       fence.leaseKey,fence.holderId,fence.fencingToken,JSON.stringify(progress)]
+    );
+    if (inserted.rowCount === 1) return undefined;
+    const current = await this.lockInventoryEffect(client,effect,operation,fence,false);
+    if (current.status === "running") throw new Error("INVENTORY_EFFECT_IN_PROGRESS");
+    if (current.status === "failed") throw new Error(current.errorCode ?? "INVENTORY_EFFECT_PREVIOUSLY_FAILED");
+    return current;
+  }
+
+  private async updateInventoryEffect(
+    client:PoolClient,
+    effect:InventoryEffectIdentity,
+    operation:InventoryEffectOperation,
+    input:{
+      readonly status?:"succeeded"|"failed";
+      readonly progress:Record<string,unknown>;
+      readonly result?:Record<string,unknown>;
+      readonly errorCode?:string;
+    }
+  ):Promise<void> {
+    const status = input.status ?? "running";
+    const updated = await client.query(
+      `UPDATE ops.inventory_effect SET status=$4,progress=$5,result=$6,error_code=$7,
+         updated_at=clock_timestamp(),completed_at=CASE WHEN $4='running' THEN NULL ELSE clock_timestamp() END
+       WHERE effect_id=$1 AND operation=$2 AND input_digest=$3 AND status='running'`,
+      [effect.effectId,operation,effect.inputDigest,status,JSON.stringify(input.progress),
+       input.result === undefined ? null : JSON.stringify(input.result),input.errorCode ?? null]
+    );
+    if (updated.rowCount !== 1) throw new Error("INVENTORY_EFFECT_STATE_CONFLICT");
+  }
+
+  private async insertInventoryEffectItem(
+    client:PoolClient,
+    input:{
+      effectId:string;itemKey:string;inputDigest:string;
+      status:"succeeded"|"failed";resultDigest:string;
+      counts:Record<string,unknown>;
+    }
+  ):Promise<void> {
+    const inserted = await client.query(
+      `INSERT INTO ops.inventory_effect_item(
+         effect_id,item_key,input_digest,status,result_digest,counts
+       ) VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT(effect_id,item_key) DO NOTHING`,
+      [input.effectId,input.itemKey,input.inputDigest,input.status,
+       input.resultDigest,JSON.stringify(input.counts)]
+    );
+    if (inserted.rowCount === 1) return;
+    const existing = await client.query<{
+      input_digest:string;status:string;result_digest:string;counts:Record<string,unknown>;
+    }>(
+      `SELECT input_digest,status,result_digest,counts
+       FROM ops.inventory_effect_item WHERE effect_id=$1 AND item_key=$2`,
+      [input.effectId,input.itemKey]
+    );
+    const current = row(existing.rows,"inventory effect item");
+    if (current.input_digest !== input.inputDigest || current.status !== input.status ||
+      current.result_digest !== input.resultDigest ||
+      factDigest(current.counts) !== factDigest(input.counts)) {
+      throw new Error("INVENTORY_EFFECT_ITEM_CONFLICT");
+    }
+  }
+
+  async beginInventoryEffect(
+    effect:InventoryEffectIdentity,
+    operation:InventoryEffectOperation,
+    progress:Record<string,unknown>,
+    fence:LeaseFence
+  ):Promise<Record<string,unknown> | undefined> {
+    return inTransaction(this.pool,async (client) => {
+      await this.assertLeaseForUpdate(client,fence);
+      return (await this.claimInventoryEffect(client,effect,operation,progress,fence))?.result ?? undefined;
+    });
+  }
+
+  async recordInventoryEffectItem(
+    effect:InventoryEffectIdentity,
+    input:{
+      readonly productId:string;readonly snapshotId:string;
+      readonly status:"failed";
+      readonly code:string;
+      readonly forecastAttempted:number;
+      readonly riskAttempted:number;
+    },
+    fence:LeaseFence
+  ):Promise<void> {
+    await inTransaction(this.pool,async (client) => {
+      await this.assertLeaseForUpdate(client,fence);
+      await this.lockInventoryEffect(
+        client,effect,"inventory.shop.forecast-risk.refresh",fence
+      );
+      const inputDigest = factDigest([
+        effect.inputDigest,input.productId,input.snapshotId
+      ]);
+      await this.insertInventoryEffectItem(client,{
+        effectId:effect.effectId,itemKey:input.productId,inputDigest,
+        status:"failed",resultDigest:factDigest({ code:input.code }),
+        counts:{
+          completedProducts:0,failedProducts:1,
+          forecastAttempted:input.forecastAttempted,forecastPersisted:0,
+          riskAttempted:input.riskAttempted,riskPersisted:0,
+          severity:null
+        }
+      });
+    });
+  }
+
+  async completeForecastRiskEffect(
+    effect:InventoryEffectIdentity,
+    result:Record<string,unknown>,
+    fence:LeaseFence
+  ):Promise<void> {
+    await inTransaction(this.pool,async (client) => {
+      await this.assertLeaseForUpdate(client,fence);
+      const currentEffect = await this.lockInventoryEffect(
+        client,effect,"inventory.shop.forecast-risk.refresh",fence
+      );
+      const items = await client.query<ForecastEffectItemRow>(
+        `SELECT status,counts FROM ops.inventory_effect_item
+         WHERE effect_id=$1 ORDER BY item_key`,
+        [effect.effectId]
+      );
+      const aggregate = aggregateForecastEffectItems(items.rows);
+      const expectedProducts = Number(currentEffect.progress.attemptedProducts);
+      const forecastWrites = result.forecastWrites as Record<string,unknown> | undefined;
+      const riskWrites = result.riskWrites as Record<string,unknown> | undefined;
+      const resultSeverities = result.severities as Record<string,unknown> | undefined;
+      const severityTotal = Object.values(aggregate.severities).reduce((sum,value) => sum + value,0);
+      if (!Number.isSafeInteger(expectedProducts) || expectedProducts < 0 ||
+        items.rows.length !== expectedProducts ||
+        Number(result.attemptedProducts) !== expectedProducts ||
+        Number(result.completedProducts) !== aggregate.completedProducts ||
+        Number(result.partialProducts) !== 0 ||
+        Number(result.failedProducts) !== aggregate.failedProducts ||
+        aggregate.completedProducts + aggregate.failedProducts !== expectedProducts ||
+        aggregate.riskPersisted !== aggregate.completedProducts ||
+        severityTotal !== aggregate.completedProducts ||
+        !forecastWrites || !riskWrites || !resultSeverities ||
+        Number(forecastWrites.attempted) !== aggregate.forecastAttempted ||
+        Number(forecastWrites.persisted) !== aggregate.forecastPersisted ||
+        Number(riskWrites.attempted) !== aggregate.riskAttempted ||
+        Number(riskWrites.persisted) !== aggregate.riskPersisted ||
+        Object.entries(aggregate.severities).some(
+          ([key,value]) => Number(resultSeverities[key]) !== value
+        ) ||
+        result.status !== (aggregate.failedProducts === 0 ? "complete" : "partial")) {
+        throw new Error("INVENTORY_EFFECT_SUMMARY_CONFLICT");
+      }
+      await this.updateInventoryEffect(
+        client,effect,"inventory.shop.forecast-risk.refresh",{
+          status:"succeeded",
+          progress:{
+            attemptedProducts:expectedProducts,
+            completedProducts:aggregate.completedProducts,
+            partialProducts:0,failedProducts:aggregate.failedProducts,
+            forecastWrites:{
+              attempted:aggregate.forecastAttempted,persisted:aggregate.forecastPersisted
+            },
+            riskWrites:{ attempted:aggregate.riskAttempted,persisted:aggregate.riskPersisted },
+            severities:aggregate.severities
+          },
+          result
+        }
+      );
+    });
+  }
+
+  async listInventoryEffectsForReconciliation(input:{
+    readonly leaseRequestId:string;
+    readonly lease:LeaseFence;
+    readonly runId:string;
+    readonly limit:100;
+    readonly cursor?:{
+      readonly operation:InventoryEffectOperation;
+      readonly effectId:string;
+    };
+  }):Promise<InventoryEffectPage> {
+    return inTransaction(this.pool,async (client) => {
+      await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
+      const acquisition = await client.query(
+        `SELECT 1 FROM ops.lease_acquisition_request
+         WHERE lease_key=$1 AND request_id=$2 AND holder_id=$3 AND fencing_token=$4`,
+        [input.lease.leaseKey,input.leaseRequestId,input.lease.holderId,
+         input.lease.fencingToken]
+      );
+      if (acquisition.rowCount !== 1) {
+        throw new Error("INVENTORY_EFFECT_LEASE_IDENTITY_INVALID");
+      }
+      const lease = await client.query<{
+        expires_at:Date;server_now:Date;
+      }>(
+        `SELECT expires_at,clock_timestamp() AS server_now
+         FROM ops.lease WHERE lease_key=$1 FOR UPDATE`,
+        [input.lease.leaseKey]
+      );
+      const currentLease = lease.rows[0];
+      if (currentLease &&
+        currentLease.expires_at.getTime() > currentLease.server_now.getTime()) {
+        throw new Error("INVENTORY_EFFECT_ACTIVE_OWNER");
+      }
+      const effects = await client.query<{
+        effect_id:string;operation:InventoryEffectOperation;input_digest:string;
+        identity_digest:string;run_id:string;lease_request_id:string;
+        lease_key:string;holder_id:string;fencing_token:string;
+        status:"running"|"succeeded"|"failed";progress:Record<string,unknown>;
+        result:Record<string,unknown>|null;error_code:string|null;
+        updated_at:Date;completed_at:Date|null;
+      }>(
+        `SELECT effect_id,operation,input_digest,identity_digest,run_id,
+                lease_request_id,lease_key,holder_id,fencing_token::text,
+                status,progress,result,error_code,
+                updated_at,completed_at
+         FROM ops.inventory_effect
+         WHERE lease_request_id=$1 AND run_id=$2 AND lease_key=$3
+           AND holder_id=$4 AND fencing_token=$5
+         ORDER BY operation,effect_id`,
+        [input.leaseRequestId,input.runId,input.lease.leaseKey,
+         input.lease.holderId,input.lease.fencingToken]
+      );
+      const itemCounts = await client.query<{
+        effect_id:string;succeeded:number;failed:number;
+      }>(
+        `SELECT effect_id,
+           count(*) FILTER(WHERE status='succeeded')::int AS succeeded,
+           count(*) FILTER(WHERE status='failed')::int AS failed
+         FROM ops.inventory_effect_item
+         WHERE effect_id=ANY($1::text[])
+         GROUP BY effect_id ORDER BY effect_id`,
+        [effects.rows.map(({ effect_id }) => effect_id)]
+      );
+      const byEffect = new Map(itemCounts.rows.map((item) => [item.effect_id,item]));
+      const countKeys = new Set([
+        "stagedChunks","stagedRows","publishedRows","persistedSnapshots",
+        "attemptedProducts","completedProducts","partialProducts","failedProducts"
+      ]);
+      const summaries:InventoryEffectSummary[] = effects.rows.map((current) => {
+        const counts = byEffect.get(current.effect_id);
+        return {
+          effectId:current.effect_id,operation:current.operation,inputDigest:current.input_digest,
+          identityDigest:current.identity_digest,runId:current.run_id,
+          leaseRequestId:current.lease_request_id,
+          status:current.status,
+          progressCounts:Object.fromEntries(Object.entries(current.progress).flatMap(
+            ([key,value]) => countKeys.has(key) && Number.isSafeInteger(value) && Number(value) >= 0
+              ? [[key,Number(value)]]
+              : []
+          )),
+          itemCounts:{ succeeded:counts?.succeeded ?? 0,failed:counts?.failed ?? 0 },
+          resultDigest:current.result === null ? null : factDigest(current.result),
+          errorCode:current.error_code,updatedAt:current.updated_at.toISOString(),
+          completedAt:current.completed_at?.toISOString() ?? null
+        };
+      });
+      let offset = 0;
+      if (input.cursor) {
+        const index = summaries.findIndex((summary) =>
+          summary.operation === input.cursor!.operation &&
+          summary.effectId === input.cursor!.effectId
+        );
+        if (index < 0) throw new Error("INVENTORY_EFFECT_CURSOR_INVALID");
+        offset = index + 1;
+      }
+      const items = summaries.slice(offset,offset + input.limit);
+      const hasMore = offset + items.length < summaries.length;
+      const last = items.at(-1);
+      return {
+        status:summaries.length === 0 ? "empty" : "available",
+        items,
+        nextCursor:hasMore && last
+          ? { operation:last.operation,effectId:last.effectId }
+          : null,
+        totalCount:summaries.length,
+        reportDigest:factDigest(summaries)
+      };
+    });
+  }
+
+  async reconcileInventoryEffect(input: {
+    readonly leaseRequestId: string;
+    readonly lease: LeaseFence;
+    readonly runId: string;
+    readonly effect: InventoryEffectIdentity;
+  }): Promise<InventoryEffectReconciliationResult> {
+    return inTransaction(this.pool, async (client) => {
+      const acquisition = await client.query(
+        `SELECT 1 FROM ops.lease_acquisition_request
+         WHERE lease_key=$1 AND request_id=$2 AND holder_id=$3 AND fencing_token=$4`,
+        [input.lease.leaseKey,input.leaseRequestId,input.lease.holderId,
+         input.lease.fencingToken]
+      );
+      if (acquisition.rowCount !== 1 ||
+        input.effect.leaseRequestId !== input.leaseRequestId ||
+        input.effect.runId !== input.runId) {
+        throw new Error("INVENTORY_EFFECT_LEASE_IDENTITY_INVALID");
+      }
+      const lease = await client.query<{ expires_at:Date;server_now:Date }>(
+        `SELECT expires_at,clock_timestamp() AS server_now
+         FROM ops.lease WHERE lease_key=$1 FOR UPDATE`,
+        [input.lease.leaseKey]
+      );
+      const currentLease = lease.rows[0];
+      if (currentLease &&
+        currentLease.expires_at.getTime() > currentLease.server_now.getTime()) {
+        throw new Error("INVENTORY_EFFECT_ACTIVE_OWNER");
+      }
+      const current = await this.lockInventoryEffect(
+        client,input.effect,
+        (await client.query<{ operation:InventoryEffectOperation }>(
+          `SELECT operation FROM ops.inventory_effect WHERE effect_id=$1`,
+          [input.effect.effectId]
+        )).rows[0]?.operation ?? "inventory.snapshot.persist",
+        input.lease,false
+      );
+      if (current.runId !== input.runId) {
+        throw new Error("INVENTORY_EFFECT_ID_CONFLICT");
+      }
+      if (current.status !== "running") {
+        return {
+          effectId:current.effectId,
+          operation:current.operation,
+          status:current.status,
+          classification:"already_terminal"
+        };
+      }
+      if (current.operation === "inventory.snapshot.persist") {
+        throw new Error("INVENTORY_EFFECT_SNAPSHOT_RUNNING_INVALID");
+      }
+      if (current.operation === "sales-demand.sync") {
+        const syncRunId = current.progress.syncRunId;
+        if (typeof syncRunId !== "string" || !syncRunId) {
+          throw new Error("INVENTORY_EFFECT_PROGRESS_INVALID");
+        }
+        const sync = await client.query(
+          `UPDATE source.sync_run
+           SET status='failed',completed_at=clock_timestamp(),
+               diagnostics='["RECONCILED_ABANDONED_STAGING"]'::jsonb
+           WHERE sync_run_id=$1 AND status='running'`,
+          [syncRunId]
+        );
+        if (sync.rowCount !== 1) {
+          throw new Error("INVENTORY_EFFECT_SYNC_STATE_CONFLICT");
+        }
+        await client.query(
+          "DELETE FROM source.order_line_staging WHERE sync_run_id=$1",
+          [syncRunId]
+        );
+        await this.updateInventoryEffect(
+          client,input.effect,current.operation,{
+            status:"failed",
+            progress:current.progress,
+            errorCode:"RECONCILED_ABANDONED_STAGING"
+          }
+        );
+        return {
+          effectId:current.effectId,
+          operation:current.operation,
+          status:"failed",
+          classification:"abandoned_staging"
+        };
+      }
+      const items = await client.query<ForecastEffectItemRow>(
+        `SELECT status,counts FROM ops.inventory_effect_item
+         WHERE effect_id=$1 ORDER BY item_key`,
+        [input.effect.effectId]
+      );
+      const expectedProducts = Number(current.progress.attemptedProducts);
+      if (!Number.isSafeInteger(expectedProducts) || expectedProducts < 0 ||
+        items.rows.length > expectedProducts) {
+        throw new Error("INVENTORY_EFFECT_PROGRESS_INVALID");
+      }
+      const aggregate = aggregateForecastEffectItems(items.rows);
+      const severityTotal = Object.values(aggregate.severities)
+        .reduce((sum,value) => sum + value,0);
+      if (aggregate.completedProducts + aggregate.failedProducts !== items.rows.length ||
+        aggregate.riskPersisted !== aggregate.completedProducts ||
+        severityTotal !== aggregate.completedProducts) {
+        throw new Error("INVENTORY_EFFECT_ITEM_COUNTS_INVALID");
+      }
+      if (items.rows.length === expectedProducts) {
+        const result = {
+          status:aggregate.failedProducts === 0 ? "complete" : "partial",
+          attemptedProducts:expectedProducts,
+          completedProducts:aggregate.completedProducts,
+          partialProducts:0,
+          failedProducts:aggregate.failedProducts,
+          forecastWrites:{
+            attempted:aggregate.forecastAttempted,
+            persisted:aggregate.forecastPersisted
+          },
+          riskWrites:{
+            attempted:aggregate.riskAttempted,
+            persisted:aggregate.riskPersisted
+          },
+          severities:aggregate.severities
+        };
+        await this.updateInventoryEffect(
+          client,input.effect,current.operation,{
+            status:"succeeded",progress:result,result
+          }
+        );
+        return {
+          effectId:current.effectId,
+          operation:current.operation,
+          status:"succeeded",
+          classification:"already_terminal"
+        };
+      }
+      if (items.rows.length === 0) {
+        await this.updateInventoryEffect(
+          client,input.effect,current.operation,{
+            status:"failed",progress:current.progress,
+            errorCode:"RECONCILED_NOT_COMMITTED"
+          }
+        );
+        return {
+          effectId:current.effectId,
+          operation:current.operation,
+          status:"failed",
+          classification:"not_committed"
+        };
+      }
+      await this.updateInventoryEffect(
+        client,input.effect,current.operation,{
+          status:"failed",
+          progress:{
+            ...current.progress,
+            completedProducts:aggregate.completedProducts,
+            failedProducts:aggregate.failedProducts,
+            forecastWrites:{
+              attempted:aggregate.forecastAttempted,
+              persisted:aggregate.forecastPersisted
+            },
+            riskWrites:{
+              attempted:aggregate.riskAttempted,
+              persisted:aggregate.riskPersisted
+            },
+            severities:aggregate.severities
+          },
+          errorCode:"RECONCILED_CONFIRMED_PARTIAL"
+        }
+      );
+      return {
+        effectId:current.effectId,
+        operation:current.operation,
+        status:"failed",
+        classification:"confirmed_partial"
+      };
+    });
+  }
+
   async renewLease(input: {
     leaseKey: string;
     holderId: string;
@@ -546,14 +1179,39 @@ export class InventoryRepository {
     );
   }
 
-  async persistSnapshot(snapshot: PersistableDoudianSnapshot, fence: LeaseFence): Promise<{
+  async persistSnapshot(
+    snapshot: PersistableDoudianSnapshot,
+    effect: InventoryEffectIdentity,
+    fence: LeaseFence
+  ): Promise<{
     readonly snapshotId: string;
     readonly envelope: FactEnvelope<InventoryProductFact>;
   }> {
     const factEnvelope = envelope(snapshot);
     let snapshotId = `snapshot:${snapshot.shop.id}:${snapshot.product.id}:${factEnvelope.source.digest.slice(7, 23)}`;
-    await inTransaction(this.pool, async (client) => {
+    return inTransaction(this.pool, async (client) => {
       await this.assertLeaseForUpdate(client,fence);
+      const replay = await this.claimInventoryEffect(
+        client,effect,"inventory.snapshot.persist",{
+          shopId:snapshot.shop.id,productId:snapshot.product.id
+        },fence
+      );
+      if (replay?.result) {
+        const replaySnapshotId = replay.result.snapshotId;
+        if (typeof replaySnapshotId !== "string") {
+          throw new Error("INVENTORY_EFFECT_RESULT_INVALID");
+        }
+        const persisted = await client.query<{ snapshot_id:string;source_digest:string }>(
+          `SELECT snapshot_id,source_digest FROM inventory.snapshot
+           WHERE snapshot_id=$1 AND shop_id=$2 AND product_id=$3`,
+          [replaySnapshotId,snapshot.shop.id,snapshot.product.id]
+        );
+        const exact = row(persisted.rows,"replayed inventory snapshot");
+        if (exact.source_digest !== factEnvelope.source.digest) {
+          throw new Error("INVENTORY_EFFECT_RESULT_CONFLICT");
+        }
+        return { snapshotId:exact.snapshot_id,envelope:factEnvelope };
+      }
       await client.query(
         `INSERT INTO dataset.version(
           dataset_id, data_version, source_kind, source_digest, observed_at,
@@ -618,8 +1276,20 @@ export class InventoryRepository {
           );
         }
       }
+      const result = { snapshotId,envelope:factEnvelope };
+      const effectResult = {
+        snapshotId,shopId:snapshot.shop.id,productId:snapshot.product.id,
+        resultDigest:factDigest({ snapshotId,sourceDigest:factEnvelope.source.digest })
+      };
+      await this.updateInventoryEffect(
+        client,effect,"inventory.snapshot.persist",{
+          status:"succeeded",
+          progress:{ shopId:snapshot.shop.id,productId:snapshot.product.id,persistedSnapshots:1 },
+          result:effectResult
+        }
+      );
+      return result;
     });
-    return { snapshotId, envelope: factEnvelope };
   }
 
   async latestSnapshotFacts(
@@ -885,9 +1555,16 @@ export class InventoryRepository {
     sourceSystem: string;
     shopId: string;
     sourceWatermark?: string;
-  }, fence: LeaseFence): Promise<void> {
-    await inTransaction(this.pool, async (client) => {
+    effect:InventoryEffectIdentity;
+  }, fence: LeaseFence): Promise<Record<string,unknown> | undefined> {
+    return inTransaction(this.pool, async (client) => {
       await this.assertLeaseForUpdate(client,fence);
+      const replay = await this.claimInventoryEffect(
+        client,input.effect,"sales-demand.sync",{
+          syncRunId:input.syncRunId,stagedChunks:0,stagedRows:0
+        },fence
+      );
+      if (replay?.result) return replay.result;
       await client.query(
         `INSERT INTO source.sync_run(
           sync_run_id,source_system,shop_id,status,started_at,source_watermark
@@ -895,6 +1572,7 @@ export class InventoryRepository {
         ON CONFLICT(sync_run_id) DO NOTHING`,
         [input.syncRunId,input.sourceSystem,input.shopId,input.sourceWatermark ?? null]
       );
+      return undefined;
     });
   }
 
@@ -903,6 +1581,8 @@ export class InventoryRepository {
     readonly sourceSystem: string;
     readonly shopId: string;
     readonly rows: readonly NormalizedOrderLine[];
+    readonly effect:InventoryEffectIdentity;
+    readonly progress:{ readonly stagedChunks:number;readonly stagedRows:number };
   }, fence: LeaseFence): Promise<{
     inserted: number;
     updated: number;
@@ -916,6 +1596,7 @@ export class InventoryRepository {
     if (payload.length === 0) return { inserted:0,updated:0 };
     return inTransaction(this.pool, async (client) => {
       await this.assertLeaseForUpdate(client,fence);
+      await this.lockInventoryEffect(client,input.effect,"sales-demand.sync",fence);
       const sync = await client.query(
         `SELECT 1 FROM source.sync_run
          WHERE sync_run_id=$1 AND source_system=$2 AND shop_id=$3 AND status='running'
@@ -923,7 +1604,11 @@ export class InventoryRepository {
         [input.syncRunId,input.sourceSystem,input.shopId]
       );
       if (sync.rowCount !== 1) throw new Error("ORDER_SYNC_RUN_INVALID");
-      return this.stageOrderChunkWithClient(client,input.syncRunId,payload);
+      const counts = await this.stageOrderChunkWithClient(client,input.syncRunId,payload);
+      await this.updateInventoryEffect(client,input.effect,"sales-demand.sync",{
+        progress:{ syncRunId:input.syncRunId,...input.progress }
+      });
+      return counts;
     });
   }
 
@@ -1025,6 +1710,7 @@ export class InventoryRepository {
     recordCount: number;
     historicalCompleteThrough: string;
     observedAt: string;
+    effect:InventoryEffectIdentity;
   }, fence: LeaseFence): Promise<{
     datasetId: string;
     dataVersion: string;
@@ -1033,6 +1719,7 @@ export class InventoryRepository {
   }> {
     return inTransaction(this.pool, async (client) => {
       await this.assertLeaseForUpdate(client,fence);
+      await this.lockInventoryEffect(client,input.effect,"sales-demand.sync",fence);
       const sync = await client.query(
         `SELECT 1 FROM source.sync_run
          WHERE sync_run_id=$1 AND source_system=$2 AND shop_id=$3 AND status='running'
@@ -1121,13 +1808,31 @@ export class InventoryRepository {
         "DELETE FROM source.order_line_staging WHERE sync_run_id=$1",
         [input.syncRunId]
       );
+      const result = {
+        status:"succeeded",syncRunId:input.syncRunId,shopId:input.shopId,
+        watermark:input.watermark,sourceDigest:input.sourceDigest,
+        processed:input.recordCount,inserted,updated,
+        historicalCompleteThrough:input.historicalCompleteThrough,
+        dataset:{ datasetId,dataVersion,inserted,updated }
+      };
+      await this.updateInventoryEffect(client,input.effect,"sales-demand.sync",{
+        status:"succeeded",
+        progress:{ syncRunId:input.syncRunId,publishedRows:publishedRecordCount },
+        result
+      });
       return { datasetId,dataVersion,inserted,updated };
     });
   }
 
-  async completeNoChangeOrderSync(syncRunId: string, fence: LeaseFence): Promise<void> {
+  async completeNoChangeOrderSync(
+    syncRunId:string,
+    effect:InventoryEffectIdentity,
+    result:Record<string,unknown>,
+    fence: LeaseFence
+  ): Promise<void> {
     await inTransaction(this.pool, async (client) => {
       await this.assertLeaseForUpdate(client,fence);
+      await this.lockInventoryEffect(client,effect,"sales-demand.sync",fence);
       const completed = await client.query(
         `UPDATE source.sync_run SET status='succeeded',completed_at=clock_timestamp(),
            inserted_count=0,updated_count=0,diagnostics='["No newer source batch was available."]'::jsonb
@@ -1136,12 +1841,22 @@ export class InventoryRepository {
       );
       if (completed.rowCount !== 1) throw new Error("ORDER_SYNC_RUN_INVALID");
       await client.query("DELETE FROM source.order_line_staging WHERE sync_run_id=$1",[syncRunId]);
+      await this.updateInventoryEffect(client,effect,"sales-demand.sync",{
+        status:"succeeded",progress:{ syncRunId,stagedChunks:0,stagedRows:0 },result
+      });
     });
   }
 
-  async failOrderSync(syncRunId: string, diagnosticCode: string, fence: LeaseFence): Promise<void> {
+  async failOrderSync(
+    syncRunId:string,
+    diagnosticCode:string,
+    effect:InventoryEffectIdentity,
+    progress:Record<string,unknown>,
+    fence: LeaseFence
+  ): Promise<void> {
     await inTransaction(this.pool, async (client) => {
       await this.assertLeaseForUpdate(client,fence);
+      await this.lockInventoryEffect(client,effect,"sales-demand.sync",fence);
       const code = /^[A-Z][A-Z0-9_]{1,99}$/u.test(diagnosticCode)
         ? diagnosticCode
         : "ORDER_SYNC_FAILED";
@@ -1152,6 +1867,9 @@ export class InventoryRepository {
       );
       if (failed.rowCount !== 1) throw new Error("ORDER_SYNC_RUN_INVALID");
       await client.query("DELETE FROM source.order_line_staging WHERE sync_run_id=$1",[syncRunId]);
+      await this.updateInventoryEffect(client,effect,"sales-demand.sync",{
+        status:"failed",progress:{ syncRunId,...progress },errorCode:code
+      });
     });
   }
 
@@ -1415,6 +2133,7 @@ export class InventoryRepository {
       readonly productId: string;
       readonly evaluation: InventoryRiskEvaluation;
     };
+    readonly effect:InventoryEffectIdentity;
   }, fence: LeaseFence): Promise<{
     readonly forecastIds: readonly string[];
     readonly evaluationId: string;
@@ -1422,6 +2141,9 @@ export class InventoryRepository {
   }> {
     return inTransaction(this.pool, async (client) => {
       await this.assertLeaseForUpdate(client,fence);
+      await this.lockInventoryEffect(
+        client,input.effect,"inventory.shop.forecast-risk.refresh",fence
+      );
       const forecastIds = await this.persistForecastRows(client,input.forecasts);
       const sourceDigest = factDigest(input.risk);
       const evaluationId = `evaluation:${sourceDigest.slice(7, 39)}`;
@@ -1457,6 +2179,21 @@ export class InventoryRepository {
           throw new Error("INVENTORY_RISK_CONFLICT");
         }
       }
+      await this.insertInventoryEffectItem(client,{
+        effectId:input.effect.effectId,itemKey:input.risk.productId,
+        inputDigest:factDigest([
+          input.effect.inputDigest,input.risk.productId,input.risk.snapshotId
+        ]),
+        status:"succeeded",
+        resultDigest:factDigest({ forecastIds,evaluationId,incidentsUpdated }),
+        counts:{
+          completedProducts:1,failedProducts:0,
+          forecastAttempted:input.forecasts.length,
+          forecastPersisted:forecastIds.length,
+          riskAttempted:1,riskPersisted:1,
+          severity:input.risk.evaluation.severity
+        }
+      });
       return { forecastIds,evaluationId,incidentsUpdated };
     });
   }

@@ -3,7 +3,12 @@ import type {
   RuntimeOutcome,
   RuntimeProvider
 } from "@bpa/node-runtime";
-import type { Persistence } from "@bpa/persistence";
+import { contentDigest } from "@bpa/compiler";
+import {
+  RevisionConflictError,
+  type ExternalDomainLeaseRecord,
+  type Persistence
+} from "@bpa/persistence";
 import type { ArtifactRef, JsonValue } from "@bpa/workflow-ir";
 import {
   aggregateInventoryProductionCycle,
@@ -84,12 +89,50 @@ export interface LeaseFence {
   readonly fencingToken: number;
 }
 
+export interface InventoryEffectIdentity {
+  readonly effectId: string;
+  readonly inputDigest: string;
+  readonly identityDigest: string;
+  readonly runId: string;
+  readonly invocationId: string;
+  readonly idempotencyKey: string;
+  readonly leaseRequestId: string;
+}
+
+export function inventoryEffectIdentity(
+  invocation: Pick<
+    RuntimeInvocation,
+    "idempotencyKey" | "identity" | "invocationId" | "node"
+  >,
+  operation: InventoryWriteOperation,
+  input: JsonValue,
+  leaseRequestId: string
+): InventoryEffectIdentity {
+  return {
+    effectId: `inventory-effect:${contentDigest({
+      idempotencyKey: invocation.idempotencyKey,
+      identity: invocation.identity,
+      node: invocation.node
+    })}`,
+    inputDigest: contentDigest({ operation, input }),
+    identityDigest: contentDigest({
+      identity: invocation.identity,
+      node: invocation.node
+    }),
+    runId: invocation.identity.runId,
+    invocationId: invocation.invocationId,
+    idempotencyKey: invocation.idempotencyKey,
+    leaseRequestId
+  };
+}
+
 export interface InventoryServiceWriter {
   write(
     request: {
       readonly operation: InventoryWriteOperation;
       readonly input: JsonValue;
       readonly lease: LeaseFence;
+      readonly effect: InventoryEffectIdentity;
     },
     signal: AbortSignal
   ): Promise<JsonValue>;
@@ -253,6 +296,41 @@ export class InventoryDataRuntimeProvider implements RuntimeProvider {
 
   supports(node: ArtifactRef & { readonly kind: "node" }): boolean {
     return isInventoryDataNode(node.id, node.version);
+  }
+
+  #markWriteReconciliation(
+    lease: ExternalDomainLeaseRecord,
+    runId: string,
+    diagnostic: string
+  ): void {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const current = this.persistence.getExternalDomainLease(lease.requestId);
+      if (
+        !current ||
+        current.ownerId !== lease.ownerId ||
+        current.runId !== runId ||
+        current.providerId !== lease.providerId ||
+        current.domainKey !== lease.domainKey
+      ) {
+        throw new Error("Inventory external lease identity changed during reconciliation");
+      }
+      if (current.state === "reconciliation_required") return;
+      if (current.state !== "bound") {
+        throw new Error("Inventory external lease cannot be marked for reconciliation");
+      }
+      try {
+        this.persistence.markExternalDomainLeaseReconciliationRequired({
+          requestId: current.requestId,
+          expectedRevision: current.revision,
+          diagnostic,
+          updatedAt: this.now().toISOString()
+        });
+        return;
+      } catch (error) {
+        if (!(error instanceof RevisionConflictError)) throw error;
+      }
+    }
+    throw new Error("Inventory external lease reconciliation did not converge");
   }
 
   async invoke(
@@ -502,6 +580,12 @@ export class InventoryDataRuntimeProvider implements RuntimeProvider {
         {
           operation: rule!.operation,
           input: writeInput,
+          effect: inventoryEffectIdentity(
+            invocation,
+            rule!.operation,
+            writeInput,
+            lease.requestId
+          ),
           lease: {
             leaseKey: lease.domainKey,
             holderId: lease.ownerId,
@@ -559,17 +643,11 @@ export class InventoryDataRuntimeProvider implements RuntimeProvider {
         (writerError?.transportUncertain === true ||
           code === "SCHEDULER_LEASE_LOST");
       if (requiresReconciliation) {
-        try {
-          this.persistence.markExternalDomainLeaseReconciliationRequired({
-            requestId: lease.requestId,
-            expectedRevision: lease.revision,
-            diagnostic: `Inventory write ${rule!.operation} requires reconciliation: ${code}.`,
-            updatedAt: this.now().toISOString()
-          });
-        } catch {
-          // The write outcome is already uncertain. A concurrent state change
-          // cannot make it safe to retry or downgrade the outcome.
-        }
+        this.#markWriteReconciliation(
+          lease,
+          invocation.identity.runId,
+          `Inventory write ${rule!.operation} requires reconciliation: ${code}.`
+        );
         return uncertain(
           code,
           controlledWriterMessage(rule!.operation, code, true)

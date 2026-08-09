@@ -395,5 +395,59 @@ export const INVENTORY_MIGRATIONS: readonly AppMigration[] = [
       CREATE INDEX order_line_staging_sync_idx
         ON source.order_line_staging(sync_run_id,source_batch_id);
     `
+  },
+  {
+    version: 7,
+    name: "inventory-effect-ledger",
+    sql: `
+      CREATE TABLE ops.inventory_effect (
+        effect_id text PRIMARY KEY CHECK(effect_id ~ '^inventory-effect:sha256:[0-9a-f]{64}$'),
+        operation text NOT NULL CHECK(operation IN (
+          'sales-demand.sync',
+          'inventory.snapshot.persist',
+          'inventory.shop.forecast-risk.refresh'
+        )),
+        input_digest text NOT NULL CHECK(input_digest ~ '^sha256:[0-9a-f]{64}$'),
+        identity_digest text NOT NULL CHECK(identity_digest ~ '^sha256:[0-9a-f]{64}$'),
+        run_id text NOT NULL CHECK(length(run_id) BETWEEN 1 AND 200),
+        invocation_id text NOT NULL CHECK(length(invocation_id) BETWEEN 1 AND 200),
+        idempotency_key text NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 500),
+        lease_request_id text NOT NULL CHECK(length(lease_request_id) BETWEEN 1 AND 200),
+        lease_key text NOT NULL CHECK(length(lease_key) BETWEEN 1 AND 500),
+        holder_id text NOT NULL CHECK(length(holder_id) BETWEEN 1 AND 500),
+        fencing_token bigint NOT NULL CHECK(fencing_token >= 1),
+        status text NOT NULL CHECK(status IN ('running','succeeded','failed')),
+        progress jsonb NOT NULL DEFAULT '{}'::jsonb CHECK(jsonb_typeof(progress)='object'),
+        result jsonb CHECK(result IS NULL OR jsonb_typeof(result)='object'),
+        error_code text,
+        started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+        updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+        completed_at timestamptz,
+        CHECK(
+          (status='running' AND result IS NULL AND error_code IS NULL AND completed_at IS NULL) OR
+          (status='succeeded' AND result IS NOT NULL AND error_code IS NULL AND completed_at IS NOT NULL) OR
+          (status='failed' AND result IS NULL AND error_code IS NOT NULL AND completed_at IS NOT NULL)
+        )
+      );
+      CREATE INDEX inventory_effect_operation_recent_idx
+        ON ops.inventory_effect(operation,updated_at DESC);
+      CREATE INDEX inventory_effect_reconciliation_page_idx
+        ON ops.inventory_effect(
+          lease_request_id,run_id,lease_key,holder_id,fencing_token,operation,effect_id
+        );
+
+      CREATE TABLE ops.inventory_effect_item (
+        effect_id text NOT NULL REFERENCES ops.inventory_effect(effect_id) ON DELETE RESTRICT,
+        item_key text NOT NULL CHECK(length(item_key) BETWEEN 1 AND 200),
+        input_digest text NOT NULL CHECK(input_digest ~ '^sha256:[0-9a-f]{64}$'),
+        status text NOT NULL CHECK(status IN ('succeeded','failed')),
+        result_digest text NOT NULL CHECK(result_digest ~ '^sha256:[0-9a-f]{64}$'),
+        counts jsonb NOT NULL CHECK(jsonb_typeof(counts)='object'),
+        updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+        PRIMARY KEY(effect_id,item_key)
+      );
+      CREATE INDEX inventory_effect_item_status_idx
+        ON ops.inventory_effect_item(effect_id,status,item_key);
+    `
   }
 ];

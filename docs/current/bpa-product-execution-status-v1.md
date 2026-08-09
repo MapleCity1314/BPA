@@ -373,12 +373,21 @@ fenced PostgreSQL 事务中 promote canonical facts、发布
 当前本机 fixture 已覆盖 13 店完整周期、单店部分失败、重复清单零副作用和预测写入不确定，
 但没有真实 PostgreSQL/MySQL/登录 Chrome 证明，也没有部署到公司 Mac。
 
+同一候选进一步加入 PostgreSQL v7 effect receipt 与 SQLite v25 清障审计。Core 为每个库存
+写调用从可信 RuntimeInvocation 派生 effect ID、输入摘要、身份摘要和旧 lease request；快照、
+订单发布以及逐商品预测/风险都把受控 receipt 与对应业务效果放在同一 PostgreSQL 事务。
+响应丢失后，`bpa inventory reconciliation inspect` 只读分页核对完整 receipt 集合；只有
+操作者拿该次检查返回的 resolution token 执行带 `--yes` 的 resolve，系统才会封账 running
+effect，并以单个 SQLite CAS 同时写不可变审计和释放精确旧租约。重复 token 只回放同一结果，
+不会把 uncertain Run 改成 succeeded、不会确认 Attention，也不会触碰新 owner。
+
 现网 serialized `production-cycle.ts` 与其 launchd 入口仍保留到真实 canary 和无中断切换；
 这不是“双控制面可并跑”的许可。启用新 Trigger 前必须在同一维护窗口停用并只读确认旧
 launchd、进程、活动周期和有效 `inventory-production-cycle` lease 全为空；新链路验收后再按
-无兼容层原则删除旧执行路径。库存面板异常已能通过 Workflow Attention 展示，但正式
-Workflow 的成功周期历史仍未替换 legacy `ops.collection_run/step` 视图，因此也属于部署前
-门禁。
+无兼容层原则删除旧执行路径。代码候选中的库存面板现已通过 Core UDS 读取最新 pinned
+Trigger occurrence 及其正式 13 店 Run：更新一轮仍在执行时不回显上一轮健康状态，早停不把
+未形成汇总误报为 0/13，且不再用 legacy `ops.collection_run/step` 充当正式周期历史。该面板
+投影和清障入口仍未部署，不能作为公司 Mac 当前可见性证据。
 
 Schema v22 已随 PR #24 把体验分的“已持久化”从聚合文案改成可审计事实：每店页面读取后，
 由 Core 内 `experience-data` Provider 立即写入 Run 级不可变 Operational Fact；业务日固定
