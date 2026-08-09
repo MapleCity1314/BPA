@@ -29,6 +29,7 @@ import {
   type ArtifactType,
   type AssistanceTaskRecord,
   type AssistanceTaskListFilter,
+  type AttentionRecord,
   type AuditRecord,
   type BrowserCapabilityRecord,
   type BrowserControlLeaseRecord,
@@ -1680,6 +1681,7 @@ export class SqlitePersistence implements Persistence {
           `Recoverable Run ${input.runId} revision changed`
         );
       }
+      this.#commitAttentionForTerminal(input);
       this.#inject("recoverable_transition.after_state");
       for (const task of input.assistanceTasks ?? []) {
         if (task.task.runId !== input.runId) {
@@ -1770,6 +1772,7 @@ export class SqlitePersistence implements Persistence {
           `Run ${input.runId} revision is not ${input.expectedRevision}`
         );
       }
+      this.#commitAttentionForTerminal(input);
       this.#insertEvent(input.event);
       return this.getRun(input.runId)!;
     })();
@@ -2359,6 +2362,11 @@ export class SqlitePersistence implements Persistence {
       if (taskUpdate.changes !== 1 || runUpdate.changes !== 1) {
         throw new RevisionConflictError("Assistance wake CAS failed");
       }
+      this.#commitAttentionForTerminal({
+        runId: input.task.task.runId,
+        nextStatus: input.nextRunStatus ?? "running",
+        ...(input.attention ? { attention: input.attention } : {})
+      });
       if (input.checkpoint) {
         const checkpointUpdate = this.#db
           .prepare(
@@ -5142,6 +5150,84 @@ export class SqlitePersistence implements Persistence {
     return rows.map((row) => this.#readRun(row));
   }
 
+  getAttention(id: string): AttentionRecord | undefined {
+    const row = this.#db
+      .prepare("SELECT * FROM attention_records WHERE attention_id = ?")
+      .get(id) as SqlRow | undefined;
+    return row ? this.#readAttention(row) : undefined;
+  }
+
+  listAttention(input: {
+    states?: readonly AttentionRecord["state"][];
+    limit: number;
+  }): AttentionRecord[] {
+    const requestedLimit = Number.isSafeInteger(input.limit)
+      ? input.limit
+      : 100;
+    const limit = Math.min(Math.max(requestedLimit, 1), 200);
+    const states = [...new Set(input.states ?? [])];
+    const rows = (states.length === 0
+      ? this.#db
+          .prepare(
+            `SELECT * FROM attention_records
+             ORDER BY created_at DESC, attention_id
+             LIMIT ?`
+          )
+          .all(limit)
+      : this.#db
+          .prepare(
+            `SELECT * FROM attention_records
+             WHERE state IN (${states.map(() => "?").join(",")})
+             ORDER BY created_at DESC, attention_id
+             LIMIT ?`
+          )
+          .all(...states, limit)) as SqlRow[];
+    return rows.map((row) => this.#readAttention(row));
+  }
+
+  acknowledgeAttention(input: {
+    id: string;
+    expectedRevision: number;
+    actor: string;
+    acknowledgedAt: string;
+  }): AttentionRecord {
+    return this.#db.transaction(() => {
+      const current = this.getAttention(input.id);
+      const result = this.#db
+        .prepare(
+          `UPDATE attention_records
+           SET state = 'acknowledged', revision = revision + 1,
+               acknowledged_at = ?, acknowledged_by = ?
+           WHERE attention_id = ? AND state = 'open' AND revision = ?`
+        )
+        .run(
+          input.acknowledgedAt,
+          input.actor,
+          input.id,
+          input.expectedRevision
+        );
+      if (result.changes !== 1 || !current) {
+        throw new RevisionConflictError(
+          `Attention ${input.id} is not open at revision ${input.expectedRevision}`
+        );
+      }
+      const acknowledged = this.getAttention(input.id)!;
+      this.#insertAuditRecord({
+        id: this.#idFactory(),
+        action: "attention.acknowledged",
+        actor: input.actor,
+        target: `attention:${input.id}`,
+        detail: {
+          runId: current.item.runId,
+          previousRevision: input.expectedRevision,
+          revision: acknowledged.revision
+        },
+        occurredAt: input.acknowledgedAt
+      });
+      return acknowledged;
+    })();
+  }
+
   getNodeExecution(id: string): NodeExecutionRecord | undefined {
     const row = this.#db
       .prepare("SELECT * FROM node_executions WHERE id = ?")
@@ -5385,6 +5471,69 @@ export class SqlitePersistence implements Persistence {
         run.currentNodeKey ?? null,
         run.createdAt,
         run.updatedAt
+      );
+  }
+
+  #commitAttentionForTerminal(input: {
+    runId: string;
+    nextStatus: RunStatus;
+    attention?: AttentionRecord;
+  }): void {
+    const requiresAttention = ["rejected", "failed", "uncertain"].includes(
+      input.nextStatus
+    );
+    if (!requiresAttention) {
+      if (input.attention) {
+        throw new Error("Only rejected, failed or uncertain Runs emit Attention");
+      }
+      return;
+    }
+    if (
+      !input.attention ||
+      input.attention.item.runId !== input.runId ||
+      input.attention.state !== "open" ||
+      input.attention.revision !== 0 ||
+      input.attention.acknowledgedAt !== undefined ||
+      input.attention.acknowledgedBy !== undefined
+    ) {
+      throw new Error(
+        `Terminal Run ${input.runId} requires one new open Attention record`
+      );
+    }
+    this.#insertAttention(input.attention);
+  }
+
+  #insertAttention(record: AttentionRecord): void {
+    const item = record.item;
+    this.#db
+      .prepare(
+        `INSERT INTO attention_records(
+          attention_id, run_id, stage_key, group_key, kind, source, title,
+          reason, requested_action, blocking, batchable,
+          attempted_actions_json, resumes_automatically, state, revision,
+          created_at, due_at, acknowledged_at, acknowledged_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        item.id,
+        item.runId,
+        item.stageKey,
+        item.groupKey,
+        item.kind,
+        item.source,
+        item.title,
+        item.reason,
+        item.requestedAction,
+        item.blocking ? 1 : 0,
+        item.batchable ? 1 : 0,
+        json(item.attemptedActions),
+        item.resumesAutomatically ? 1 : 0,
+        record.state,
+        record.revision,
+        item.createdAt,
+        item.dueAt ?? null,
+        record.acknowledgedAt ?? null,
+        record.acknowledgedBy ?? null
       );
   }
 
@@ -5907,6 +6056,38 @@ export class SqlitePersistence implements Persistence {
         : { currentNodeKey: String(row.current_node_key) }),
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at)
+    };
+  }
+
+  #readAttention(row: SqlRow): AttentionRecord {
+    return {
+      item: {
+        id: String(row.attention_id),
+        runId: String(row.run_id),
+        stageKey: String(row.stage_key),
+        groupKey: String(row.group_key),
+        kind: row.kind as AttentionRecord["item"]["kind"],
+        source: row.source as AttentionRecord["item"]["source"],
+        title: String(row.title),
+        reason: String(row.reason),
+        requestedAction: String(row.requested_action),
+        blocking: Boolean(row.blocking),
+        batchable: Boolean(row.batchable),
+        attemptedActions: parseJson(
+          row.attempted_actions_json
+        ) as readonly string[],
+        resumesAutomatically: Boolean(row.resumes_automatically),
+        createdAt: String(row.created_at),
+        ...(row.due_at == null ? {} : { dueAt: String(row.due_at) })
+      },
+      state: row.state as AttentionRecord["state"],
+      revision: Number(row.revision),
+      ...(row.acknowledged_at == null
+        ? {}
+        : { acknowledgedAt: String(row.acknowledged_at) }),
+      ...(row.acknowledged_by == null
+        ? {}
+        : { acknowledgedBy: String(row.acknowledged_by) })
     };
   }
 

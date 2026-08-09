@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { projectTerminalRunAttention } from "@bpa/attention-core";
 import {
   createAssistanceTask,
   fromAssistanceTaskPersistenceAggregate,
@@ -27,6 +28,7 @@ import {
 } from "@bpa/node-runtime";
 import type {
   AssistanceTaskRecord,
+  AttentionRecord,
   CommitAssistanceTaskRequestResult,
   EngineCheckpointRecord,
   ExecutionEventRecord,
@@ -705,6 +707,20 @@ export class Ir2WorkflowRuntime {
       timestamp
     );
     const stepKey = currentStep(transition.state);
+    const nextRunStatus = runStatus(transition.state);
+    const wakeEvent = this.#event(
+      run.id,
+      this.#persistence.listEvents(run.id).length + 1,
+      "ASSISTANCE_RESULT_APPLIED",
+      {
+        taskId: input.task.task.taskId,
+        outcome: input.runOutcome.status,
+        reason: input.runOutcome.reason,
+        stateRevision: transition.state.revision
+      },
+      timestamp
+    );
+    const attention = this.#terminalAttention(run, nextRunStatus, wakeEvent);
     const result = this.#persistence.submitTaskAndWakeRun({
       task: input.task,
       expectedTaskRevision: input.expectedRevision,
@@ -718,26 +734,16 @@ export class Ir2WorkflowRuntime {
         receivedAt: timestamp,
         appliedAt: timestamp
       },
-      wakeEvent: this.#event(
-        run.id,
-        this.#persistence.listEvents(run.id).length + 1,
-        "ASSISTANCE_RESULT_APPLIED",
-        {
-          taskId: input.task.task.taskId,
-          outcome: input.runOutcome.status,
-          reason: input.runOutcome.reason,
-          stateRevision: transition.state.revision
-        },
-        timestamp
-      ),
+      wakeEvent,
       checkpoint: this.#checkpoint(transition.state, timestamp),
       expectedCheckpointRevision: checkpoint.stateRevision,
-      nextRunStatus: runStatus(transition.state),
+      nextRunStatus,
       ...(stepKey ? { currentNodeKey: stepKey } : {}),
       ...(transition.state.output === undefined
         ? {}
         : { output: transition.state.output }),
       assistanceTasks: effects.tasks,
+      ...(attention ? { attention } : {}),
       additionalOutbox: effects.outbox,
       acknowledgeOutboxIds: this.#pendingOutboxIds([
         assistanceRequestOutboxId(input.task.task.taskId),
@@ -781,10 +787,23 @@ export class Ir2WorkflowRuntime {
     );
     const stepKey = currentStep(input.transition.state);
     const sequence = this.#persistence.listEvents(input.run.id).length + 1;
+    const nextRunStatus = runStatus(input.transition.state);
+    const event = this.#event(
+      input.run.id,
+      sequence,
+      input.eventType,
+      {
+        stateRevision: input.transition.state.revision,
+        status: input.transition.state.status,
+        ...input.eventPayload
+      },
+      timestamp
+    );
+    const attention = this.#terminalAttention(input.run, nextRunStatus, event);
     return this.#persistence.commitRecoverableTransition({
       runId: input.run.id,
       expectedRevision: input.run.revision,
-      nextStatus: runStatus(input.transition.state),
+      nextStatus: nextRunStatus,
       ...(stepKey ? { currentNodeKey: stepKey } : {}),
       ...(input.transition.state.output === undefined
         ? {}
@@ -793,22 +812,36 @@ export class Ir2WorkflowRuntime {
       expectedCheckpointRevision: input.checkpoint.stateRevision,
       outbox: effects.outbox,
       assistanceTasks: effects.tasks,
+      ...(attention ? { attention } : {}),
       ...(input.inbox ? { inbox: [input.inbox] } : {}),
       ...(input.acknowledgeOutboxIds
         ? { acknowledgeOutboxIds: input.acknowledgeOutboxIds }
         : {}),
-      event: this.#event(
-        input.run.id,
-        sequence,
-        input.eventType,
-        {
-          stateRevision: input.transition.state.revision,
-          status: input.transition.state.status,
-          ...input.eventPayload
-        },
-        timestamp
-      )
+      event
     });
+  }
+
+  #terminalAttention(
+    run: RunRecord,
+    status: RunStatus,
+    event: ExecutionEventRecord
+  ): AttentionRecord | undefined {
+    if (status !== "rejected" && status !== "failed" && status !== "uncertain") {
+      return undefined;
+    }
+    return {
+      item: projectTerminalRunAttention({
+        id: run.id,
+        workflowId: run.workflowId,
+        workflowVersion: run.workflowVersion,
+        status,
+        ...(run.currentNodeKey ? { currentNodeKey: run.currentNodeKey } : {}),
+        updatedAt: event.occurredAt,
+        events: [{ type: event.type, payload: event.payload }]
+      }),
+      state: "open",
+      revision: 0
+    };
   }
 
   #requestProviderCancel(invocation: RuntimeInvocation): void {
@@ -868,6 +901,19 @@ export class Ir2WorkflowRuntime {
       input.timestamp
     );
     const stepKey = currentStep(input.transition.state);
+    const nextRunStatus = runStatus(input.transition.state);
+    const wakeEvent = this.#event(
+      input.run.id,
+      this.#persistence.listEvents(input.run.id).length + 1,
+      input.eventType,
+      input.eventPayload,
+      input.timestamp
+    );
+    const attention = this.#terminalAttention(
+      input.run,
+      nextRunStatus,
+      wakeEvent
+    );
     return this.#persistence.submitTaskAndWakeRun({
       task: assistanceTaskRecord(terminated.task),
       expectedTaskRevision: currentTask.task.revision,
@@ -881,21 +927,16 @@ export class Ir2WorkflowRuntime {
         receivedAt: input.timestamp,
         appliedAt: input.timestamp
       },
-      wakeEvent: this.#event(
-        input.run.id,
-        this.#persistence.listEvents(input.run.id).length + 1,
-        input.eventType,
-        input.eventPayload,
-        input.timestamp
-      ),
+      wakeEvent,
       checkpoint: this.#checkpoint(input.transition.state, input.timestamp),
       expectedCheckpointRevision: input.checkpoint.stateRevision,
-      nextRunStatus: runStatus(input.transition.state),
+      nextRunStatus,
       ...(stepKey ? { currentNodeKey: stepKey } : {}),
       ...(input.transition.state.output === undefined
         ? {}
         : { output: input.transition.state.output }),
       assistanceTasks: effects.tasks,
+      ...(attention ? { attention } : {}),
       additionalOutbox: effects.outbox,
       acknowledgeOutboxIds: this.#pendingOutboxIds([
         assistanceRequestOutboxId(input.taskId),

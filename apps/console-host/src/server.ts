@@ -581,6 +581,33 @@ export async function startConsoleHost(
           writeJson(response, 200, { accepted: true });
           return;
         }
+        const attentionMatch = /^\/api\/attention\/([^/]+)\/acknowledge$/.exec(
+          path
+        );
+        if (request.method === "POST" && attentionMatch) {
+          requireMutationSession(request);
+          const input = await readJson(request);
+          const expectedRevision =
+            typeof input === "object" && input !== null
+              ? (input as Record<string, unknown>).expectedRevision
+              : undefined;
+          if (
+            !Number.isSafeInteger(expectedRevision) ||
+            (expectedRevision as number) < 0
+          ) {
+            throw new HttpError(
+              400,
+              "INVALID_ATTENTION_REVISION",
+              "运行问题版本无效。"
+            );
+          }
+          await options.backend.acknowledgeAttention(
+            decodeURIComponent(attentionMatch[1]!),
+            expectedRevision as number
+          );
+          writeJson(response, 200, { accepted: true });
+          return;
+        }
         if (request.method === "POST" && path === "/api/uploads/leases") {
           requireMutationSession(request);
           const input = parseLeaseInput(await readJson(request));

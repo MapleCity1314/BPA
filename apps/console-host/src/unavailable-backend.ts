@@ -53,6 +53,10 @@ export class UnavailableControlBackend implements ControlBackend {
     return unavailable();
   }
 
+  async acknowledgeAttention(_id: string, _expectedRevision: number) {
+    return unavailable();
+  }
+
   async createStagingLease(_input: StagingLeaseRequest) {
     return unavailable();
   }

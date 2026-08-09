@@ -35,7 +35,7 @@ Workflow terminal fact
 
 ## 3. 已完成的第一层
 
-当前候选增加平台级 `attention.list`：
+已合并的第一层增加平台级 `attention.list`：
 
 1. SQLite 按终态和更新时间有界读取 Run，不扫描页面、Cookie 或浏览器存储。
 2. `@bpa/attention-core` 只从受控字段提取风险码；原始错误消息不进入投影。
@@ -43,15 +43,19 @@ Workflow terminal fact
 4. Console Host 将投影映射为稳定 UI 合同，Operator Console 在首页展示问题数量、
    标题与下一步。
 
-该层解决“面板能看见”，不等于“手机已收到推送”，也没有将历史终态标记为已处理。
+该层解决“面板能看见”，不等于“手机已收到推送”。
 
 ## 4. 第二层：持久 Attention 与 Delivery Outbox
 
-下一实现切片只新增两个平台事实，不把飞书逻辑塞进 Workflow：
+当前 Schema v16 候选先新增第一个平台事实，不把飞书逻辑塞进 Workflow：
 
 - `attention_record`：稳定 ID、Run/Node 身份、分类、严重度、创建时间、确认状态和确认人。
 - `attention_delivery`：Attention ID、Channel、幂等键、请求摘要、投递状态、效果确认和
   `uncertain` 原因。
+
+`attention_record` 候选已经实现 open/acknowledged、revision CAS、确认审计、重启恢复和
+Operator Console 的“已知晓”动作。`attention_delivery` 仍是下一切片；Schema v16 不做
+历史失败回填，避免把无法证明是否已处理的旧 Run 猜成新的未处理事项。
 
 生成必须与 Run 终态转换位于同一 SQLite 事务。投递器只消费 Outbox，不读取业务表；
 成功、明确失败和效果不确定分别持久化。超时后如果不能证明消息未送达，状态必须为

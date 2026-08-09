@@ -1707,7 +1707,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(15);
+      expect(store.health().schemaVersion).toBe(16);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1816,13 +1816,14 @@ describe("append-only migrations", () => {
         DROP INDEX engine_outbox_pending_created;
         DROP INDEX gateway_commands_active_sequence;
         DROP INDEX gateway_commands_terminal_result_sequence;
+        DROP TABLE attention_records;
         DELETE FROM schema_migrations
-        WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+        WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(15);
+      expect(upgraded.health().schemaVersion).toBe(16);
       expect(upgraded.getAssistanceTask(task.task.taskId)).toEqual(task);
       expect(
         upgraded.getAssistanceRequestResult("not-recorded")
@@ -1847,7 +1848,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(15);
+      expect(store.health().schemaVersion).toBe(16);
       expect(store.getAssistanceRequestResult("not-recorded")).toBeUndefined();
       store.close();
     } finally {
@@ -1869,7 +1870,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(15);
+      expect(store.health().schemaVersion).toBe(16);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1957,13 +1958,14 @@ describe("append-only migrations", () => {
         DROP INDEX engine_outbox_pending_created;
         DROP INDEX gateway_commands_active_sequence;
         DROP INDEX gateway_commands_terminal_result_sequence;
+        DROP TABLE attention_records;
         DELETE FROM schema_migrations
-        WHERE version IN (6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+        WHERE version IN (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(15);
+      expect(upgraded.health().schemaVersion).toBe(16);
       expect(
         upgraded.createWorkflowDraft({
           draftId: "v5-upgraded-draft",
@@ -2004,7 +2006,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(15);
+      expect(store.health().schemaVersion).toBe(16);
       expect(store.getWorkflowDraft("not-created")).toBeUndefined();
       store.close();
     } finally {
@@ -2017,7 +2019,7 @@ describe("append-only migrations", () => {
     const databasePath = join(directory, "bpa.sqlite3");
     try {
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(15);
+      expect(store.health().schemaVersion).toBe(16);
       store.close();
       const raw = new Database(databasePath);
       raw

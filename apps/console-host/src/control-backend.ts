@@ -37,6 +37,7 @@ export const CONSOLE_CONTROL_METHODS = {
   taskClaim: "assistance.task.claim",
   taskSubmit: "assistance.task.submit",
   attentionList: "attention.list",
+  attentionAcknowledge: "attention.acknowledge",
   stagingLeaseCreate: "staging.lease.create",
   datasetImportStaged: "dataset.import.staged",
   evidenceLineageGet: "evidence.lineage.get",
@@ -453,7 +454,8 @@ export class UdsControlBackend implements ControlBackend {
               item.requestedAction,
               "查看运行记录后再决定是否重新发起。"
             ),
-            createdAt: safeTimestamp(item.createdAt, observedAt)
+            createdAt: safeTimestamp(item.createdAt, observedAt),
+            revision: integer(item.revision)
           }
         ];
       });
@@ -724,6 +726,25 @@ export class UdsControlBackend implements ControlBackend {
       });
     } catch {
       return [];
+    }
+  }
+
+  async acknowledgeAttention(
+    id: string,
+    expectedRevision: number
+  ): Promise<void> {
+    try {
+      await this.#client.request<unknown>(
+        CONSOLE_CONTROL_METHODS.attentionAcknowledge,
+        {
+          id,
+          expectedRevision,
+          actor: this.#actorId
+        },
+        { requestId: this.#operationId() }
+      );
+    } catch {
+      throw failureMessage("确认运行问题");
     }
   }
 

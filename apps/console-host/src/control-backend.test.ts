@@ -92,7 +92,8 @@ describe("UdsControlBackend", () => {
           title: "浏览器登录或验证需要处理",
           reason: "浏览器返回了登录阻断。",
           requestedAction: "在受管 Chrome Profile 中完成人工登录。",
-          createdAt: "2026-07-30T03:58:00.000Z"
+          createdAt: "2026-07-30T03:58:00.000Z",
+          revision: 0
         }
       ])
       .respond(CONSOLE_CONTROL_METHODS.browserPageObservationList, [
@@ -527,6 +528,26 @@ describe("UdsControlBackend", () => {
           resolverType: "human",
           fencingToken: 7,
           output: { approved: true }
+        }
+      }
+    ]);
+  });
+
+  it("acknowledges terminal attention with its current revision", async () => {
+    const client = new FakeRequester().respond(
+      CONSOLE_CONTROL_METHODS.attentionAcknowledge,
+      { state: "acknowledged", revision: 1 }
+    );
+
+    await backend(client).acknowledgeAttention("run-terminal:run-1", 0);
+
+    expect(client.calls).toEqual([
+      {
+        method: "attention.acknowledge",
+        params: {
+          id: "run-terminal:run-1",
+          expectedRevision: 0,
+          actor: "operator:test"
         }
       }
     ]);
