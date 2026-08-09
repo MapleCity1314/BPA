@@ -158,7 +158,7 @@ describe("local control socket", () => {
       sendControlRequest(socketPath, "doctor")
     ).resolves.toMatchObject({
       status: "ok",
-      persistence: { adapter: "sqlite", schemaVersion: 14 }
+      persistence: { adapter: "sqlite", schemaVersion: 15 }
     });
   });
 

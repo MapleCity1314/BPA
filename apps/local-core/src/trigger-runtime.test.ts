@@ -80,4 +80,73 @@ describe("deterministic Trigger Runtime",() => {
     expect(store.listTriggerRuns(schedule.id)).toHaveLength(1);
     store.close();
   });
+
+  it("reconciles an active Run with its pinned TriggerSpec version",() => {
+    const store = new SqlitePersistence({ path:":memory:" });
+    const trigger = store.putTriggerSpec({
+      spec:base,actor:"operator",occurredAt:"2026-08-05T00:00:00.000Z"
+    });
+    const engine = runtime(store,() => new Date("2026-08-05T00:00:00.000Z"));
+    const triggerRun = engine.fire({ trigger,occurrenceKey:"manual:req-pinned" });
+    store.putTriggerSpec({
+      spec:{
+        ...base,
+        version:"2.0.0",
+        workflow:{ id:"inventory.refresh",version:"2.0.0" },
+        concurrencyKey:"inventory:replacement"
+      },
+      actor:"operator",
+      occurredAt:"2026-08-05T00:00:01.000Z"
+    });
+    const run = store.getRun(triggerRun.workflowRunId!)!;
+    store.commitRunTransition({
+      runId:run.id,expectedRevision:run.revision,nextStatus:"succeeded",
+      event:{
+        id:randomUUID(),runId:run.id,sequence:2,type:"RUN_SUCCEEDED",
+        payload:{},occurredAt:"2026-08-05T00:00:02.000Z"
+      }
+    });
+
+    engine.tick();
+
+    expect(store.listTriggerRuns(base.id)[0]).toMatchObject({
+      triggerVersion:"1.0.0",status:"complete"
+    });
+    expect(store.acquireTriggerLease({
+      concurrencyKey:base.concurrencyKey,
+      ownerId:"next-run",
+      now:"2026-08-05T00:00:03.000Z",
+      ttlSeconds:300
+    })).toBeDefined();
+    store.close();
+  });
+
+  it.each(["rejected","uncertain","cancelled","failed"] as const)(
+    "preserves the %s Workflow terminal status",
+    (terminalStatus) => {
+      const store = new SqlitePersistence({ path:":memory:" });
+      const trigger = store.putTriggerSpec({
+        spec:base,actor:"operator",occurredAt:"2026-08-05T00:00:00.000Z"
+      });
+      const engine = runtime(store,() => new Date("2026-08-05T00:00:00.000Z"));
+      const triggerRun = engine.fire({
+        trigger,
+        occurrenceKey:`manual:req-${terminalStatus}`
+      });
+      const run = store.getRun(triggerRun.workflowRunId!)!;
+      store.commitRunTransition({
+        runId:run.id,expectedRevision:run.revision,nextStatus:terminalStatus,
+        event:{
+          id:randomUUID(),runId:run.id,sequence:2,
+          type:`RUN_${terminalStatus.toUpperCase()}`,
+          payload:{},occurredAt:"2026-08-05T00:00:01.000Z"
+        }
+      });
+
+      engine.tick();
+
+      expect(store.listTriggerRuns(base.id)[0]?.status).toBe(terminalStatus);
+      store.close();
+    }
+  );
 });
