@@ -84,6 +84,17 @@ describe("UdsControlBackend", () => {
       .respond(CONSOLE_CONTROL_METHODS.taskList, [
         { taskId: "task-1" }
       ])
+      .respond(CONSOLE_CONTROL_METHODS.attentionList, [
+        {
+          id: "run-terminal:run-login",
+          runId: "run-login",
+          kind: "blocking",
+          title: "浏览器登录或验证需要处理",
+          reason: "浏览器返回了登录阻断。",
+          requestedAction: "在受管 Chrome Profile 中完成人工登录。",
+          createdAt: "2026-07-30T03:58:00.000Z"
+        }
+      ])
       .respond(CONSOLE_CONTROL_METHODS.browserPageObservationList, [
         {
           sessionId: "session-1",
@@ -101,9 +112,15 @@ describe("UdsControlBackend", () => {
       ]);
     const result = await backend(client).getDashboard();
     expect(result).toMatchObject({
-      attention: "attention",
-      headline: "有 1 项等待处理",
+      attention: "action",
+      headline: "发现 1 项运行问题",
       pendingTaskCount: 1,
+      alerts: [
+        {
+          id: "run-terminal:run-login",
+          kind: "blocking"
+        }
+      ],
       components: [
         { id: "core", status: "healthy" },
         { id: "persistence", status: "healthy" },
@@ -131,6 +148,10 @@ describe("UdsControlBackend", () => {
       {
         method: "browser.page-observation.list",
         params: { limit: 200 }
+      },
+      {
+        method: "attention.list",
+        params: { limit: 100 }
       }
     ]);
   });

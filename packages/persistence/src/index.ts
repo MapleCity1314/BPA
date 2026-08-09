@@ -712,6 +712,10 @@ export interface BrowserObservationStore {
 
 export interface ExecutionStore {
   getRun(id: string): RunRecord | undefined;
+  listRuns(input: {
+    statuses?: readonly RunStatus[];
+    limit: number;
+  }): RunRecord[];
   getNodeExecution(id: string): NodeExecutionRecord | undefined;
   listEvents(runId: string): ExecutionEventRecord[];
   requestCancel(runId: string, actor: string): RunRecord;

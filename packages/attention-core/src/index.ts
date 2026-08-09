@@ -48,6 +48,96 @@ export interface AttentionGroup {
   readonly dueAt?: string;
 }
 
+export interface TerminalRunAttentionInput {
+  readonly id: string;
+  readonly workflowId: string;
+  readonly workflowVersion: string;
+  readonly status: "rejected" | "failed" | "uncertain";
+  readonly currentNodeKey?: string;
+  readonly updatedAt: string;
+  readonly events: readonly {
+    readonly type: string;
+    readonly payload: unknown;
+  }[];
+}
+
+const AUTHENTICATION_CODES = new Set([
+  "AUTH_REQUIRED",
+  "CAPTCHA_REQUIRED",
+  "RISK_CONTROL",
+  "SESSION_EXPIRED"
+]);
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function diagnosticCodes(value: unknown): string[] {
+  const source = record(value);
+  if (!source) return [];
+  const direct = ["code", "errorCode", "reasonCode"].flatMap((key) =>
+    typeof source[key] === "string" ? [source[key] as string] : []
+  );
+  const error = record(source.error);
+  const riskSignals = Array.isArray(source.riskSignals)
+    ? source.riskSignals
+    : [];
+  return [
+    ...direct,
+    ...(typeof error?.code === "string" ? [error.code] : []),
+    ...riskSignals.flatMap((signal) => {
+      const parsed = record(signal);
+      return typeof parsed?.code === "string" ? [parsed.code] : [];
+    })
+  ];
+}
+
+/**
+ * Projects a durable terminal Run into one operator-facing, secret-free item.
+ * Delivery channels consume this projection instead of interpreting raw events.
+ */
+export function projectTerminalRunAttention(
+  input: TerminalRunAttentionInput
+): AttentionItem {
+  const codes = [
+    ...new Set(input.events.flatMap((event) => diagnosticCodes(event.payload)))
+  ];
+  const authenticationBlocked = codes.some((code) =>
+    AUTHENTICATION_CODES.has(code)
+  );
+  const blocking = input.status === "rejected" || input.status === "uncertain";
+  const statusLabel =
+    input.status === "uncertain"
+      ? "结果不确定"
+      : input.status === "rejected"
+        ? "任务已安全阻断"
+        : "任务执行失败";
+  return createAttentionItem({
+    id: `run-terminal:${input.id}`,
+    runId: input.id,
+    stageKey: input.currentNodeKey ?? "run",
+    groupKey: authenticationBlocked ? "authentication" : input.status,
+    kind: blocking ? "blocking" : "action",
+    source: authenticationBlocked ? "browser" : "runtime",
+    title: authenticationBlocked ? "浏览器登录或验证需要处理" : statusLabel,
+    reason: authenticationBlocked
+      ? "浏览器返回了登录、验证码或平台风控阻断。"
+      : `${input.workflowId}@${input.workflowVersion} ${statusLabel}。`,
+    requestedAction: authenticationBlocked
+      ? "在受管 Chrome Profile 中完成人工登录或验证，再重新发起工作流。"
+      : input.status === "uncertain"
+        ? "先核对运行记录与证据；确认外部效果前不要自动重试。"
+        : "查看运行记录中的失败步骤，处理原因后再重新发起。",
+    blocking,
+    batchable: false,
+    attemptedActions: [],
+    resumesAutomatically: false,
+    createdAt: input.updatedAt
+  });
+}
+
 const PRIORITY: Record<AttentionKind, number> = {
   information: 0,
   review: 1,

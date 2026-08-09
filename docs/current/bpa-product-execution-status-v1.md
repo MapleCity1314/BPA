@@ -8,8 +8,8 @@
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- Git 基线：截至 2026-08-09，PR #2–#11 均已在 required checks 通过后进入 `main`；
-  最新基线为 PR #11 merge commit `c3dc98180c57`。阶段 0 结构收敛、资源观测、清退商品
+- Git 基线：截至 2026-08-09，PR #2–#12 均已在 required checks 通过后进入 `main`；
+  最新基线为 PR #12 merge commit `4d128150968e`。阶段 0 结构收敛、资源观测、清退商品
   Mac 目标约束、爆款图片来源闭包校验和体验分候选均已进入主线。
 - GitHub `main` 已启用管理员同样受约束的 Branch Protection：必须走 Pull Request、
   与主线同步、解决 review conversation，并通过 macOS、Windows、性能、双架构发布、
@@ -34,6 +34,12 @@
 | 2 造流程易用 | 未开始 | Web 校正界面、截图/元素候选回传、非技术用户验收 | 非技术同事独立完成真实流程发布 |
 | 3 通用能力 | 未开始 | HTTP Request、File Write、JSON Transform、导出、自愈 | 不写 Adapter 覆盖主要通用需求 |
 | 4 外部交付 | 未开始 | 单机安装、license、多用户权限 | 签名闭包安装、升级、回滚和权限验收 |
+
+阶段 1 的第一层候选已开始：平台从持久化 Run 终态生成脱敏 Attention，并把登录、验证码、
+风控、`rejected`、`failed` 与 `uncertain` 呈现在统一 Operator Console 首页。该候选只完成
+“面板能看见”；平台级持久 Attention、投递 Outbox、手机推送、确认状态与远程 Recovery
+Session 尚未实现，不能据此宣称无人值守成立。实施顺序与共享 Chrome 资源边界见
+`docs/plans/bpa-stage-one-unattended-operations-v0.1.md`。
 
 ## 3. Rust 准入状态
 

@@ -27,6 +27,7 @@ const dashboard: DashboardSnapshot = {
   runtimeVersion: "0.4.0",
   activeRunCount: 1,
   pendingTaskCount: 1,
+  alerts: [],
   components: [
     {
       id: "core",
@@ -206,6 +207,37 @@ async function renderReady(api = mockApi()) {
 }
 
 describe("Operator Console", () => {
+  it("surfaces durable terminal attention on the overview", async () => {
+    const user = userEvent.setup();
+    const api = mockApi();
+    api.getDashboard = vi.fn(async () => ({
+      ...dashboard,
+      headline: "发现 1 项运行问题",
+      alerts: [
+        {
+          id: "run-terminal:run-login",
+          runId: "run-login",
+          kind: "blocking" as const,
+          title: "浏览器登录或验证需要处理",
+          reason: "浏览器返回了登录阻断。",
+          requestedAction: "在受管 Chrome Profile 中完成人工登录。",
+          createdAt: "2026-07-30T03:58:00.000Z"
+        }
+      ]
+    }));
+
+    await renderReady(api);
+
+    expect(
+      screen.getByRole("heading", { name: "浏览器登录或验证需要处理" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("在受管 Chrome Profile 中完成人工登录。")
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "查看 1 项问题" }));
+    expect(screen.getByText(/Run run-login/)).toBeInTheDocument();
+  });
+
   it("shows business work first and keeps diagnostics in advanced mode", async () => {
     const user = userEvent.setup();
     await renderReady();

@@ -261,6 +261,9 @@ importers:
       '@bpa/assistance-core':
         specifier: workspace:*
         version: link:../../packages/assistance-core
+      '@bpa/attention-core':
+        specifier: workspace:*
+        version: link:../../packages/attention-core
       '@bpa/authoring-core':
         specifier: workspace:*
         version: link:../../packages/authoring-core
@@ -543,7 +546,7 @@ importers:
     devDependencies:
       '@napi-rs/cli':
         specifier: 3.8.2
-        version: 3.8.2(@emnapi/runtime@1.11.2)(@types/node@24.13.3)
+        version: 3.8.2(@emnapi/runtime@1.9.2)(@types/node@24.13.3)
       tsx:
         specifier: ^4.20.6
         version: 4.23.1
@@ -6729,7 +6732,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@napi-rs/cli@3.8.2(@emnapi/runtime@1.11.2)(@types/node@24.13.3)':
+  '@napi-rs/cli@3.8.2(@emnapi/runtime@1.9.2)(@types/node@24.13.3)':
     dependencies:
       '@inquirer/prompts': 8.5.2(@types/node@24.13.3)
       '@napi-rs/cross-toolchain': 1.0.3
@@ -6745,7 +6748,7 @@ snapshots:
       typanion: 3.14.0
       typescript: 6.0.3
     optionalDependencies:
-      '@emnapi/runtime': 1.11.2
+      '@emnapi/runtime': 1.9.2
     transitivePeerDependencies:
       - '@napi-rs/cross-toolchain-arm64-target-aarch64'
       - '@napi-rs/cross-toolchain-arm64-target-armv7'

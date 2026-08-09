@@ -36,12 +36,23 @@ export interface BrowserPageBindingSelection {
   observationRevision: number;
 }
 
+export interface AttentionView {
+  id: string;
+  runId?: string;
+  kind: "information" | "review" | "action" | "approval" | "blocking";
+  title: string;
+  reason: string;
+  requestedAction: string;
+  createdAt: string;
+}
+
 export interface DashboardSnapshot {
   attention: AttentionLevel;
   headline: string;
   runtimeVersion: string;
   components: HealthComponent[];
   browserSessions: BrowserSessionView[];
+  alerts: AttentionView[];
   activeRunCount: number;
   pendingTaskCount: number;
 }

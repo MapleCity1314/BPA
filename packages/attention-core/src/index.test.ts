@@ -3,6 +3,7 @@ import {
   aggregateAttentionItems,
   attentionRequiresInterruption,
   createAttentionItem,
+  projectTerminalRunAttention,
   type AttentionItem
 } from "./index.js";
 
@@ -68,5 +69,52 @@ describe("AttentionItem", () => {
     expect(() =>
       createAttentionItem(item("invalid", { kind: "blocking" }))
     ).toThrow(/invalid/u);
+  });
+
+  it("projects login rejection without exposing raw event messages", () => {
+    const attention = projectTerminalRunAttention({
+      id: "run-login",
+      workflowId: "doudian.inventory.refresh",
+      workflowVersion: "1.0.0",
+      status: "rejected",
+      currentNodeKey: "collect",
+      updatedAt: "2026-08-09T06:00:00.000Z",
+      events: [
+        {
+          type: "RUNTIME_RESULT_APPLIED",
+          payload: {
+            errorCode: "SESSION_EXPIRED",
+            message: "secret browser detail"
+          }
+        }
+      ]
+    });
+
+    expect(attention).toMatchObject({
+      id: "run-terminal:run-login",
+      groupKey: "authentication",
+      kind: "blocking",
+      source: "browser",
+      attemptedActions: []
+    });
+    expect(JSON.stringify(attention)).not.toContain("secret browser detail");
+  });
+
+  it("keeps uncertain outcomes blocking and forbids blind retry guidance", () => {
+    const attention = projectTerminalRunAttention({
+      id: "run-uncertain",
+      workflowId: "delivery.feishu",
+      workflowVersion: "1.0.0",
+      status: "uncertain",
+      updatedAt: "2026-08-09T06:00:00.000Z",
+      events: []
+    });
+
+    expect(attention).toMatchObject({
+      groupKey: "uncertain",
+      blocking: true,
+      resumesAutomatically: false
+    });
+    expect(attention.requestedAction).toContain("不要自动重试");
   });
 });

@@ -1,5 +1,6 @@
 import { useMemo, useState, type FormEvent } from "react";
 import type {
+  AttentionView,
   BrowserPageBindingSelection,
   BrowserSessionView,
   DashboardSnapshot,
@@ -55,6 +56,7 @@ export function OverviewView({
   onNavigate(view: ViewId): void;
 }) {
   const ready = dashboard.attention === "normal";
+  const attentionCount = tasks.length + dashboard.alerts.length;
   return (
     <div className="view-stack">
       <section className={`hero-card operator-hero ${ready ? "quiet" : "needs-action"}`}>
@@ -83,8 +85,10 @@ export function OverviewView({
         </button>
         <button onClick={() => onNavigate("tasks")} type="button">
           <span>需要处理</span>
-          <strong>{tasks.length}</strong>
-          <small>{tasks.length === 0 ? "当前无需介入" : "集中处理后自动继续"}</small>
+          <strong>{attentionCount}</strong>
+          <small>
+            {attentionCount === 0 ? "当前无需介入" : "查看阻断、失败与待确认项"}
+          </small>
         </button>
         <button onClick={() => onNavigate("runs")} type="button">
           <span>正在运行</span>
@@ -97,6 +101,20 @@ export function OverviewView({
           <small>{downloads[0]?.title ?? "暂无可下载结果"}</small>
         </button>
       </section>
+      {dashboard.alerts.length > 0 ? (
+        <section className="panel attention-preview">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">运行问题</p>
+              <h3>{dashboard.alerts[0]?.title}</h3>
+              <p className="muted">{dashboard.alerts[0]?.requestedAction}</p>
+            </div>
+            <button onClick={() => onNavigate("tasks")} type="button">
+              查看 {dashboard.alerts.length} 项问题
+            </button>
+          </div>
+        </section>
+      ) : null}
       {tasks.length > 0 ? (
         <section className="panel attention-preview">
           <div className="section-heading">
@@ -682,10 +700,12 @@ export function RunTimelineView({
 
 export function TaskCenter({
   api,
+  alerts,
   tasks,
   onCompleted
 }: {
   api: OperatorConsoleApi;
+  alerts: AttentionView[];
   tasks: TaskView[];
   onCompleted(): Promise<void>;
 }) {
@@ -712,14 +732,30 @@ export function TaskCenter({
           <h2>任务中心</h2>
           <p className="muted">只有需要判断或登录时才会在这里打扰你。</p>
         </div>
-        <StatusPill tone={tasks.length ? "action" : "normal"}>
-          {tasks.length ? "需要操作" : "无需监管"}
+        <StatusPill tone={tasks.length + alerts.length ? "action" : "normal"}>
+          {tasks.length + alerts.length ? "需要操作" : "无需监管"}
         </StatusPill>
       </div>
-      {tasks.length === 0 ? (
+      {tasks.length === 0 && alerts.length === 0 ? (
         <div className="empty-state">目前没有需要人工处理的事项。</div>
       ) : (
         <div className="task-list">
+          {alerts.map((alert) => (
+            <article className="task-card" key={alert.id}>
+              <div>
+                <StatusPill tone="action">
+                  {alert.kind === "blocking" ? "已阻断" : "需要复核"}
+                </StatusPill>
+                <h3>{alert.title}</h3>
+                <p>{alert.reason}</p>
+                <p>{alert.requestedAction}</p>
+                <small>
+                  {formatTime(alert.createdAt)}
+                  {alert.runId ? ` · Run ${alert.runId}` : ""}
+                </small>
+              </div>
+            </article>
+          ))}
           {tasks.map((task) => (
             <article className="task-card" key={task.id}>
               <div>
