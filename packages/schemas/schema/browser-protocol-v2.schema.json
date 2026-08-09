@@ -172,6 +172,52 @@
         { "contains": { "const": "active_page_probe_v1" } }
       ]
     },
+    "extensionResourceUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active_commands",
+        "active_tab_commands",
+        "active_alliance_stages",
+        "cancellation_requests",
+        "cancellation_stop_barriers",
+        "observed_tabs",
+        "observation_capacity",
+        "managed_tabs",
+        "pacing_reservations",
+        "probes"
+      ],
+      "properties": {
+        "active_commands": { "type": "integer", "minimum": 0, "maximum": 32 },
+        "active_tab_commands": { "type": "integer", "minimum": 0, "maximum": 32 },
+        "active_alliance_stages": { "type": "integer", "minimum": 0, "maximum": 32 },
+        "cancellation_requests": { "type": "integer", "minimum": 0, "maximum": 32 },
+        "cancellation_stop_barriers": { "type": "integer", "minimum": 0, "maximum": 32 },
+        "observed_tabs": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "observation_capacity": { "const": 64 },
+        "managed_tabs": { "type": "integer", "minimum": 0 },
+        "pacing_reservations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["active", "capacity", "ttl_ms"],
+          "properties": {
+            "active": { "type": "integer", "minimum": 0, "maximum": 64 },
+            "capacity": { "const": 64 },
+            "ttl_ms": { "const": 120000 }
+          }
+        },
+        "probes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["active", "capacity", "ttl_ms"],
+          "properties": {
+            "active": { "type": "integer", "minimum": 0, "maximum": 32 },
+            "capacity": { "const": 32 },
+            "ttl_ms": { "const": 30000 }
+          }
+        }
+      }
+    },
     "messageBase": {
       "type": "object",
       "additionalProperties": false,
@@ -913,6 +959,41 @@
     "heartbeat": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "properties": { "type": { "const": "heartbeat.ping" } }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "type": "object",
+                "properties": { "resource_usage": false }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": { "type": { "const": "heartbeat.pong" } }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "type": "object",
+                "required": ["resource_usage"],
+                "properties": {
+                  "resource_usage": {
+                    "$ref": "#/$defs/extensionResourceUsage"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
       "required": [
         "protocol",
         "version",
@@ -938,7 +1019,8 @@
           "additionalProperties": false,
           "required": ["nonce"],
           "properties": {
-            "nonce": { "$ref": "#/$defs/id" }
+            "nonce": { "$ref": "#/$defs/id" },
+            "resource_usage": { "$ref": "#/$defs/extensionResourceUsage" }
           }
         }
       }

@@ -61,6 +61,13 @@ Content Script 与 Adapter observer 产生通用 `page.observation`；Core 可�
 Script 状态、认证状态与不可解析的 `authentication.context_ref`、observer capability、
 revision、page epoch 和过期时间。平台身份由 Adapter Node 读取，不进入协议或 Core。
 
+Gateway 每 20 秒向 READY Session 发送 `heartbeat.ping`。Bridge 的
+`heartbeat.pong` 必须回显当前 nonce，并携带严格白名单的 `resource_usage`：活跃命令、
+标签页命令、Alliance stage、取消请求与停止屏障、观察/受管标签页，以及 pacing reservation
+和 probe generation 的数量、容量与 TTL。Core 只接受当前 pending nonce，校验固定容量和计数
+守恒后才把资源快照交给采集器；到下一心跳周期仍未确认时清除旧快照。迟到、畸形或超界的
+pong 不得覆盖新一代状态。
+
 ### 3.1 Session 状态机
 
 ```text

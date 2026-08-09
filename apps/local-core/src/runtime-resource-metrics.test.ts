@@ -37,7 +37,19 @@ const browserGateway = {
   connectionCount: 1,
   readySessionCount: 1,
   pendingCancelRequestCount: 0,
-  pageProbes: { active: 2, capacity: 32, ttlMs: 10_000 }
+  pageProbes: { active: 2, capacity: 32, ttlMs: 10_000 },
+  extension: {
+    activeCommands: 1,
+    activeTabCommands: 1,
+    activeAllianceStages: 0,
+    cancellationRequests: 0,
+    cancellationStopBarriers: 0,
+    observedTabs: 2,
+    observationCapacity: 64,
+    managedTabs: 0,
+    pacingReservations: { active: 1, capacity: 64, ttlMs: 120_000 },
+    probes: { active: 1, capacity: 32, ttlMs: 30_000 }
+  }
 };
 
 describe("Core runtime resource metrics", () => {

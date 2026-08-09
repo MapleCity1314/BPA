@@ -72,6 +72,10 @@ import {
   parseManagedTabObservations
 } from "../lib/managed-tab-lifecycle";
 import { NativeConnectionSupervisor } from "../lib/native-connection-supervisor";
+import {
+  EXTENSION_RUNTIME_LIMITS,
+  ExtensionRuntimeResourceRegistry
+} from "../lib/extension-runtime-resources";
 
 const NATIVE_HOST = "com.bpa.browser";
 const PROTOCOL = BROWSER_PROTOCOL;
@@ -102,7 +106,7 @@ export default defineBackground(() => {
     { readonly tabId: number; readonly requestId: string }
   >();
   const cancellationStopBarriers = new Map<string, Promise<boolean>>();
-  const pacingReservations = new Map<string, number>();
+  const runtimeResources = new ExtensionRuntimeResourceRegistry();
   const observedTabs = new Map<
     number,
     {
@@ -118,7 +122,6 @@ export default defineBackground(() => {
       windowId?: number;
     }
   >();
-  const probeGenerations = new Map<number, number>();
   const contentScriptRecovery = new ContentScriptRecovery();
   const assistancePanel = new AssistancePanelRepository({
     get: (key) => browser.storage.local.get(key),
@@ -257,6 +260,12 @@ export default defineBackground(() => {
     if (current && shouldReusePageEpoch(current, url, forceNew)) {
       return current.pageEpoch;
     }
+    if (
+      !current &&
+      observedTabs.size >= EXTENSION_RUNTIME_LIMITS.observations
+    ) {
+      throw new Error("BROWSER_OBSERVATION_CAPACITY_EXCEEDED");
+    }
     const pageEpoch = createPageEpoch(tabId);
     const observerCapabilityId = observerCapabilityForUrl(url);
     if (!observerCapabilityId) throw new Error("PAGE_OBSERVER_NOT_FOUND");
@@ -394,125 +403,142 @@ export default defineBackground(() => {
     tabId: number,
     options: { forceNewEpoch?: boolean } = {}
   ): Promise<void> => {
-    const generation = (probeGenerations.get(tabId) ?? 0) + 1;
-    probeGenerations.set(tabId, generation);
-    const isCurrentProbe = (pageEpoch: string): boolean =>
-      probeGenerations.get(tabId) === generation &&
-      observedTabs.get(tabId)?.pageEpoch === pageEpoch;
-    let tab: Browser.tabs.Tab;
-    try {
-      tab = await browser.tabs.get(tabId);
-    } catch {
-      await invalidateTrackedTab(tabId, "TAB_CLOSED");
-      return;
-    }
-    const url = supportedSourceUrl(tab.url);
-    if (!url) {
-      await invalidateTrackedTab(tabId, "PAGE_LEFT_SUPPORTED_SCOPE");
-      return;
-    }
-    const observerCapabilityId = observerCapabilityForUrl(url.href);
-    if (!observerCapabilityId) {
-      await invalidateTrackedTab(tabId, "PAGE_OBSERVER_NOT_FOUND");
-      return;
-    }
-    const pageEpoch = pageEpochFor(
-      tabId,
-      url.href,
-      tab.windowId,
-      options.forceNewEpoch
-    );
-    if (tab.status !== "complete") {
-      await reportPage({
-        tabId,
-        windowId: tab.windowId,
-        url,
-        contentScriptReady: false,
-        authentication: { state: "unknown" },
-        observationState: "loading",
-        pageEpoch,
-        observerCapabilityId,
-        reasonCode: "PAGE_LOADING"
+    const generation = runtimeResources.beginProbe(tabId);
+    if (generation === undefined) {
+      await updateStatus({
+        lastError: "BROWSER_PROBE_CAPACITY_EXCEEDED"
       });
       return;
     }
     try {
-      const response = (await contentScriptRecovery.probe({
-        tabId,
-        probe: () =>
-          browser.tabs.sendMessage(tabId, {
-            type: "bpa.content.probe",
-            pageEpoch
-          }),
-        inject: async () => {
-          await browser.scripting.executeScript({
-            target: { tabId },
-            files: ["/content-scripts/content.js"]
-          });
-        }
-      })) as {
-        pageEpoch?: string;
-        observerCapabilityId?: string;
-        authentication?: {
-          state: PageAuthenticationState;
-          contextRef?: string;
-        };
-        observationState?:
-          | "loading"
-          | "probing"
-          | "auth_required"
-          | "challenge"
-          | "ready"
-          | "departed"
-          | "stale";
-        reasonCode?: string;
-      };
-      if (
-        response?.pageEpoch !== pageEpoch ||
-        response.observerCapabilityId !== observerCapabilityId ||
-        !response.authentication ||
-        !response.observationState
-      ) {
-        throw new Error("CONTENT_PROBE_INVALID");
+      const isCurrentProbe = (pageEpoch: string): boolean =>
+        runtimeResources.isCurrentProbe(tabId, generation) &&
+        observedTabs.get(tabId)?.pageEpoch === pageEpoch;
+      let tab: Browser.tabs.Tab;
+      try {
+        tab = await browser.tabs.get(tabId);
+      } catch {
+        await invalidateTrackedTab(tabId, "TAB_CLOSED");
+        return;
       }
-      if (!isCurrentProbe(pageEpoch)) return;
-      const tracked = observedTabs.get(tabId);
-      const authenticationChanged =
-        tracked?.lastObservationSignature !== undefined &&
-        (tracked.authenticationState !== response.authentication.state ||
-          tracked.authenticationContextRef !==
-            response.authentication.contextRef);
-      const observationEpoch = authenticationChanged
-        ? pageEpochFor(tabId, url.href, tab.windowId, true)
-        : pageEpoch;
-      await reportPage({
-        tabId,
-        windowId: tab.windowId,
-        url,
-        contentScriptReady: true,
-        authentication: response.authentication,
-        observationState: response.observationState,
-        pageEpoch: observationEpoch,
-        observerCapabilityId,
-        ...(response.reasonCode ? { reasonCode: response.reasonCode } : {})
-      });
-    } catch (error) {
-      if (!isCurrentProbe(pageEpoch)) return;
-      const reasonCode = contentScriptFailureReason(error);
-      await reportPage({
-        tabId,
-        windowId: tab.windowId,
-        url,
-        contentScriptReady: false,
-        authentication: { state: "unknown" },
-        observationState:
-          reasonCode === "BROWSER_CONTENT_SCRIPT_MISSING"
-            ? "content_script_missing"
-            : "stale",
-        pageEpoch,
-        observerCapabilityId,
-        reasonCode
-      });
+      const url = supportedSourceUrl(tab.url);
+      if (!url) {
+        await invalidateTrackedTab(tabId, "PAGE_LEFT_SUPPORTED_SCOPE");
+        return;
+      }
+      const observerCapabilityId = observerCapabilityForUrl(url.href);
+      if (!observerCapabilityId) {
+        await invalidateTrackedTab(tabId, "PAGE_OBSERVER_NOT_FOUND");
+        return;
+      }
+      let pageEpoch: string;
+      try {
+        pageEpoch = pageEpochFor(
+          tabId,
+          url.href,
+          tab.windowId,
+          options.forceNewEpoch
+        );
+      } catch (error) {
+        await updateStatus({
+          lastError: error instanceof Error ? error.message : String(error)
+        });
+        return;
+      }
+      if (tab.status !== "complete") {
+        await reportPage({
+          tabId,
+          windowId: tab.windowId,
+          url,
+          contentScriptReady: false,
+          authentication: { state: "unknown" },
+          observationState: "loading",
+          pageEpoch,
+          observerCapabilityId,
+          reasonCode: "PAGE_LOADING"
+        });
+        return;
+      }
+      try {
+        const response = (await contentScriptRecovery.probe({
+          tabId,
+          probe: () =>
+            browser.tabs.sendMessage(tabId, {
+              type: "bpa.content.probe",
+              pageEpoch
+            }),
+          inject: async () => {
+            await browser.scripting.executeScript({
+              target: { tabId },
+              files: ["/content-scripts/content.js"]
+            });
+          }
+        })) as {
+          pageEpoch?: string;
+          observerCapabilityId?: string;
+          authentication?: {
+            state: PageAuthenticationState;
+            contextRef?: string;
+          };
+          observationState?:
+            | "loading"
+            | "probing"
+            | "auth_required"
+            | "challenge"
+            | "ready"
+            | "departed"
+            | "stale";
+          reasonCode?: string;
+        };
+        if (
+          response?.pageEpoch !== pageEpoch ||
+          response.observerCapabilityId !== observerCapabilityId ||
+          !response.authentication ||
+          !response.observationState
+        ) {
+          throw new Error("CONTENT_PROBE_INVALID");
+        }
+        if (!isCurrentProbe(pageEpoch)) return;
+        const tracked = observedTabs.get(tabId);
+        const authenticationChanged =
+          tracked?.lastObservationSignature !== undefined &&
+          (tracked.authenticationState !== response.authentication.state ||
+            tracked.authenticationContextRef !==
+              response.authentication.contextRef);
+        const observationEpoch = authenticationChanged
+          ? pageEpochFor(tabId, url.href, tab.windowId, true)
+          : pageEpoch;
+        await reportPage({
+          tabId,
+          windowId: tab.windowId,
+          url,
+          contentScriptReady: true,
+          authentication: response.authentication,
+          observationState: response.observationState,
+          pageEpoch: observationEpoch,
+          observerCapabilityId,
+          ...(response.reasonCode ? { reasonCode: response.reasonCode } : {})
+        });
+      } catch (error) {
+        if (!isCurrentProbe(pageEpoch)) return;
+        const reasonCode = contentScriptFailureReason(error);
+        await reportPage({
+          tabId,
+          windowId: tab.windowId,
+          url,
+          contentScriptReady: false,
+          authentication: { state: "unknown" },
+          observationState:
+            reasonCode === "BROWSER_CONTENT_SCRIPT_MISSING"
+              ? "content_script_missing"
+              : "stale",
+          pageEpoch,
+          observerCapabilityId,
+          reasonCode
+        });
+      }
+    } finally {
+      runtimeResources.completeProbe(tabId, generation);
     }
   };
 
@@ -777,6 +803,23 @@ export default defineBackground(() => {
       if (interrupted) await sendStoredResult(interrupted);
       return;
     }
+    if (activeCommands.size >= EXTENSION_RUNTIME_LIMITS.activeCommands) {
+      send(
+        envelope(
+          "command.ack",
+          {
+            command_seq: payload.command_seq,
+            command_id: payload.command_id,
+            node_execution_id: payload.node_execution_id,
+            accepted: false,
+            fencing_token: payload.fencing_token,
+            reason_code: "BROWSER_COMMAND_CAPACITY_EXCEEDED"
+          },
+          String(message.trace_id)
+        )
+      );
+      return;
+    }
     const occupyingCommand = activeTabCommands.get(executingTabId);
     if (occupyingCommand && occupyingCommand !== commandId) {
       send(
@@ -837,6 +880,9 @@ export default defineBackground(() => {
       if (activeTabCommands.get(executingTabId) === commandId) {
         activeTabCommands.delete(executingTabId);
       }
+      cancelledCommands.delete(commandId);
+      cancellationStopBarriers.delete(commandId);
+      activeAllianceStages.delete(commandId);
       const childTabIds = managedTabs.finish(commandId);
       for (const childTabId of childTabIds) {
         const closed = await browser.tabs
@@ -903,7 +949,7 @@ export default defineBackground(() => {
         now: Date.now(),
         lastExecutedAt: Math.max(
           persistedLastExecutedAt,
-          pacingReservations.get(rateKey) ?? 0
+          runtimeResources.pacingReservation(rateKey)
         ),
         deadline: Date.parse(payload.deadline),
         policy: timingPolicy
@@ -911,7 +957,9 @@ export default defineBackground(() => {
       if (!reservation.accepted) {
         throw new Error(reservation.reason);
       }
-      pacingReservations.set(rateKey, reservation.executeAt);
+      if (!runtimeResources.reservePacing(rateKey, reservation.executeAt)) {
+        throw new Error("RATE_LIMIT_QUEUE_EXCEEDED");
+      }
       rateLimitWaitMs = reservation.waitMs;
       if (reservation.waitMs > 0) {
         await updateStatus({
@@ -1563,15 +1611,39 @@ export default defineBackground(() => {
         });
         break;
       }
-      case "heartbeat.ping":
+      case "heartbeat.ping": {
+        const usage = runtimeResources.usage();
         send(
           envelope(
             "heartbeat.pong",
-            { nonce: message.payload.nonce },
+            {
+              nonce: message.payload.nonce,
+              resource_usage: {
+                active_commands: activeCommands.size,
+                active_tab_commands: activeTabCommands.size,
+                active_alliance_stages: activeAllianceStages.size,
+                cancellation_requests: cancelledCommands.size,
+                cancellation_stop_barriers: cancellationStopBarriers.size,
+                observed_tabs: observedTabs.size,
+                observation_capacity: EXTENSION_RUNTIME_LIMITS.observations,
+                managed_tabs: managedTabs.snapshot().length,
+                pacing_reservations: {
+                  active: usage.pacingReservations.active,
+                  capacity: usage.pacingReservations.capacity,
+                  ttl_ms: usage.pacingReservations.ttlMs
+                },
+                probes: {
+                  active: usage.probes.active,
+                  capacity: usage.probes.capacity,
+                  ttl_ms: usage.probes.ttlMs
+                }
+              }
+            },
             message.trace_id
           )
         );
         break;
+      }
       case "session.error":
         await updateStatus({ lastError: message.payload.message });
         break;
@@ -1797,6 +1869,7 @@ export default defineBackground(() => {
     managedTabs.forget(tabId);
     void persistManagedTabs();
     contentScriptRecovery.forget(tabId);
+    runtimeResources.forgetProbe(tabId);
     void invalidateTrackedTab(tabId, "TAB_CLOSED");
   });
   setInterval(() => void probeAllSourceTabs(), 10_000);

@@ -63,6 +63,29 @@ describe("runtime resource collector", () => {
               ttlMs: 10_000,
               ignored: "must not escape"
             },
+            extension: {
+              activeCommands: 1,
+              activeTabCommands: 1,
+              activeAllianceStages: 0,
+              cancellationRequests: 0,
+              cancellationStopBarriers: 0,
+              observedTabs: 2,
+              observationCapacity: 64,
+              managedTabs: 0,
+              pacingReservations: {
+                active: 1,
+                capacity: 64,
+                ttlMs: 120_000,
+                ignored: "must not escape"
+              },
+              probes: {
+                active: 1,
+                capacity: 32,
+                ttlMs: 30_000,
+                ignored: "must not escape"
+              },
+              ignored: "must not escape"
+            },
             ignored: "must not escape"
           },
           sqlite: {
@@ -105,6 +128,22 @@ describe("runtime resource collector", () => {
             active: 2,
             capacity: 32,
             ttlMs: 10_000
+          },
+          extension: {
+            activeCommands: 1,
+            activeTabCommands: 1,
+            activeAllianceStages: 0,
+            cancellationRequests: 0,
+            cancellationStopBarriers: 0,
+            observedTabs: 2,
+            observationCapacity: 64,
+            managedTabs: 0,
+            pacingReservations: {
+              active: 1,
+              capacity: 64,
+              ttlMs: 120_000
+            },
+            probes: { active: 1, capacity: 32, ttlMs: 30_000 }
           }
         },
         sqlite: {

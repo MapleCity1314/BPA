@@ -180,6 +180,9 @@ function coreMetrics(path) {
   const processMetrics = document?.process;
   const browserGateway = document?.browserGateway;
   const pageProbes = browserGateway?.pageProbes;
+  const extension = browserGateway?.extension;
+  const pacingReservations = extension?.pacingReservations;
+  const extensionProbes = extension?.probes;
   const valid =
     document?.schema === "bpa.core-runtime-metrics/1" &&
     Number.isFinite(Date.parse(document.sampledAt)) &&
@@ -202,6 +205,28 @@ function coreMetrics(path) {
     safeInteger(pageProbes?.capacity, 1) &&
     pageProbes.active <= pageProbes.capacity &&
     safeInteger(pageProbes?.ttlMs, 1) &&
+    extension &&
+    safeInteger(extension.activeCommands) &&
+    safeInteger(extension.activeTabCommands) &&
+    extension.activeTabCommands <= extension.activeCommands &&
+    safeInteger(extension.activeAllianceStages) &&
+    extension.activeAllianceStages <= extension.activeCommands &&
+    safeInteger(extension.cancellationRequests) &&
+    extension.cancellationRequests <= extension.activeCommands &&
+    safeInteger(extension.cancellationStopBarriers) &&
+    extension.cancellationStopBarriers === extension.cancellationRequests &&
+    safeInteger(extension.observedTabs) &&
+    safeInteger(extension.observationCapacity, 1) &&
+    extension.observedTabs <= extension.observationCapacity &&
+    safeInteger(extension.managedTabs) &&
+    safeInteger(pacingReservations?.active) &&
+    safeInteger(pacingReservations?.capacity, 1) &&
+    pacingReservations.active <= pacingReservations.capacity &&
+    safeInteger(pacingReservations?.ttlMs, 1) &&
+    safeInteger(extensionProbes?.active) &&
+    safeInteger(extensionProbes?.capacity, 1) &&
+    extensionProbes.active <= extensionProbes.capacity &&
+    safeInteger(extensionProbes?.ttlMs, 1) &&
     sqlite?.measurement === "same_connection_db_status64" &&
     safeInteger(sqlite.configuredCacheBytes) &&
     safeInteger(sqlite.pageSizeBytes, 1) &&
@@ -231,6 +256,26 @@ function coreMetrics(path) {
         active: pageProbes.active,
         capacity: pageProbes.capacity,
         ttlMs: pageProbes.ttlMs
+      },
+      extension: {
+        activeCommands: extension.activeCommands,
+        activeTabCommands: extension.activeTabCommands,
+        activeAllianceStages: extension.activeAllianceStages,
+        cancellationRequests: extension.cancellationRequests,
+        cancellationStopBarriers: extension.cancellationStopBarriers,
+        observedTabs: extension.observedTabs,
+        observationCapacity: extension.observationCapacity,
+        managedTabs: extension.managedTabs,
+        pacingReservations: {
+          active: pacingReservations.active,
+          capacity: pacingReservations.capacity,
+          ttlMs: pacingReservations.ttlMs
+        },
+        probes: {
+          active: extensionProbes.active,
+          capacity: extensionProbes.capacity,
+          ttlMs: extensionProbes.ttlMs
+        }
       }
     },
     sqlite: {
