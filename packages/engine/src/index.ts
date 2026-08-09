@@ -181,6 +181,18 @@ function outputKey(scopePath: ScopePath, stepKey: string): string {
   return `${scopeKey(scopePath)}:${stepKey}`;
 }
 
+function evidenceKey(scopePath: ScopePath, stepKey: string): string {
+  return outputKey(scopePath, `${stepKey}:evidence`);
+}
+
+function frozenEvidence(outcome: RuntimeOutcome): JsonValue {
+  return outcome.evidence.map((reference) => ({
+    evidenceId: reference.evidenceId,
+    digest: reference.digest,
+    classification: reference.classification
+  }));
+}
+
 function scopeFromOutputKey(key: string): ScopePath | undefined {
   let depth = 0;
   let inString = false;
@@ -282,7 +294,10 @@ function resolveReference(
   }
   const scope = [...currentScope(state)];
   while (true) {
-    const value = state.stepOutputs[outputKey(scope, binding.stepKey!)];
+    const key = binding.source === "step_evidence"
+      ? evidenceKey(scope, binding.stepKey!)
+      : outputKey(scope, binding.stepKey!);
+    const value = state.stepOutputs[key];
     if (value !== undefined) return valueAtPath(value, binding.path);
     if (scope.length === 0) break;
     scope.pop();
@@ -588,6 +603,17 @@ function stopForeachAtDeadline(
   if (foreach?.kind !== "foreach") {
     throw new Error(`Foreach frame step not found: ${frame.stepKey}`);
   }
+  const stoppedScope = state.foreachStack
+    .slice(0, frameIndex + 1)
+    .reduce<ScopePath>(
+      (scope, currentFrame) =>
+        appendScope(
+          scope,
+          currentFrame.stepKey,
+          currentFrame.itemKeys[currentFrame.index]!
+        ),
+      []
+    );
   return drive(
     plan,
     immutableState(
@@ -600,6 +626,10 @@ function stopForeachAtDeadline(
         },
         foreachStack: state.foreachStack.slice(0, frameIndex),
         active: undefined,
+        stepOutputs: withoutCompletedScopeOutputs(
+          state.stepOutputs,
+          stoppedScope
+        ),
         previousOutput: aggregate(frame) as unknown as JsonValue
       },
       state.revision
@@ -1135,6 +1165,7 @@ export class DeterministicWorkflowEngine {
       input.outcome.status === "rejected" ||
       input.outcome.status === "uncertain"
     ) {
+      const scope = currentScope(state);
       return drive(
         this.plan,
         immutableState(
@@ -1149,6 +1180,10 @@ export class DeterministicWorkflowEngine {
             },
             active:undefined,
             completedExternalIds,
+            stepOutputs: {
+              ...state.stepOutputs,
+              [evidenceKey(scope, step.key)]: frozenEvidence(input.outcome)
+            },
             error:{
               code:input.outcome.error.code,
               message:input.outcome.error.message
@@ -1222,14 +1257,13 @@ export class DeterministicWorkflowEngine {
           active: undefined,
           completedExternalIds,
           previousOutput: output,
-          ...(input.outcome.status === "succeeded"
-            ? {
-                stepOutputs: {
-                  ...state.stepOutputs,
-                  [outputKey(scope, step.key)]: output
-                }
-              }
-            : {})
+          stepOutputs: {
+            ...state.stepOutputs,
+            [evidenceKey(scope, step.key)]: frozenEvidence(input.outcome),
+            ...(input.outcome.status === "succeeded"
+              ? { [outputKey(scope, step.key)]: output }
+              : {})
+          },
         },
         state.revision
       ),

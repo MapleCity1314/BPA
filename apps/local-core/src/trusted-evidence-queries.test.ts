@@ -182,6 +182,48 @@ describe("TrustedEvidenceQueryService", () => {
         retainUntil: "2026-08-29T00:00:00.000Z"
       }
     });
+    persistence.putSourceRecord({
+      apiVersion: "bpa.source/v1alpha1",
+      kind: "SourceRecord",
+      sourceId: "source-materialized",
+      sourceType: "public_url",
+      locator: { url: "https://p3.ecombdimg.com/materialized.jpg" },
+      observedAt: timestamp,
+      recordedAt: timestamp,
+      accessScope: "public",
+      classification: "restricted",
+      title: "DOUYIN materialized candidate"
+    });
+    persistence.putAssetRecord({
+      apiVersion: "bpa.asset/v1alpha1",
+      kind: "AssetRecord",
+      assetId: "asset-materialized",
+      digest,
+      size: body.length,
+      mediaType: "image/jpeg",
+      storageRef: `asset-store:${digest}`,
+      classification: "restricted",
+      sourceIds: ["source-materialized"],
+      createdAt: timestamp,
+      retention: {
+        policy: "restricted_24h",
+        retainUntil: "2026-07-31T00:00:00.000Z"
+      }
+    });
+    persistence.putExportRecord({
+      exportId: "export-materialized",
+      runId: "run-query",
+      exportType: "evidence_bundle",
+      status: "ready",
+      assetIds: ["asset-materialized"],
+      metadata: {
+        assets: [{
+          assetId: "asset-materialized",
+          sourceEvidenceId: "evidence-query"
+        }]
+      },
+      createdAt: timestamp
+    });
     persistence.acceptResultWithEvidence({
       commandId: "command-query",
       runId: "run-query",
@@ -213,8 +255,32 @@ describe("TrustedEvidenceQueryService", () => {
       status: "ready",
       assetIds: ["asset-query"],
       metadata: {
-        title: "参考图包",
-        fileName: "reference-pack.json"
+        schemaVersion: "reference-asset-pack/v1",
+        exportId: "export-query",
+        packId: "pack-query",
+        sourceRunId: "run-query",
+        status: "ready_internal_reference",
+        rightsStatus: "not_assessed",
+        allowedUse: "internal_reference_only",
+        assetCount: 1,
+        assets: [{
+          assetId: "asset-query",
+          digest,
+          sizeBytes: body.length,
+          mediaType: "image/jpeg",
+          platform: "DOUYIN",
+          sourceEvidenceId: "evidence-query",
+          discoveryId: "DOUYIN:query",
+          sourceUrl: "https://example.com/image.jpg",
+          sourcePageUrl: "https://example.com/product",
+          role: "COMPOSITION_TEMPLATE",
+          reason: "构图关系清楚",
+          allowedTransferDimensions: ["composition"],
+          prohibitedInferences: ["不得推断版权或销量"],
+          rightsStatus: "not_assessed",
+          allowedUse: "internal_reference_only"
+        }],
+        blockers: ["SOURCE_RIGHTS_NOT_ASSESSED"]
       },
       createdAt: timestamp
     });
@@ -228,6 +294,12 @@ describe("TrustedEvidenceQueryService", () => {
           label: "公开商品页",
           origin: "https://example.com",
           observedAt: timestamp
+        },
+        {
+          id: "source-materialized",
+          label: "DOUYIN materialized candidate",
+          origin: "https://p3.ecombdimg.com",
+          observedAt: timestamp
         }
       ],
       evidence: [
@@ -236,12 +308,18 @@ describe("TrustedEvidenceQueryService", () => {
           label: "screenshot",
           classification: "public",
           digest,
-          sourceIds: ["source-query"]
+          sourceIds: ["source-materialized", "source-query"]
         }
       ],
       assets: [
         {
           id: "asset-query",
+          label: "image/jpeg",
+          digest,
+          evidenceIds: ["evidence-query"]
+        },
+        {
+          id: "asset-materialized",
           label: "image/jpeg",
           digest,
           evidenceIds: ["evidence-query"]
@@ -253,16 +331,38 @@ describe("TrustedEvidenceQueryService", () => {
         id: "export-query",
         runId: "run-query",
         kind: "reference_pack",
-        title: "参考图包",
-        fileName: "reference-pack.json",
+        title: "参考资产包",
+        fileName: "export-query.zip",
         sizeBytes: body.length,
         createdAt: timestamp,
-        assetIds: ["asset-query"]
+        assetIds: ["asset-query"],
+        rightsStatus: "not_assessed",
+        allowedUse: "internal_reference_only",
+        blockers: ["SOURCE_RIGHTS_NOT_ASSESSED"]
       }
     ]);
-    expect(queries.download("export-query")).toEqual(
-      queries.listDownloads("run-query")[0]
-    );
+    expect(queries.download("export-query")).toMatchObject({
+      manifestVersion: "bpa.download-manifest/1",
+      id: "export-query",
+      kind: "reference_pack",
+      assets: [{
+        assetId: "asset-query",
+        digest,
+        sizeBytes: body.length,
+        mediaType: "image/jpeg"
+      }],
+      referencePack: {
+        packId: "pack-query",
+        rightsStatus: "not_assessed",
+        allowedUse: "internal_reference_only"
+      }
+    });
+    expect(queries.downloadAsset("export-query", "asset-query")).toMatchObject({
+      manifestVersion: "bpa.download-asset/1",
+      downloadId: "export-query",
+      assetId: "asset-query",
+      mediaType: "image/jpeg"
+    });
     persistence.close();
   });
 

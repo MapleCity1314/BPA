@@ -1,0 +1,43 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: ecommerce.reference-pack.publish
+  version: 1.0.0
+  title: 发布人工策展参考资产包
+  description: 仅将本 Run 已物化且经人工确认角色、理由和禁止推断边界的图片发布为内部参考 Export；不授予再分发权。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [materialization, curation]
+  properties:
+    materialization: { type: object }
+    curation: { type: object }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [schemaVersion, exportId, packId, sourceRunId, status, rightsStatus, allowedUse, assetCount, assets, blockers]
+  properties:
+    schemaVersion: { const: reference-asset-pack/v1 }
+    exportId: { type: string }
+    packId: { type: string }
+    sourceRunId: { type: string }
+    status: { const: ready_internal_reference }
+    rightsStatus: { const: not_assessed }
+    allowedUse: { const: internal_reference_only }
+    assetCount: { type: integer, minimum: 1, maximum: 20 }
+    assets: { type: array, minItems: 1, maxItems: 20, items: { type: object } }
+    blockers:
+      type: array
+      prefixItems:
+        - { const: SOURCE_RIGHTS_NOT_ASSESSED }
+      minItems: 1
+      maxItems: 1
+risk:
+  level: R1
+  permissions: [ecommerce.reference-pack.publish]
+execution:
+  timeoutDefault: 30s
+  idempotency: verified_write
+  cancellable: true
+errors: [ECOMMERCE_REFERENCE_INPUT_INVALID, ECOMMERCE_REFERENCE_CURATION_INVALID, ECOMMERCE_REFERENCE_ASSET_INVALID, ECOMMERCE_REFERENCE_EXPORT_CONFLICT, ECOMMERCE_REFERENCE_CANCELLED]

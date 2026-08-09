@@ -119,6 +119,10 @@ import {
   projectInventoryProductionCycleSummary
 } from "./inventory-production-cycle-summary.js";
 import { InventoryEffectReconciliationService } from "./inventory-effect-reconciliation.js";
+import {
+  EcommerceEvidenceRuntimeProvider,
+  isEcommerceEvidenceNode
+} from "./ecommerce-evidence-runtime-provider.js";
 
 export const CONTROL_MAX_MESSAGE_BYTES = 512 * 1024;
 
@@ -291,6 +295,17 @@ export class LocalCoreService {
     ) {
       providers.register(
         new InventoryDataRuntimeProvider(persistence, inventoryServiceClient)
+      );
+    }
+    if (
+      candidateArchiveDataDirectory &&
+      !providers.list().includes("ecommerce-evidence")
+    ) {
+      providers.register(
+        new EcommerceEvidenceRuntimeProvider(
+          persistence,
+          candidateArchiveDataDirectory
+        )
       );
     }
     if (!providers.list().includes("team")) {
@@ -1048,6 +1063,11 @@ export class LocalCoreService {
         );
       case "download.get":
         return this.#trustedEvidence.download(String(params.downloadId));
+      case "download.asset.get":
+        return this.#trustedEvidence.downloadAsset(
+          String(params.downloadId),
+          String(params.assetId)
+        );
       case "asset.validate":
         return this.#validateAsset(
           String(params.assetType),
@@ -2075,6 +2095,8 @@ export class LocalCoreService {
                 ? "experience-data"
                 : isAllianceRetiredDataNode(id, version)
                   ? "alliance-retired-data"
+                  : isEcommerceEvidenceNode(id, version)
+                    ? "ecommerce-evidence"
                   : isInventoryDataNode(id, version)
                     ? "inventory-data"
                     : definition.runtime.replace(/^engine_/, ""),

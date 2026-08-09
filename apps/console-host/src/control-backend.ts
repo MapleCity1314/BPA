@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { zipSync } from "fflate";
 import type {
   AttentionView,
   BrowserSessionView,
@@ -51,6 +52,7 @@ export const CONSOLE_CONTROL_METHODS = {
   evidenceLineageGet: "evidence.lineage.get",
   downloadList: "download.list",
   downloadGet: "download.get",
+  downloadAssetGet: "download.asset.get",
   authoringDesignModeRequest: "authoring.design-mode.request",
   authoringDesignModeActivate: "authoring.design-mode.activate",
   authoringDesignModeStop: "authoring.design-mode.stop"
@@ -70,11 +72,13 @@ export interface UdsControlBackendOptions {
   operationId?: () => string;
   leaseDurationMs?: number;
   stagingUploader?: StagingUploader;
+  assetReader?: { read(storageRef: string): Uint8Array };
 }
 
 interface CachedTask {
   raw: Record<string, unknown>;
   outputSchema: Record<string, unknown>;
+  referenceCuration?: NonNullable<TaskView["referenceCuration"]>;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -137,6 +141,47 @@ function safeTimestamp(value: unknown, fallback: string): string {
     return fallback;
   }
   return value;
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[]
+): boolean {
+  return JSON.stringify(Object.keys(value).sort()) ===
+    JSON.stringify([...keys].sort());
+}
+
+function boundedText(value: unknown, maximum: number): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= maximum
+    ? value
+    : undefined;
+}
+
+function boundedStringArray(
+  value: unknown,
+  options: {
+    minimum: number;
+    maximum: number;
+    itemMaximum: number;
+    allowed?: readonly string[];
+  }
+): string[] | undefined {
+  if (
+    !Array.isArray(value) ||
+    value.length < options.minimum ||
+    value.length > options.maximum ||
+    value.some(
+      (item) =>
+        typeof item !== "string" ||
+        item.length < 1 ||
+        item.length > options.itemMaximum ||
+        (options.allowed && !options.allowed.includes(item))
+    ) ||
+    new Set(value).size !== value.length
+  ) {
+    return undefined;
+  }
+  return [...value] as string[];
 }
 
 function failureMessage(action: string): ConsoleUserFacingError {
@@ -284,6 +329,65 @@ function taskOutput(
   task: CachedTask,
   input: SubmitTaskInput
 ): Record<string, unknown> {
+  if (task.referenceCuration) {
+    const submitted = input.referenceCuration;
+    const roleDimensions: Record<string, string> = {
+      COMPOSITION_TEMPLATE: "composition",
+      PACKAGING_FACT: "packaging_observation",
+      PRODUCT_FACT: "product_observation",
+      TEXTURE_MATERIAL: "texture_reference"
+    };
+    if (
+      input.decision !== "publish_selection" ||
+      input.note !== undefined ||
+      !submitted ||
+      submitted.selectedAssets.length < 1 ||
+      submitted.selectedAssets.length > task.referenceCuration.assets.length
+    ) {
+      throw new Error("invalid reference curation");
+    }
+    const available = new Set(
+      task.referenceCuration.assets.map((asset) => asset.assetId)
+    );
+    const selectedIds = new Set<string>();
+    const selectedAssets = submitted.selectedAssets.map((item) => {
+      const dimension = roleDimensions[item.role];
+      if (
+        !available.has(item.assetId) ||
+        selectedIds.has(item.assetId) ||
+        !dimension ||
+        item.reason.length < 1 ||
+        item.reason.length > 500 ||
+        item.prohibitedInferences.length < 1 ||
+        item.prohibitedInferences.length > 10 ||
+        new Set(item.prohibitedInferences).size !==
+          item.prohibitedInferences.length ||
+        item.prohibitedInferences.some(
+          (value) => value.length < 1 || value.length > 300
+        )
+      ) {
+        throw new Error("invalid reference curation");
+      }
+      selectedIds.add(item.assetId);
+      return {
+        assetId: item.assetId,
+        role: item.role,
+        reason: item.reason,
+        allowedTransferDimensions: [dimension],
+        prohibitedInferences: [...item.prohibitedInferences]
+      };
+    });
+    return {
+      packId: task.referenceCuration.packId,
+      selectedAssets,
+      rejectedAssetIds: task.referenceCuration.assets
+        .map((asset) => asset.assetId)
+        .filter((assetId) => !selectedIds.has(assetId))
+    };
+  }
+  if (input.referenceCuration) {
+    throw new Error("unexpected reference curation");
+  }
   const properties = record(task.outputSchema.properties);
   const positive = !["reject", "rejected", "deny", "declined"].includes(
     input.decision
@@ -307,6 +411,97 @@ function taskOutput(
   return {
     decision: input.decision,
     ...(input.note ? { note: input.note } : {})
+  };
+}
+
+function referenceCurationView(
+  task: Record<string, unknown>
+): NonNullable<TaskView["referenceCuration"]> | undefined {
+  const profile = record(task.profile);
+  if (
+    profile?.id !== "reference_asset_curation" ||
+    profile.version !== "1.0.0"
+  ) {
+    return undefined;
+  }
+  const input = record(task.input);
+  const materialization = record(input?.materialization);
+  if (
+    !input ||
+    !hasExactKeys(input, ["packId", "materialization"]) ||
+    !materialization ||
+    !hasExactKeys(materialization, [
+      "schemaVersion", "materializationExportId", "packId", "sourceRunId",
+      "status", "rightsStatus", "allowedUse", "sourceEvidenceDigest",
+      "assetCount", "assets", "blockers"
+    ]) ||
+    materialization.schemaVersion !== "reference-asset-materialization/v1" ||
+    materialization.packId !== input.packId ||
+    materialization.sourceRunId !== task.runId ||
+    materialization.status !== "materialized_internal_reference" ||
+    materialization.rightsStatus !== "not_assessed" ||
+    materialization.allowedUse !== "internal_reference_only" ||
+    !/^sha256:[a-f0-9]{64}$/u.test(String(materialization.sourceEvidenceDigest)) ||
+    JSON.stringify(materialization.blockers) !== JSON.stringify([
+      "SOURCE_RIGHTS_NOT_ASSESSED",
+      "HUMAN_ROLE_CURATION_REQUIRED"
+    ]) ||
+    !boundedText(input.packId, 120) ||
+    !boundedText(materialization.materializationExportId, 300) ||
+    !Array.isArray(materialization.assets) ||
+    materialization.assets.length < 1 ||
+    materialization.assets.length > 20 ||
+    materialization.assetCount !== materialization.assets.length
+  ) {
+    throw new Error("invalid reference curation task");
+  }
+  const materializationExportId = materialization.materializationExportId as string;
+  const assets = materialization.assets.map((value) => {
+    const item = record(value);
+    if (
+      !item ||
+      !hasExactKeys(item, [
+        "discoveryId", "platform", "sourceEvidenceId", "assetId", "digest",
+        "sizeBytes", "mediaType", "observedRemoteUrl", "sourceUrl",
+        "sourcePageUrl", "role", "rightsStatus", "allowedUse"
+      ]) ||
+      !["DOUYIN", "TAOBAO", "JD"].includes(String(item.platform)) ||
+      !boundedText(item.discoveryId, 300) ||
+      !boundedText(item.sourceEvidenceId, 200) ||
+      !boundedText(item.assetId, 300) ||
+      !/^sha256:[a-f0-9]{64}$/u.test(String(item.digest)) ||
+      !Number.isSafeInteger(item.sizeBytes) ||
+      (item.sizeBytes as number) < 1 ||
+      (item.sizeBytes as number) > 5 * 1024 * 1024 ||
+      !["image/jpeg", "image/png", "image/webp"].includes(
+        String(item.mediaType)
+      ) ||
+      item.role !== "UNASSIGNED_REFERENCE_CANDIDATE" ||
+      item.rightsStatus !== "not_assessed" ||
+      item.allowedUse !== "internal_reference_only"
+    ) {
+      throw new Error("invalid reference curation task");
+    }
+    return {
+      assetId: item.assetId as string,
+      platform: item.platform as "DOUYIN" | "TAOBAO" | "JD",
+      discoveryId: item.discoveryId as string,
+      mediaType: item.mediaType as "image/jpeg" | "image/png" | "image/webp",
+      sizeBytes: item.sizeBytes as number,
+      previewUrl:
+        `/api/downloads/${encodeURIComponent(materializationExportId)}` +
+        `/assets/${encodeURIComponent(item.assetId as string)}`
+    };
+  });
+  if (new Set(assets.map((asset) => asset.assetId)).size !== assets.length) {
+    throw new Error("invalid reference curation task");
+  }
+  return {
+    packId: input.packId as string,
+    materializationExportId,
+    rightsStatus: "not_assessed",
+    allowedUse: "internal_reference_only",
+    assets
   };
 }
 
@@ -375,6 +570,9 @@ export class UdsControlBackend implements ControlBackend {
   readonly #operationId: () => string;
   readonly #leaseDurationMs: number;
   readonly #stagingUploader: StagingUploader | undefined;
+  readonly #assetReader:
+    | { read(storageRef: string): Uint8Array }
+    | undefined;
   readonly #tasks = new Map<string, CachedTask>();
   readonly #stagingAuthorizations = new Map<
     string,
@@ -391,6 +589,7 @@ export class UdsControlBackend implements ControlBackend {
     this.#operationId = options.operationId ?? randomUUID;
     this.#leaseDurationMs = options.leaseDurationMs ?? 5 * 60 * 1000;
     this.#stagingUploader = options.stagingUploader;
+    this.#assetReader = options.assetReader;
   }
 
   async getDashboard(query: DashboardQuery = {}): Promise<DashboardSnapshot> {
@@ -888,7 +1087,12 @@ export class UdsControlBackend implements ControlBackend {
         }
         const profile = record(task.profile);
         const outputSchema = record(task.outputSchema) ?? {};
-        this.#tasks.set(taskId, { raw: task, outputSchema });
+        const referenceCuration = referenceCurationView(task);
+        this.#tasks.set(taskId, {
+          raw: task,
+          outputSchema,
+          ...(referenceCuration ? { referenceCuration } : {})
+        });
         const properties = record(outputSchema.properties);
         const approved = record(properties?.approved)?.type === "boolean";
         return [
@@ -899,19 +1103,25 @@ export class UdsControlBackend implements ControlBackend {
             title:
               mode === "human_action"
                 ? "需要你完成页面操作"
+                : referenceCuration
+                  ? "确认参考图片角色与使用边界"
                 : `请确认：${text(profile?.id, "业务判断")}`,
             guidance:
               mode === "human_action"
                 ? "按页面提示完成登录或验证后，再回来确认完成。"
+                : referenceCuration
+                  ? "逐张预览候选图片；至少选择一张，填写参考角色、采用理由和禁止推断。未选择的图片会明确记为不采用。"
                 : "请核对业务信息；不确定时选择暂不确认。",
             attention: mode === "human_action" ? "action" : "attention",
             dueAt: safeTimestamp(task.deadline, this.#now().toISOString()),
-            choices: approved
+            ...(referenceCuration
+              ? { referenceCuration }
+              : { choices: approved
               ? [
                   { value: "confirmed", label: "确认" },
                   { value: "rejected", label: "暂不确认" }
                 ]
-              : [{ value: "completed", label: "确认完成" }]
+              : [{ value: "completed", label: "确认完成" }] })
           }
         ];
       });
@@ -1292,6 +1502,16 @@ export class UdsControlBackend implements ControlBackend {
             title: text(download.title, "业务输出"),
             fileName: text(download.fileName, "bpa-output"),
             sizeBytes: integer(download.sizeBytes),
+            assetIds: stringList(download.assetIds),
+            ...(download.rightsStatus === "not_assessed"
+              ? { rightsStatus: "not_assessed" as const }
+              : {}),
+            ...(download.allowedUse === "internal_reference_only"
+              ? { allowedUse: "internal_reference_only" as const }
+              : {}),
+            ...(Array.isArray(download.blockers)
+              ? { blockers: stringList(download.blockers) }
+              : {}),
             createdAt: safeTimestamp(
               download.createdAt,
               this.#now().toISOString()
@@ -1402,16 +1622,375 @@ export class UdsControlBackend implements ControlBackend {
   }
 
   async getDownload(downloadId: string): Promise<DownloadPayload> {
+    const manifest = await this.#downloadManifest(downloadId);
+    const contents = manifest.assets.map((asset) => ({
+      ...asset,
+      body: this.#readAsset(asset)
+    }));
+    if (manifest.kind === "report" && contents.length === 1) {
+      return {
+        fileName: manifest.fileName,
+        mediaType: contents[0]!.mediaType,
+        body: contents[0]!.body
+      };
+    }
+    const files: Record<string, Uint8Array> = {
+      "manifest.json": new TextEncoder().encode(
+        `${JSON.stringify(manifest.referencePack ?? {
+          manifestVersion: manifest.manifestVersion,
+          id: manifest.id,
+          runId: manifest.runId,
+          kind: manifest.kind,
+          assets: manifest.assets.map(({ storageRef: _storageRef, ...asset }) => asset)
+        }, null, 2)}\n`
+      )
+    };
+    contents.forEach((asset, index) => {
+      const extension = asset.mediaType === "image/jpeg"
+        ? "jpg"
+        : asset.mediaType === "image/png"
+          ? "png"
+          : asset.mediaType === "image/webp"
+            ? "webp"
+            : "bin";
+      files[`assets/${String(index + 1).padStart(2, "0")}-${asset.assetId.replace(/[^A-Za-z0-9._-]/gu, "_")}.${extension}`] =
+        asset.body;
+    });
+    return {
+      fileName: manifest.fileName.endsWith(".zip")
+        ? manifest.fileName
+        : `${manifest.fileName}.zip`,
+      mediaType: "application/zip",
+      body: zipSync(files, { level: 0 })
+    };
+  }
+
+  async getDownloadAsset(
+    downloadId: string,
+    assetId: string
+  ): Promise<DownloadPayload> {
+    const manifest = await this.#downloadManifest(downloadId);
+    if (
+      manifest.kind !== "reference_pack" &&
+      manifest.kind !== "reference_candidates"
+    ) {
+      throw new ConsoleUserFacingError("该业务输出不支持图片预览。");
+    }
+    const asset = manifest.assets.find((candidate) =>
+      candidate.assetId === assetId
+    );
+    if (!asset || !["image/jpeg", "image/png", "image/webp"].includes(asset.mediaType)) {
+      throw new ConsoleUserFacingError("参考图片不存在或不可预览。");
+    }
+    return {
+      fileName: `${asset.assetId}`,
+      mediaType: asset.mediaType,
+      body: this.#readAsset(asset)
+    };
+  }
+
+  async #downloadManifest(downloadId: string): Promise<{
+    manifestVersion: "bpa.download-manifest/1";
+    id: string;
+    runId: string;
+    kind: "report" | "reference_pack" | "reference_candidates";
+    fileName: string;
+    assets: Array<{
+      assetId: string;
+      digest: string;
+      sizeBytes: number;
+      mediaType: string;
+      storageRef: string;
+    }>;
+    referencePack?: Record<string, unknown>;
+  }> {
+    if (!this.#assetReader) {
+      throw new ConsoleUserFacingError("本机 CAS 下载读取器尚未配置。");
+    }
+    let value: unknown;
     try {
-      await this.#client.request<unknown>(
+      value = await this.#client.request<unknown>(
         CONSOLE_CONTROL_METHODS.downloadGet,
         { downloadId }
       );
     } catch {
       throw failureMessage("准备下载");
     }
-    throw new ConsoleUserFacingError(
-      "安全下载通道尚未启用；文件内容不会通过控制协议发送。"
-    );
+    const candidate = record(value);
+    const kind = candidate?.kind;
+    const baseKeys = [
+      "manifestVersion", "id", "runId", "kind", "title", "fileName",
+      "sizeBytes", "createdAt", "assetIds", "assets"
+    ];
+    const expectedKeys = kind === "reference_pack"
+      ? [
+          ...baseKeys,
+          "rightsStatus", "allowedUse", "blockers", "referencePack"
+        ]
+      : kind === "reference_candidates"
+        ? [...baseKeys, "rightsStatus", "allowedUse", "blockers"]
+      : baseKeys;
+    if (
+      !candidate ||
+      !hasExactKeys(candidate, expectedKeys) ||
+      candidate.manifestVersion !== "bpa.download-manifest/1" ||
+      candidate.id !== downloadId ||
+      (kind !== "report" &&
+        kind !== "reference_pack" &&
+        kind !== "reference_candidates") ||
+      !boundedText(candidate.runId, 200) ||
+      !boundedText(candidate.title, 300) ||
+      !boundedText(candidate.fileName, 240) ||
+      /[\\/\u0000-\u001f]/u.test(String(candidate.fileName)) ||
+      typeof candidate.createdAt !== "string" ||
+      !Number.isFinite(Date.parse(candidate.createdAt)) ||
+      !Array.isArray(candidate.assets)
+    ) {
+      throw failureMessage("校验下载清单");
+    }
+    const parsedAssets = records(candidate.assets);
+    const assets = parsedAssets.map((asset) => {
+      if (
+        !hasExactKeys(asset, [
+          "assetId", "digest", "sizeBytes", "mediaType", "storageRef"
+        ])
+      ) {
+        throw failureMessage("校验下载清单");
+      }
+      return {
+        assetId: boundedText(asset.assetId, 300) ?? "",
+        digest: boundedText(asset.digest, 71) ?? "",
+        sizeBytes: integer(asset.sizeBytes, -1),
+        mediaType: boundedText(asset.mediaType, 100) ?? "",
+        storageRef: boundedText(asset.storageRef, 100) ?? ""
+      };
+    });
+    const assetIds = boundedStringArray(candidate.assetIds, {
+      minimum: 1,
+      maximum: 20,
+      itemMaximum: 300
+    });
+    const totalSize = assets.reduce((total, asset) => total + asset.sizeBytes, 0);
+    if (
+      assets.length !== candidate.assets.length ||
+      assets.length < 1 ||
+      assets.length > 20 ||
+      !assetIds ||
+      new Set(assets.map((asset) => asset.assetId)).size !== assets.length ||
+      assets.some((asset) =>
+        !asset.assetId ||
+        !/^sha256:[a-f0-9]{64}$/u.test(asset.digest) ||
+        asset.sizeBytes < 1 ||
+        asset.sizeBytes >
+          (kind === "report" ? 25 * 1024 * 1024 : 5 * 1024 * 1024) ||
+        asset.storageRef !== `asset-store:${asset.digest}`
+      ) ||
+      totalSize < 1 ||
+      totalSize > 100 * 1024 * 1024 ||
+      candidate.sizeBytes !== totalSize ||
+      JSON.stringify(assets.map((asset) => asset.assetId)) !==
+        JSON.stringify(assetIds)
+    ) {
+      throw failureMessage("校验下载清单");
+    }
+    if (
+      kind === "reference_candidates" &&
+      (candidate.rightsStatus !== "not_assessed" ||
+        candidate.allowedUse !== "internal_reference_only" ||
+        JSON.stringify(candidate.blockers) !==
+          JSON.stringify(["SOURCE_RIGHTS_NOT_ASSESSED"]))
+    ) {
+      throw failureMessage("校验参考资产包边界");
+    }
+    let referencePack: Record<string, unknown> | undefined;
+    if (kind === "reference_pack") {
+      const rawPack = record(candidate.referencePack);
+      if (
+        candidate.rightsStatus !== "not_assessed" ||
+        candidate.allowedUse !== "internal_reference_only" ||
+        JSON.stringify(candidate.blockers) !==
+          JSON.stringify(["SOURCE_RIGHTS_NOT_ASSESSED"]) ||
+        !rawPack ||
+        !hasExactKeys(rawPack, [
+          "schemaVersion", "exportId", "packId", "sourceRunId", "status",
+          "rightsStatus", "allowedUse", "assetCount", "assets", "blockers"
+        ]) ||
+        rawPack.schemaVersion !== "reference-asset-pack/v1" ||
+        rawPack.exportId !== downloadId ||
+        rawPack.sourceRunId !== candidate.runId ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/u.test(String(rawPack.packId)) ||
+        rawPack.status !== "ready_internal_reference" ||
+        rawPack.rightsStatus !== "not_assessed" ||
+        rawPack.allowedUse !== "internal_reference_only" ||
+        rawPack.assetCount !== assets.length ||
+        JSON.stringify(rawPack.blockers) !==
+          JSON.stringify(["SOURCE_RIGHTS_NOT_ASSESSED"]) ||
+        !Array.isArray(rawPack.assets) ||
+        rawPack.assets.length !== assets.length
+      ) {
+        throw failureMessage("校验参考资产包边界");
+      }
+      const byId = new Map(assets.map((asset) => [asset.assetId, asset]));
+      const roleDimensions: Record<string, string> = {
+        COMPOSITION_TEMPLATE: "composition",
+        PACKAGING_FACT: "packaging_observation",
+        PRODUCT_FACT: "product_observation",
+        TEXTURE_MATERIAL: "texture_reference"
+      };
+      const safeAssets = rawPack.assets.map((value) => {
+        const item = record(value);
+        if (
+          !item ||
+          !hasExactKeys(item, [
+            "assetId", "digest", "sizeBytes", "mediaType", "platform",
+            "discoveryId", "sourceUrl", "sourcePageUrl", "sourceEvidenceId",
+            "role", "reason", "allowedTransferDimensions",
+            "prohibitedInferences", "rightsStatus", "allowedUse"
+          ])
+        ) {
+          throw failureMessage("校验参考资产包边界");
+        }
+        const asset = byId.get(String(item.assetId));
+        const role = boundedText(item.role, 40);
+        const dimensions = boundedStringArray(item.allowedTransferDimensions, {
+          minimum: 1,
+          maximum: 4,
+          itemMaximum: 50,
+          allowed: [
+            "composition", "packaging_observation", "product_observation",
+            "texture_reference"
+          ]
+        });
+        const prohibited = boundedStringArray(item.prohibitedInferences, {
+          minimum: 1,
+          maximum: 10,
+          itemMaximum: 300
+        });
+        let sourceUrl: URL;
+        let sourcePageUrl: URL;
+        try {
+          sourceUrl = new URL(String(item.sourceUrl));
+          sourcePageUrl = new URL(String(item.sourcePageUrl));
+        } catch {
+          throw failureMessage("校验参考资产包边界");
+        }
+        const platform = String(item.platform) as "DOUYIN" | "TAOBAO" | "JD";
+        const cdnSuffixes = {
+          DOUYIN: ["ecombdimg.com", "byteimg.com"],
+          TAOBAO: ["alicdn.com"],
+          JD: ["360buyimg.com"]
+        }[platform] ?? [];
+        const pageHosts: Record<string, string> = {
+          DOUYIN: "www.douyin.com",
+          TAOBAO: "s.taobao.com",
+          JD: "search.jd.com"
+        };
+        const pageQueryKeys: Record<string, readonly string[]> = {
+          DOUYIN: ["type"],
+          TAOBAO: ["q"],
+          JD: ["keyword"]
+        };
+        const sourceHost = sourceUrl.hostname.toLowerCase();
+        const sourceApproved = cdnSuffixes.some(
+          (suffix) =>
+            sourceHost === suffix || sourceHost.endsWith(`.${suffix}`)
+        );
+        const pageApproved =
+          sourcePageUrl.hostname.toLowerCase() === pageHosts[platform] &&
+          [...sourcePageUrl.searchParams.keys()].every((key) =>
+            (pageQueryKeys[platform] ?? []).includes(key)
+          );
+        if (
+          !asset ||
+          item.digest !== asset.digest ||
+          item.sizeBytes !== asset.sizeBytes ||
+          item.mediaType !== asset.mediaType ||
+          !["image/jpeg", "image/png", "image/webp"].includes(asset.mediaType) ||
+          !["DOUYIN", "TAOBAO", "JD"].includes(platform) ||
+          !boundedText(item.discoveryId, 300) ||
+          sourceUrl.protocol !== "https:" ||
+          sourcePageUrl.protocol !== "https:" ||
+          Boolean(sourceUrl.username || sourceUrl.password) ||
+          Boolean(sourcePageUrl.username || sourcePageUrl.password) ||
+          Boolean(sourceUrl.port && sourceUrl.port !== "443") ||
+          Boolean(sourcePageUrl.port && sourcePageUrl.port !== "443") ||
+          !sourceApproved ||
+          !pageApproved ||
+          !boundedText(item.sourceEvidenceId, 200) ||
+          !role ||
+          !roleDimensions[role] ||
+          !boundedText(item.reason, 500) ||
+          !dimensions ||
+          !dimensions.includes(roleDimensions[role]!) ||
+          !prohibited ||
+          item.rightsStatus !== "not_assessed" ||
+          item.allowedUse !== "internal_reference_only"
+        ) {
+          throw failureMessage("校验参考资产包边界");
+        }
+        return {
+          assetId: asset.assetId,
+          digest: asset.digest,
+          sizeBytes: asset.sizeBytes,
+          mediaType: asset.mediaType,
+          platform: item.platform,
+          discoveryId: item.discoveryId,
+          sourceUrl: sourceUrl.toString(),
+          sourcePageUrl: sourcePageUrl.toString(),
+          sourceEvidenceId: item.sourceEvidenceId,
+          role,
+          reason: item.reason,
+          allowedTransferDimensions: dimensions,
+          prohibitedInferences: prohibited,
+          rightsStatus: "not_assessed",
+          allowedUse: "internal_reference_only"
+        };
+      });
+      if (
+        JSON.stringify(safeAssets.map((asset) => asset.assetId)) !==
+        JSON.stringify(assetIds)
+      ) {
+        throw failureMessage("校验参考资产包边界");
+      }
+      referencePack = {
+        schemaVersion: "reference-asset-pack/v1",
+        exportId: downloadId,
+        packId: rawPack.packId,
+        sourceRunId: candidate.runId,
+        status: "ready_internal_reference",
+        rightsStatus: "not_assessed",
+        allowedUse: "internal_reference_only",
+        assetCount: safeAssets.length,
+        assets: safeAssets,
+        blockers: ["SOURCE_RIGHTS_NOT_ASSESSED"]
+      };
+    }
+    return {
+      manifestVersion: "bpa.download-manifest/1",
+      id: downloadId,
+      runId: candidate.runId as string,
+      kind,
+      fileName: candidate.fileName as string,
+      assets,
+      ...(referencePack ? { referencePack } : {})
+    };
+  }
+
+  #readAsset(asset: {
+    digest: string;
+    sizeBytes: number;
+    storageRef: string;
+  }): Uint8Array {
+    let body: Uint8Array;
+    try {
+      body = this.#assetReader!.read(asset.storageRef);
+    } catch {
+      throw new ConsoleUserFacingError("CAS 业务资产不可读取。");
+    }
+    const actual = `sha256:${createHash("sha256").update(body).digest("hex")}`;
+    if (body.byteLength !== asset.sizeBytes || actual !== asset.digest) {
+      throw new ConsoleUserFacingError("CAS 业务资产摘要校验失败。");
+    }
+    return body;
   }
 }

@@ -78,7 +78,8 @@ export interface ValueReference {
     | "run_input"
     | "previous_output"
     | "scope_item"
-    | "step_output";
+    | "step_output"
+    | "step_evidence";
   readonly path: readonly string[];
   readonly stepKey?: StepKey;
 }

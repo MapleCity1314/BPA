@@ -99,6 +99,10 @@ export class UnavailableControlBackend implements ControlBackend {
     return unavailable();
   }
 
+  async getDownloadAsset(_downloadId: string, _assetId: string) {
+    return unavailable();
+  }
+
   async startDesignMode(_input: DesignModeGrantInput) {
     return unavailable();
   }

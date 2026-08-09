@@ -166,6 +166,14 @@ class RecordingBackend implements ControlBackend {
       body: new Uint8Array([123, 125])
     };
   }
+
+  readonly getDownloadAsset = vi.fn(
+    async (_downloadId: string, _assetId: string) => ({
+      fileName: "preview.jpg",
+      mediaType: "image/jpeg",
+      body: new Uint8Array([0xff, 0xd8, 0xff, 0xee])
+    })
+  );
 }
 
 const handles: ConsoleHostHandle[] = [];
@@ -271,6 +279,77 @@ describe("Console Host security boundary", () => {
     expect(backend.getDashboard).toHaveBeenCalledWith({
       includeRecoverySessions: true
     });
+  });
+
+  it("serves operator-only CAS previews with no-store headers", async () => {
+    const { backend, handle, cookie } = await launch();
+    const response = await fetch(
+      `${handle.origin}/api/downloads/reference-1/assets/asset-1`,
+      { headers: { Cookie: cookie } }
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/jpeg");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("content-disposition")).toBe("inline");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(
+      new Uint8Array([0xff, 0xd8, 0xff, 0xee])
+    );
+    expect(backend.getDownloadAsset).toHaveBeenCalledWith(
+      "reference-1",
+      "asset-1"
+    );
+  });
+
+  it("accepts only the closed structured reference curation shape", async () => {
+    const { backend, handle, cookie, csrf } = await launch();
+    const input = {
+      decision: "publish_selection",
+      referenceCuration: {
+        selectedAssets: [{
+          assetId: "asset-1",
+          role: "COMPOSITION_TEMPLATE",
+          reason: "只参考主体与留白关系",
+          prohibitedInferences: ["不得推断版权或销量"]
+        }]
+      }
+    };
+    const accepted = await fetch(
+      `${handle.origin}/api/tasks/task-curation/submit`,
+      {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: handle.origin,
+          "X-BPA-CSRF-Token": csrf,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(input)
+      }
+    );
+    expect(accepted.status).toBe(200);
+    expect(backend.submitTask).toHaveBeenCalledWith("task-curation", input);
+
+    const rejected = await fetch(
+      `${handle.origin}/api/tasks/task-curation/submit`,
+      {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: handle.origin,
+          "X-BPA-CSRF-Token": csrf,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          ...input,
+          referenceCuration: {
+            ...input.referenceCuration,
+            packId: "client-controlled"
+          }
+        })
+      }
+    );
+    expect(rejected.status).toBe(400);
+    expect(backend.submitTask).toHaveBeenCalledOnce();
   });
 
   it("acknowledges attention through an authenticated CAS mutation", async () => {
@@ -579,7 +658,8 @@ describe("Console Host security boundary", () => {
       title: "业务报告",
       fileName: "/Users/operator/private/report.json",
       sizeBytes: 12,
-      createdAt: "2030-01-01T00:00:00.000Z"
+      createdAt: "2030-01-01T00:00:00.000Z",
+      assetIds: ["asset-report"]
     }, {
       id: "download-2",
       runId: "run-1",
@@ -587,7 +667,8 @@ describe("Console Host security boundary", () => {
       title: "参考材料",
       fileName: "C:\\Users\\operator\\private\\reference.zip",
       sizeBytes: 24,
-      createdAt: "2030-01-01T00:00:01.000Z"
+      createdAt: "2030-01-01T00:00:01.000Z",
+      assetIds: ["asset-reference"]
     }]);
     const downloads = await fetch(`${handle.origin}/api/downloads`, {
       headers: { Cookie: cookie }
@@ -631,6 +712,15 @@ describe("Console Host security boundary", () => {
     expect(await download.json()).toMatchObject({
       error: { code: "VIEWER_DOWNLOAD_FORBIDDEN" }
     });
+    const preview = await fetch(
+      `${handle.origin}/api/downloads/download-2/assets/asset-reference`,
+      { headers: { Cookie: cookie } }
+    );
+    expect(preview.status).toBe(403);
+    expect(await preview.json()).toMatchObject({
+      error: { code: "VIEWER_PREVIEW_FORBIDDEN" }
+    });
+    expect(backend.getDownloadAsset).not.toHaveBeenCalled();
   });
 
   it("rejects an invalid access mode at the programmatic boundary", async () => {

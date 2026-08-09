@@ -2,15 +2,15 @@ apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: ecommerce.cross-platform-evidence-probe
-  version: 1.0.0
-  title: 抖音淘宝京东商品证据链探查
-  description: 对同一商品意图分别读取抖音、淘宝和京东的已打开搜索页，再建立类目空间、可比商品池、一级证据声明和远程主图候选包。
+  version: 2.0.0
+  title: 三平台参考图片证据包
+  description: 从同一 Run 的抖音、淘宝和京东 Browser Evidence 冻结候选图片，受限物化到 BPA CAS，经人工确认角色与禁止推断后发布内部参考 Export。
 spec:
   riskLevel: R1
   inputSchema:
     type: object
     additionalProperties: false
-    required: [intent, poolId, packId, sourceRunId, observedAt, comparisonRules, exclusionRules, maxItems]
+    required: [intent, poolId, packId, observedAt, comparisonRules, exclusionRules, maxItems]
     properties:
       intent:
         type: object
@@ -23,8 +23,11 @@ spec:
           researchGoal: { type: string }
           workingBoundary: { type: object }
       poolId: { type: string, minLength: 1 }
-      packId: { type: string, minLength: 1 }
-      sourceRunId: { type: string, minLength: 1 }
+      packId:
+        type: string
+        minLength: 1
+        maxLength: 120
+        pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]*$
       observedAt: { type: string, format: date-time }
       comparisonRules:
         type: object
@@ -39,15 +42,18 @@ spec:
   outputSchema:
     type: object
     additionalProperties: false
-    required: [productIntent, discovery, categorySpace, comparablePool, evidenceClaims, referencePack]
+    required: [status, productIntent, discovery, categorySpace, comparablePool, evidenceClaims, candidateReferencePack]
     properties:
+      status: { enum: [no_reference_assets, ready_internal_reference] }
       productIntent: { type: object }
       discovery: { type: object }
       categorySpace: { type: object }
       comparablePool: { type: object }
       evidenceClaims: { type: object }
-      referencePack: { type: object }
-  limits: { maxDepth: 2, maxStepExecutions: 50 }
+      candidateReferencePack: { type: object }
+      materialization: { type: object }
+      publishedReferencePack: { type: object }
+  limits: { maxDepth: 3, maxStepExecutions: 60 }
   resourceSlots:
     douyin_page:
       kind: browser
@@ -127,21 +133,78 @@ spec:
         timeout: 10s
       - key: build_reference_pack
         kind: call
-        use: ecommerce.discovery.reference-pack.build@1.0.0
+        use: ecommerce.discovery.reference-pack.build@2.0.0
         with:
           packId: ${input.packId}
-          sourceRunId: ${input.sourceRunId}
           discovery: ${steps.merge_discovery.output}
           comparablePool: ${steps.build_comparable_pool.output}
           evidence: ${steps.evaluate_evidence.output}
         timeout: 10s
-      - key: completed
-        kind: terminal
-        status: succeeded
-        output:
-          productIntent: ${steps.normalize_intent.output}
-          discovery: ${steps.merge_discovery.output}
-          categorySpace: ${steps.build_category_space.output}
-          comparablePool: ${steps.build_comparable_pool.output}
-          evidenceClaims: ${steps.evaluate_evidence.output}
-          referencePack: ${steps.build_reference_pack.output}
+      - key: reference_assets_available
+        kind: decision
+        condition:
+          kind: compare
+          operator: equals
+          left:
+            kind: binding
+            binding: ${steps.build_reference_pack.output.status}
+          right:
+            kind: literal
+            value: PROVISIONAL_REMOTE_ASSETS
+        then:
+          kind: sequence
+          steps:
+            - key: materialize_reference_assets
+              kind: call
+              use: ecommerce.reference-assets.materialize@1.0.0
+              with:
+                packId: ${input.packId}
+                referencePack: ${steps.build_reference_pack.output}
+                sourceEvidence:
+                  douyin: ${steps.probe_douyin.evidence}
+                  taobao: ${steps.probe_taobao.evidence}
+                  jd: ${steps.probe_jd.evidence}
+              timeout: 5m
+            - key: curate_reference_assets
+              kind: wait.assistance
+              use: reference_asset_curation@1.0.0
+              with:
+                packId: ${input.packId}
+                materialization: ${steps.materialize_reference_assets.output}
+              blocking: true
+              deadline: 24h
+              onUnavailable: fail
+            - key: publish_reference_pack
+              kind: call
+              use: ecommerce.reference-pack.publish@1.0.0
+              with:
+                materialization: ${steps.materialize_reference_assets.output}
+                curation: ${steps.curate_reference_assets.output}
+              timeout: 30s
+            - key: completed_with_reference_assets
+              kind: terminal
+              status: succeeded
+              output:
+                status: ready_internal_reference
+                productIntent: ${steps.normalize_intent.output}
+                discovery: ${steps.merge_discovery.output}
+                categorySpace: ${steps.build_category_space.output}
+                comparablePool: ${steps.build_comparable_pool.output}
+                evidenceClaims: ${steps.evaluate_evidence.output}
+                candidateReferencePack: ${steps.build_reference_pack.output}
+                materialization: ${steps.materialize_reference_assets.output}
+                publishedReferencePack: ${steps.publish_reference_pack.output}
+        else:
+          kind: sequence
+          steps:
+            - key: completed_without_reference_assets
+              kind: terminal
+              status: succeeded
+              output:
+                status: no_reference_assets
+                productIntent: ${steps.normalize_intent.output}
+                discovery: ${steps.merge_discovery.output}
+                categorySpace: ${steps.build_category_space.output}
+                comparablePool: ${steps.build_comparable_pool.output}
+                evidenceClaims: ${steps.evaluate_evidence.output}
+                candidateReferencePack: ${steps.build_reference_pack.output}

@@ -1,0 +1,78 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: ecommerce.reference-assets.materialize
+  version: 1.0.0
+  title: 物化受限电商参考图片
+  description: 仅从本 Run 的三平台 Browser Evidence 中核验远程主图候选，下载固定公共图片 CDN 内容并写入 BPA CAS；权利未评估前只允许内部参考。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [packId, referencePack, sourceEvidence]
+  properties:
+    packId:
+      type: string
+      minLength: 1
+      maxLength: 120
+      pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]*$
+    referencePack: { type: object }
+    sourceEvidence:
+      type: object
+      additionalProperties: false
+      required: [douyin, taobao, jd]
+      properties:
+        douyin: { type: array, minItems: 1, maxItems: 1, items: { type: object } }
+        taobao: { type: array, minItems: 1, maxItems: 1, items: { type: object } }
+        jd: { type: array, minItems: 1, maxItems: 1, items: { type: object } }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [schemaVersion, materializationExportId, packId, sourceRunId, status, rightsStatus, allowedUse, sourceEvidenceDigest, assetCount, assets, blockers]
+  properties:
+    schemaVersion: { const: reference-asset-materialization/v1 }
+    materializationExportId: { type: string }
+    packId: { type: string }
+    sourceRunId: { type: string }
+    status: { const: materialized_internal_reference }
+    rightsStatus: { const: not_assessed }
+    allowedUse: { const: internal_reference_only }
+    sourceEvidenceDigest: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+    assetCount: { type: integer, minimum: 1, maximum: 20 }
+    assets:
+      type: array
+      minItems: 1
+      maxItems: 20
+      items:
+        type: object
+        additionalProperties: false
+        required: [discoveryId, platform, sourceEvidenceId, assetId, digest, sizeBytes, mediaType, observedRemoteUrl, sourceUrl, sourcePageUrl, role, rightsStatus, allowedUse]
+        properties:
+          discoveryId: { type: string }
+          platform: { enum: [DOUYIN, TAOBAO, JD] }
+          sourceEvidenceId: { type: string }
+          assetId: { type: string }
+          digest: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+          sizeBytes: { type: integer, minimum: 1, maximum: 5242880 }
+          mediaType: { enum: [image/jpeg, image/png, image/webp] }
+          observedRemoteUrl: { type: string, format: uri }
+          sourceUrl: { type: string, format: uri }
+          sourcePageUrl: { type: string, format: uri }
+          role: { const: UNASSIGNED_REFERENCE_CANDIDATE }
+          rightsStatus: { const: not_assessed }
+          allowedUse: { const: internal_reference_only }
+    blockers:
+      type: array
+      prefixItems:
+        - { const: SOURCE_RIGHTS_NOT_ASSESSED }
+        - { const: HUMAN_ROLE_CURATION_REQUIRED }
+      minItems: 2
+      maxItems: 2
+risk:
+  level: R1
+  permissions: [ecommerce.reference-asset.materialize]
+execution:
+  timeoutDefault: 5m
+  idempotency: verified_write
+  cancellable: true
+errors: [ECOMMERCE_REFERENCE_INPUT_INVALID, ECOMMERCE_REFERENCE_EVIDENCE_INVALID, ECOMMERCE_REFERENCE_LIMIT_EXCEEDED, ECOMMERCE_REFERENCE_REMOTE_UNAVAILABLE, ECOMMERCE_REFERENCE_ASSET_INVALID, ECOMMERCE_REFERENCE_STORAGE_FAILED, ECOMMERCE_REFERENCE_CANCELLED]

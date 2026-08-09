@@ -208,10 +208,13 @@ function mockApi(): OperatorConsoleApi {
         title: "重点项检查报告",
         fileName: "report.json",
         sizeBytes: 1024,
-        createdAt: "2026-07-30T00:00:00.000Z"
+        createdAt: "2026-07-30T00:00:00.000Z",
+        assetIds: []
       }
     ]),
     downloadUrl: (id) => `/api/downloads/${id}`,
+    previewUrl: (downloadId, assetId) =>
+      `/api/downloads/${downloadId}/assets/${assetId}`,
     startDesignMode: vi.fn(async (input) => ({
       id: "design.grant-1",
       authoringSessionId: input.authoringSessionId,
@@ -426,6 +429,61 @@ describe("Operator Console", () => {
       })
     );
     expect(screen.getByText(/已记录处理结果/)).toBeInTheDocument();
+  });
+
+  it("previews and submits a structured reference asset curation", async () => {
+    const user = userEvent.setup();
+    const api = mockApi();
+    api.listTasks = vi.fn(async () => [{
+      id: "task-curation",
+      runId: "run-curation",
+      kind: "human_confirm" as const,
+      title: "确认参考图片角色与使用边界",
+      guidance: "逐张核对候选图。",
+      attention: "attention" as const,
+      referenceCuration: {
+        packId: "pack-curation",
+        materializationExportId: "export-materialization",
+        rightsStatus: "not_assessed" as const,
+        allowedUse: "internal_reference_only" as const,
+        assets: [{
+          assetId: "asset-1",
+          platform: "DOUYIN" as const,
+          discoveryId: "DOUYIN:product-1",
+          mediaType: "image/jpeg" as const,
+          sizeBytes: 4,
+          previewUrl: "/api/downloads/export-materialization/assets/asset-1"
+        }]
+      }
+    }]);
+    await renderReady(api);
+    await user.click(screen.getByRole("button", { name: /^02任务1$/ }));
+
+    expect(screen.getByAltText("DOUYIN 候选参考图")).toHaveAttribute(
+      "src",
+      "/api/downloads/export-materialization/assets/asset-1"
+    );
+    expect(screen.getByText(/权利未评估/u)).toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "采用这张图" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "采用理由" }),
+      "只参考主体与留白关系"
+    );
+    await user.click(screen.getByRole("button", { name: "发布内部参考包" }));
+
+    await waitFor(() =>
+      expect(api.submitTask).toHaveBeenCalledWith("task-curation", {
+        decision: "publish_selection",
+        referenceCuration: {
+          selectedAssets: [{
+            assetId: "asset-1",
+            role: "COMPOSITION_TEMPLATE",
+            reason: "只参考主体与留白关系",
+            prohibitedInferences: ["不得据此推断版权、销量或产品真实性"]
+          }]
+        }
+      })
+    );
   });
 
   it("opens and stops an exact 15-minute Design Mode grant", async () => {

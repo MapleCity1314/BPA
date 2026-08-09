@@ -1,0 +1,57 @@
+apiVersion: bpa.assistance/v1alpha1
+kind: AssistanceProfile
+metadata:
+  id: reference_asset_curation
+  version: 1.0.0
+  title: 参考图片角色与使用边界确认
+  description: 对已进入 BPA CAS 的受限参考图片逐项确认设计角色、采用理由、可迁移维度和禁止推断；不确认版权或对外分发权。
+taskKind: human_confirm
+riskLevel: R2
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [packId, selectedAssets, rejectedAssetIds]
+  properties:
+    packId:
+      type: string
+      minLength: 1
+      maxLength: 120
+      pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]*$
+    selectedAssets:
+      type: array
+      minItems: 1
+      maxItems: 20
+      items:
+        type: object
+        additionalProperties: false
+        required: [assetId, role, reason, allowedTransferDimensions, prohibitedInferences]
+        properties:
+          assetId: { type: string }
+          role: { enum: [COMPOSITION_TEMPLATE, PACKAGING_FACT, PRODUCT_FACT, TEXTURE_MATERIAL] }
+          reason: { type: string, minLength: 1, maxLength: 500 }
+          allowedTransferDimensions:
+            type: array
+            minItems: 1
+            maxItems: 4
+            uniqueItems: true
+            items: { enum: [composition, packaging_observation, product_observation, texture_reference] }
+          prohibitedInferences:
+            type: array
+            minItems: 1
+            maxItems: 10
+            uniqueItems: true
+            items: { type: string, minLength: 1, maxLength: 300 }
+    rejectedAssetIds:
+      type: array
+      maxItems: 20
+      uniqueItems: true
+      items: { type: string }
+policySnapshot:
+  autoContinue: false
+  r1ProfileApproved: false
+  durableDecision: true
+  onUnavailable: fail
+instructions:
+  - 只选择已经物化并能安全预览的 Asset；assetId 与 packId 必须逐字保留任务输入。
+  - 角色只描述这张图在参考包中的用途，不把销量、转化、版权或产品真实性归因给图片。
+  - 每项必须写明允许迁移的维度和禁止推断；权利状态继续保持 not_assessed/internal_reference_only。

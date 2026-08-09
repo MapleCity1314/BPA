@@ -467,21 +467,29 @@ function bindingIssues(binding: BindingValue, path: string): ValidationIssue[] {
           )
         );
       }
-      if (binding.source === "step_output" && !binding.stepKey) {
+      if (
+        (binding.source === "step_output" ||
+          binding.source === "step_evidence") &&
+        !binding.stepKey
+      ) {
         issues.push(
           issue(
             "INVALID_VALUE",
             `${path}/stepKey`,
-            "step_output references require stepKey"
+            `${binding.source} references require stepKey`
           )
         );
       }
-      if (binding.source !== "step_output" && binding.stepKey !== undefined) {
+      if (
+        binding.source !== "step_output" &&
+        binding.source !== "step_evidence" &&
+        binding.stepKey !== undefined
+      ) {
         issues.push(
           issue(
             "INVALID_VALUE",
             `${path}/stepKey`,
-            "stepKey is only valid for step_output references"
+            "stepKey is only valid for step output or evidence references"
           )
         );
       }

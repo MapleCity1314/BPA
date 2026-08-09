@@ -184,11 +184,37 @@ export interface TaskView {
   attention: "attention" | "action";
   dueAt?: string;
   choices?: Array<{ value: string; label: string }>;
+  referenceCuration?: {
+    packId: string;
+    materializationExportId: string;
+    rightsStatus: "not_assessed";
+    allowedUse: "internal_reference_only";
+    assets: Array<{
+      assetId: string;
+      platform: "DOUYIN" | "TAOBAO" | "JD";
+      discoveryId: string;
+      mediaType: "image/jpeg" | "image/png" | "image/webp";
+      sizeBytes: number;
+      previewUrl: string;
+    }>;
+  };
 }
 
 export interface SubmitTaskInput {
   decision: string;
   note?: string;
+  referenceCuration?: {
+    selectedAssets: Array<{
+      assetId: string;
+      role:
+        | "COMPOSITION_TEMPLATE"
+        | "PACKAGING_FACT"
+        | "PRODUCT_FACT"
+        | "TEXTURE_MATERIAL";
+      reason: string;
+      prohibitedInferences: string[];
+    }>;
+  };
 }
 
 export interface StagingLeaseRequest {
@@ -260,6 +286,10 @@ export interface DownloadView {
   fileName: string;
   sizeBytes: number;
   createdAt: string;
+  assetIds: string[];
+  rightsStatus?: "not_assessed";
+  allowedUse?: "internal_reference_only";
+  blockers?: string[];
 }
 
 export interface DownloadPayload {
@@ -327,6 +357,10 @@ export interface ControlBackend {
   getEvidenceLineage(runId: string): Promise<EvidenceLineageView>;
   listDownloads(runId?: string): Promise<DownloadView[]>;
   getDownload(downloadId: string): Promise<DownloadPayload>;
+  getDownloadAsset(
+    downloadId: string,
+    assetId: string
+  ): Promise<DownloadPayload>;
   startDesignMode(
     input: DesignModeGrantInput
   ): Promise<DesignModeGrantView>;

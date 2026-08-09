@@ -193,6 +193,17 @@
       "public": false
     },
     {
+      "id": "repo.operations.ecommerce-reference-assets-v1",
+      "source": "docs/operations/ecommerce-reference-assets-v1.md",
+      "title": "三平台参考图片证据包操作说明 v1",
+      "summary": "定义三平台 Browser Evidence 绑定、CAS 物化、人工角色策展、内部参考 Export、安全预览下载和权利停止线。",
+      "authority": "operations",
+      "implementation": "partial",
+      "audience": ["operator", "developer", "ai"],
+      "since": "0.7.0",
+      "public": false
+    },
+    {
       "id": "repo.plan.authoring-0.4",
       "source": "docs/plans/basic-scenarios-and-ai-authoring-v0.4.md",
       "title": "BPA 基础场景、工程闭环与 AI 创作设计 v0.4",
