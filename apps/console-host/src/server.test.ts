@@ -16,6 +16,9 @@ import { startConsoleHost, type ConsoleHostHandle } from "./server.js";
 class RecordingBackend implements ControlBackend {
   readonly createRun = vi.fn(async (_input: CreateRunInput) => ({ runId: "run-1" }));
   readonly submitTask = vi.fn(async (_taskId: string, _input: SubmitTaskInput) => {});
+  readonly acknowledgeAttention = vi.fn(
+    async (_id: string, _expectedRevision: number) => {}
+  );
   readonly createStagingLease = vi.fn(async (_input: StagingLeaseRequest) => ({
     id: "lease-1",
     expiresAt: "2030-01-01T00:00:00.000Z",
@@ -215,6 +218,29 @@ describe("Console Host security boundary", () => {
       headers: { Cookie: cookie }
     });
     expect(dashboard.status).toBe(200);
+  });
+
+  it("acknowledges attention through an authenticated CAS mutation", async () => {
+    const { handle, cookie, csrf, backend } = await launch();
+    const response = await fetch(
+      `${handle.origin}/api/attention/run-terminal%3Arun-1/acknowledge`,
+      {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: handle.origin,
+          "X-BPA-CSRF-Token": csrf,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ expectedRevision: 0 })
+      }
+    );
+
+    expect(response.status).toBe(200);
+    expect(backend.acknowledgeAttention).toHaveBeenCalledWith(
+      "run-terminal:run-1",
+      0
+    );
   });
 
   it("rejects foreign Host, foreign Origin, and missing CSRF", async () => {

@@ -282,6 +282,9 @@ export function App({ api }: { api: OperatorConsoleApi }) {
             alerts={dashboard.alerts}
             tasks={tasks}
             onCompleted={reloadTasks}
+            onAttentionAcknowledged={async () => {
+              setDashboard(await api.getDashboard());
+            }}
           />
         ) : null}
         {view === "datasets" ? <DatasetImport api={api} /> : null}

@@ -1321,5 +1321,47 @@ export const migrations: Migration[] = [
       CREATE INDEX trigger_runs_recent
         ON trigger_runs(trigger_id, created_at DESC);
     `
+  },
+  {
+    version: 16,
+    sql: `
+      CREATE TABLE attention_records (
+        attention_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL UNIQUE
+          REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        stage_key TEXT NOT NULL,
+        group_key TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN (
+          'information', 'review', 'action', 'approval', 'blocking'
+        )),
+        source TEXT NOT NULL CHECK (source IN (
+          'assistance', 'browser', 'runtime', 'approval', 'business-rule'
+        )),
+        title TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        requested_action TEXT NOT NULL,
+        blocking INTEGER NOT NULL CHECK (blocking IN (0, 1)),
+        batchable INTEGER NOT NULL CHECK (batchable IN (0, 1)),
+        attempted_actions_json TEXT NOT NULL,
+        resumes_automatically INTEGER NOT NULL CHECK (
+          resumes_automatically IN (0, 1)
+        ),
+        state TEXT NOT NULL CHECK (state IN ('open', 'acknowledged')),
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        created_at TEXT NOT NULL,
+        due_at TEXT,
+        acknowledged_at TEXT,
+        acknowledged_by TEXT,
+        CHECK (
+          (state = 'open' AND acknowledged_at IS NULL AND acknowledged_by IS NULL)
+          OR
+          (state = 'acknowledged' AND acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL)
+        )
+      ) STRICT;
+
+      CREATE INDEX attention_records_open_created
+        ON attention_records(created_at, attention_id)
+        WHERE state = 'open';
+    `
   }
 ];

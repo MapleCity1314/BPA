@@ -148,6 +148,7 @@ function mockApi(): OperatorConsoleApi {
     getRun: vi.fn(async () => run),
     listTasks: vi.fn(async () => tasks),
     submitTask: vi.fn(async () => {}),
+    acknowledgeAttention: vi.fn(async () => {}),
     importDataset: vi.fn(async () => ({
       status: "published" as const,
       stagingId: "staging-1",
@@ -221,7 +222,8 @@ describe("Operator Console", () => {
           title: "浏览器登录或验证需要处理",
           reason: "浏览器返回了登录阻断。",
           requestedAction: "在受管 Chrome Profile 中完成人工登录。",
-          createdAt: "2026-07-30T03:58:00.000Z"
+          createdAt: "2026-07-30T03:58:00.000Z",
+          revision: 0
         }
       ]
     }));
@@ -236,6 +238,11 @@ describe("Operator Console", () => {
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "查看 1 项问题" }));
     expect(screen.getByText(/Run run-login/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "已知晓" }));
+    expect(api.acknowledgeAttention).toHaveBeenCalledWith(
+      "run-terminal:run-login",
+      0
+    );
   });
 
   it("shows business work first and keeps diagnostics in advanced mode", async () => {

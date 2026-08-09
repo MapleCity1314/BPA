@@ -106,13 +106,14 @@ describe("Trigger and Browser Control Lease persistence",() => {
       seeded.close();
       const legacy = new Database(path);
       legacy.exec(`
+        DROP TABLE attention_records;
         DROP TABLE trigger_spec_versions;
-        DELETE FROM schema_migrations WHERE version = 15;
+        DELETE FROM schema_migrations WHERE version IN (15, 16);
       `);
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path });
-      expect(upgraded.health().schemaVersion).toBe(15);
+      expect(upgraded.health().schemaVersion).toBe(16);
       expect(upgraded.getTriggerSpecVersion(spec.id,spec.version)).toEqual(spec);
       expect(upgraded.listTriggerRuns(spec.id)).toEqual([
         expect.objectContaining({

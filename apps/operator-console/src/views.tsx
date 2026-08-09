@@ -702,12 +702,14 @@ export function TaskCenter({
   api,
   alerts,
   tasks,
-  onCompleted
+  onCompleted,
+  onAttentionAcknowledged
 }: {
   api: OperatorConsoleApi;
   alerts: AttentionView[];
   tasks: TaskView[];
   onCompleted(): Promise<void>;
+  onAttentionAcknowledged(): Promise<void>;
 }) {
   const [busyId, setBusyId] = useState("");
   const [message, setMessage] = useState("");
@@ -720,6 +722,19 @@ export function TaskCenter({
       await onCompleted();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "提交失败。");
+    } finally {
+      setBusyId("");
+    }
+  }
+  async function acknowledge(alert: AttentionView) {
+    setBusyId(alert.id);
+    setMessage("");
+    try {
+      await api.acknowledgeAttention(alert.id, alert.revision);
+      setMessage("已确认该运行问题；旧 Run 保持终态，不会自动重试。");
+      await onAttentionAcknowledged();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "确认失败。");
     } finally {
       setBusyId("");
     }
@@ -753,6 +768,15 @@ export function TaskCenter({
                   {formatTime(alert.createdAt)}
                   {alert.runId ? ` · Run ${alert.runId}` : ""}
                 </small>
+              </div>
+              <div className="choice-row">
+                <button
+                  disabled={busyId === alert.id}
+                  onClick={() => void acknowledge(alert)}
+                  type="button"
+                >
+                  已知晓
+                </button>
               </div>
             </article>
           ))}

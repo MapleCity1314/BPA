@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { projectTerminalRunAttention } from "@bpa/attention-core";
 import {
   contentDigest,
   type CompiledNode,
@@ -12,6 +13,7 @@ import {
 } from "@bpa/node-runtime";
 import type {
   ExecutionEventRecord,
+  AttentionRecord,
   NodeExecutionRecord,
   NodeExecutionStatus,
   Persistence,
@@ -635,16 +637,42 @@ export class LocalWorkflowEngine {
         };
       }
     }
+    const event = this.#event(run.id, sequence, `RUN_${status.toUpperCase()}`, {
+      nodeExecutionId,
+      ...(terminalError ? { error: terminalError } : {})
+    });
+    const attention = this.#terminalAttention(run, status, event);
     return this.persistence.commitRunTransition({
       runId: run.id,
       expectedRevision: this.persistence.getRun(run.id)!.revision,
       nextStatus: status,
       ...(output === undefined ? {} : { output }),
-      event: this.#event(run.id, sequence, `RUN_${status.toUpperCase()}`, {
-        nodeExecutionId,
-        ...(terminalError ? { error: terminalError } : {})
-      })
+      ...(attention ? { attention } : {}),
+      event
     });
+  }
+
+  #terminalAttention(
+    run: RunRecord,
+    status: RunStatus,
+    event: ExecutionEventRecord
+  ): AttentionRecord | undefined {
+    if (status !== "rejected" && status !== "failed" && status !== "uncertain") {
+      return undefined;
+    }
+    return {
+      item: projectTerminalRunAttention({
+        id: run.id,
+        workflowId: run.workflowId,
+        workflowVersion: run.workflowVersion,
+        status,
+        ...(run.currentNodeKey ? { currentNodeKey: run.currentNodeKey } : {}),
+        updatedAt: event.occurredAt,
+        events: [{ type: event.type, payload: event.payload }]
+      }),
+      state: "open",
+      revision: 0
+    };
   }
 
   #validationIssues(

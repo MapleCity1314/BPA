@@ -25,6 +25,7 @@ export interface OperatorConsoleApi {
   getRun(runId: string): Promise<RunView>;
   listTasks(): Promise<TaskView[]>;
   submitTask(taskId: string, input: SubmitTaskInput): Promise<void>;
+  acknowledgeAttention(id: string, expectedRevision: number): Promise<void>;
   importDataset(
     file: File,
     input: Omit<StagedDatasetImportInput, "upload">
@@ -133,6 +134,17 @@ export class HttpOperatorConsoleApi implements OperatorConsoleApi {
     await this.#request(
       `/api/tasks/${encodeURIComponent(taskId)}/submit`,
       { method: "POST", body: JSON.stringify(input) },
+      true
+    );
+  }
+
+  async acknowledgeAttention(id: string, expectedRevision: number) {
+    await this.#request(
+      `/api/attention/${encodeURIComponent(id)}/acknowledge`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expectedRevision })
+      },
       true
     );
   }

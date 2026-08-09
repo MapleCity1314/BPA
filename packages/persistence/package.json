@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@bpa/asset-core": "workspace:*",
+    "@bpa/attention-core": "workspace:*",
     "@bpa/evidence-core": "workspace:*",
     "@bpa/schemas": "workspace:*",
     "@bpa/source-core": "workspace:*",

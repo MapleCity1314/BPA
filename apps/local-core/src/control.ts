@@ -11,7 +11,6 @@ import {
   type TaskQueueFilter
 } from "@bpa/assistance-core";
 import type { DraftOperation } from "@bpa/authoring-core";
-import { projectTerminalRunAttention } from "@bpa/attention-core";
 import {
   compileCanonicalWorkflow,
   compileWorkflow,
@@ -922,27 +921,20 @@ export class LocalCoreService {
           ? Math.min(Math.max(requestedLimit, 1), 200)
           : 100;
         return this.persistence
-          .listRuns({
-            statuses: ["rejected", "failed", "uncertain"],
-            limit
-          })
-          .map((run) =>
-            projectTerminalRunAttention({
-              id: run.id,
-              workflowId: run.workflowId,
-              workflowVersion: run.workflowVersion,
-              status: run.status as "rejected" | "failed" | "uncertain",
-              ...(run.currentNodeKey
-                ? { currentNodeKey: run.currentNodeKey }
-                : {}),
-              updatedAt: run.updatedAt,
-              events: this.persistence.listEvents(run.id).map((event) => ({
-                type: event.type,
-                payload: event.payload
-              }))
-            })
-          );
+          .listAttention({ states: ["open"], limit })
+          .map((record) => ({
+            ...record.item,
+            state: record.state,
+            revision: record.revision
+          }));
       }
+      case "attention.acknowledge":
+        return this.persistence.acknowledgeAttention({
+          id: String(params.id),
+          expectedRevision: Number(params.expectedRevision),
+          actor: String(params.actor || userInfo().username),
+          acknowledgedAt: new Date().toISOString()
+        });
       case "run.inspect": {
         const runId = String(params.runId);
         const run = this.persistence.getRun(runId);

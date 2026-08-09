@@ -11,6 +11,7 @@ import {
   parseControlHelloResponse,
   type ControlRequestEnvelope
 } from "@bpa/control-protocol";
+import { projectTerminalRunAttention } from "@bpa/attention-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { resolveLocalIpcEndpoint } from "@bpa/platform-runtime";
@@ -132,22 +133,36 @@ describe("local control socket", () => {
         occurredAt: createdAt
       }
     });
+    const terminalEvent = {
+      id: randomUUID(),
+      runId: run.id,
+      sequence: 2,
+      type: "RUNTIME_RESULT_APPLIED",
+      payload: {
+        errorCode: "SESSION_EXPIRED",
+        message: "private browser diagnostic"
+      },
+      occurredAt: "2026-08-09T06:01:00.000Z"
+    };
     persistence.commitRunTransition({
       runId: run.id,
       expectedRevision: run.revision,
       nextStatus: "rejected",
       currentNodeKey: "collect",
-      event: {
-        id: randomUUID(),
-        runId: run.id,
-        sequence: 2,
-        type: "RUNTIME_RESULT_APPLIED",
-        payload: {
-          errorCode: "SESSION_EXPIRED",
-          message: "private browser diagnostic"
-        },
-        occurredAt: "2026-08-09T06:01:00.000Z"
-      }
+      attention: {
+        item: projectTerminalRunAttention({
+          id: run.id,
+          workflowId: run.workflowId,
+          workflowVersion: run.workflowVersion,
+          status: "rejected",
+          currentNodeKey: "collect",
+          updatedAt: terminalEvent.occurredAt,
+          events: [terminalEvent]
+        }),
+        state: "open",
+        revision: 0
+      },
+      event: terminalEvent
     });
 
     const response = service.handle({
@@ -164,11 +179,34 @@ describe("local control socket", () => {
           runId: "run-login-alert",
           groupKey: "authentication",
           kind: "blocking",
-          attemptedActions: []
+          attemptedActions: [],
+          state: "open",
+          revision: 0
         }
       ]
     });
     expect(JSON.stringify(response)).not.toContain("private browser diagnostic");
+    expect(
+      service.handle({
+        id: "attention-acknowledge",
+        method: "attention.acknowledge",
+        params: {
+          id: "run-terminal:run-login-alert",
+          expectedRevision: 0,
+          actor: "operator:test"
+        }
+      })
+    ).toMatchObject({
+      ok: true,
+      result: { state: "acknowledged", revision: 1 }
+    });
+    expect(
+      service.handle({
+        id: "attention-list-after-acknowledge",
+        method: "attention.list",
+        params: { limit: 20 }
+      })
+    ).toMatchObject({ ok: true, result: [] });
     persistence.close();
   });
 
@@ -224,7 +262,7 @@ describe("local control socket", () => {
       sendControlRequest(socketPath, "doctor")
     ).resolves.toMatchObject({
       status: "ok",
-      persistence: { adapter: "sqlite", schemaVersion: 15 }
+      persistence: { adapter: "sqlite", schemaVersion: 16 }
     });
   });
 

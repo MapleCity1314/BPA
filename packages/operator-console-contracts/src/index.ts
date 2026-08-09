@@ -44,6 +44,7 @@ export interface AttentionView {
   reason: string;
   requestedAction: string;
   createdAt: string;
+  revision: number;
 }
 
 export interface DashboardSnapshot {
@@ -245,6 +246,7 @@ export interface ControlBackend {
   getRun(runId: string): Promise<RunView>;
   listTasks(): Promise<TaskView[]>;
   submitTask(taskId: string, input: SubmitTaskInput): Promise<void>;
+  acknowledgeAttention(id: string, expectedRevision: number): Promise<void>;
   createStagingLease(input: StagingLeaseRequest): Promise<StagingLease>;
   uploadStagingLease(
     leaseId: string,

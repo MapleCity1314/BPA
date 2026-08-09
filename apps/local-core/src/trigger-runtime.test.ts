@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { projectTerminalRunAttention } from "@bpa/attention-core";
 import { describe,expect,it } from "vitest";
 import type { RunRecord,TriggerSpecDefinition } from "@bpa/persistence";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
@@ -134,13 +135,24 @@ describe("deterministic Trigger Runtime",() => {
         occurrenceKey:`manual:req-${terminalStatus}`
       });
       const run = store.getRun(triggerRun.workflowRunId!)!;
+      const terminalEvent = {
+        id:randomUUID(),runId:run.id,sequence:2,
+        type:`RUN_${terminalStatus.toUpperCase()}`,
+        payload:{},occurredAt:"2026-08-05T00:00:01.000Z"
+      };
       store.commitRunTransition({
         runId:run.id,expectedRevision:run.revision,nextStatus:terminalStatus,
-        event:{
-          id:randomUUID(),runId:run.id,sequence:2,
-          type:`RUN_${terminalStatus.toUpperCase()}`,
-          payload:{},occurredAt:"2026-08-05T00:00:01.000Z"
-        }
+        ...(terminalStatus === "cancelled" ? {} : {
+          attention:{
+            item:projectTerminalRunAttention({
+              id:run.id,workflowId:run.workflowId,
+              workflowVersion:run.workflowVersion,status:terminalStatus,
+              updatedAt:terminalEvent.occurredAt,events:[terminalEvent]
+            }),
+            state:"open" as const,revision:0
+          }
+        }),
+        event:terminalEvent
       });
 
       engine.tick();

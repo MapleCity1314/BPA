@@ -15,6 +15,7 @@ import type {
   BlobRecord,
   StagingLeaseRecord
 } from "@bpa/asset-core";
+import type { AttentionItem } from "@bpa/attention-core";
 import type {
   EvidenceChunkRecord,
   EvidenceTransferRecord
@@ -259,6 +260,14 @@ export interface OutboxMessage {
   createdAt: string;
 }
 
+export interface AttentionRecord {
+  item: AttentionItem;
+  state: "open" | "acknowledged";
+  revision: number;
+  acknowledgedAt?: string;
+  acknowledgedBy?: string;
+}
+
 export interface CreateRunInput {
   run: RunRecord;
   event: ExecutionEventRecord;
@@ -291,6 +300,7 @@ export interface RunTransitionInput {
   nextStatus: RunStatus;
   currentNodeKey?: string;
   output?: unknown;
+  attention?: AttentionRecord;
   event: ExecutionEventRecord;
 }
 
@@ -369,6 +379,7 @@ export interface SubmitAssistanceAndWakeInput {
   nextRunStatus?: RunStatus;
   currentNodeKey?: string;
   output?: unknown;
+  attention?: AttentionRecord;
   assistanceTasks?: readonly AssistanceTaskRecord[];
   additionalOutbox?: readonly OutboxMessage[];
   acknowledgeOutboxIds?: readonly string[];
@@ -719,6 +730,20 @@ export interface ExecutionStore {
   getNodeExecution(id: string): NodeExecutionRecord | undefined;
   listEvents(runId: string): ExecutionEventRecord[];
   requestCancel(runId: string, actor: string): RunRecord;
+}
+
+export interface AttentionStore {
+  getAttention(id: string): AttentionRecord | undefined;
+  listAttention(input: {
+    states?: readonly AttentionRecord["state"][];
+    limit: number;
+  }): AttentionRecord[];
+  acknowledgeAttention(input: {
+    id: string;
+    expectedRevision: number;
+    actor: string;
+    acknowledgedAt: string;
+  }): AttentionRecord;
 }
 
 export interface AuditRecord {
@@ -1263,6 +1288,7 @@ export interface Persistence
     DecisionRecordStore,
     GatewayDeliveryUnitOfWork,
     ExecutionStore,
+    AttentionStore,
     WorkflowAuthoringStore,
     AuthoringStore,
     SourceAssetStore,
