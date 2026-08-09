@@ -735,6 +735,9 @@ export type TriggerRunStatus =
   | "partial"
   | "blocked"
   | "degraded"
+  | "rejected"
+  | "uncertain"
+  | "cancelled"
   | "failed"
   | "skipped";
 
@@ -784,6 +787,10 @@ export interface TriggerStore {
     occurredAt: string;
   }): TriggerSpecRecord;
   getTriggerSpec(id: string): TriggerSpecRecord | undefined;
+  getTriggerSpecVersion(
+    id: string,
+    version: string
+  ): TriggerSpecDefinition | undefined;
   listTriggerSpecs(): TriggerSpecRecord[];
   claimTriggerOccurrence(input: TriggerRunRecord):
     | { status: "accepted"; record: TriggerRunRecord }

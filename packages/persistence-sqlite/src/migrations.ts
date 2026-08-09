@@ -1274,7 +1274,52 @@ export const migrations: Migration[] = [
         ON workflow_runs(status, updated_at)
         WHERE status NOT IN (
           'succeeded', 'rejected', 'failed', 'cancelled', 'uncertain'
-        );
+      );
+    `
+  },
+  {
+    version: 15,
+    sql: `
+      CREATE TABLE trigger_spec_versions (
+        trigger_id TEXT NOT NULL,
+        trigger_version TEXT NOT NULL,
+        spec_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        PRIMARY KEY(trigger_id, trigger_version)
+      ) STRICT;
+
+      INSERT INTO trigger_spec_versions(
+        trigger_id, trigger_version, spec_json, created_at, created_by
+      )
+      SELECT trigger_id, trigger_version, spec_json, created_at, created_by
+      FROM trigger_specs;
+
+      CREATE TABLE trigger_runs_v15 (
+        trigger_run_id TEXT PRIMARY KEY,
+        trigger_id TEXT NOT NULL REFERENCES trigger_specs(trigger_id) ON DELETE RESTRICT,
+        trigger_version TEXT NOT NULL,
+        occurrence_key TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (
+          'due', 'lease_acquired', 'run_created', 'running', 'complete',
+          'partial', 'blocked', 'degraded', 'rejected', 'uncertain',
+          'cancelled', 'failed', 'skipped'
+        )),
+        workflow_run_id TEXT REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        fencing_token INTEGER CHECK (fencing_token IS NULL OR fencing_token >= 1),
+        dataset_id TEXT,
+        dataset_version TEXT,
+        diagnostic TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(trigger_id, occurrence_key)
+      ) STRICT;
+
+      INSERT INTO trigger_runs_v15 SELECT * FROM trigger_runs;
+      DROP TABLE trigger_runs;
+      ALTER TABLE trigger_runs_v15 RENAME TO trigger_runs;
+      CREATE INDEX trigger_runs_recent
+        ON trigger_runs(trigger_id, created_at DESC);
     `
   }
 ];

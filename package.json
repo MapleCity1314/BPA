@@ -83,6 +83,9 @@
     "vitest": "^4.0.18"
   },
   "pnpm": {
+    "overrides": {
+      "postcss": "8.5.26"
+    },
     "onlyBuiltDependencies": [
       "better-sqlite3",
       "esbuild"

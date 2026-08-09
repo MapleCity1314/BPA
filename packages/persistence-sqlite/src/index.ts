@@ -4839,7 +4839,27 @@ export class SqlitePersistence implements Persistence {
       return current;
     }
     return this.#db.transaction(() => {
+      const existingVersion = this.getTriggerSpecVersion(
+        input.spec.id,
+        input.spec.version
+      );
+      if (
+        existingVersion &&
+        canonicalJson(existingVersion) !== canonicalJson(input.spec)
+      ) {
+        throw new ArtifactConflictError(
+          `Trigger identity conflict: ${input.spec.id}@${input.spec.version}`
+        );
+      }
       const revision = (current?.revision ?? 0) + 1;
+      this.#db.prepare(
+        `INSERT INTO trigger_spec_versions(
+          trigger_id,trigger_version,spec_json,created_at,created_by
+        ) VALUES (?,?,?,?,?)
+        ON CONFLICT(trigger_id,trigger_version) DO NOTHING`
+      ).run(
+        input.spec.id,input.spec.version,json(input.spec),input.occurredAt,input.actor
+      );
       this.#db.prepare(
         `INSERT INTO trigger_specs(
           trigger_id,trigger_version,revision,enabled,spec_json,
@@ -4902,6 +4922,19 @@ export class SqlitePersistence implements Persistence {
     const row = this.#db.prepare("SELECT * FROM trigger_specs WHERE trigger_id=?")
       .get(id) as SqlRow | undefined;
     return row ? this.#readTriggerSpec(row) : undefined;
+  }
+
+  getTriggerSpecVersion(
+    id: string,
+    version: string
+  ): TriggerSpecDefinition | undefined {
+    const row = this.#db.prepare(
+      `SELECT spec_json FROM trigger_spec_versions
+       WHERE trigger_id=? AND trigger_version=?`
+    ).get(id,version) as SqlRow | undefined;
+    return row
+      ? parseJson(row.spec_json) as TriggerSpecDefinition
+      : undefined;
   }
 
   listTriggerSpecs(): TriggerSpecRecord[] {

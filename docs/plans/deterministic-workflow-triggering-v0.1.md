@@ -2,7 +2,9 @@
 
 > 文档类别：平台能力计划。
 > 记录时间：2026-08-05。
-> 实现状态：Manual、Schedule、Dataset 最小平台内核已实现；Domain Event、External Event 和可视化运行日历待后续版本。
+> 实现状态：Manual、Schedule、Dataset 最小平台内核已实现；TriggerSpec 不可变版本
+> 历史与 Workflow 终态保真候选已完成；Domain Event、External Event 和可视化运行
+> 日历待后续版本。
 
 ## 1. 目标
 
@@ -82,6 +84,8 @@ interface TriggerSpec {
 ```
 
 TriggerSpec 固定工作流版本和权限边界。修改 Trigger、Workflow 版本、外部写入能力或通知目的地必须形成配置审计。
+`enabled` 是带 CAS 与审计的当前控制状态，不改变已经归档的执行配置版本；一次 Run
+钉死的是 workflow、input、并发键和策略等执行字段。
 
 ## 6. 运行状态机
 
@@ -159,6 +163,10 @@ AI 不能绕开 Runtime 租约、权限和效果确认，也不能成为内部�
 - [x] 增加 Trigger Schema、SQLite 存储、CLI 和控制协议。
 - [x] 支持 Manual、Schedule 和 Dataset 三类 Trigger。
 - [x] 建立 occurrence / dataset version / request key 幂等、并发租约、fencing 和配置审计。
+- [x] 持久化不可变 TriggerSpec 版本；活动 Run 恢复时只按记录的版本续租，不读取同 ID
+  的后来配置。
+- [x] Trigger Run 原样保留 Workflow 的 `rejected`、`uncertain`、`cancelled` 和 `failed`
+  终态，不再压缩为 `blocked`、`degraded` 或笼统失败。
 - [ ] 增加 bounded catch-up 的多周期补偿和可视化运行日历；当前 Schedule 每周期至多运行一次，重启后按 `run_once` 语义处理当前周期。
 
 ### P2：事件和产品入口

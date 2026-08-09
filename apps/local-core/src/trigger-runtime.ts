@@ -4,6 +4,7 @@ import type {
   Persistence,
   RunRecord,
   TriggerRunRecord,
+  TriggerSpecDefinition,
   TriggerSpecRecord
 } from "@bpa/persistence";
 
@@ -102,8 +103,17 @@ export class TriggerRuntime {
   private reconcileActiveRuns(now: string): void {
     for (const triggerRun of this.persistence.listTriggerRuns()) {
       if (!ACTIVE_TRIGGER_STATES.has(triggerRun.status)) continue;
-      const trigger = this.persistence.getTriggerSpec(triggerRun.triggerId);
-      if (!trigger) continue;
+      const trigger = this.persistence.getTriggerSpecVersion(
+        triggerRun.triggerId,
+        triggerRun.triggerVersion
+      );
+      if (!trigger) {
+        this.persistence.updateTriggerRun({
+          triggerRunId:triggerRun.triggerRunId,status:"failed",updatedAt:now,
+          diagnostic:"Pinned TriggerSpec version is missing."
+        });
+        continue;
+      }
       const lease = this.findOrRenewLease(trigger,triggerRun,now);
       if (!lease) {
         this.persistence.updateTriggerRun({
@@ -126,40 +136,46 @@ export class TriggerRuntime {
         }
         continue;
       }
-      const status = run.status === "succeeded"
-        ? "complete"
-        : run.status === "uncertain"
-          ? "degraded"
-          : run.status === "cancelled"
-            ? "blocked"
-            : "failed";
+      const status = (() => {
+        switch (run.status) {
+          case "succeeded":
+            return "complete";
+          case "rejected":
+          case "uncertain":
+          case "cancelled":
+          case "failed":
+            return run.status;
+          default:
+            throw new Error(`Unsupported Workflow terminal: ${run.status}`);
+        }
+      })();
       this.finish(trigger,triggerRun,lease,status,now);
     }
   }
 
   private findOrRenewLease(
-    trigger: TriggerSpecRecord,
+    trigger: TriggerSpecDefinition,
     triggerRun: TriggerRunRecord,
     now: string
   ): BrowserControlLeaseRecord | undefined {
     if (triggerRun.fencingToken !== undefined) {
       return this.persistence.renewTriggerLease({
-        concurrencyKey:trigger.spec.concurrencyKey,
+        concurrencyKey:trigger.concurrencyKey,
         ownerId:triggerRun.triggerRunId,fencingToken:triggerRun.fencingToken,
         now,ttlSeconds:LEASE_TTL_SECONDS
       });
     }
     return this.persistence.acquireTriggerLease({
-      concurrencyKey:trigger.spec.concurrencyKey,
+      concurrencyKey:trigger.concurrencyKey,
       ownerId:triggerRun.triggerRunId,now,ttlSeconds:LEASE_TTL_SECONDS
     });
   }
 
   private finish(
-    trigger: TriggerSpecRecord,
+    trigger: TriggerSpecDefinition,
     triggerRun: TriggerRunRecord,
     lease: BrowserControlLeaseRecord,
-    status: "complete" | "blocked" | "degraded" | "failed",
+    status: "complete" | "rejected" | "failed" | "cancelled" | "uncertain",
     now: string,
     diagnostic?: string
   ): void {
@@ -168,7 +184,7 @@ export class TriggerRuntime {
       ...(diagnostic ? { diagnostic } : {})
     });
     this.persistence.releaseTriggerLease({
-      concurrencyKey:trigger.spec.concurrencyKey,
+      concurrencyKey:trigger.concurrencyKey,
       ownerId:triggerRun.triggerRunId,fencingToken:lease.fencingToken,releasedAt:now
     });
   }

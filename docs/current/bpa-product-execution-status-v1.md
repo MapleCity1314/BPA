@@ -1,25 +1,23 @@
 # BPA 长期产品执行状态 v1
 
 > 文档类别：当前执行状态与阶段证据索引。
-> 记录时间：2026-08-06。
+> 初始记录时间：2026-08-06；最近更新：2026-08-09。
 > 权威等级：current-state。本文件记录"现在做到哪里"，产品边界和阶段顺序分别以
 > `docs/normative/bpa-product-form-v1.md` 与 `docs/normative/bpa-roadmap-v1.md` 为准。
 
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- 当前分支：`codex/phase0-observation`，只记录阶段 0 观测证据，不部署新 Runtime。
-- Git 基线：PR #2 与 PR #3 均已在全部发布门禁通过后合并到 `main`，merge commit 分别为
-  `5e091af7fbb0` 与 `58bfc108238f`。阶段 0 的结构收敛、Workflow `rejected` 终态保真、
-  资源观测加固和 Windows 文件锁重试均已进入主线。
+- Git 基线：截至 2026-08-09，PR #2–#9 均已在 required checks 通过后进入 `main`；
+  最新基线为 PR #9 merge commit `0ce1612a7054`。阶段 0 结构收敛、资源观测、清退商品
+  Mac 目标约束、爆款图片来源闭包校验和体验分候选均已进入主线。
 - GitHub `main` 已启用管理员同样受约束的 Branch Protection：必须走 Pull Request、
   与主线同步、解决 review conversation，并通过 macOS、Windows、性能、双架构发布、
   可复现性和 WorkBuddy 交付共 10 个 required checks；禁止 force-push 和删除主线。
-- 验证基线：固定 Node `24.18.0` 下 PR #3 候选 `pnpm verify` 通过，126 个测试文件、
-  775 项测试全绿，文档 Catalog 80 条有效，Astro 0 诊断。GitHub 的 macOS/Linux、Windows、
-  性能、双架构发布、Windows 可复现性、WorkBuddy 发布及 Windows 安装验证全部通过。
-  生产闭包仍是已经完整验收并部署的 `51ba97b2e526`；PR #3 已合并但未部署，不得以代码
-  合并替代生产证据，也不得为部署重置当前 24 小时采样窗口。
+- 验证基线：固定 Node `24.18.0`；每个主线候选继续经过本机 `pnpm verify` 与 GitHub
+  macOS/Linux、Windows、性能、双架构发布、Windows 可复现性和 WorkBuddy 交付门禁。
+  生产闭包仍是已验收并部署的 `51ba97b2e526`；后续源码合并均不等于已部署，也不得
+  为部署重置资源采样窗口。
 - 生产原则：库存公司业务不中断；任何运行中进程、状态、schedule 或有效 lease 存在
   时，只观察，不重启、不叠加触发。
 - Rust 判定：暂不切换生产 Core，保留实现、测试和候选架构；完成阶段 0 数据采集后
@@ -31,7 +29,7 @@
 
 | 阶段 | 状态 | 当前最重要缺口 | 退出证据 |
 | --- | --- | --- | --- |
-| 0 稳住上阵 | **进行中** | Core 热轮询修复后的首个自然 13 店周期已成功；PR #3 已合并，新 24 小时资源曲线与 Core 7 天稳定性尚未验收 | 24 小时三类资源曲线、Core 7 天稳定 |
+| 0 稳住上阵 | **进行中** | 结构收敛与生产热轮询修复已完成；24 小时资源曲线最终报告与 Core 7 天稳定性尚未验收 | 24 小时三类资源曲线、Core 7 天稳定 |
 | 1 无人值守 | 未开始 | 登录失效恢复、失败推送、统一控制台、固定 Trigger 覆盖 | 无 SSH 认证恢复、100% 失败推送、AI 触发占比持续降至零 |
 | 2 造流程易用 | 未开始 | Web 校正界面、截图/元素候选回传、非技术用户验收 | 非技术同事独立完成真实流程发布 |
 | 3 通用能力 | 未开始 | HTTP Request、File Write、JSON Transform、导出、自愈 | 不写 Adapter 覆盖主要通用需求 |
@@ -208,10 +206,10 @@ Mac 上的登录态真实页面 E2E。
 
 2026-08-06 的只读 Trigger 审计进一步确认：完整 13 店周期仍由 launchd 和
 `production-cycle.ts` 编排，不是一个已发布 Workflow。PR #3 已让 Workflow 的
-`rejected` 成为不可恢复的真实终态，但 Trigger Run 仍没有钉死不可变的 TriggerSpec 快照，
-并仍会压缩 Workflow 的 `rejected` / `uncertain`。阶段 0 门禁完成后，先修复 Trigger
-版本血缘、触发层终态保真、人工 actor 审计和策略执行，再迁移库存编排；不得用一个
-仅调用旧脚本的壳 Node 伪装成产品 Workflow。
+`rejected` 成为不可恢复的真实终态；当时 Trigger Run 仍没有钉死不可变的 TriggerSpec
+快照，并会压缩 Workflow 终态。2026-08-09 候选已修复版本血缘与终态保真；待其通过
+主线门禁后，继续补人工 actor 审计和策略执行，再迁移库存编排。不得用一个仅调用旧
+脚本的壳 Node 伪装成产品 Workflow。
 
 2026-08-06 20:59 的生产只读复核发现最新周期失败于
 `BROWSER_CONTROL_LEASE_RENEW_UNCONFIRMED`：当时有效 Browser Control Lease、运行中
@@ -231,6 +229,13 @@ schedule 和 collection 均为 0，但该周期只完成 1/13 店。该店已经
 typecheck 已通过；生产已部署精确 RC，现场 schema、索引和查询计划复核通过。修复后的
 首个自然 13 店周期已经完整成功，租约续期与终态清理均闭合；业务恢复已由生产证据确认，
 但 24 小时和 7 天稳定性门禁仍未完成。
+
+2026-08-09 的 Trigger 血缘候选新增 Schema v15：`trigger_spec_versions` 以
+`triggerId + triggerVersion` 保存不可变执行配置；`enabled` 单独作为带 CAS 和审计的
+当前控制状态。活动 Trigger Run 恢复、续租和释放只使用其已记录版本，不再回读同 ID
+的当前配置。Trigger Run 同时原样保留 Workflow 的
+`rejected`、`uncertain`、`cancelled`、`failed` 终态。该候选只完成本机代码与迁移回归，
+尚未部署；库存仍由原生产控制面运行。
 
 候选 RC 已完成首次 source-to-closure 故障注入：在隔离 Home 和 v12 临时数据库中，
 强制让新 launch agent bootstrap 以状态 42 失败。installer 随后恢复了旧 launchd
@@ -283,5 +288,6 @@ Workflow fixture 一致，且来源 URL 均属于抖音商品图片 CDN。闭包
 4. 等待并分析新 Core、Chrome 和 SQLite 同连接 page cache 的 24 小时采样结果；首个
    自然 13 店周期已成功，不再需要人工补触发。
 5. 启动 Core 7 天稳定性窗口并记录重启、RSS 趋势与运行事件。
-6. 修复 Trigger 版本钉死与终态保真，再进入阶段 1 的登录恢复、告警和统一控制台。
+6. ~~修复 Trigger 版本钉死与终态保真。~~ 候选已完成，待完整门禁和主线合并；随后
+   进入阶段 1 的登录恢复、告警和统一控制台。
 7. 依次完成清退商品、库存监控、爆款图片证据流的正式产品回归。
