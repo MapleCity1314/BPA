@@ -4,6 +4,12 @@ import { readFile, writeFile } from "node:fs/promises";
 
 const INPUT_SCHEMA = "bpa.runtime-resource-sample/1";
 const OUTPUT_SCHEMA = "bpa.runtime-resource-analysis/1";
+const CORE_STABILITY_WINDOW_HOURS = 168;
+const CORE_RSS_BASELINE_WINDOW_HOURS = 24;
+const CORE_RSS_ABSOLUTE_GROWTH_LIMIT_KIB = 8 * 1024;
+const CORE_RSS_RELATIVE_GROWTH_LIMIT = 0.1;
+const CORE_RSS_MONOTONIC_RATIO_LIMIT = 0.8;
+const CORE_RSS_MONOTONIC_GROWTH_FLOOR_KIB = 4 * 1024;
 
 function usage() {
   return [
@@ -15,6 +21,7 @@ function usage() {
     "  --expected-interval-seconds <n>   Expected sampling interval, default 60",
     "  --minimum-duration-hours <n>      Required conclusion window, default 24",
     "  --require-complete                Exit non-zero unless the resource gate is complete",
+    "  --require-stable                  Exit non-zero unless the Core 7-day gate is complete",
     "  --help                            Show this help"
   ].join("\n");
 }
@@ -40,6 +47,10 @@ function parseArguments(argv) {
     }
     if (argument === "--require-complete") {
       options.requireComplete = true;
+      continue;
+    }
+    if (argument === "--require-stable") {
+      options.requireStable = true;
       continue;
     }
     const value = argv[index + 1];
@@ -98,6 +109,15 @@ function parseSamples(source) {
 
 function rounded(value, digits = 2) {
   return Number(value.toFixed(digits));
+}
+
+function median(values) {
+  if (values.length === 0) return null;
+  const ordered = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(ordered.length / 2);
+  return ordered.length % 2 === 0
+    ? (ordered[middle - 1] + ordered[middle]) / 2
+    : ordered[middle];
 }
 
 function seriesSummary(points, durationHours) {
@@ -335,6 +355,156 @@ function sqliteSummary(samples, expectedIntervalSeconds) {
   };
 }
 
+function coreStabilitySummary(
+  samples,
+  durationHours,
+  continuityComplete,
+  coreIdentity
+) {
+  const firstTimestamp = samples[0].timestamp;
+  const lastTimestamp = samples.at(-1).timestamp;
+  const observations = samples.map(({ sample, timestamp }) => {
+    const rssKiB = sample.services["com.bpa.core"]?.rssKiB;
+    return {
+      timestamp,
+      rssKiB:
+        typeof rssKiB === "number" && Number.isFinite(rssKiB)
+          ? rssKiB
+          : null
+    };
+  });
+  const available = observations.filter(({ rssKiB }) => rssKiB !== null);
+  const buckets = new Map();
+  for (const observation of available) {
+    const hour = Math.floor(
+      (observation.timestamp - firstTimestamp) / (60 * 60 * 1_000)
+    );
+    const values = buckets.get(hour) ?? [];
+    values.push(observation.rssKiB);
+    buckets.set(hour, values);
+  }
+  const hourlyPoints = [...buckets.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([hour, values]) => ({ hour, value: median(values) }));
+  const firstWindowEnd =
+    firstTimestamp + CORE_RSS_BASELINE_WINDOW_HOURS * 60 * 60 * 1_000;
+  const lastWindowStart =
+    lastTimestamp - CORE_RSS_BASELINE_WINDOW_HOURS * 60 * 60 * 1_000;
+  const baselineMedianKiB = median(
+    available
+      .filter(({ timestamp }) => timestamp < firstWindowEnd)
+      .map(({ rssKiB }) => rssKiB)
+  );
+  const terminalMedianKiB = median(
+    available
+      .filter(({ timestamp }) => timestamp > lastWindowStart)
+      .map(({ rssKiB }) => rssKiB)
+  );
+  const observedGrowthKiB =
+    baselineMedianKiB === null || terminalMedianKiB === null
+      ? null
+      : rounded(terminalMedianKiB - baselineMedianKiB);
+  const observedGrowthRatio =
+    observedGrowthKiB === null || !baselineMedianKiB
+      ? null
+      : rounded(observedGrowthKiB / baselineMedianKiB, 4);
+  const allowedGrowthKiB = baselineMedianKiB === null
+    ? null
+    : rounded(Math.max(
+        CORE_RSS_ABSOLUTE_GROWTH_LIMIT_KIB,
+        baselineMedianKiB * CORE_RSS_RELATIVE_GROWTH_LIMIT
+      ));
+  const hourlyTrend = seriesSummary(hourlyPoints, durationHours);
+  const projectedSevenDayGrowthKiB = hourlyTrend
+    ? rounded(hourlyTrend.slopePerHour * CORE_STABILITY_WINDOW_HOURS)
+    : null;
+  const increasingSteps = hourlyPoints.slice(1).filter(
+    (point, index) => point.value > hourlyPoints[index].value
+  ).length;
+  const positiveStepRatio = hourlyPoints.length < 2
+    ? null
+    : rounded(increasingSteps / (hourlyPoints.length - 1), 4);
+  const persistentMonotonicGrowth =
+    positiveStepRatio !== null &&
+    observedGrowthKiB !== null &&
+    positiveStepRatio >= CORE_RSS_MONOTONIC_RATIO_LIMIT &&
+    observedGrowthKiB > CORE_RSS_MONOTONIC_GROWTH_FLOOR_KIB;
+  const windowComplete = durationHours >= CORE_STABILITY_WINDOW_HOURS;
+  const rssComplete = available.length === samples.length;
+  const growthWithinLimit =
+    observedGrowthKiB !== null &&
+    allowedGrowthKiB !== null &&
+    observedGrowthKiB <= allowedGrowthKiB;
+  const trendWithinLimit =
+    projectedSevenDayGrowthKiB !== null &&
+    allowedGrowthKiB !== null &&
+    projectedSevenDayGrowthKiB <= allowedGrowthKiB;
+  const coreSevenDayStable =
+    windowComplete &&
+    continuityComplete &&
+    coreIdentity.pidStable &&
+    coreIdentity.runtimeIdentityStable &&
+    rssComplete &&
+    growthWithinLimit &&
+    trendWithinLimit &&
+    !persistentMonotonicGrowth;
+  return {
+    policy: {
+      minimumDurationHours: CORE_STABILITY_WINDOW_HOURS,
+      baselineWindowHours: CORE_RSS_BASELINE_WINDOW_HOURS,
+      absoluteGrowthLimitKiB: CORE_RSS_ABSOLUTE_GROWTH_LIMIT_KIB,
+      relativeGrowthLimit: CORE_RSS_RELATIVE_GROWTH_LIMIT,
+      monotonicIncreaseRatioLimit: CORE_RSS_MONOTONIC_RATIO_LIMIT,
+      monotonicGrowthFloorKiB: CORE_RSS_MONOTONIC_GROWTH_FLOOR_KIB
+    },
+    windowComplete,
+    continuityComplete,
+    corePidStable: coreIdentity.pidStable,
+    coreRuntimeIdentityStable: coreIdentity.runtimeIdentityStable,
+    rssComplete,
+    observedSamples: available.length,
+    missingSamples: samples.length - available.length,
+    hourlyMedianBuckets: hourlyPoints.length,
+    baselineMedianKiB,
+    terminalMedianKiB,
+    observedGrowthKiB,
+    observedGrowthRatio,
+    allowedGrowthKiB,
+    slopePerHourKiB: hourlyTrend?.slopePerHour ?? null,
+    projectedSevenDayGrowthKiB,
+    positiveStepRatio,
+    persistentMonotonicGrowth,
+    growthWithinLimit,
+    trendWithinLimit,
+    coreSevenDayStable,
+    blockers: [
+      ...(!windowComplete ? ["seven_day_window_not_reached"] : []),
+      ...(!continuityComplete ? ["sampling_gaps_exceed_limit"] : []),
+      ...(coreIdentity.missingPidSamples > 0 ? ["core_pid_missing"] : []),
+      ...(coreIdentity.uniquePids.length > 1 ? ["core_pid_changed"] : []),
+      ...(!coreIdentity.runtimeIdentityExpected
+        ? ["core_runtime_identity_not_measured"]
+        : []),
+      ...(coreIdentity.runtimeIdentityExpected &&
+      coreIdentity.missingRuntimeIdentitySamples > 0
+        ? ["core_runtime_identity_missing"]
+        : []),
+      ...(coreIdentity.runtimeIdentityExpected &&
+      coreIdentity.runtimeIdentities.length > 1
+        ? ["core_runtime_identity_changed"]
+        : []),
+      ...(!rssComplete ? ["core_rss_samples_missing"] : []),
+      ...(rssComplete && !growthWithinLimit
+        ? ["core_rss_growth_exceeds_limit"]
+        : []),
+      ...(rssComplete && !trendWithinLimit
+        ? ["core_rss_trend_exceeds_limit"]
+        : []),
+      ...(persistentMonotonicGrowth ? ["core_rss_monotonic_growth"] : [])
+    ]
+  };
+}
+
 function analyze(samples, options) {
   const first = samples[0];
   const last = samples.at(-1);
@@ -374,6 +544,12 @@ function analyze(samples, options) {
     continuityComplete &&
     coreIdentityStable &&
     sqlite.pageCache.status === "measured";
+  const stabilityGate = coreStabilitySummary(
+    samples,
+    durationHours,
+    continuityComplete,
+    coreIdentity
+  );
   return {
     schema: OUTPUT_SCHEMA,
     source: {
@@ -418,6 +594,7 @@ function analyze(samples, options) {
       ]
     },
     coreIdentity,
+    stabilityGate,
     services: Object.fromEntries(
       serviceLabels.map((label) => [
         label,
@@ -448,6 +625,12 @@ async function main() {
       `Resource measurement gate is incomplete: ${analysis.conclusionGate.blockers.join(", ")}\n`
     );
     process.exitCode = 2;
+  }
+  if (options.requireStable && !analysis.stabilityGate.coreSevenDayStable) {
+    process.stderr.write(
+      `Core stability gate is incomplete: ${analysis.stabilityGate.blockers.join(", ")}\n`
+    );
+    process.exitCode = 3;
   }
 }
 

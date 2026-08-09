@@ -75,6 +75,22 @@ function sample(
   };
 }
 
+function sevenDaySamples(
+  rssForHour: (hour: number) => number,
+  pidForHour: (hour: number) => number = () => 10
+): RuntimeSampleFixture[] {
+  const startedAt = Date.parse("2026-08-01T00:00:00.000Z");
+  return Array.from({ length:169 },(_,hour) => {
+    const sampledAt = new Date(startedAt + hour * 60 * 60 * 1_000).toISOString();
+    return sample(
+      sampledAt,
+      pidForHour(hour),
+      rssForHour(hour),
+      4_096 + (hour % 4) * 128
+    );
+  });
+}
+
 describe("runtime resource analysis", () => {
   it("keeps file size evidence separate from SQLite page-cache evidence", () => {
     const root = mkdtempSync(join(tmpdir(), "bpa-runtime-analysis-"));
@@ -369,6 +385,131 @@ describe("runtime resource analysis", () => {
     expect(result.conclusionGate.blockers).toContain(
       "sqlite_page_cache_not_measured"
     );
+  });
+
+  it("closes the seven-day Core stability gate for bounded RSS oscillation",() => {
+    const root = mkdtempSync(join(tmpdir(),"bpa-runtime-stability-"));
+    const input = join(root,"samples.jsonl");
+    writeFileSync(
+      input,
+      `${sevenDaySamples((hour) => 100_000 + (hour % 6) * 128)
+        .map((value) => JSON.stringify(value)).join("\n")}\n`
+    );
+
+    const result = JSON.parse(execFileSync(
+      process.execPath,
+      [script,"--input",input,"--expected-interval-seconds","3600","--require-stable"],
+      { encoding:"utf8" }
+    ));
+
+    expect(result.stabilityGate).toMatchObject({
+      windowComplete:true,
+      continuityComplete:true,
+      corePidStable:true,
+      coreRuntimeIdentityStable:true,
+      rssComplete:true,
+      hourlyMedianBuckets:169,
+      persistentMonotonicGrowth:false,
+      growthWithinLimit:true,
+      trendWithinLimit:true,
+      coreSevenDayStable:true,
+      blockers:[]
+    });
+    expect(result.stabilityGate.policy).toEqual({
+      minimumDurationHours:168,
+      baselineWindowHours:24,
+      absoluteGrowthLimitKiB:8192,
+      relativeGrowthLimit:0.1,
+      monotonicIncreaseRatioLimit:0.8,
+      monotonicGrowthFloorKiB:4096
+    });
+  });
+
+  it("fails the seven-day gate for persistent monotonic Core RSS growth",() => {
+    const root = mkdtempSync(join(tmpdir(),"bpa-runtime-stability-"));
+    const input = join(root,"samples.jsonl");
+    writeFileSync(
+      input,
+      `${sevenDaySamples((hour) => 100_000 + hour * 1024)
+        .map((value) => JSON.stringify(value)).join("\n")}\n`
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [script,"--input",input,"--expected-interval-seconds","3600","--require-stable"],
+      { encoding:"utf8" }
+    );
+    const analysis = JSON.parse(result.stdout);
+
+    expect(result.status).toBe(3);
+    expect(analysis.stabilityGate).toMatchObject({
+      windowComplete:true,
+      persistentMonotonicGrowth:true,
+      growthWithinLimit:false,
+      trendWithinLimit:false,
+      coreSevenDayStable:false
+    });
+    expect(analysis.stabilityGate.blockers).toEqual([
+      "core_rss_growth_exceeds_limit",
+      "core_rss_trend_exceeds_limit",
+      "core_rss_monotonic_growth"
+    ]);
+    expect(result.stderr).toContain("core_rss_monotonic_growth");
+  });
+
+  it("fails the seven-day gate when the observed Core process changes",() => {
+    const root = mkdtempSync(join(tmpdir(),"bpa-runtime-stability-"));
+    const input = join(root,"samples.jsonl");
+    writeFileSync(
+      input,
+      `${sevenDaySamples(
+        (hour) => 100_000 + (hour % 6) * 128,
+        (hour) => hour < 84 ? 10 : 11
+      ).map((value) => JSON.stringify(value)).join("\n")}\n`
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [script,"--input",input,"--expected-interval-seconds","3600","--require-stable"],
+      { encoding:"utf8" }
+    );
+    const stability = JSON.parse(result.stdout).stabilityGate;
+
+    expect(result.status).toBe(3);
+    expect(stability).toMatchObject({
+      windowComplete:true,
+      corePidStable:false,
+      coreRuntimeIdentityStable:true,
+      coreSevenDayStable:false
+    });
+    expect(stability.blockers).toContain("core_pid_changed");
+  });
+
+  it("does not infer seven-day stability from a complete 24-hour window",() => {
+    const root = mkdtempSync(join(tmpdir(),"bpa-runtime-stability-"));
+    const input = join(root,"samples.jsonl");
+    const startedAt = Date.parse("2026-08-01T00:00:00.000Z");
+    const samples = Array.from({ length:25 },(_,hour) => {
+      const sampledAt = new Date(startedAt + hour * 60 * 60 * 1_000).toISOString();
+      return sample(sampledAt,10,100_000 + (hour % 4) * 64,4096);
+    });
+    writeFileSync(
+      input,
+      `${samples.map((value) => JSON.stringify(value)).join("\n")}\n`
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [script,"--input",input,"--expected-interval-seconds","3600","--require-stable"],
+      { encoding:"utf8" }
+    );
+
+    expect(result.status).toBe(3);
+    expect(JSON.parse(result.stdout).stabilityGate).toMatchObject({
+      windowComplete:false,
+      coreSevenDayStable:false,
+      blockers:["seven_day_window_not_reached"]
+    });
   });
 
   it("fails closed on a non-chronological sample stream", () => {

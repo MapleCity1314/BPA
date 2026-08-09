@@ -24,6 +24,7 @@
     "performance:check": "tsx scripts/verify-persistence-scale.ts",
     "runtime:analyze": "node scripts/analyze-macos-runtime-metrics.mjs",
     "runtime:gate": "node scripts/analyze-macos-runtime-metrics.mjs --require-complete",
+    "runtime:stability-gate": "node scripts/analyze-macos-runtime-metrics.mjs --require-stable",
     "evidence:closure": "tsx scripts/verify-ecommerce-evidence-closure.ts",
     "native:build": "pnpm --filter @bpa/inventory-kernel build:release",
     "native:test": "pnpm --filter @bpa/inventory-kernel test",
