@@ -114,7 +114,7 @@ function seedProbeEvidence(input: {
   const assets = new LocalAssetStore({
     dataDirectory: input.dataDirectory,
     clock: { now: () => new Date(timestamp) },
-    idFactory: () => `lease:${input.platform.toLowerCase()}`,
+    idFactory: () => `lease-${input.platform.toLowerCase()}`,
     secretFactory: () => Buffer.alloc(32, 7)
   });
   const lease = assets.issueStagingLease({
