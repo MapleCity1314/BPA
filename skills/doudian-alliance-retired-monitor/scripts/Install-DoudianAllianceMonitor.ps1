@@ -227,7 +227,7 @@ $RequiredAssets = @(
   @{
     type = "workflow"
     file = "doudian.alliance-retired-products-monitor.workflow.yaml"
-    sha256 = "eef860b6978b66bc9199a9499b84968cdbc4377b1d5d3ac2eebe78546044d845"
+    sha256 = "7d8e11d2a5b2a1184f02789553413cc92b8b42a1304d3ff3c4a4f86c88f93ae2"
   }
 )
 foreach ($Asset in $RequiredAssets) {
@@ -458,7 +458,7 @@ $Configuration = [ordered]@{
   runtimeIdentity = $RequiredIdentity
   bpaCommand = $BpaCommand
   recordsDir = $RecordsRoot
-  workflow = "doudian.alliance-retired-products-monitor@2.0.0"
+  workflow = "doudian.alliance-retired-products-monitor@2.0.1"
   maxShops = 100
   schedule = "daily 13:00"
   timezone = "Asia/Shanghai"
@@ -505,7 +505,7 @@ $InputJson = @{ maxShops = $EffectiveMaxShops } | ConvertTo-Json -Compress
 $Arguments = @(
   "workflow-run",
   "doudian.alliance-retired-products-monitor",
-  "--version", "2.0.0",
+  "--version", "2.0.1",
   "--input-file", $InputFile,
   "--wait-seconds", "28800"
 )

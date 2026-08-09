@@ -2,7 +2,8 @@
 
 > 文档类别：公司业务工作流迁移计划。  
 > 记录时间：2026-08-07。  
-> 实现状态：部分实现；P1 本机候选已完成，尚未执行真实浏览器 E2E、部署、外部投递或调度切换。  
+> 实现状态：部分实现；P1 与正式资产本机 Provider E2E 已完成，尚未执行真实浏览器 E2E、
+> 单店事实持久化、Dataset、外部投递、部署或调度切换。
 > 适用范围：公司 Mac mini 上的抖店体验分每日多店采集。  
 > 不在本期：微信小店、快手小店、历史数据兼容层、Rust 改写。  
 > 权威上位文档：`docs/normative/bpa-product-form-v1.md`、
@@ -491,7 +492,7 @@ apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: doudian.experience-score.daily
-  version: 1.0.0
+  version: 1.0.1
 spec:
   riskLevel: R1
   limits:
@@ -517,7 +518,7 @@ spec:
 ### 8.1 foreach 策略
 
 - `maxItems`: 100，防止页面异常造成无界列表。
-- `onItemError`: continue，但阻断类 RiskSignal 立即停止剩余浏览器步骤。
+- `onItemError`: `collect`，普通失败继续形成部分结果；阻断类 RiskSignal 立即停止剩余浏览器步骤。
 - 单店最长 4 分钟；整轮浏览器阶段最长 75 分钟。
 - 单店成功后立即持久化，再进入下一店。
 - 每次切换后重新校验店铺身份，不相信上一步页面状态。
@@ -544,7 +545,7 @@ spec:
 ```yaml
 id: doudian-experience-daily
 kind: schedule
-workflow: doudian.experience-score.daily@1.0.0
+workflow: doudian.experience-score.daily@1.0.1
 timezone: Asia/Shanghai
 schedule: daily 13:00
 idempotencyPolicy: occurrence
@@ -659,16 +660,19 @@ Trigger 在发布和真实 E2E 通过前保持禁用。
 
 ### P1：Adapter、Node 与 Workflow 候选
 
-状态：本机候选已完成（2026-08-07），未部署。
+状态：本机候选与 Provider E2E 已完成（2026-08-09），未部署。
 
 已交付候选：
 
 - 新建 `doudian-experience` Adapter；
 - 新建发现、事务性身份校验与快照读取 Node；
 - 新建聚合 Node；逐店 Step 输出已形成 Runtime 检查点；
-- 新建 `doudian.experience-score.daily` Workflow；
+- 新建 `doudian.experience-score.daily@1.0.1` Workflow；普通单店失败进入
+  foreach `collect` 后聚合，阻断类 `rejected` 仍立即终止；
 - fixture 行为测试、Schema 测试、RiskSignal 测试；
-- 候选资产保持 unpublished，未创建或启用 Trigger。
+- 正式资产本机 E2E 通过临时 Trigger、同一 Browser Session、资源绑定、IR2 Provider、
+  终态和浏览器租约释放，并与清退商品、库存依次运行时保持单实例记录；
+- 候选资产保持未部署，未创建或启用生产 Trigger。
 
 留待 P2/P3：正式 `experience.snapshot.persist` 服务写入、不可变 Dataset 发布、截图 Evidence
 与飞书 Effect。当前候选不能以本地测试替代这些生产能力。
@@ -702,7 +706,7 @@ Trigger 在发布和真实 E2E 通过前保持禁用。
 
 建议 PR 3：
 
-- 发布 Workflow/Node/Adapter 1.0.0；
+- 发布 Workflow 1.0.1 与 Node/Adapter 1.0.0；
 - 创建但不启用 Schedule Trigger；
 - Operator Console 展示 Run、Dataset、Evidence、Alert；
 - Feishu Bitable 与消息 Effect 完成幂等和不确定效果测试；

@@ -57,6 +57,7 @@ describe("deterministic Trigger Runtime",() => {
     const engine = runtime(store,() => new Date("2026-08-05T00:00:00.000Z"));
     const first = engine.fire({ trigger,occurrenceKey:"manual:req-1" });
     expect(first).toMatchObject({ status:"run_created" });
+    expect(store.getRun(first.workflowRunId!)?.input).toEqual(base.input);
     expect(engine.fire({ trigger,occurrenceKey:"manual:req-1" }).triggerRunId)
       .toBe(first.triggerRunId);
     const run = store.getRun(first.workflowRunId!)!;
