@@ -110,6 +110,8 @@ importers:
         specifier: ^27.0.1
         version: 27.4.0
 
+  adapters/feishu-notification: {}
+
   adapters/marketplace:
     dependencies:
       '@bpa/schemas':
@@ -252,6 +254,9 @@ importers:
 
   apps/local-core:
     dependencies:
+      '@bpa/adapter-feishu-notification':
+        specifier: workspace:*
+        version: link:../../adapters/feishu-notification
       '@bpa/asset-core':
         specifier: workspace:*
         version: link:../../packages/asset-core

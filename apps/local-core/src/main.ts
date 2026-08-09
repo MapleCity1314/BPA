@@ -11,6 +11,9 @@ import { resolveBpaPaths } from "./paths.js";
 import { CoreInstanceLock } from "./instance-lock.js";
 import { writeRuntimeResourceMetrics } from "./runtime-resource-metrics.js";
 import {
+  createOperatorNotificationDispatcher
+} from "./operator-notification.js";
+import {
   LocalStagingTransferServer,
   StagingTransferService
 } from "./staging-transfer.js";
@@ -34,6 +37,10 @@ if (process.argv.includes("--migrate-only")) {
   process.stdout.write("BPA migrations completed successfully.\n");
   process.exit(0);
 }
+const notificationDispatcher = createOperatorNotificationDispatcher({
+  persistence,
+  environment: process.env
+});
 const signingKey = loadOrCreateCoreSigningKey(paths.signingKey);
 const browserEvidence = new BrowserEvidenceReceiver(
   persistence,
@@ -134,9 +141,31 @@ const gatewayTimer = setInterval(() => {
 }, 500);
 gatewayTimer.unref();
 
+let deliveringAttention = false;
+const drainAttentionDelivery = (): void => {
+  if (!notificationDispatcher || deliveringAttention) return;
+  deliveringAttention = true;
+  void notificationDispatcher
+    .dispatchNext()
+    .catch(() => {
+      process.stderr.write(
+        "[attention-delivery] dispatch failed before a safe outcome was recorded.\n"
+      );
+    })
+    .finally(() => {
+      deliveringAttention = false;
+    });
+};
+const attentionDeliveryTimer = notificationDispatcher
+  ? setInterval(drainAttentionDelivery, 5_000)
+  : undefined;
+attentionDeliveryTimer?.unref();
+drainAttentionDelivery();
+
 const shutdown = async (): Promise<void> => {
   clearInterval(gatewayTimer);
   clearInterval(resourceMetricsTimer);
+  if (attentionDeliveryTimer) clearInterval(attentionDeliveryTimer);
   await server.stop().catch(() => undefined);
   await stagingServer.stop().catch(() => undefined);
   persistence.close();

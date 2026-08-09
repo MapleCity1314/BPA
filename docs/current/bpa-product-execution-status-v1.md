@@ -8,8 +8,8 @@
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- Git 基线：截至 2026-08-09，PR #2–#14 均已在 required checks 通过后进入 `main`；
-  最新基线为 PR #14 merge commit `bb71d832d575`。阶段 0 结构收敛、资源观测、清退商品
+- Git 基线：截至 2026-08-09，PR #2–#15 均已在 required checks 通过后进入 `main`；
+  最新基线为 PR #15 merge commit `e6c3f59eebdf`。阶段 0 结构收敛、资源观测、清退商品
   Mac 目标约束、爆款图片来源闭包校验和体验分候选均已进入主线。
 - GitHub `main` 已启用管理员同样受约束的 Branch Protection：必须走 Pull Request、
   与主线同步、解决 review conversation，并通过 macOS、Windows、性能、双架构发布、
@@ -38,8 +38,9 @@
 阶段 1 的前两层已进入主线：平台从 Run 问题终态生成脱敏 Attention，并把登录、验证码、
 风控、`rejected`、`failed` 与 `uncertain` 呈现在统一 Operator Console。Schema v16 将
 Attention 与终态写入同一事务，增加 open/acknowledged、revision CAS、确认审计和重启恢复；
-缺少 Attention 的问题终态会整体回滚。Schema v17 Delivery Outbox 正在候选分支实现，真实
-通知 Adapter、手机推送与远程 Recovery Session 仍未实现，不能据此宣称无人值守成立。
+缺少 Attention 的问题终态会整体回滚。Schema v17 Delivery Outbox、保守投递状态机和面板
+对账已进入主线；独立飞书通知 Adapter 与严格 `0600` 配置加载正在候选分支实现，尚未配置
+真实 Channel。手机推送生产验收与远程 Recovery Session 仍未完成，不能据此宣称无人值守成立。
 实施顺序与共享 Chrome 资源边界见
 `docs/plans/bpa-stage-one-unattended-operations-v0.1.md`。
 
