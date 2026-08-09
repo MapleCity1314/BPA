@@ -1560,5 +1560,202 @@ export const migrations: Migration[] = [
           ON DELETE RESTRICT
       ) STRICT;
     `
+  },
+  {
+    version: 21,
+    sql: `
+      CREATE TABLE attention_records_v21 (
+        attention_id TEXT PRIMARY KEY,
+        source_type TEXT NOT NULL CHECK (source_type IN (
+          'workflow-run', 'trigger-occurrence'
+        )),
+        workflow_run_id TEXT REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        trigger_occurrence_id TEXT
+          REFERENCES trigger_occurrences(occurrence_id) ON DELETE RESTRICT,
+        delivery_policy TEXT NOT NULL CHECK (delivery_policy IN (
+          'operator-notification', 'dashboard-only'
+        )),
+        stage_key TEXT NOT NULL,
+        group_key TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN (
+          'information', 'review', 'action', 'approval', 'blocking'
+        )),
+        source TEXT NOT NULL CHECK (source IN (
+          'assistance', 'browser', 'runtime', 'approval', 'business-rule'
+        )),
+        title TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        requested_action TEXT NOT NULL,
+        blocking INTEGER NOT NULL CHECK (blocking IN (0, 1)),
+        batchable INTEGER NOT NULL CHECK (batchable IN (0, 1)),
+        attempted_actions_json TEXT NOT NULL,
+        resumes_automatically INTEGER NOT NULL CHECK (
+          resumes_automatically IN (0, 1)
+        ),
+        state TEXT NOT NULL CHECK (state IN ('open', 'acknowledged')),
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        created_at TEXT NOT NULL,
+        due_at TEXT,
+        acknowledged_at TEXT,
+        acknowledged_by TEXT,
+        CHECK (
+          (source_type = 'workflow-run' AND workflow_run_id IS NOT NULL
+            AND trigger_occurrence_id IS NULL
+            AND delivery_policy = 'operator-notification')
+          OR
+          (source_type = 'trigger-occurrence' AND workflow_run_id IS NULL
+            AND trigger_occurrence_id IS NOT NULL
+            AND delivery_policy = 'dashboard-only')
+        ),
+        CHECK (
+          (state = 'open' AND acknowledged_at IS NULL AND acknowledged_by IS NULL)
+          OR
+          (state = 'acknowledged' AND acknowledged_at IS NOT NULL
+            AND acknowledged_by IS NOT NULL)
+        )
+      ) STRICT;
+
+      CREATE TABLE attention_deliveries_v21 (
+        delivery_id TEXT PRIMARY KEY,
+        attention_id TEXT NOT NULL UNIQUE
+          REFERENCES attention_records_v21(attention_id) ON DELETE RESTRICT,
+        channel TEXT NOT NULL CHECK (channel = 'operator-notification'),
+        idempotency_key TEXT NOT NULL UNIQUE,
+        request_digest TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN (
+          'pending', 'delivering', 'delivered', 'failed', 'uncertain'
+        )),
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        attempt INTEGER NOT NULL CHECK (attempt >= 0),
+        lease_id TEXT,
+        lease_owner TEXT,
+        lease_expires_at TEXT,
+        last_error_code TEXT,
+        provider_receipt_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        CHECK ((state = 'pending' AND attempt = 0) OR state != 'pending'),
+        CHECK (
+          (state = 'delivering' AND lease_id IS NOT NULL
+            AND lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)
+          OR
+          (state != 'delivering' AND lease_id IS NULL
+            AND lease_owner IS NULL AND lease_expires_at IS NULL)
+        ),
+        CHECK (
+          (state IN ('pending', 'delivering') AND completed_at IS NULL)
+          OR
+          (state IN ('delivered', 'failed', 'uncertain')
+            AND completed_at IS NOT NULL)
+        ),
+        CHECK (
+          (state IN ('failed', 'uncertain') AND last_error_code IS NOT NULL)
+          OR state NOT IN ('failed', 'uncertain')
+        )
+      ) STRICT;
+
+      CREATE TABLE recovery_sessions_v21 (
+        recovery_session_id TEXT PRIMARY KEY,
+        attention_id TEXT NOT NULL UNIQUE
+          REFERENCES attention_records_v21(attention_id) ON DELETE RESTRICT,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        state TEXT NOT NULL CHECK (state IN (
+          'issued', 'active', 'completed', 'expired', 'revoked', 'invalidated'
+        )),
+        requested_by TEXT NOT NULL,
+        browser_session_id TEXT NOT NULL
+          REFERENCES browser_sessions(id) ON DELETE RESTRICT,
+        browser_instance_id TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        tab_id INTEGER NOT NULL CHECK (tab_id >= 0),
+        origin TEXT NOT NULL,
+        initial_page_epoch TEXT NOT NULL,
+        token_digest TEXT NOT NULL,
+        lease_resource_id TEXT NOT NULL,
+        lease_owner_id TEXT NOT NULL,
+        lease_fencing_token INTEGER NOT NULL CHECK (lease_fencing_token >= 1),
+        issued_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        activated_at TEXT,
+        completed_at TEXT,
+        completion_page_epoch TEXT,
+        terminal_reason TEXT,
+        CHECK (expires_at > issued_at),
+        CHECK (
+          (state = 'issued' AND activated_at IS NULL AND completed_at IS NULL)
+          OR
+          (state = 'active' AND activated_at IS NOT NULL AND completed_at IS NULL)
+          OR
+          (state = 'completed' AND activated_at IS NOT NULL
+            AND completed_at IS NOT NULL AND completion_page_epoch IS NOT NULL)
+          OR
+          (state IN ('expired', 'revoked', 'invalidated')
+            AND completed_at IS NULL AND terminal_reason IS NOT NULL)
+        )
+      ) STRICT;
+
+      DROP TABLE recovery_sessions;
+      DROP TABLE attention_deliveries;
+      DROP TABLE attention_records;
+      ALTER TABLE attention_records_v21 RENAME TO attention_records;
+      ALTER TABLE attention_deliveries_v21 RENAME TO attention_deliveries;
+      ALTER TABLE recovery_sessions_v21 RENAME TO recovery_sessions;
+
+      CREATE UNIQUE INDEX attention_records_workflow_run
+        ON attention_records(workflow_run_id)
+        WHERE source_type = 'workflow-run';
+      CREATE UNIQUE INDEX attention_records_trigger_occurrence
+        ON attention_records(trigger_occurrence_id)
+        WHERE source_type = 'trigger-occurrence';
+      CREATE INDEX attention_records_open_created
+        ON attention_records(created_at, attention_id)
+        WHERE state = 'open';
+      CREATE INDEX attention_deliveries_pending_created
+        ON attention_deliveries(created_at, delivery_id)
+        WHERE state = 'pending';
+      CREATE INDEX attention_deliveries_state_updated
+        ON attention_deliveries(state, updated_at, delivery_id);
+      CREATE INDEX recovery_sessions_state_expiry
+        ON recovery_sessions(state, expires_at, recovery_session_id);
+      CREATE INDEX recovery_sessions_browser_profile
+        ON recovery_sessions(
+          browser_instance_id, profile_id, state, expires_at
+        );
+
+      CREATE TRIGGER attention_deliveries_workflow_source_insert
+      BEFORE INSERT ON attention_deliveries
+      WHEN (SELECT source_type FROM attention_records
+            WHERE attention_id = NEW.attention_id) != 'workflow-run'
+      BEGIN
+        SELECT RAISE(ABORT, 'Attention delivery requires workflow-run source');
+      END;
+
+      CREATE TRIGGER attention_deliveries_workflow_source_update
+      BEFORE UPDATE OF attention_id ON attention_deliveries
+      WHEN (SELECT source_type FROM attention_records
+            WHERE attention_id = NEW.attention_id) != 'workflow-run'
+      BEGIN
+        SELECT RAISE(ABORT, 'Attention delivery requires workflow-run source');
+      END;
+
+      CREATE TRIGGER recovery_sessions_workflow_source_insert
+      BEFORE INSERT ON recovery_sessions
+      WHEN (SELECT source_type FROM attention_records
+            WHERE attention_id = NEW.attention_id) != 'workflow-run'
+      BEGIN
+        SELECT RAISE(ABORT, 'Recovery Session requires workflow-run Attention');
+      END;
+
+      CREATE TRIGGER recovery_sessions_workflow_source_update
+      BEFORE UPDATE OF attention_id ON recovery_sessions
+      WHEN (SELECT source_type FROM attention_records
+            WHERE attention_id = NEW.attention_id) != 'workflow-run'
+      BEGIN
+        SELECT RAISE(ABORT, 'Recovery Session requires workflow-run Attention');
+      END;
+    `
   }
 ];

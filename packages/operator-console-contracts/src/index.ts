@@ -67,6 +67,7 @@ export interface AttentionView {
     | "delivered"
     | "failed"
     | "uncertain"
+    | "not-requested"
     | "missing";
   deliveryAttempt: number;
   deliveryErrorCode?: string;
@@ -110,6 +111,8 @@ export interface DashboardSnapshot {
   recoverySessions: RecoverySessionView[];
   activeRunCount: number;
   pendingTaskCount: number;
+  attentionTotal?: number;
+  attentionTruncated?: boolean;
 }
 
 export interface WorkflowInputField {

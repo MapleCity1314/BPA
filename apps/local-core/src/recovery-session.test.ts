@@ -9,6 +9,7 @@ import type {
   BrowserPageObservationRecord,
   BrowserSessionRecord,
   ExecutionEventRecord,
+  Persistence,
   RunRecord
 } from "@bpa/persistence";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
@@ -57,6 +58,8 @@ function page(
 
 function terminalAttention(): AttentionRecord {
   return {
+    sourceRef: { kind: "workflow-run", runId: "run-recovery" },
+    deliveryPolicy: "operator-notification",
     item: {
       id: attentionId,
       runId: "run-recovery",
@@ -371,6 +374,12 @@ describe("RecoverySessionService", () => {
     );
     service.issue({ ...request(), ttlSeconds: 60 });
     now = "2026-08-09T08:01:00.000Z";
+    const auditBeforeRead = persistence.listAudit().length;
+    expect(service.list()).toEqual([
+      expect.objectContaining({ id: "recovery-4", state: "issued" })
+    ]);
+    expect(persistence.listAudit()).toHaveLength(auditBeforeRead);
+    service.sweepExpired();
 
     expect(service.list()).toEqual([
       expect.objectContaining({
@@ -487,6 +496,38 @@ describe("RecoverySessionService", () => {
     expect(() =>
       service.issue({ ...request(), origin: "http://fxg.jinritemai.com" })
     ).toThrow("RECOVERY_ORIGIN_INVALID");
+    persistence.close();
+  });
+
+  it("atomically rejects Recovery when Attention changes after the service precheck", () => {
+    const persistence = seed();
+    const raced = new Proxy(persistence as Persistence, {
+      get(target, property) {
+        if (property === "issueRecoverySession") {
+          return (input: Parameters<Persistence["issueRecoverySession"]>[0]) => {
+            persistence.acknowledgeAttention({
+              id: attentionId,
+              expectedRevision: 0,
+              actor: "operator:racing-acknowledgement",
+              acknowledgedAt: "2026-08-09T08:00:00.500Z"
+            });
+            return persistence.issueRecoverySession(input);
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+    });
+    const service = new RecoverySessionService(
+      raced,
+      () => issuedAt,
+      () => "recovery-raced",
+      () => "one-time-token-with-at-least-thirty-two-bytes"
+    );
+
+    expect(() => service.issue(request())).toThrow();
+    expect(persistence.getRecoverySession("recovery-raced")).toBeUndefined();
+    expect(persistence.listBrowserControlLeases(issuedAt)).toEqual([]);
     persistence.close();
   });
 });

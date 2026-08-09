@@ -141,6 +141,14 @@ v1alpha2 候选还把积压限制为每 tick 最多 1000 个 occurrence，并在
 终态后租约释放且实例记录不增长；它仍是 Provider fixture，真实页面、标签页上限和 Chrome
 进程数仍需后续本机浏览器 E2E 验收。
 
+Schema v21 候选继续补齐计划层问题面：没有 Workflow Run 的
+`blocked/failed/missed/skipped` 与 dashboard-only Attention 原子提交，已有 Workflow Run
+的终态只保留 Run Attention，避免重复通知；旧版 Workflow 的 Trigger 调用在任何 Run 写入
+前拒绝，不能留下孤儿 Run。库存指挥台按 `appId=inventory-monitor` 只读这些 Attention，
+不写库存数据库、不确认、不恢复、不投递，也不弹浏览器桌面通知。Core 或响应契约不可读时
+面板 fail-closed，明确显示“BPA 触发状态暂不可读”。Schema 20 Attention 控制面非空时
+Schema 21 拒绝升级并保持原库，部署前必须走导出、退役和空库门禁。
+
 ## 7. 实施顺序与门禁
 
 1. **面板投影**：终态反例、登录风险码、脱敏和 UI 测试通过。

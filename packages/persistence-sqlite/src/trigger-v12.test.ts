@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { describe,expect,it } from "vitest";
-import type { TriggerOccurrenceRecord,TriggerSpecDefinition } from "@bpa/persistence";
+import type {
+  AttentionRecord,
+  TriggerOccurrenceRecord,
+  TriggerSpecDefinition
+} from "@bpa/persistence";
 import { SqlitePersistence } from "./index.js";
 
 const now = "2026-08-05T00:00:00.000Z";
@@ -39,6 +43,34 @@ function occurrence(
     createdAt:now,
     updatedAt:now,
     ...overrides
+  };
+}
+
+function occurrenceAttention(
+  occurrenceId: string,
+  outcome: "missed" | "skipped" | "blocked" | "failed",
+  diagnostic: string
+): AttentionRecord {
+  return {
+    sourceRef: { kind:"trigger-occurrence",occurrenceId },
+    deliveryPolicy:"dashboard-only",
+    item: {
+      id:`trigger-occurrence-terminal:${occurrenceId}`,
+      stageKey:"trigger",
+      groupKey:outcome,
+      kind:outcome === "blocked" ? "blocking" : "action",
+      source:"runtime",
+      title:`Trigger ${outcome}`,
+      reason:diagnostic,
+      requestedAction:"Review the Trigger occurrence on the dashboard.",
+      blocking:outcome === "blocked",
+      batchable:false,
+      attemptedActions:[],
+      resumesAutomatically:false,
+      createdAt:now
+    },
+    state:"open",
+    revision:0
   };
 }
 
@@ -116,8 +148,8 @@ describe("Trigger occurrence, attempt, schedule and lease persistence",() => {
     store.claimTriggerOccurrence(occurrence("earlier","2026-08-05T00:01:00.000Z"));
     store.claimTriggerOccurrence(occurrence("future","2026-08-06T00:00:00.000Z"));
     store.claimTriggerOccurrence(occurrence("deferred","2026-08-05T00:00:00.000Z"));
-    store.updateTriggerOccurrence({
-      occurrenceId:"deferred",expectedRevision:0,status:"deferred",
+    store.deferTriggerOccurrence({
+      occurrenceId:"deferred",expectedRevision:0,
       nextAttemptAt:"2026-08-05T00:10:00.000Z",updatedAt:now
     });
     expect(store.listRunnableTriggerOccurrences({
@@ -129,13 +161,92 @@ describe("Trigger occurrence, attempt, schedule and lease persistence",() => {
     store.close();
   });
 
+  it("atomically terminalizes a pre-Run occurrence with dashboard-only Attention",() => {
+    let injectFailure = true;
+    const store = new SqlitePersistence({
+      path:":memory:",
+      failureInjector(point) {
+        if (
+          injectFailure &&
+          point === "trigger_occurrence.attention.after_occurrence"
+        ) {
+          throw new Error("simulated Attention crash");
+        }
+      }
+    });
+    store.putTriggerSpec({ spec,actor:"operator",occurredAt:now });
+    store.claimTriggerOccurrence(occurrence("occ-missed"));
+    const diagnostic = "daily occurrence exceeded its on-time window";
+    const attention = occurrenceAttention("occ-missed","missed",diagnostic);
+
+    expect(() => store.finishTriggerOccurrenceWithAttention({
+      occurrenceId:"occ-missed",expectedRevision:0,outcome:"missed",
+      diagnostic,updatedAt:now,attention
+    })).toThrow("simulated Attention crash");
+    expect(store.getTriggerOccurrence("occ-missed")).toMatchObject({
+      status:"pending",revision:0
+    });
+    expect(store.queryAttention({ limit:20 }).records).toEqual([]);
+
+    injectFailure = false;
+    const finished = store.finishTriggerOccurrenceWithAttention({
+      occurrenceId:"occ-missed",expectedRevision:0,outcome:"missed",
+      diagnostic,updatedAt:now,attention
+    });
+    expect(finished).toEqual({
+      occurrence:expect.objectContaining({
+        status:"terminal",terminalOutcome:"missed",revision:1,diagnostic
+      }),
+      attention
+    });
+    expect(store.listAttentionDeliveries({ limit:20 })).toEqual([]);
+
+    expect(store.finishTriggerOccurrenceWithAttention({
+      occurrenceId:"occ-missed",expectedRevision:0,outcome:"missed",
+      diagnostic,updatedAt:now,attention
+    })).toEqual(finished);
+    expect(() => store.finishTriggerOccurrenceWithAttention({
+      occurrenceId:"occ-missed",expectedRevision:0,outcome:"missed",
+      diagnostic:"different",updatedAt:now,
+      attention:{ ...attention,item:{ ...attention.item,reason:"different" } }
+    })).toThrow("Trigger Occurrence is already terminal");
+
+    store.claimTriggerOccurrence(occurrence("occ-skipped"));
+    const skipped = occurrenceAttention(
+      "occ-skipped","skipped","older catch-up occurrence superseded"
+    );
+    store.finishTriggerOccurrenceWithAttention({
+      occurrenceId:"occ-skipped",expectedRevision:0,outcome:"skipped",
+      diagnostic:"older catch-up occurrence superseded",updatedAt:now,
+      attention:skipped
+    });
+    expect(store.queryAttention({
+      sourceKinds:["trigger-occurrence"],appIds:[spec.appId],limit:1
+    })).toEqual({ records:[attention],total:2,truncated:true });
+    expect(store.queryAttention({
+      sourceKinds:["workflow-run"],limit:20
+    })).toEqual({ records:[],total:0,truncated:false });
+    expect(store.queryAttention({
+      appIds:["another-app"],limit:20
+    })).toEqual({ records:[],total:0,truncated:false });
+    expect(() => store.queryAttention({
+      appIds:[],limit:20
+    })).toThrow("Attention appId filter is invalid");
+    const acknowledged = store.acknowledgeAttention({
+      id:attention.item.id,expectedRevision:0,actor:"operator",
+      acknowledgedAt:"2026-08-05T00:01:00.000Z"
+    });
+    expect(store.finishTriggerOccurrenceWithAttention({
+      occurrenceId:"occ-missed",expectedRevision:0,outcome:"missed",
+      diagnostic,updatedAt:now,attention
+    })).toEqual({ occurrence:finished.occurrence,attention:acknowledged });
+    store.close();
+  });
+
   it("creates an attempt with an occurrence CAS and does not consume losing claims",() => {
     const store = new SqlitePersistence({ path:":memory:" });
     store.putTriggerSpec({ spec,actor:"operator",occurredAt:now });
     store.claimTriggerOccurrence(occurrence("occ-attempt"));
-    expect(() => store.updateTriggerOccurrence({
-      occurrenceId:"occ-attempt",expectedRevision:0,status:"running",updatedAt:now
-    })).toThrow("Invalid Trigger Occurrence transition: pending -> running");
     const claimed = store.createTriggerAttempt({
       attemptId:"attempt-1",occurrenceId:"occ-attempt",
       expectedOccurrenceRevision:0,createdAt:now
@@ -159,30 +270,45 @@ describe("Trigger occurrence, attempt, schedule and lease persistence",() => {
       fencingToken:1,browserFencingToken:2
     });
     expect(running).toMatchObject({ status:"running",revision:1,fencingToken:1 });
-    expect(() => store.updateTriggerAttempt({
-      attemptId:"attempt-1",expectedRevision:0,status:"terminal",
-      terminalOutcome:"failed",updatedAt:now
-    })).toThrow("Trigger Attempt revision changed");
-    const terminalAttempt = store.updateTriggerAttempt({
-      attemptId:"attempt-1",expectedRevision:1,status:"terminal",
-      terminalOutcome:"failed",updatedAt:now
+    const failedAttention = occurrenceAttention(
+      "occ-attempt","failed","attempt failed before Run creation"
+    );
+    expect(() => store.finishTriggerAttempt({
+      attemptId:"attempt-1",expectedAttemptRevision:1,
+      occurrenceId:"occ-attempt",expectedOccurrenceRevision:1,
+      outcome:"complete",updatedAt:now
+    })).toThrow(
+      "A pre-Run Trigger Attempt may only terminate as blocked or failed"
+    );
+    expect(store.getTriggerAttempt("attempt-1")).toMatchObject({
+      status:"running",revision:1
+    });
+    expect(() => store.finishTriggerAttempt({
+      attemptId:"attempt-1",expectedAttemptRevision:0,
+      occurrenceId:"occ-attempt",expectedOccurrenceRevision:1,
+      outcome:"failed",diagnostic:"attempt failed before Run creation",
+      updatedAt:now,attention:failedAttention
+    })).toThrow("Trigger Attempt finish CAS failed");
+    const terminal = store.finishTriggerAttempt({
+      attemptId:"attempt-1",expectedAttemptRevision:1,
+      occurrenceId:"occ-attempt",expectedOccurrenceRevision:1,
+      outcome:"failed",diagnostic:"attempt failed before Run creation",
+      updatedAt:now,attention:failedAttention
     });
     expect(() => store.updateTriggerAttempt({
-      attemptId:"attempt-1",expectedRevision:terminalAttempt.revision,
+      attemptId:"attempt-1",expectedRevision:terminal.attempt.revision,
       status:"running",updatedAt:now
     })).toThrow("Invalid Trigger Attempt transition: terminal -> running");
-    const terminalOccurrence = store.updateTriggerOccurrence({
-      occurrenceId:"occ-attempt",expectedRevision:1,status:"terminal",
-      terminalOutcome:"failed",updatedAt:now
-    });
-    expect(() => store.updateTriggerOccurrence({
-      occurrenceId:"occ-attempt",expectedRevision:terminalOccurrence.revision,
-      status:"deferred",nextAttemptAt:"2026-08-05T01:00:00.000Z",updatedAt:now
+    expect(() => store.deferTriggerOccurrence({
+      occurrenceId:"occ-attempt",expectedRevision:terminal.occurrence.revision,
+      nextAttemptAt:"2026-08-05T01:00:00.000Z",updatedAt:now
     })).toThrow("Invalid Trigger Occurrence transition: terminal -> deferred");
     store.close();
   });
 
   it("finishes an Attempt and its running Occurrence atomically",() => {
+    const diagnostic = "blocked before Run creation";
+    const attention = occurrenceAttention("occ-finish","blocked",diagnostic);
     let injectFailure = true;
     const store = new SqlitePersistence({
       path:":memory:",
@@ -202,7 +328,7 @@ describe("Trigger occurrence, attempt, schedule and lease persistence",() => {
     expect(() => store.finishTriggerAttempt({
       attemptId:"attempt-finish",expectedAttemptRevision:0,
       occurrenceId:"occ-finish",expectedOccurrenceRevision:1,
-      outcome:"blocked",diagnostic:"blocked before Run creation",updatedAt:now
+      outcome:"blocked",diagnostic,updatedAt:now,attention
     })).toThrow("simulated finish crash");
     expect(store.getTriggerAttempt("attempt-finish")).toMatchObject({
       status:"pending",revision:0
@@ -215,7 +341,7 @@ describe("Trigger occurrence, attempt, schedule and lease persistence",() => {
     expect(() => store.finishTriggerAttempt({
       attemptId:"attempt-finish",expectedAttemptRevision:0,
       occurrenceId:"occ-finish",expectedOccurrenceRevision:0,
-      outcome:"blocked",updatedAt:now
+      outcome:"blocked",diagnostic,updatedAt:now,attention
     })).toThrow("Trigger Occurrence finish CAS failed");
     expect(store.getTriggerAttempt("attempt-finish")).toMatchObject({
       status:"pending",revision:0
@@ -227,18 +353,28 @@ describe("Trigger occurrence, attempt, schedule and lease persistence",() => {
     expect(() => store.finishTriggerAttempt({
       attemptId:"attempt-finish",expectedAttemptRevision:1,
       occurrenceId:"occ-finish",expectedOccurrenceRevision:1,
-      outcome:"blocked",updatedAt:now
+      outcome:"blocked",diagnostic,updatedAt:now,attention
     })).toThrow("Trigger Attempt finish CAS failed");
 
     expect(store.finishTriggerAttempt({
       attemptId:"attempt-finish",expectedAttemptRevision:0,
       occurrenceId:"occ-finish",expectedOccurrenceRevision:1,
-      outcome:"blocked",diagnostic:"blocked before Run creation",updatedAt:now
+      outcome:"blocked",diagnostic,updatedAt:now,attention
     })).toMatchObject({
       attempt:{ status:"terminal",terminalOutcome:"blocked",revision:1,
-        diagnostic:"blocked before Run creation" },
+        diagnostic },
       occurrence:{ status:"terminal",terminalOutcome:"blocked",revision:2,
-        diagnostic:"blocked before Run creation" }
+        diagnostic }
+    });
+    expect(store.getAttention(attention.item.id)).toEqual(attention);
+    expect(store.listAttentionDeliveries({ limit:20 })).toEqual([]);
+    expect(store.finishTriggerAttempt({
+      attemptId:"attempt-finish",expectedAttemptRevision:0,
+      occurrenceId:"occ-finish",expectedOccurrenceRevision:1,
+      outcome:"blocked",diagnostic,updatedAt:now,attention
+    })).toMatchObject({
+      attempt:{ status:"terminal",terminalOutcome:"blocked" },
+      occurrence:{ status:"terminal",terminalOutcome:"blocked" }
     });
     store.close();
   });
@@ -344,7 +480,7 @@ describe("Trigger occurrence, attempt, schedule and lease persistence",() => {
           'failed', NULL, 3, 'inventory', 'v1', 'legacy diagnostic',
           '${now}', '${now}', 4
         );
-        DELETE FROM schema_migrations WHERE version=20;
+        DELETE FROM schema_migrations WHERE version>=20;
       `);
       legacy.close();
 

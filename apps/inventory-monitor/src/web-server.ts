@@ -8,6 +8,10 @@ import {
   buildSystemOperationalReminders,
   type CollectionControlHealth
 } from "./dashboard-analytics.js";
+import type {
+  InventoryPanelReminder,
+  RuntimeAttentionReminderProvider
+} from "./runtime-attention-reminders.js";
 
 const SESSION_COOKIE = "bpa_inventory_session";
 const SESSION_IDLE_MS = 30 * 60 * 1000;
@@ -311,6 +315,7 @@ export async function startInventoryWebServer(input: {
   now?: () => number;
   sessionSecret?: string;
   recoveryStatusPath?: string;
+  runtimeAttentionReminders?: RuntimeAttentionReminderProvider;
 }): Promise<InventoryWebHandle> {
   const now = input.now ?? Date.now;
   const shops = input.shops ?? (input.shopId
@@ -347,6 +352,22 @@ export async function startInventoryWebServer(input: {
     if (!aggregateCache) return refreshAggregate();
     if (now() - aggregateCache.at > 30_000) void refreshAggregate().catch(() => undefined);
     return aggregateCache.value;
+  };
+  const runtimeAttentionReminders = async (): Promise<readonly InventoryPanelReminder[]> => {
+    if (!input.runtimeAttentionReminders) return [];
+    try {
+      return await input.runtimeAttentionReminders();
+    } catch {
+      return [{
+        id:"bpa-trigger-attention:unavailable",
+        severity:"warning",
+        title:"BPA 触发状态暂不可读",
+        detail:"库存数据仍可查看，但当前无法读取工作流触发提醒。",
+        source:"BPA 触发调度",
+        action:"稍后刷新面板；在状态恢复前不要据此判断工作流正常。",
+        notificationEligible:false
+      }];
+    }
   };
   void refreshAggregate().catch(() => undefined);
   const authenticate = (request: IncomingMessage): { session: Session; cookie: string } | undefined => {
@@ -387,8 +408,13 @@ export async function startInventoryWebServer(input: {
       if (url.pathname === "/api/overview" && request.method === "GET") {
         const requestedShopId = url.searchParams.get("shopId");
         if (requestedShopId === null || requestedShopId === "all") {
+          const [overview,runtimeReminders] = await Promise.all([
+            allStoreOverview(),
+            runtimeAttentionReminders()
+          ]);
           return json(response,200,{
-            ...await allStoreOverview(),
+            ...overview,
+            reminders:[...records(overview.reminders),...runtimeReminders],
             recovery:await readRecoveryStatus(input.recoveryStatusPath),
             shops:shops.map(({ id,name }) => ({ id,name })),
             selectedShop:{ id:"all",name:"全店" }
@@ -398,16 +424,18 @@ export async function startInventoryWebServer(input: {
           return json(response,404,{ error:"SHOP_NOT_CONFIGURED" });
         }
         const shop = configuredShop(requestedShopId);
-        const [overview,controlHealth] = await Promise.all([
+        const [overview,controlHealth,runtimeReminders] = await Promise.all([
           input.repository.overview(shop.id),
-          input.repository.collectionControlHealth()
+          input.repository.collectionControlHealth(),
+          runtimeAttentionReminders()
         ]);
         return json(response,200,{
           ...overview,
           controlHealth,
           reminders:[
             ...buildSystemOperationalReminders(controlHealth),
-            ...records(overview.reminders)
+            ...records(overview.reminders),
+            ...runtimeReminders
           ],
           recovery:await readRecoveryStatus(input.recoveryStatusPath),
           shops:shops.map(({ id,name }) => ({ id,name })),

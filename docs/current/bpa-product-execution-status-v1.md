@@ -279,15 +279,24 @@ typecheck 已通过；生产已部署精确 RC，现场 schema、索引和查询
 三工作流本机 fixture 已覆盖占用、跳过、终态释放和接管；该层已进入主线但尚未部署，
 也不等于三条真实页面 E2E 已完成。
 
-当前 Schema v20 候选不再把一次 Trigger Run 同时当作计划事件和执行尝试。它新增持久
+Schema v20 已随 PR #22 进入主线，不再把一次 Trigger Run 同时当作计划事件和执行尝试。它新增持久
 TriggerOccurrence、TriggerAttempt 和 Schedule cursor，Schedule 改为显式 daily/interval、
 IANA timezone、固定 anchor 与 on-time window；`skip`、`run_once`、
 `bounded_catch_up` 已由 Runtime 执行。业务或浏览器租约忙时 occurrence 进入
 `deferred + nextAttemptAt`，不创建 Attempt、不消耗重试次数，也不启动额外 Chrome；三条
 同到期 Workflow 的 fixture 已证明释放后继续串行。活动 Occurrence/Attempt 查询没有最近
-200 条截断，Attempt 与 Occurrence 终态在同一 SQLite 事务提交。该候选尚未合并或部署；
-pre-Run `blocked/missed/skipped` 的 dashboard-only Attention 仍待下一层原子化，因此当前
-面板还不能展示这些日历问题。
+200 条截断，Attempt 与 Occurrence 终态在同一 SQLite 事务提交。该层尚未部署。
+
+当前 Schema v21 候选把 pre-Run `blocked/failed/missed/skipped` 终态与
+`dashboard-only` Attention 放在同一 SQLite 事务；没有 Workflow Run 的 Attempt 只允许
+以 `blocked/failed` 终止，旧版 Workflow 被 Trigger 调用时在创建 Run 前即安全阻断。库存
+指挥台只通过 Core UDS 读取属于 `inventory-monitor` 的开放 Trigger Attention，不确认、
+恢复、投递或写库存数据库；响应畸形或读取失败会显示“BPA 触发状态暂不可读”，不能显示
+运行正常。这些提醒有严重度但不会触发外部 Delivery 或浏览器桌面通知。Operator Console
+同时把 Attention 查询失败视为 action、把 information/review 视为 attention，并对 Viewer
+使用固定脱敏文案。Schema 20 的旧 Attention、Delivery 或 Recovery Session 任一非空时，
+Schema 21 明确拒绝升级并保持数据库原样；正式部署前必须先导出、退役并完成空库门禁。
+该候选仍只完成代码与本机测试，尚未合并或部署，因此生产库存面板当前还看不到这些提醒。
 
 对抗审查后，候选已升为不兼容旧计划形状的 `bpa.trigger/v1alpha2`：旧 Schema 19 库中
 只要仍存在 TriggerSpec 或 Trigger Run，Schema 20 升级就明确拒绝并保持数据库原样，不能

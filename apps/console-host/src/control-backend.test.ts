@@ -30,7 +30,9 @@ class FakeRequester implements ConsoleControlRequester {
     if (queue.length === 0) {
       throw new Error(`No fake response for ${method}`);
     }
-    return queue.shift() as TResult;
+    const value = queue.shift();
+    if (value instanceof Error) throw value;
+    return value as TResult;
   }
 }
 
@@ -84,12 +86,15 @@ describe("UdsControlBackend", () => {
       .respond(CONSOLE_CONTROL_METHODS.taskList, [
         { taskId: "task-1" }
       ])
-      .respond(CONSOLE_CONTROL_METHODS.attentionList, [
-        {
+      .respond(CONSOLE_CONTROL_METHODS.attentionList, {
+        items: [{
           id: "run-terminal:run-login",
-          runId: "run-login",
+          sourceRef: { kind: "workflow-run", runId: "run-login" },
+          source: "browser",
           groupKey: "authentication",
           kind: "blocking",
+          blocking: true,
+          deliveryPolicy: "operator-notification",
           title: "浏览器登录或验证需要处理",
           reason: "浏览器返回了登录阻断。",
           requestedAction: "在受管 Chrome Profile 中完成人工登录。",
@@ -97,8 +102,10 @@ describe("UdsControlBackend", () => {
           revision: 0,
           deliveryState: "pending",
           deliveryAttempt: 0
-        }
-      ])
+        }],
+        total: 1,
+        truncated: false
+      })
       .respond(CONSOLE_CONTROL_METHODS.browserPageObservationList, [
         {
           sessionId: "session-1",
@@ -125,13 +132,14 @@ describe("UdsControlBackend", () => {
           id: "run-terminal:run-login",
           kind: "blocking",
           deliveryState: "pending",
-          recoverable: true
+          recoverable: false
         }
       ],
       components: [
         { id: "core", status: "healthy" },
         { id: "persistence", status: "healthy" },
-        { id: "browser", status: "healthy" }
+        { id: "browser", status: "healthy" },
+        { id: "attention", status: "healthy" }
       ],
       browserSessions: [
         { id: "chrome-profile-1:7:3", status: "ready" }
@@ -158,7 +166,7 @@ describe("UdsControlBackend", () => {
       },
       {
         method: "attention.list",
-        params: { limit: 100 }
+        params: { states: ["open"], limit: 100 }
       },
       {
         method: "recovery-session.list",
@@ -255,11 +263,16 @@ describe("UdsControlBackend", () => {
         browser: { connected: true, ready: true }
       })
       .respond(CONSOLE_CONTROL_METHODS.taskList, [])
-      .respond(CONSOLE_CONTROL_METHODS.attentionList, [
-        {
+      .respond(CONSOLE_CONTROL_METHODS.attentionList, {
+        items: [{
           id: "attention-1",
+          sourceRef: { kind: "workflow-run", runId: "run-1" },
+          source: "browser",
           groupKey: "authentication",
           kind: "blocking",
+          blocking: true,
+          runStatus: "rejected",
+          deliveryPolicy: "operator-notification",
           title: "需要登录",
           reason: "登录态失效",
           requestedAction: "恢复登录",
@@ -267,8 +280,10 @@ describe("UdsControlBackend", () => {
           revision: 0,
           deliveryState: "delivered",
           deliveryAttempt: 1
-        }
-      ])
+        }],
+        total: 1,
+        truncated: false
+      })
       .respond(CONSOLE_CONTROL_METHODS.browserPageObservationList, [
         {
           sessionId: "browser-session-1",
@@ -321,6 +336,89 @@ describe("UdsControlBackend", () => {
     expect(result.recoverySessions).toEqual([
       expect.objectContaining({ id: "recovery-1", state: "active" })
     ]);
+  });
+
+  it("raises informational dashboard-only Attention and exposes truncation", async () => {
+    const client = new FakeRequester()
+      .respond(CONSOLE_CONTROL_METHODS.doctor, {
+        status: "ok",
+        persistence: { adapter: "sqlite", schemaVersion: 21, writable: true },
+        browser: { connected: true, ready: true }
+      })
+      .respond(CONSOLE_CONTROL_METHODS.taskList, [])
+      .respond(CONSOLE_CONTROL_METHODS.browserPageObservationList, [])
+      .respond(CONSOLE_CONTROL_METHODS.attentionList, {
+        items: [{
+          id: "trigger-occurrence-terminal:occurrence-1",
+          sourceRef: {
+            kind: "trigger-occurrence",
+            occurrenceId: "occurrence-1"
+          },
+          source: "runtime",
+          groupKey: "trigger-missed",
+          kind: "information",
+          blocking: false,
+          deliveryPolicy: "dashboard-only",
+          title: "计划执行已错过",
+          reason: "计划时间已过。",
+          requestedAction: "在工作台复核。",
+          createdAt: "2026-07-30T03:59:00.000Z",
+          revision: 0,
+          deliveryState: "not-requested",
+          deliveryAttempt: 0
+        }],
+        total: 7,
+        truncated: true
+      })
+      .respond(CONSOLE_CONTROL_METHODS.recoverySessionList, []);
+
+    const result = await backend(client).getDashboard();
+
+    expect(result).toMatchObject({
+      attention: "attention",
+      headline: "发现 1 项运行问题",
+      attentionTotal: 7,
+      attentionTruncated: true,
+      alerts: [{
+        id: "trigger-occurrence-terminal:occurrence-1",
+        deliveryState: "not-requested",
+        recoverable: false
+      }]
+    });
+    expect(result.components).toContainEqual(expect.objectContaining({
+      id: "attention",
+      status: "healthy",
+      summary: "当前显示 1 项，共 7 项"
+    }));
+  });
+
+  it("fails closed when open Attention cannot be read", async () => {
+    const client = new FakeRequester()
+      .respond(CONSOLE_CONTROL_METHODS.doctor, {
+        status: "ok",
+        persistence: { adapter: "sqlite", schemaVersion: 21, writable: true },
+        browser: { connected: true, ready: true }
+      })
+      .respond(CONSOLE_CONTROL_METHODS.taskList, [])
+      .respond(CONSOLE_CONTROL_METHODS.browserPageObservationList, [])
+      .respond(
+        CONSOLE_CONTROL_METHODS.attentionList,
+        new Error("internal socket=/private/core.sock")
+      )
+      .respond(CONSOLE_CONTROL_METHODS.recoverySessionList, []);
+
+    const result = await backend(client).getDashboard();
+
+    expect(result).toMatchObject({
+      attention: "action",
+      headline: "运行问题状态暂时不可读",
+      alerts: []
+    });
+    expect(result.components).toContainEqual(expect.objectContaining({
+      id: "attention",
+      status: "unavailable"
+    }));
+    expect(JSON.stringify(result)).not.toContain("/private/core.sock");
   });
 
   it("turns transport failures into an unavailable view without leaking details", async () => {

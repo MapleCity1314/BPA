@@ -112,6 +112,7 @@ const gatewayTimer = setInterval(() => {
     triggerTick += 1;
     if (triggerTick >= 2) {
       triggerTick = 0;
+      service.recoverySessions.sweepExpired();
       service.triggers.tick();
     }
     if (!drainingIr2) {

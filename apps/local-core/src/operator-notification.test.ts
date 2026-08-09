@@ -74,7 +74,13 @@ function seedDelivery(persistence: SqlitePersistence): void {
     runId: run.id,
     expectedRevision: run.revision,
     nextStatus: "rejected",
-    attention: { item, state: "open", revision: 0 },
+    attention: {
+      sourceRef: { kind: "workflow-run", runId: run.id },
+      deliveryPolicy: "operator-notification",
+      item,
+      state: "open",
+      revision: 0
+    },
     attentionDelivery: createTerminalAttentionDelivery({
       attention: item,
       workflowId: run.workflowId,

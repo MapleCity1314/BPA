@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { projectTerminalRunAttention } from "@bpa/attention-core";
+import {
+  projectTerminalRunAttention,
+  projectTerminalTriggerOccurrenceAttention
+} from "@bpa/attention-core";
 import type {
   EngineCheckpointRecord,
   RunPlanSnapshotRecord,
@@ -135,7 +138,13 @@ function finishRun(
     nextStatus: status,
     ...(attention
       ? {
-          attention: { item: attention, state: "open" as const, revision: 0 },
+          attention: {
+            sourceRef: { kind: "workflow-run" as const, runId: run.id },
+            deliveryPolicy: "operator-notification" as const,
+            item: attention,
+            state: "open" as const,
+            revision: 0
+          },
           attentionDelivery: createTerminalAttentionDelivery({
             attention,
             workflowId: run.workflowId,
@@ -226,6 +235,19 @@ describe("deterministic Trigger Runtime", () => {
         terminalOutcome: "missed"
       }
     ]);
+    expect(
+      store.queryAttention({
+        sourceKinds: ["trigger-occurrence"],
+        appIds: ["inventory-monitor"],
+        limit: 20
+      })
+    ).toMatchObject({
+      total: 1,
+      truncated: false,
+      records: [
+        expect.objectContaining({ deliveryPolicy: "dashboard-only" })
+      ]
+    });
     store.close();
   });
 
@@ -333,6 +355,17 @@ describe("deterministic Trigger Runtime", () => {
           item.status === "terminal" ? item.terminalOutcome : item.status
         )
       ).toEqual(scenario.expected);
+      expect(
+        store.queryAttention({
+          sourceKinds: ["trigger-occurrence"],
+          appIds: ["inventory-monitor"],
+          limit: 20
+        }).total
+      ).toBe(
+        scenario.expected.filter(
+          (value) => value === "missed" || value === "skipped"
+        ).length
+      );
       store.close();
     }
   });
@@ -425,7 +458,21 @@ describe("deterministic Trigger Runtime", () => {
       occurrenceId: "occurrence-terminal-lease",
       expectedOccurrenceRevision: 1,
       outcome: "failed",
-      updatedAt: at
+      updatedAt: at,
+      attention: {
+        sourceRef: {
+          kind: "trigger-occurrence",
+          occurrenceId: "occurrence-terminal-lease"
+        },
+        deliveryPolicy: "dashboard-only",
+        item: projectTerminalTriggerOccurrenceAttention({
+          occurrenceId: "occurrence-terminal-lease",
+          outcome: "failed",
+          updatedAt: at
+        }),
+        state: "open",
+        revision: 0
+      }
     });
 
     const engine = runtime(store, () => new Date(at));
@@ -564,6 +611,13 @@ describe("deterministic Trigger Runtime", () => {
       terminalOutcome: "failed",
       diagnostic: "Browser instance lease was lost."
     });
+    expect(
+      store.queryAttention({
+        sourceKinds: ["trigger-occurrence"],
+        appIds: ["inventory-monitor"],
+        limit: 20
+      }).total
+    ).toBe(0);
     expect(store.listBrowserControlLeases(current.toISOString())).toEqual([
       expect.objectContaining({ ownerId: "recovery-session:successor", fencingToken: 2 })
     ]);
@@ -625,6 +679,13 @@ describe("deterministic Trigger Runtime", () => {
       terminalOutcome: "failed",
       diagnostic: "Workflow Run was not created before reconciliation."
     });
+    expect(
+      store.queryAttention({
+        sourceKinds: ["trigger-occurrence"],
+        appIds: ["inventory-monitor"],
+        limit: 20
+      }).total
+    ).toBe(1);
     expect(store.listBrowserControlLeases("2026-08-05T00:00:01.000Z")).toEqual([]);
     store.close();
   });
@@ -728,6 +789,13 @@ describe("deterministic Trigger Runtime", () => {
         status: "terminal",
         terminalOutcome: terminalStatus
       });
+      expect(
+        store.queryAttention({
+          sourceKinds: ["trigger-occurrence"],
+          appIds: ["inventory-monitor"],
+          limit: 20
+        }).total
+      ).toBe(0);
       store.close();
     }
   );

@@ -261,12 +261,18 @@ export interface OutboxMessage {
 }
 
 export interface AttentionRecord {
+  sourceRef: AttentionSourceRef;
+  deliveryPolicy: "operator-notification" | "dashboard-only";
   item: AttentionItem;
   state: "open" | "acknowledged";
   revision: number;
   acknowledgedAt?: string;
   acknowledgedBy?: string;
 }
+
+export type AttentionSourceRef =
+  | { kind: "workflow-run"; runId: string }
+  | { kind: "trigger-occurrence"; occurrenceId: string };
 
 export type AttentionDeliveryState =
   | "pending"
@@ -330,6 +336,7 @@ export interface RecoverySessionRecord {
 export interface IssueRecoverySessionInput {
   id: string;
   attentionId: string;
+  expectedAttentionRevision: number;
   requestedBy: string;
   browserSessionId: string;
   browserInstanceId: string;
@@ -811,10 +818,16 @@ export interface ExecutionStore {
 
 export interface AttentionStore {
   getAttention(id: string): AttentionRecord | undefined;
-  listAttention(input: {
+  queryAttention(input: {
     states?: readonly AttentionRecord["state"][];
+    sourceKinds?: readonly AttentionSourceRef["kind"][];
+    appIds?: readonly string[];
     limit: number;
-  }): AttentionRecord[];
+  }): {
+    records: AttentionRecord[];
+    total: number;
+    truncated: boolean;
+  };
   acknowledgeAttention(input: {
     id: string;
     expectedRevision: number;
@@ -997,15 +1010,24 @@ export interface TriggerStore {
   claimTriggerOccurrence(input: TriggerOccurrenceRecord):
     | { status: "accepted"; record: TriggerOccurrenceRecord }
     | { status: "duplicate"; record: TriggerOccurrenceRecord };
-  updateTriggerOccurrence(input: {
+  deferTriggerOccurrence(input: {
     occurrenceId: string;
     expectedRevision: number;
-    status: TriggerOccurrenceStatus;
     updatedAt: string;
-    nextAttemptAt?: string;
-    terminalOutcome?: TriggerTerminalOutcome;
+    nextAttemptAt: string;
     diagnostic?: string;
   }): TriggerOccurrenceRecord;
+  finishTriggerOccurrenceWithAttention(input: {
+    occurrenceId: string;
+    expectedRevision: number;
+    outcome: "missed" | "skipped" | "blocked" | "failed";
+    diagnostic?: string;
+    updatedAt: string;
+    attention: AttentionRecord;
+  }): {
+    occurrence: TriggerOccurrenceRecord;
+    attention: AttentionRecord;
+  };
   getTriggerOccurrence(occurrenceId: string): TriggerOccurrenceRecord | undefined;
   listTriggerOccurrences(triggerId?: string): TriggerOccurrenceRecord[];
   listActiveTriggerOccurrences(triggerId?: string): TriggerOccurrenceRecord[];
@@ -1041,6 +1063,7 @@ export interface TriggerStore {
     outcome: TriggerTerminalOutcome;
     diagnostic?: string;
     updatedAt: string;
+    attention?: AttentionRecord;
   }): {
     occurrence: TriggerOccurrenceRecord;
     attempt: TriggerAttemptRecord;

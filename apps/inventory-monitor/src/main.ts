@@ -2,12 +2,18 @@ import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createAppPostgresPool } from "@bpa/app-postgres";
+import {
+  ControlClient,
+  resolveControlSocketPath,
+  UnixSocketControlTransport
+} from "@bpa/control-client";
 import { isWindowsNamedPipe, resolveDefaultBpaHome } from "@bpa/platform-runtime";
 import { MysqlSalesDemandSync, mysqlOptionsFromEnvironment } from "./mysql-source.js";
 import { InventoryRepository } from "./repository.js";
 import { InventoryServiceProtocol } from "./service-protocol.js";
 import { inventoryShopsFromEnvironment } from "./shop-config.js";
 import { startInventoryWebServer } from "./web-server.js";
+import { createRuntimeAttentionReminderProvider } from "./runtime-attention-reminders.js";
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -75,8 +81,16 @@ if (accessToken.length < 32) throw new Error("WEB_ACCESS_TOKEN_TOO_SHORT");
 await chmod(accessTokenFile,0o600);
 const recoveryStatusPath = process.env.BPA_INVENTORY_RECOVERY_STATUS_FILE?.trim() ||
   join(resolveDefaultBpaHome(),"run","inventory-multishop-recovery.status.json");
+const attentionControl = new ControlClient(
+  new UnixSocketControlTransport(resolveControlSocketPath(),{
+    runtime:{ name:"bpa-inventory-monitor",version:"0.1.0" },
+    features:["attention_dashboard"]
+  }),
+  { timeoutMs:2_000 }
+);
 const web = await startInventoryWebServer({
-  repository,shops,port,sessionSecret,listenHost,publicHost,accessToken,recoveryStatusPath
+  repository,shops,port,sessionSecret,listenHost,publicHost,accessToken,recoveryStatusPath,
+  runtimeAttentionReminders:createRuntimeAttentionReminderProvider(attentionControl)
 });
 const launchUrlFile = process.env.BPA_INVENTORY_LAUNCH_URL_FILE?.trim() || (
   isWindowsNamedPipe(socketPath)

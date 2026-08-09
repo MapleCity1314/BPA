@@ -857,6 +857,8 @@ export class Ir2WorkflowRuntime {
     });
     return {
       attention: {
+        sourceRef: { kind: "workflow-run", runId: run.id },
+        deliveryPolicy: "operator-notification",
         item,
         state: "open",
         revision: 0

@@ -462,7 +462,7 @@ function viewerDashboard(
     alerts: dashboard.alerts.map((alert, index) => ({
       id: `viewer-attention-${index + 1}`,
       kind: alert.kind,
-      title: alert.title,
+      title: "运行状态需要关注",
       reason: "运行产生一项需要关注的状态。",
       requestedAction: "请在 Mac 执行端复核后处理。",
       createdAt: alert.createdAt,
