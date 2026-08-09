@@ -34,7 +34,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && 'deployment' || github.ref }}
   cancel-in-progress: false
 
 jobs:
