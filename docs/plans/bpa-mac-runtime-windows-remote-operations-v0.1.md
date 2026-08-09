@@ -44,14 +44,15 @@ Windows 生产，也不得删除其路径。
 
 | 角色 | 允许 | 禁止 |
 | --- | --- | --- |
-| Viewer | 脱敏 Dashboard、Run、Evidence、Attention 与报告清单 | 所有业务写入、浏览器/恢复绑定、技术细节和文件正文下载 |
+| Viewer | 脱敏 Dashboard、Run、Attention 与报告清单 | 所有业务写入、浏览器/恢复绑定、Catalog、Evidence lineage、技术细节和文件正文下载 |
 | Operator | Viewer + 请求已允许的 Manual Trigger、CAS 启停、确认 Attention | `run.create`、任意输入、资产发布、浏览器控制、Design Mode |
 | Maintainer | 仅 Mac 本机维护面 | 不通过远程 Gateway 暴露 |
 
 第一阶段只实现 Viewer。Console Host 继续绑定 `127.0.0.1`，`viewer` 模式在服务端
 拒绝所有业务写请求，前端同时隐藏自动化启动、任务处理、恢复、数据导入和创作入口。
 Dashboard 与 Run 同时移除浏览器/恢复绑定和技术细节；文件正文下载在身份感知的分类授权
-完成前保持关闭。
+完成前保持关闭。Viewer Dashboard 不枚举 Recovery Session，避免一次 GET 因会话过期而
+产生持久状态更新；生产前端不发布包含源码正文的 sourcemap。
 这只证明只读应用边界，不等于远程网络和身份已经完成；不得直接改绑 `0.0.0.0`。
 
 第二阶段新增常驻 Remote Operator Gateway，并只在公司私网/Tailscale 或现有公司

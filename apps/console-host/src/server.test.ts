@@ -7,6 +7,7 @@ import type {
   CreateRunInput,
   DashboardSnapshot,
   DesignModeGrantInput,
+  DownloadView,
   RunView,
   StartRecoverySessionInput,
   StagingLeaseRequest,
@@ -134,9 +135,7 @@ class RecordingBackend implements ControlBackend {
       pendingTaskCount: 0
     }));
 
-  async listWorkflows() {
-    return [];
-  }
+  readonly listWorkflows = vi.fn(async () => []);
 
   readonly getRun = vi.fn(async (runId: string): Promise<RunView> => ({
       id: runId,
@@ -149,13 +148,16 @@ class RecordingBackend implements ControlBackend {
 
   readonly listTasks = vi.fn(async () => []);
 
-  async getEvidenceLineage(runId: string) {
-    return { runId, sources: [], evidence: [], assets: [] };
-  }
+  readonly getEvidenceLineage = vi.fn(async (runId: string) => ({
+    runId,
+    sources: [],
+    evidence: [],
+    assets: []
+  }));
 
-  async listDownloads(_runId?: string) {
-    return [];
-  }
+  readonly listDownloads = vi.fn(
+    async (_runId?: string): Promise<DownloadView[]> => []
+  );
 
   async getDownload(_downloadId: string) {
     return {
@@ -464,7 +466,20 @@ describe("Console Host security boundary", () => {
         authenticated: true,
         lastSeenAt: "2030-01-01T00:00:00.000Z"
       }],
-      alerts: [],
+      alerts: [{
+        id: "attention-secret",
+        runId: "run-secret",
+        kind: "blocking",
+        title: "需要复核",
+        reason: "socket=/private/core.sock",
+        requestedAction: "open /private/browser-profile",
+        createdAt: "2030-01-01T00:00:00.000Z",
+        revision: 17,
+        deliveryState: "failed",
+        deliveryAttempt: 4,
+        deliveryErrorCode: "INTERNAL_TRANSPORT_ERROR",
+        recoverable: true
+      }],
       recoverySessions: [],
       activeRunCount: 0,
       pendingTaskCount: 0
@@ -481,25 +496,46 @@ describe("Console Host security boundary", () => {
     expect(dashboard.status).toBe(200);
     const dashboardBody = await dashboard.json();
     expect(dashboardBody).toMatchObject({
+      runtimeVersion: "managed",
       components: [{ id: "core", label: "Core", status: "healthy", summary: "正常" }],
       browserSessions: [],
-      recoverySessions: []
+      recoverySessions: [],
+      pendingTaskCount: 0,
+      alerts: [{
+        id: "viewer-attention-1",
+        reason: "运行产生一项需要关注的状态。",
+        requestedAction: "请在 Mac 执行端复核后处理。",
+        revision: 0,
+        deliveryAttempt: 0,
+        recoverable: false
+      }]
     });
     expect(JSON.stringify(dashboardBody)).not.toContain("socket=/private/core.sock");
+    expect(JSON.stringify(dashboardBody)).not.toContain("attention-secret");
+    expect(JSON.stringify(dashboardBody)).not.toContain("run-secret");
+    expect(JSON.stringify(dashboardBody)).not.toContain("INTERNAL_TRANSPORT_ERROR");
+    expect(backend.getDashboard).toHaveBeenCalledWith({
+      includeRecoverySessions: false
+    });
+
+    const workflowCatalog = await fetch(`${handle.origin}/api/workflows`, {
+      headers: { Cookie: cookie }
+    });
+    expect(await workflowCatalog.json()).toEqual([]);
+    expect(backend.listWorkflows).not.toHaveBeenCalled();
 
     backend.getRun.mockResolvedValueOnce({
       id: "run-1",
-      workflowTitle: "检查",
-      status: "failed",
-      businessSummary: "需要处理",
+      workflowTitle: "doudian.secret.workflow · 9.9.9",
+      status: "running",
+      businessSummary: "正在执行：internal.node.key",
       startedAt: "2030-01-01T00:00:00.000Z",
-      completedAt: "2030-01-01T00:01:00.000Z",
       timeline: [{
         id: "step-1",
         at: "2030-01-01T00:00:30.000Z",
-        title: "读取失败",
-        summary: "页面暂不可用",
-        state: "failed",
+        title: "internal.node.key",
+        summary: "profile=/private/browser-profile",
+        state: "active",
         technicalDetails: "profile=/private/browser-profile"
       }]
     });
@@ -509,9 +545,43 @@ describe("Console Host security boundary", () => {
     const runBody = await inspectedRun.json();
     expect(runBody).toMatchObject({
       id: "run-1",
-      timeline: [{ summary: "页面暂不可用" }]
+      workflowTitle: "业务流程",
+      businessSummary: "任务正在运行。",
+      timeline: [{
+        title: "步骤正在执行",
+        summary: "远程只读视图不显示内部执行细节。"
+      }]
     });
     expect(JSON.stringify(runBody)).not.toContain("/private/browser-profile");
+    expect(JSON.stringify(runBody)).not.toContain("internal.node.key");
+    expect(JSON.stringify(runBody)).not.toContain("doudian.secret.workflow");
+
+    const lineage = await fetch(`${handle.origin}/api/runs/run-1/lineage`, {
+      headers: { Cookie: cookie }
+    });
+    expect(await lineage.json()).toEqual({
+      runId: "run-1",
+      sources: [],
+      evidence: [],
+      assets: []
+    });
+    expect(backend.getEvidenceLineage).not.toHaveBeenCalled();
+
+    backend.listDownloads.mockResolvedValueOnce([{
+      id: "download-1",
+      runId: "run-1",
+      kind: "report",
+      title: "业务报告",
+      fileName: "/Users/operator/private/report.json",
+      sizeBytes: 12,
+      createdAt: "2030-01-01T00:00:00.000Z"
+    }]);
+    const downloads = await fetch(`${handle.origin}/api/downloads`, {
+      headers: { Cookie: cookie }
+    });
+    expect(await downloads.json()).toEqual([expect.objectContaining({
+      fileName: "_Users_operator_private_report.json"
+    })]);
 
     const run = await fetch(`${handle.origin}/api/runs`, {
       method: "POST",
@@ -547,6 +617,16 @@ describe("Console Host security boundary", () => {
     expect(await download.json()).toMatchObject({
       error: { code: "VIEWER_DOWNLOAD_FORBIDDEN" }
     });
+  });
+
+  it("rejects an invalid access mode at the programmatic boundary", async () => {
+    await expect(
+      startConsoleHost({
+        backend: new RecordingBackend(),
+        staticRoot: await fixtureRoot(),
+        accessMode: "viewr" as never
+      })
+    ).rejects.toThrow("accessMode must be operator or viewer");
   });
 
   it("requires CSRF and a closed Design Mode page-binding shape", async () => {

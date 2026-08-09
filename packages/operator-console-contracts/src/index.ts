@@ -14,6 +14,10 @@ export interface ConsoleLaunchService {
   launch(): Promise<ConsoleLaunchHandle>;
 }
 
+export interface DashboardQuery {
+  includeRecoverySessions?: boolean;
+}
+
 export interface HealthComponent {
   id: string;
   label: string;
@@ -290,7 +294,7 @@ export interface DesignModeGrantView {
 }
 
 export interface ControlBackend {
-  getDashboard(): Promise<DashboardSnapshot>;
+  getDashboard(query?: DashboardQuery): Promise<DashboardSnapshot>;
   listWorkflows(): Promise<WorkflowSummary[]>;
   createRun(input: CreateRunInput): Promise<CreateRunResult>;
   getRun(runId: string): Promise<RunView>;

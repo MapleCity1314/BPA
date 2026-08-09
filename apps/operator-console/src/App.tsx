@@ -80,13 +80,14 @@ export function App({ api }: { api: OperatorConsoleApi }) {
     void (async () => {
       try {
         const session = await api.initializeSession();
-        const [nextDashboard, nextWorkflows, nextTasks, nextDownloads] =
-          await Promise.all([
-            api.getDashboard(),
-            api.listWorkflows(),
-            api.listTasks(),
-            api.listDownloads()
-          ]);
+        const [nextDashboard, nextDownloads] = await Promise.all([
+          api.getDashboard(),
+          api.listDownloads()
+        ]);
+        const [nextWorkflows, nextTasks] =
+          session.accessMode === "viewer"
+            ? [[], []]
+            : await Promise.all([api.listWorkflows(), api.listTasks()]);
         if (!active) return;
         setAccessMode(session.accessMode);
         setDashboard(nextDashboard);
@@ -157,9 +158,7 @@ export function App({ api }: { api: OperatorConsoleApi }) {
       : navigation;
   const visibleAdvancedNavigation =
     accessMode === "viewer"
-      ? advancedNavigation.filter((item) =>
-          ["diagnostics", "runs", "evidence"].includes(item.id)
-        )
+      ? advancedNavigation.filter((item) => item.id === "runs")
       : advancedNavigation;
 
   return (
@@ -271,6 +270,7 @@ export function App({ api }: { api: OperatorConsoleApi }) {
         ) : null}
         {view === "overview" ? (
           <OverviewView
+            readOnly={accessMode === "viewer"}
             dashboard={dashboard}
             downloads={downloads}
             tasks={tasks}

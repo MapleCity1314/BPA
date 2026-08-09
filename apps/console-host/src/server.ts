@@ -453,22 +453,59 @@ function viewerDashboard(
 ): Awaited<ReturnType<ControlBackend["getDashboard"]>> {
   return {
     ...dashboard,
+    runtimeVersion: "managed",
     components: dashboard.components.map(
       ({ technicalDetails: _technicalDetails, ...component }) => component
     ),
     browserSessions: [],
-    recoverySessions: []
+    alerts: dashboard.alerts.map((alert, index) => ({
+      id: `viewer-attention-${index + 1}`,
+      kind: alert.kind,
+      title: alert.title,
+      reason: "运行产生一项需要关注的状态。",
+      requestedAction: "请在 Mac 执行端复核后处理。",
+      createdAt: alert.createdAt,
+      revision: 0,
+      deliveryState: alert.deliveryState,
+      deliveryAttempt: 0,
+      recoverable: false
+    })),
+    recoverySessions: [],
+    pendingTaskCount: 0
   };
 }
 
 function viewerRun(
   run: Awaited<ReturnType<ControlBackend["getRun"]>>
 ): Awaited<ReturnType<ControlBackend["getRun"]>> {
+  const businessSummary =
+    run.status === "succeeded"
+      ? "任务已完成。"
+      : run.status === "waiting"
+        ? "任务正在等待处理。"
+        : ["rejected", "failed", "uncertain"].includes(run.status)
+          ? "任务没有确定完成。"
+          : run.status === "cancelled"
+            ? "任务已取消。"
+            : "任务正在运行。";
   return {
     ...run,
-    timeline: run.timeline.map(
-      ({ technicalDetails: _technicalDetails, ...entry }) => entry
-    )
+    workflowTitle: "业务流程",
+    businessSummary,
+    timeline: run.timeline.map(({ id, at, state }) => ({
+      id,
+      at,
+      state,
+      title:
+        state === "completed"
+          ? "步骤已完成"
+          : state === "active"
+            ? "步骤正在执行"
+            : state === "waiting"
+              ? "步骤等待处理"
+              : "步骤执行失败",
+      summary: "远程只读视图不显示内部执行细节。"
+    }))
   };
 }
 
@@ -476,6 +513,9 @@ export async function startConsoleHost(
   options: ConsoleHostOptions
 ): Promise<ConsoleHostHandle> {
   const accessMode = options.accessMode ?? "operator";
+  if (accessMode !== "operator" && accessMode !== "viewer") {
+    throw new Error("accessMode must be operator or viewer");
+  }
   const now = options.now ?? Date.now;
   const tokenBytes = options.tokenBytes ?? (() => randomBytes(32));
   const logError =
@@ -594,7 +634,9 @@ export async function startConsoleHost(
 
         if (request.method === "GET" && path === "/api/dashboard") {
           getSession(request);
-          const dashboard = await options.backend.getDashboard();
+          const dashboard = await options.backend.getDashboard({
+            includeRecoverySessions: accessMode !== "viewer"
+          });
           writeJson(
             response,
             200,
@@ -604,7 +646,11 @@ export async function startConsoleHost(
         }
         if (request.method === "GET" && path === "/api/workflows") {
           getSession(request);
-          writeJson(response, 200, await options.backend.listWorkflows());
+          writeJson(
+            response,
+            200,
+            accessMode === "viewer" ? [] : await options.backend.listWorkflows()
+          );
           return;
         }
         if (
@@ -797,18 +843,33 @@ export async function startConsoleHost(
           writeJson(
             response,
             200,
-            await options.backend.getEvidenceLineage(
-              decodeURIComponent(lineageMatch[1]!)
-            )
+            accessMode === "viewer"
+              ? {
+                  runId: decodeURIComponent(lineageMatch[1]!),
+                  sources: [],
+                  evidence: [],
+                  assets: []
+                }
+              : await options.backend.getEvidenceLineage(
+                  decodeURIComponent(lineageMatch[1]!)
+                )
           );
           return;
         }
         if (request.method === "GET" && path === "/api/downloads") {
           getSession(request);
+          const downloads = await options.backend.listDownloads(
+            url.searchParams.get("runId") ?? undefined
+          );
           writeJson(
             response,
             200,
-            await options.backend.listDownloads(url.searchParams.get("runId") ?? undefined)
+            accessMode === "viewer"
+              ? downloads.map((download) => ({
+                  ...download,
+                  fileName: sanitizeDownloadName(download.fileName)
+                }))
+              : downloads
           );
           return;
         }

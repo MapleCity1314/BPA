@@ -370,7 +370,8 @@ describe("Operator Console", () => {
   it("hides every mutation entry in a viewer session", async () => {
     const api = mockApi();
     api.initializeSession = vi.fn(async () => ({ accessMode: "viewer" as const }));
-    await renderReady(api);
+    render(<App api={api} />);
+    await screen.findByRole("heading", { name: "BPA 运行概览" });
 
     expect(screen.queryByRole("button", { name: /自动化/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^02任务/ })).not.toBeInTheDocument();
@@ -382,7 +383,10 @@ describe("Operator Console", () => {
     expect(screen.queryByRole("button", { name: /创作模式/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /数据导入/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /运行诊断/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /证据血缘/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /证据血缘/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /系统诊断/ })).not.toBeInTheDocument();
+    expect(api.listWorkflows).not.toHaveBeenCalled();
+    expect(api.listTasks).not.toHaveBeenCalled();
   });
 
   it("starts a workflow with an exact browser session binding", async () => {
