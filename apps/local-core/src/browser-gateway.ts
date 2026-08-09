@@ -71,8 +71,30 @@ export interface BrowserGatewayStatus {
       capacity: number;
       ttlMs: number;
     };
+    extension: ExtensionResourceUsage | null;
   };
   lastError?: string;
+}
+
+export interface ExtensionResourceUsage {
+  activeCommands: number;
+  activeTabCommands: number;
+  activeAllianceStages: number;
+  cancellationRequests: number;
+  cancellationStopBarriers: number;
+  observedTabs: number;
+  observationCapacity: number;
+  managedTabs: number;
+  pacingReservations: {
+    active: number;
+    capacity: number;
+    ttlMs: number;
+  };
+  probes: {
+    active: number;
+    capacity: number;
+    ttlMs: number;
+  };
 }
 
 interface ActiveSession {
@@ -87,7 +109,12 @@ interface ActiveSession {
   lastAckedCommandSeq: number;
   ready: boolean;
   capabilities: BrowserCapabilityRecord[];
+  extensionResourceUsage?: ExtensionResourceUsage;
+  lastHeartbeatSentAt?: number;
+  pendingHeartbeatNonce?: string;
 }
+
+const BROWSER_HEARTBEAT_INTERVAL_MS = 20_000;
 
 interface BrowserConnection {
   id: string;
@@ -107,6 +134,87 @@ export function observationCoversFrozenRevision(
     Number.isSafeInteger(frozenRevision) &&
     currentRevision >= frozenRevision
   );
+}
+
+function parseExtensionResourceUsage(
+  value: unknown
+): ExtensionResourceUsage | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const pacing = record.pacing_reservations;
+  const probes = record.probes;
+  if (
+    pacing === null ||
+    typeof pacing !== "object" ||
+    Array.isArray(pacing) ||
+    probes === null ||
+    typeof probes !== "object" ||
+    Array.isArray(probes)
+  ) {
+    return undefined;
+  }
+  const pacingRecord = pacing as Record<string, unknown>;
+  const probeRecord = probes as Record<string, unknown>;
+  const integers = [
+    record.active_commands,
+    record.active_tab_commands,
+    record.active_alliance_stages,
+    record.cancellation_requests,
+    record.cancellation_stop_barriers,
+    record.observed_tabs,
+    record.observation_capacity,
+    record.managed_tabs,
+    pacingRecord.active,
+    pacingRecord.capacity,
+    pacingRecord.ttl_ms,
+    probeRecord.active,
+    probeRecord.capacity,
+    probeRecord.ttl_ms
+  ];
+  if (
+    !integers.every(
+      (candidate) => Number.isSafeInteger(candidate) && Number(candidate) >= 0
+    )
+  ) {
+    return undefined;
+  }
+  const usage = {
+    activeCommands: Number(record.active_commands),
+    activeTabCommands: Number(record.active_tab_commands),
+    activeAllianceStages: Number(record.active_alliance_stages),
+    cancellationRequests: Number(record.cancellation_requests),
+    cancellationStopBarriers: Number(record.cancellation_stop_barriers),
+    observedTabs: Number(record.observed_tabs),
+    observationCapacity: Number(record.observation_capacity),
+    managedTabs: Number(record.managed_tabs),
+    pacingReservations: {
+      active: Number(pacingRecord.active),
+      capacity: Number(pacingRecord.capacity),
+      ttlMs: Number(pacingRecord.ttl_ms)
+    },
+    probes: {
+      active: Number(probeRecord.active),
+      capacity: Number(probeRecord.capacity),
+      ttlMs: Number(probeRecord.ttl_ms)
+    }
+  } satisfies ExtensionResourceUsage;
+  return usage.activeCommands <= 32 &&
+    usage.activeTabCommands <= usage.activeCommands &&
+    usage.activeAllianceStages <= usage.activeCommands &&
+    usage.cancellationRequests <= usage.activeCommands &&
+    usage.cancellationStopBarriers === usage.cancellationRequests &&
+    usage.observationCapacity === 64 &&
+    usage.observedTabs <= usage.observationCapacity &&
+    usage.pacingReservations.capacity === 64 &&
+    usage.pacingReservations.active <= usage.pacingReservations.capacity &&
+    usage.pacingReservations.ttlMs === 120_000 &&
+    usage.probes.capacity === 32 &&
+    usage.probes.active <= usage.probes.capacity &&
+    usage.probes.ttlMs === 30_000
+    ? usage
+    : undefined;
 }
 
 function compareExtensionVersions(left: string, right: string): number {
@@ -292,7 +400,8 @@ export class LocalBrowserGateway implements RuntimeProvider {
           (total, connection) => total + connection.cancelRequests.size,
           0
         ),
-        pageProbes: this.#pageProbes.usage()
+        pageProbes: this.#pageProbes.usage(),
+        extension: primary?.session?.extensionResourceUsage ?? null
       },
       ...(primary?.lastError ? { lastError: primary.lastError } : {})
     };
@@ -528,6 +637,34 @@ export class LocalBrowserGateway implements RuntimeProvider {
           this.#handleResult(connection, candidate);
           break;
         case "heartbeat.pong":
+          {
+            if (
+              candidate.payload.nonce !==
+              connection.session.pendingHeartbeatNonce
+            ) {
+              connection.lastError = "BROWSER_HEARTBEAT_NONCE_INVALID";
+              break;
+            }
+            const usage = parseExtensionResourceUsage(
+              candidate.payload.resource_usage
+            );
+            if (!usage) {
+              delete connection.session.extensionResourceUsage;
+              connection.lastError =
+                "BROWSER_EXTENSION_RESOURCE_USAGE_INVALID";
+              break;
+            }
+            connection.session.extensionResourceUsage = usage;
+            delete connection.session.pendingHeartbeatNonce;
+            if (
+              connection.lastError ===
+                "BROWSER_EXTENSION_RESOURCE_USAGE_INVALID" ||
+              connection.lastError === "BROWSER_HEARTBEAT_NONCE_INVALID" ||
+              connection.lastError === "BROWSER_HEARTBEAT_TIMEOUT"
+            ) {
+              delete connection.lastError;
+            }
+          }
           break;
         case "cancel.ack":
           break;
@@ -674,6 +811,30 @@ export class LocalBrowserGateway implements RuntimeProvider {
 
   tick(at = new Date()): { timedOut: number; dispatched: number } {
     this.#pageProbes.prune(at.getTime());
+    for (const connection of this.#connections.values()) {
+      const session = connection.session;
+      if (
+        !session?.ready ||
+        (session.lastHeartbeatSentAt !== undefined &&
+          at.getTime() - session.lastHeartbeatSentAt <
+            BROWSER_HEARTBEAT_INTERVAL_MS)
+      ) {
+        continue;
+      }
+      if (session.pendingHeartbeatNonce !== undefined) {
+        delete session.extensionResourceUsage;
+        connection.lastError = "BROWSER_HEARTBEAT_TIMEOUT";
+      }
+      session.lastHeartbeatSentAt = at.getTime();
+      const nonce = randomUUID();
+      session.pendingHeartbeatNonce = nonce;
+      this.#sendMessage(
+        connection,
+        "heartbeat.ping",
+        { nonce },
+        "trace-heartbeat"
+      );
+    }
     this.recoverCancellations();
     this.recoverTerminalResults();
     let timedOut = 0;

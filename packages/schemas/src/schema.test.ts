@@ -275,6 +275,15 @@ describe("timing and risk schemas", () => {
     };
     expect(validateBrowserProtocolMessage(result)).toBe(true);
   });
+
+  it("bounds Extension runtime resources on heartbeat pong", () => {
+    const heartbeat = structuredClone(
+      examples.find((example) => example.type === "heartbeat.pong")!
+    );
+    expect(validateBrowserProtocolMessage(heartbeat)).toBe(true);
+    heartbeat.payload.resource_usage.probes.active = 33;
+    expect(validateBrowserProtocolMessage(heartbeat)).toBe(false);
+  });
 });
 
 const protocolExample = (name: string): unknown =>

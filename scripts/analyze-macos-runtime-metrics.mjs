@@ -367,6 +367,9 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
     const processMetrics = metrics?.process;
     const browserGateway = metrics?.browserGateway;
     const pageProbes = browserGateway?.pageProbes;
+    const extension = browserGateway?.extension;
+    const pacingReservations = extension?.pacingReservations;
+    const extensionProbes = extension?.probes;
     const valid =
       metrics?.status === "available" &&
       Number.isFinite(metricsTimestamp) &&
@@ -376,6 +379,9 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
       processMetrics &&
       browserGateway &&
       pageProbes &&
+      extension &&
+      pacingReservations &&
+      extensionProbes &&
       [
         processMetrics.rssBytes,
         processMetrics.heapTotalBytes,
@@ -387,13 +393,40 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         browserGateway.pendingCancelRequestCount,
         pageProbes.active,
         pageProbes.capacity,
-        pageProbes.ttlMs
+        pageProbes.ttlMs,
+        extension.activeCommands,
+        extension.activeTabCommands,
+        extension.activeAllianceStages,
+        extension.cancellationRequests,
+        extension.cancellationStopBarriers,
+        extension.observedTabs,
+        extension.observationCapacity,
+        extension.managedTabs,
+        pacingReservations.active,
+        pacingReservations.capacity,
+        pacingReservations.ttlMs,
+        extensionProbes.active,
+        extensionProbes.capacity,
+        extensionProbes.ttlMs
       ].every((value) => Number.isSafeInteger(value) && value >= 0) &&
       processMetrics.heapUsedBytes <= processMetrics.heapTotalBytes &&
       browserGateway.readySessionCount <= browserGateway.connectionCount &&
       pageProbes.capacity >= 1 &&
       pageProbes.active <= pageProbes.capacity &&
-      pageProbes.ttlMs >= 1;
+      pageProbes.ttlMs >= 1 &&
+      extension.activeTabCommands <= extension.activeCommands &&
+      extension.activeAllianceStages <= extension.activeCommands &&
+      extension.cancellationRequests <= extension.activeCommands &&
+      extension.cancellationStopBarriers ===
+        extension.cancellationRequests &&
+      extension.observationCapacity >= 1 &&
+      extension.observedTabs <= extension.observationCapacity &&
+      pacingReservations.capacity >= 1 &&
+      pacingReservations.active <= pacingReservations.capacity &&
+      pacingReservations.ttlMs >= 1 &&
+      extensionProbes.capacity >= 1 &&
+      extensionProbes.active <= extensionProbes.capacity &&
+      extensionProbes.ttlMs >= 1;
     return valid
       ? [{ metrics, hour: (timestamp - firstTimestamp) / (60 * 60 * 1_000) }]
       : [];
@@ -461,7 +494,72 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         ? [...new Set(measured.map(({ metrics }) =>
             metrics.browserGateway.pageProbes.ttlMs
           ))]
-        : []
+        : [],
+      extension: {
+        activeCommands: summarize(
+          (metrics) => metrics.browserGateway.extension.activeCommands,
+          "Extension activeCommands"
+        ),
+        activeTabCommands: summarize(
+          (metrics) => metrics.browserGateway.extension.activeTabCommands,
+          "Extension activeTabCommands"
+        ),
+        activeAllianceStages: summarize(
+          (metrics) => metrics.browserGateway.extension.activeAllianceStages,
+          "Extension activeAllianceStages"
+        ),
+        cancellationRequests: summarize(
+          (metrics) => metrics.browserGateway.extension.cancellationRequests,
+          "Extension cancellationRequests"
+        ),
+        cancellationStopBarriers: summarize(
+          (metrics) =>
+            metrics.browserGateway.extension.cancellationStopBarriers,
+          "Extension cancellationStopBarriers"
+        ),
+        observedTabs: summarize(
+          (metrics) => metrics.browserGateway.extension.observedTabs,
+          "Extension observedTabs"
+        ),
+        managedTabs: summarize(
+          (metrics) => metrics.browserGateway.extension.managedTabs,
+          "Extension managedTabs"
+        ),
+        pacingReservations: summarize(
+          (metrics) =>
+            metrics.browserGateway.extension.pacingReservations.active,
+          "Extension pacingReservations"
+        ),
+        probes: summarize(
+          (metrics) => metrics.browserGateway.extension.probes.active,
+          "Extension probes"
+        ),
+        observationCapacity: complete
+          ? [...new Set(measured.map(({ metrics }) =>
+              metrics.browserGateway.extension.observationCapacity
+            ))]
+          : [],
+        pacingCapacity: complete
+          ? [...new Set(measured.map(({ metrics }) =>
+              metrics.browserGateway.extension.pacingReservations.capacity
+            ))]
+          : [],
+        pacingTtlMs: complete
+          ? [...new Set(measured.map(({ metrics }) =>
+              metrics.browserGateway.extension.pacingReservations.ttlMs
+            ))]
+          : [],
+        probeCapacity: complete
+          ? [...new Set(measured.map(({ metrics }) =>
+              metrics.browserGateway.extension.probes.capacity
+            ))]
+          : [],
+        probeTtlMs: complete
+          ? [...new Set(measured.map(({ metrics }) =>
+              metrics.browserGateway.extension.probes.ttlMs
+            ))]
+          : []
+      }
     }
   };
 }

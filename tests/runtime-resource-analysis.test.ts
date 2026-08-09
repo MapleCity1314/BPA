@@ -83,6 +83,22 @@ function sample(
                 active: 0,
                 capacity: 32,
                 ttlMs: 10_000
+              },
+              extension: {
+                activeCommands: 0,
+                activeTabCommands: 0,
+                activeAllianceStages: 0,
+                cancellationRequests: 0,
+                cancellationStopBarriers: 0,
+                observedTabs: 1,
+                observationCapacity: 64,
+                managedTabs: 0,
+                pacingReservations: {
+                  active: 0,
+                  capacity: 64,
+                  ttlMs: 120_000
+                },
+                probes: { active: 0, capacity: 32, ttlMs: 30_000 }
               }
             },
             sqlite: {
@@ -236,7 +252,14 @@ describe("runtime resource analysis", () => {
       missingSamples: 0,
       browserGateway: {
         pageProbeCapacity: [32],
-        pageProbeTtlMs: [10_000]
+        pageProbeTtlMs: [10_000],
+        extension: {
+          observationCapacity: [64],
+          pacingCapacity: [64],
+          pacingTtlMs: [120_000],
+          probeCapacity: [32],
+          probeTtlMs: [30_000]
+        }
       }
     });
     expect(result.coreResident.process.heapUsedBytes.change).toBe(4096);

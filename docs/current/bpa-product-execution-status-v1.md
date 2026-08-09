@@ -40,11 +40,14 @@ Team Worker，Control Server 停止前主动关闭全部长连接，并把 Core 
 Core 的原子资源快照和 24 小时分析结果现可记录 V8 process memory、Browser Gateway 连接、
 取消请求与 page probe 占用。本代码候选还把 Extension 到 Native Host 的连接收敛为单一
 generation：同一时刻最多一个连接尝试，只有有效 welcome 才重置 2–30 秒有界退避，旧 Port
-回调和 service worker 停止后的回调均不可改写新连接。标签页创建前硬上限、Extension
-pacing/cancel/probe generation 集合、Native Host/Team Worker/短命进程、event-loop lag、
-标签页数、Gateway 队列和 quiescence 仍是工程缺口。本机当前没有 BPA launchd/进程，
-因此这只是
-仓库形态审计，不能当作公司 Mac 当前进程事实。灰度候选、预算与停止线见阶段 1 计划。
+回调和 service worker 停止后的回调均不可改写新连接。本代码候选进一步把 Extension 活跃
+命令限制为 32、观察表限制为 64、pacing reservation 限制为 64 项/120 秒 TTL、probe
+generation 限制为 32 项/30 秒 TTL；取消请求、停止屏障和 Alliance stage 在命令终态统一
+回收。`heartbeat.pong` 的白名单资源占用经 Core 校验后进入 24 小时采集与分析结果。
+标签页创建前硬上限、Native Host/Team Worker/短命进程、event-loop lag、Gateway 队列和
+quiescence 仍是工程缺口；`managed_tabs` 目前只有计数，没有创建前容量门。本机当前没有 BPA
+launchd/进程，因此这只是仓库形态审计，不能当作公司 Mac 当前进程事实。灰度候选、预算与
+停止线见阶段 1 计划。
 
 ## 2. 阶段状态板
 

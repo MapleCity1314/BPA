@@ -52,10 +52,14 @@ succeeded | rejected | failed | timed_out | cancelled | uncertain
 | `cancel.request` | Gateway → Bridge | 表达停止意图 |
 | `cancel.ack` | Bridge → Gateway | 确认收到 Cancel 并说明动作是否开始 |
 | `cancel.effective` | Bridge → Gateway | 返回 `cancelled` 或 `uncertain` |
-| `heartbeat.ping` | 双向 | 探测连接 |
-| `heartbeat.pong` | 双向 | 回应相同 nonce |
+| `heartbeat.ping` | Gateway → Bridge | 探测连接 |
+| `heartbeat.pong` | Bridge → Gateway | 回应相同 nonce，并报告严格有界的 Extension 常驻资源占用 |
 
 Cancel 不是回滚。写动作已经开始且无法确认副作用时必须返回 `uncertain`。
+
+`heartbeat.pong.resource_usage` 只包含白名单计数：活跃命令、标签页命令、Alliance stage、
+取消请求与停止屏障、观察标签页、受管标签页，以及 pacing reservation 和 probe generation
+的当前数量、容量和 TTL。Core 必须校验固定容量及计数守恒；畸形或过界心跳不能成为资源曲线证据。
 
 ## Evidence
 

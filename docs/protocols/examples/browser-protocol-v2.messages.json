@@ -246,7 +246,27 @@
     "type": "heartbeat.pong",
     "trace_id": "trace-session",
     "payload": {
-      "nonce": "heartbeat-01"
+      "nonce": "heartbeat-01",
+      "resource_usage": {
+        "active_commands": 1,
+        "active_tab_commands": 1,
+        "active_alliance_stages": 0,
+        "cancellation_requests": 0,
+        "cancellation_stop_barriers": 0,
+        "observed_tabs": 2,
+        "observation_capacity": 64,
+        "managed_tabs": 0,
+        "pacing_reservations": {
+          "active": 1,
+          "capacity": 64,
+          "ttl_ms": 120000
+        },
+        "probes": {
+          "active": 1,
+          "capacity": 32,
+          "ttl_ms": 30000
+        }
+      }
     }
   },
   {

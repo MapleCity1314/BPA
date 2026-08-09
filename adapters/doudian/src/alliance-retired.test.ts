@@ -43,6 +43,7 @@ describe("Doudian alliance retired-products runtime", () => {
           "apps/extension/src/lib/adapter-node-registry.ts",
           "apps/extension/src/lib/alliance-retired-background.ts",
           "apps/extension/src/lib/alliance-retired-content.ts",
+          "apps/extension/src/lib/extension-runtime-resources.ts",
           "apps/extension/src/lib/native-connection-supervisor.ts",
           "adapters/doudian/src/alliance-retired.ts"
         ]

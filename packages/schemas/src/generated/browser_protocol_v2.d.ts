@@ -32,6 +32,22 @@ export type BrowserFeatures = {
 export type BrowserFeatures1 = ("page_observation_v2" | "exact_tab_binding_v2" | "active_page_probe_v1")[];
 export type Digest = string;
 export type ResultStatus = "succeeded" | "rejected" | "failed" | "timed_out" | "cancelled" | "uncertain";
+export type Heartbeat = {
+  [k: string]: unknown;
+} & {
+  protocol: "bpa.browser/2";
+  version: "2.0.0";
+  message_id: Id;
+  session_id: Id;
+  seq: number;
+  sent_at: Timestamp;
+  type: "heartbeat.ping" | "heartbeat.pong";
+  trace_id: Id;
+  payload: {
+    nonce: Id;
+    resource_usage?: ExtensionResourceUsage;
+  };
+};
 
 export interface SessionHello {
   protocol: "bpa.browser/2";
@@ -411,17 +427,24 @@ export interface CancelEffective {
     safe_stop?: boolean;
   };
 }
-export interface Heartbeat {
-  protocol: "bpa.browser/2";
-  version: "2.0.0";
-  message_id: Id;
-  session_id: Id;
-  seq: number;
-  sent_at: Timestamp;
-  type: "heartbeat.ping" | "heartbeat.pong";
-  trace_id: Id;
-  payload: {
-    nonce: Id;
+export interface ExtensionResourceUsage {
+  active_commands: number;
+  active_tab_commands: number;
+  active_alliance_stages: number;
+  cancellation_requests: number;
+  cancellation_stop_barriers: number;
+  observed_tabs: number;
+  observation_capacity: 64;
+  managed_tabs: number;
+  pacing_reservations: {
+    active: number;
+    capacity: 64;
+    ttl_ms: 120000;
+  };
+  probes: {
+    active: number;
+    capacity: 32;
+    ttl_ms: 30000;
   };
 }
 export interface SessionError {

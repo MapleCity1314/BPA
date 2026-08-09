@@ -221,11 +221,14 @@ Schema 降级描述成可恢复旧二进制，也不得复制登录态。
    路径、Profile 身份和回读校验纳入签名闭包。
 3. **标签页硬上限**：Extension 目前只在命令结束或启动恢复时回收归属子标签页；必须在
    创建临时页前拒绝超过上限，并把当前归属页数量写入脱敏运行指标。
-4. **有界内存结构**：Extension 的 pacing/cancel/probe generation 集合与 Core 的 page
-   probe 请求表必须有 TTL、容量上限和 size 指标；24 小时窗口前先通过增长反例。
-   本代码候选已关闭 Core 子项：page probe 表为 32 项、10 秒 TTL，完成、断线和超时均
-   回收，迟到响应不能清除同页新请求，容量满时 fail-closed。Extension pacing/cancel/probe
-   generation 的 TTL、容量和指标仍未完成。
+4. **有界内存结构**：Extension 与 Core 的常驻集合必须有与生命周期匹配的容量、回收规则
+   和 size 指标；24 小时窗口前先通过增长反例。本代码候选已把 Core page probe 表限制为
+   32 项、10 秒 TTL，完成、断线和超时均回收，迟到响应不能清除同页新请求。Extension
+   活跃命令/观察表分别限制为 32/64；pacing reservation 为 64 项、120 秒 TTL；probe
+   generation 为 32 项、30 秒 TTL；取消请求、停止屏障和 Alliance stage 随命令终态统一
+   回收。容量满时 fail-closed，`heartbeat.pong` 暴露白名单 size/capacity/TTL 并由 Core
+   校验后采集。取消状态按命令生命周期回收，不虚构独立 TTL。受管标签页创建前硬上限仍见
+   第 3 项。
 5. **单连接重连**：本代码候选已为 Extension 到 Native Host 的 connect 增加
    generation/in-flight guard、2–30 秒有界退避、握手完成后才重置退避、旧 Port 回调隔离，
    并覆盖 disconnect 与连接异常不会重复排程；尚未完成真实 Native Host/Chrome 重连 E2E，
@@ -236,12 +239,13 @@ Schema 降级描述成可恢复旧二进制，也不得复制登录态。
    Registry 必须 dispose Team Worker。否则 launchd 更新可能等待 Native Host，或遗留 worker。
    本代码候选已实现这两项并覆盖反向 dispose、重复关闭、多个失败聚合和 resident socket
    关闭反例；尚未部署，不能替代公司 Mac 的孤儿进程检查。
-8. **采样可见性**：现有采集器还不统计 Native Host、Team Worker、短命 Node 子进程、
-   V8 heap、event-loop lag、标签页、Gateway 队列和常驻 Map size。常驻灰度前必须补这些角色
-   指标和 Run terminal 后 15 分钟 quiescence marker。
+8. **采样可见性**：常驻灰度前必须覆盖 Native Host、Team Worker、短命 Node 子进程、
+   event-loop lag、标签页、Gateway 队列和 Run terminal 后 15 分钟 quiescence marker。
    本代码候选已把 Core V8 process memory、Browser Gateway 连接/ready Session、pending
-   cancel 和 page probe size/capacity/TTL 纳入原子白名单快照、采集器与分析结果；其余角色、
-   event-loop lag、标签页、Gateway 队列和 quiescence 仍未完成。
+   cancel、page probe size/capacity/TTL，以及 Extension 命令、观察、受管标签页、取消、
+   pacing 和 probe 的白名单计数纳入原子资源快照、采集器与分析结果；其余进程角色、
+   event-loop lag、Gateway 队列和 quiescence 仍未完成。`managed_tabs` 只有计数，不能替代
+   第 3 项的创建前硬上限。
 9. **入口清退**：旧 source/tsx launchd、Inventory Scheduler 模式与签名闭包 Core 不能并存。
    灰度前选定签名闭包为唯一 Core；legacy recovery 仍会按步骤启动短命 Node 子进程，只有
    正式库存 Workflow 接管后，per-step Node spawn 才能归零。

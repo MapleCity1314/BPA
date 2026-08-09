@@ -26,6 +26,19 @@ function fixture(path: string): unknown {
   );
 }
 
+const extensionResourceUsage = {
+  active_commands: 1,
+  active_tab_commands: 1,
+  active_alliance_stages: 0,
+  cancellation_requests: 0,
+  cancellation_stop_barriers: 0,
+  observed_tabs: 2,
+  observation_capacity: 64,
+  managed_tabs: 0,
+  pacing_reservations: { active: 1, capacity: 64, ttl_ms: 120_000 },
+  probes: { active: 1, capacity: 32, ttl_ms: 30_000 }
+};
+
 describe("local browser gateway", () => {
   it("accepts monotonic observation heartbeats for the same frozen page",() => {
     expect(observationCoversFrozenRevision(1,1)).toBe(true);
@@ -121,6 +134,159 @@ describe("local browser gateway", () => {
       lastError: "BROWSER_BRIDGE_FEATURE_MISMATCH"
     });
     expect(outgoing).toEqual([]);
+    persistence.close();
+  });
+
+  it("polls and validates bounded Extension resource usage", () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const gateway = new LocalBrowserGateway(
+      persistence,
+      new LocalWorkflowEngine(persistence),
+      {
+        keyId: "core-heartbeat-key",
+        privateKey,
+        publicKey,
+        publicKeySpkiBase64: exportPublicKeySpkiBase64(publicKey)
+      }
+    );
+    const outgoing: Array<Record<string, any>> = [];
+    const connectionId = gateway.attach(
+      `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      (message) => outgoing.push(message)
+    );
+    gateway.handle(
+      {
+        protocol: "bpa.browser/2",
+        version: "2.0.0",
+        message_id: "hello-heartbeat",
+        session_id: "new",
+        seq: 0,
+        sent_at: "2026-08-10T00:00:00.000Z",
+        type: "session.hello",
+        trace_id: "trace-heartbeat-test",
+        payload: {
+          browser_instance_id: "browser-heartbeat",
+          extension_id: DEFAULT_BPA_EXTENSION_ID,
+          extension_version: "0.6.2",
+          bridge_build_id: "v0.6.0-test.node24.18.0",
+          supported_protocols: ["bpa.browser/2"],
+          features: [
+            "page_observation_v2",
+            "exact_tab_binding_v2",
+            "active_page_probe_v1"
+          ],
+          last_acked_command_seq: 0
+        }
+      },
+      connectionId
+    );
+    const sessionId = String(outgoing.at(-1)!.session_id);
+    gateway.handle(
+      {
+        protocol: "bpa.browser/2",
+        version: "2.0.0",
+        message_id: "capability-heartbeat",
+        session_id: sessionId,
+        seq: 1,
+        sent_at: "2026-08-10T00:00:01.000Z",
+        type: "capability.report",
+        trace_id: "trace-heartbeat-test",
+        payload: {
+          capabilities: [],
+          features: [
+            "page_observation_v2",
+            "exact_tab_binding_v2",
+            "active_page_probe_v1"
+          ],
+          manifest_digest: `sha256:${"a".repeat(64)}`
+        }
+      },
+      connectionId
+    );
+    expect(gateway.status().resourceUsage.extension).toBeNull();
+
+    gateway.tick(new Date("2026-08-10T00:00:20.000Z"));
+    const heartbeat = outgoing.findLast(
+      (message) => message.type === "heartbeat.ping"
+    )!;
+    gateway.handle(
+      {
+        protocol: "bpa.browser/2",
+        version: "2.0.0",
+        message_id: "heartbeat-resource-usage",
+        session_id: sessionId,
+        seq: 2,
+        sent_at: "2026-08-10T00:00:20.100Z",
+        type: "heartbeat.pong",
+        trace_id: "trace-heartbeat-test",
+        payload: {
+          nonce: heartbeat.payload.nonce,
+          resource_usage: extensionResourceUsage
+        }
+      },
+      connectionId
+    );
+    expect(gateway.status().resourceUsage.extension).toMatchObject({
+      activeCommands: 1,
+      observedTabs: 2,
+      pacingReservations: { active: 1, capacity: 64, ttlMs: 120_000 },
+      probes: { active: 1, capacity: 32, ttlMs: 30_000 }
+    });
+
+    gateway.tick(new Date("2026-08-10T00:00:40.000Z"));
+    gateway.handle(
+      {
+        protocol: "bpa.browser/2",
+        version: "2.0.0",
+        message_id: "heartbeat-stale-nonce",
+        session_id: sessionId,
+        seq: 3,
+        sent_at: "2026-08-10T00:00:40.100Z",
+        type: "heartbeat.pong",
+        trace_id: "trace-heartbeat-test",
+        payload: {
+          nonce: heartbeat.payload.nonce,
+          resource_usage: extensionResourceUsage
+        }
+      },
+      connectionId
+    );
+    expect(gateway.status().lastError).toBe(
+      "BROWSER_HEARTBEAT_NONCE_INVALID"
+    );
+
+    gateway.tick(new Date("2026-08-10T00:01:00.000Z"));
+    expect(gateway.status()).toMatchObject({
+      resourceUsage: { extension: null },
+      lastError: "BROWSER_HEARTBEAT_TIMEOUT"
+    });
+    const recoveryHeartbeat = outgoing.findLast(
+      (message) => message.type === "heartbeat.ping"
+    )!;
+    gateway.handle(
+      {
+        protocol: "bpa.browser/2",
+        version: "2.0.0",
+        message_id: "heartbeat-resource-usage-recovered",
+        session_id: sessionId,
+        seq: 4,
+        sent_at: "2026-08-10T00:01:00.100Z",
+        type: "heartbeat.pong",
+        trace_id: "trace-heartbeat-test",
+        payload: {
+          nonce: recoveryHeartbeat.payload.nonce,
+          resource_usage: extensionResourceUsage
+        }
+      },
+      connectionId
+    );
+    expect(gateway.status()).toMatchObject({
+      resourceUsage: {
+        extension: { activeCommands: 1, observedTabs: 2 }
+      }
+    });
+    expect(gateway.status().lastError).toBeUndefined();
     persistence.close();
   });
 
