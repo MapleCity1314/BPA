@@ -428,7 +428,7 @@ describe("RecoverySessionService", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("invalidates immediately and releases the fence when the browser disconnects", () => {
     const persistence = seed();

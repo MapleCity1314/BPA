@@ -5,6 +5,9 @@
 截至当前提交，Windows x64 已进入可验证 RC 候选阶段，而不是宣称完成真实业务
 验收。macOS arm64 现有运行路径保持兼容。
 
+公司业务部署已另行决定采用 Mac 唯一执行、Windows 远程查看/受控请求。Windows x64
+Runtime 继续作为 P2 可选服务器能力验证，不再代表公司清退等业务应在 Windows 执行。
+
 已实现：
 
 - `@bpa/platform-runtime` 统一 macOS/Windows 数据路径与 IPC 端点。
@@ -32,6 +35,8 @@
 - AttentionItem 尚未持久化为新的正式 Schema，也没有替代 AssistanceTask。
 - 任务历史列表和最近业务结果仍受现有 Control 查询能力限制。
 - 重点项检查和蝉妈妈流程的非技术运营人员可用性测试。
+- 远程 HTTPS 身份、Viewer/Operator RBAC 与 allowlist Trigger 调用；当前 Console
+  Viewer 仍是 loopback 本地边界，不能据此宣称 Windows 已可远程访问。
 
 ## 发布判定
 

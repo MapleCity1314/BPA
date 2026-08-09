@@ -171,6 +171,12 @@ Core 7 天 RSS 门禁采用固定、可复算的判据，不允许人工凭曲�
 Web 控制台上能看到每一次运行的步骤、结果、证据链。这是 §2.3 里"可审计性是
 入场券"的产品体现——机制已经在引擎里了，缺的是把它呈现出来。
 
+公司部署采用 Mac 唯一执行、Windows 远程控制面。先交付服务端强制只读的 Viewer，
+再交付只允许 allowlist Manual Trigger 的 Operator；不得把现有 loopback Console 改绑
+公网地址，也不得向 Windows 透传 Control method。两条 Windows 迁移链中目前只有清退
+商品可由仓库证实，第二条在入口确认前保持“待确认”。详细门禁见
+`docs/plans/bpa-mac-runtime-windows-remote-operations-v0.1.md`。
+
 ### 阶段 1 验收
 
 - 登录态失效可远程恢复，全程不需要登录那台机器。

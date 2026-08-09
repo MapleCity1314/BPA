@@ -24,6 +24,19 @@ exchanges it for an HttpOnly, SameSite=Strict cookie and a CSRF token. The token
 is invalid after the first exchange. Sessions expire after 30 minutes of idle
 time.
 
+Set `BPA_CONSOLE_ACCESS_MODE=viewer` to create a fail-closed read-only session.
+Viewer sessions can use authenticated GET projections, while every business
+mutation is rejected by the HTTP server and hidden by the web application.
+Browser and recovery bindings plus technical details are stripped, action task
+lists are empty, and catalog/evidence-lineage projections are closed. Viewer
+dashboard reads also skip Recovery Session enumeration because that operation
+can expire persisted sessions. Production UI source maps and file bodies remain
+unavailable until a remote identity can be authorized against their
+classification.
+This mode does not make the host remotely reachable: it remains bound to
+`127.0.0.1` with exact Host and Origin checks. A separately reviewed private
+HTTPS identity boundary is required before forwarding it to another machine.
+
 ## Local skeleton
 
 ```sh

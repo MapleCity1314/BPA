@@ -142,7 +142,7 @@ const lineage: EvidenceLineageView = {
 
 function mockApi(): OperatorConsoleApi {
   return {
-    initializeSession: vi.fn(async () => {}),
+    initializeSession: vi.fn(async () => ({ accessMode: "operator" as const })),
     getDashboard: vi.fn(async () => dashboard),
     listWorkflows: vi.fn(async () => workflows),
     createRun: vi.fn(async () => ({ runId: "run-1" })),
@@ -365,6 +365,28 @@ describe("Operator Console", () => {
     const details = screen.getByText("查看技术细节").closest("details");
     expect(details).not.toHaveAttribute("open");
     expect(screen.getByText("socket=/private/example/core.sock")).not.toBeVisible();
+  });
+
+  it("hides every mutation entry in a viewer session", async () => {
+    const api = mockApi();
+    api.initializeSession = vi.fn(async () => ({ accessMode: "viewer" as const }));
+    render(<App api={api} />);
+    await screen.findByRole("heading", { name: "BPA 运行概览" });
+
+    expect(screen.queryByRole("button", { name: /自动化/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^02任务/ })).not.toBeInTheDocument();
+    expect(screen.getByText("只读查看")).toBeInTheDocument();
+    expect(screen.getByText("运行与浏览器操作只在 Mac 执行")).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /高级设置/ }));
+    expect(screen.queryByRole("button", { name: /创作模式/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /数据导入/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /运行诊断/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /证据血缘/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /系统诊断/ })).not.toBeInTheDocument();
+    expect(api.listWorkflows).not.toHaveBeenCalled();
+    expect(api.listTasks).not.toHaveBeenCalled();
   });
 
   it("starts a workflow with an exact browser session binding", async () => {

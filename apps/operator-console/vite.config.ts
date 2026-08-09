@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   build: {
     target: "es2023",
-    sourcemap: true
+    sourcemap: false
   },
   test: {
     environment: "jsdom",

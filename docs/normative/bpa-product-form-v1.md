@@ -111,6 +111,12 @@ BPA 的替代提案是：同样的自动化，但**可被追问**。
 `docs/current/cross-platform-current-state-v0.6.md` 中把这些列为发布门禁的
 判定在本形态下不再适用于 P0，但其技术结论仍然有效。
 
+公司当前部署进一步收紧为：Mac mini 是唯一业务执行端；Windows 是远程 Web 客户端，
+不安装公司业务 Runtime、Extension、Native Host、Chrome Profile 或 Schedule。
+Windows 发起运行属于受审计的 Operator 写权限，不得归类为 Viewer 只读，也不得绕过
+Mac Trigger、租约和已发布版本。实现顺序见
+`docs/plans/bpa-mac-runtime-windows-remote-operations-v0.1.md`。
+
 ## 5. 界面分工
 
 | 界面 | 用户占比 | 职责 |

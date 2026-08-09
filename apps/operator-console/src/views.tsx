@@ -44,12 +44,14 @@ export function StatusPill({
 }
 
 export function OverviewView({
+  readOnly = false,
   dashboard,
   workflows,
   tasks,
   downloads,
   onNavigate
 }: {
+  readOnly?: boolean;
   dashboard: DashboardSnapshot;
   workflows: WorkflowSummary[];
   tasks: TaskView[];
@@ -63,34 +65,50 @@ export function OverviewView({
       <section className={`hero-card operator-hero ${ready ? "quiet" : "needs-action"}`}>
         <div>
           <p className="eyebrow">{ready ? "准备就绪" : "需要处理"}</p>
-          <h2>{ready ? "今天想让 BPA 做什么？" : "BPA 需要处理"}</h2>
+          <h2>
+            {readOnly
+              ? "BPA 运行概览"
+              : ready
+                ? "今天想让 BPA 做什么？"
+                : "BPA 需要处理"}
+          </h2>
           <p className="muted">
-            {ready
-              ? `已有 ${workflows.length} 个自动化可以直接开始。`
-              : dashboard.headline}
+            {readOnly
+              ? dashboard.headline
+              : ready
+                ? `已有 ${workflows.length} 个自动化可以直接开始。`
+                : dashboard.headline}
           </p>
         </div>
         <button
           className="hero-action"
-          onClick={() => onNavigate(ready ? "start" : "tasks")}
+          onClick={() =>
+            onNavigate(readOnly ? "runs" : ready ? "start" : "tasks")
+          }
           type="button"
         >
-          {ready ? "开始新任务" : "查看处理项"}
+          {readOnly ? "查看运行记录" : ready ? "开始新任务" : "查看处理项"}
         </button>
       </section>
       <section className="operator-home-grid" aria-label="业务概览">
-        <button onClick={() => onNavigate("start")} type="button">
-          <span>开始</span>
-          <strong>新任务</strong>
-          <small>{workflows[0]?.title ?? "查看可用自动化"}</small>
-        </button>
-        <button onClick={() => onNavigate("tasks")} type="button">
-          <span>需要处理</span>
-          <strong>{attentionCount}</strong>
-          <small>
-            {attentionCount === 0 ? "当前无需介入" : "查看阻断、失败与待确认项"}
-          </small>
-        </button>
+        {!readOnly ? (
+          <>
+            <button onClick={() => onNavigate("start")} type="button">
+              <span>开始</span>
+              <strong>新任务</strong>
+              <small>{workflows[0]?.title ?? "查看可用自动化"}</small>
+            </button>
+            <button onClick={() => onNavigate("tasks")} type="button">
+              <span>需要处理</span>
+              <strong>{attentionCount}</strong>
+              <small>
+                {attentionCount === 0
+                  ? "当前无需介入"
+                  : "查看阻断、失败与待确认项"}
+              </small>
+            </button>
+          </>
+        ) : null}
         <button onClick={() => onNavigate("runs")} type="button">
           <span>正在运行</span>
           <strong>{dashboard.activeRunCount}</strong>
@@ -110,9 +128,11 @@ export function OverviewView({
               <h3>{dashboard.alerts[0]?.title}</h3>
               <p className="muted">{dashboard.alerts[0]?.requestedAction}</p>
             </div>
-            <button onClick={() => onNavigate("tasks")} type="button">
-              查看 {dashboard.alerts.length} 项问题
-            </button>
+            {!readOnly ? (
+              <button onClick={() => onNavigate("tasks")} type="button">
+                查看 {dashboard.alerts.length} 项问题
+              </button>
+            ) : null}
           </div>
         </section>
       ) : null}

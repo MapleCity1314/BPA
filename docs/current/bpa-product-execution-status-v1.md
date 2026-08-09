@@ -8,8 +8,8 @@
 ## 1. 当前判定
 
 - 当前阶段：**阶段 0，稳住上阵**。
-- Git 基线：截至 2026-08-09，PR #2–#19 均已在 required checks 通过后进入 `main`；
-  最新基线为 PR #19 merge commit `353b5a2ef236`。阶段 0 结构收敛、资源观测、清退商品
+- Git 基线：截至 2026-08-09，PR #2–#20 均已在 required checks 通过后进入 `main`；
+  最新基线为 PR #20 merge commit `3a4187af4abe`。阶段 0 结构收敛、资源观测、清退商品
   Mac 目标约束、爆款图片来源闭包校验和体验分候选均已进入主线。
 - GitHub `main` 已启用管理员同样受约束的 Branch Protection：必须走 Pull Request、
   与主线同步、解决 review conversation，并通过 macOS、Windows、性能、双架构发布、
@@ -24,6 +24,11 @@
   按准入门禁重新判断。
 - Codex 判定：短期继续用于阅读、诊断、开发、页面观察和候选生成；正式运行最终不
   依赖 Codex。
+
+公司跨端形态已明确为 Mac 唯一执行、Windows 远程控制面。当前候选新增 Console Viewer：
+服务端拒绝除会话交换以外的业务写请求，前端隐藏自动化启动、任务处理、恢复、数据导入
+与创作入口；Host 仍严格绑定 loopback，因此这只是本地安全边界，不是已完成远程部署。
+仓库只能证实清退商品这一条 Windows 专属业务交付，用户所指第二条工作流入口待确认。
 
 ## 2. 阶段状态板
 

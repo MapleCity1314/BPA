@@ -5,7 +5,10 @@ import { join } from "node:path";
 import type {
   ControlBackend,
   CreateRunInput,
+  DashboardSnapshot,
   DesignModeGrantInput,
+  DownloadView,
+  RunView,
   StartRecoverySessionInput,
   StagingLeaseRequest,
   StagedDatasetImportInput,
@@ -120,8 +123,7 @@ class RecordingBackend implements ControlBackend {
     })
   );
 
-  async getDashboard() {
-    return {
+  readonly getDashboard = vi.fn(async (): Promise<DashboardSnapshot> => ({
       attention: "normal" as const,
       headline: "运行正常",
       runtimeVersion: "0.4.0",
@@ -131,35 +133,31 @@ class RecordingBackend implements ControlBackend {
       recoverySessions: [],
       activeRunCount: 0,
       pendingTaskCount: 0
-    };
-  }
+    }));
 
-  async listWorkflows() {
-    return [];
-  }
+  readonly listWorkflows = vi.fn(async () => []);
 
-  async getRun(runId: string) {
-    return {
+  readonly getRun = vi.fn(async (runId: string): Promise<RunView> => ({
       id: runId,
       workflowTitle: "检查",
       status: "running" as const,
       businessSummary: "正在运行",
       startedAt: "2026-07-30T00:00:00.000Z",
       timeline: []
-    };
-  }
+    }));
 
-  async listTasks() {
-    return [];
-  }
+  readonly listTasks = vi.fn(async () => []);
 
-  async getEvidenceLineage(runId: string) {
-    return { runId, sources: [], evidence: [], assets: [] };
-  }
+  readonly getEvidenceLineage = vi.fn(async (runId: string) => ({
+    runId,
+    sources: [],
+    evidence: [],
+    assets: []
+  }));
 
-  async listDownloads(_runId?: string) {
-    return [];
-  }
+  readonly listDownloads = vi.fn(
+    async (_runId?: string): Promise<DownloadView[]> => []
+  );
 
   async getDownload(_downloadId: string) {
     return {
@@ -215,6 +213,7 @@ async function launch(
     backend?: RecordingBackend;
     now?: () => number;
     idleTimeoutMs?: number;
+    accessMode?: "operator" | "viewer";
   } = {}
 ) {
   const backend = options.backend ?? new RecordingBackend();
@@ -222,6 +221,7 @@ async function launch(
     backend,
     staticRoot: await fixtureRoot(),
     tokenBytes: tokenSource(),
+    ...(options.accessMode ? { accessMode: options.accessMode } : {}),
     ...(options.now ? { now: options.now } : {}),
     ...(options.idleTimeoutMs ? { idleTimeoutMs: options.idleTimeoutMs } : {})
   });
@@ -235,8 +235,11 @@ async function launch(
     }
   });
   const cookie = exchange.headers.get("set-cookie")?.split(";")[0] ?? "";
-  const session = (await exchange.json()) as { csrfToken: string };
-  return { backend, handle, exchange, cookie, csrf: session.csrfToken };
+  const session = (await exchange.json()) as {
+    csrfToken: string;
+    accessMode: "operator" | "viewer";
+  };
+  return { backend, handle, exchange, cookie, csrf: session.csrfToken, session };
 }
 
 describe("Console Host security boundary", () => {
@@ -440,6 +443,199 @@ describe("Console Host security boundary", () => {
     });
     expect(pathAttempt.status).toBe(400);
     expect(backend.createStagingLease).not.toHaveBeenCalled();
+  });
+
+  it("keeps viewer sessions read-only at the HTTP boundary", async () => {
+    const backend = new RecordingBackend();
+    backend.getDashboard.mockResolvedValueOnce({
+      attention: "normal",
+      headline: "运行正常",
+      runtimeVersion: "0.6.0",
+      components: [{
+        id: "core",
+        label: "Core",
+        status: "healthy",
+        summary: "正常",
+        technicalDetails: "socket=/private/core.sock"
+      }],
+      browserSessions: [{
+        id: "browser-1",
+        label: "Chrome",
+        status: "ready",
+        origin: "https://fxg.jinritemai.com",
+        authenticated: true,
+        lastSeenAt: "2030-01-01T00:00:00.000Z"
+      }],
+      alerts: [{
+        id: "attention-secret",
+        runId: "run-secret",
+        kind: "blocking",
+        title: "需要复核",
+        reason: "socket=/private/core.sock",
+        requestedAction: "open /private/browser-profile",
+        createdAt: "2030-01-01T00:00:00.000Z",
+        revision: 17,
+        deliveryState: "failed",
+        deliveryAttempt: 4,
+        deliveryErrorCode: "INTERNAL_TRANSPORT_ERROR",
+        recoverable: true
+      }],
+      recoverySessions: [],
+      activeRunCount: 0,
+      pendingTaskCount: 0
+    });
+    const { handle, cookie, csrf, session } = await launch({
+      backend,
+      accessMode: "viewer"
+    });
+    expect(session).toMatchObject({ accessMode: "viewer" });
+
+    const dashboard = await fetch(`${handle.origin}/api/dashboard`, {
+      headers: { Cookie: cookie }
+    });
+    expect(dashboard.status).toBe(200);
+    const dashboardBody = await dashboard.json();
+    expect(dashboardBody).toMatchObject({
+      runtimeVersion: "managed",
+      components: [{ id: "core", label: "Core", status: "healthy", summary: "正常" }],
+      browserSessions: [],
+      recoverySessions: [],
+      pendingTaskCount: 0,
+      alerts: [{
+        id: "viewer-attention-1",
+        reason: "运行产生一项需要关注的状态。",
+        requestedAction: "请在 Mac 执行端复核后处理。",
+        revision: 0,
+        deliveryAttempt: 0,
+        recoverable: false
+      }]
+    });
+    expect(JSON.stringify(dashboardBody)).not.toContain("socket=/private/core.sock");
+    expect(JSON.stringify(dashboardBody)).not.toContain("attention-secret");
+    expect(JSON.stringify(dashboardBody)).not.toContain("run-secret");
+    expect(JSON.stringify(dashboardBody)).not.toContain("INTERNAL_TRANSPORT_ERROR");
+    expect(backend.getDashboard).toHaveBeenCalledWith({
+      includeRecoverySessions: false
+    });
+
+    const workflowCatalog = await fetch(`${handle.origin}/api/workflows`, {
+      headers: { Cookie: cookie }
+    });
+    expect(await workflowCatalog.json()).toEqual([]);
+    expect(backend.listWorkflows).not.toHaveBeenCalled();
+
+    backend.getRun.mockResolvedValueOnce({
+      id: "run-1",
+      workflowTitle: "doudian.secret.workflow · 9.9.9",
+      status: "running",
+      businessSummary: "正在执行：internal.node.key",
+      startedAt: "2030-01-01T00:00:00.000Z",
+      timeline: [{
+        id: "step-1",
+        at: "2030-01-01T00:00:30.000Z",
+        title: "internal.node.key",
+        summary: "profile=/private/browser-profile",
+        state: "active",
+        technicalDetails: "profile=/private/browser-profile"
+      }]
+    });
+    const inspectedRun = await fetch(`${handle.origin}/api/runs/run-1`, {
+      headers: { Cookie: cookie }
+    });
+    const runBody = await inspectedRun.json();
+    expect(runBody).toMatchObject({
+      id: "run-1",
+      workflowTitle: "业务流程",
+      businessSummary: "任务正在运行。",
+      timeline: [{
+        title: "步骤正在执行",
+        summary: "远程只读视图不显示内部执行细节。"
+      }]
+    });
+    expect(JSON.stringify(runBody)).not.toContain("/private/browser-profile");
+    expect(JSON.stringify(runBody)).not.toContain("internal.node.key");
+    expect(JSON.stringify(runBody)).not.toContain("doudian.secret.workflow");
+
+    const lineage = await fetch(`${handle.origin}/api/runs/run-1/lineage`, {
+      headers: { Cookie: cookie }
+    });
+    expect(await lineage.json()).toEqual({
+      runId: "run-1",
+      sources: [],
+      evidence: [],
+      assets: []
+    });
+    expect(backend.getEvidenceLineage).not.toHaveBeenCalled();
+
+    backend.listDownloads.mockResolvedValueOnce([{
+      id: "download-1",
+      runId: "run-1",
+      kind: "report",
+      title: "业务报告",
+      fileName: "/Users/operator/private/report.json",
+      sizeBytes: 12,
+      createdAt: "2030-01-01T00:00:00.000Z"
+    }, {
+      id: "download-2",
+      runId: "run-1",
+      kind: "reference_pack",
+      title: "参考材料",
+      fileName: "C:\\Users\\operator\\private\\reference.zip",
+      sizeBytes: 24,
+      createdAt: "2030-01-01T00:00:01.000Z"
+    }]);
+    const downloads = await fetch(`${handle.origin}/api/downloads`, {
+      headers: { Cookie: cookie }
+    });
+    expect(await downloads.json()).toEqual([
+      expect.objectContaining({ fileName: "report.json" }),
+      expect.objectContaining({ fileName: "reference.zip" })
+    ]);
+
+    const run = await fetch(`${handle.origin}/api/runs`, {
+      method: "POST",
+      headers: {
+        Cookie: cookie,
+        Origin: handle.origin,
+        "X-BPA-CSRF-Token": csrf,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        workflowId: "forbidden",
+        workflowVersion: "1.0.0",
+        inputs: {},
+        resourceBindings: {}
+      })
+    });
+    expect(run.status).toBe(403);
+    expect(await run.json()).toMatchObject({
+      error: { code: "VIEWER_READ_ONLY" }
+    });
+    expect(backend.createRun).not.toHaveBeenCalled();
+
+    const tasks = await fetch(`${handle.origin}/api/tasks`, {
+      headers: { Cookie: cookie }
+    });
+    expect(await tasks.json()).toEqual([]);
+    expect(backend.listTasks).not.toHaveBeenCalled();
+
+    const download = await fetch(`${handle.origin}/api/downloads/download-1`, {
+      headers: { Cookie: cookie }
+    });
+    expect(download.status).toBe(403);
+    expect(await download.json()).toMatchObject({
+      error: { code: "VIEWER_DOWNLOAD_FORBIDDEN" }
+    });
+  });
+
+  it("rejects an invalid access mode at the programmatic boundary", async () => {
+    await expect(
+      startConsoleHost({
+        backend: new RecordingBackend(),
+        staticRoot: await fixtureRoot(),
+        accessMode: "viewr" as never
+      })
+    ).rejects.toThrow("accessMode must be operator or viewer");
   });
 
   it("requires CSRF and a closed Design Mode page-binding shape", async () => {

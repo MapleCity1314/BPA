@@ -45,6 +45,7 @@ interface LeaseRecord {
 export interface ConsoleHostOptions {
   backend: ControlBackend;
   staticRoot: string;
+  accessMode?: "operator" | "viewer";
   now?: () => number;
   tokenBytes?: () => Uint8Array;
   idleTimeoutMs?: number;
@@ -443,13 +444,79 @@ function mimeType(path: string): string {
 }
 
 function sanitizeDownloadName(value: string): string {
-  const safe = value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 180);
+  const leafName = value.split(/[\\/]/u).at(-1) ?? "";
+  const safe = leafName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 180);
   return safe || "bpa-download";
+}
+
+function viewerDashboard(
+  dashboard: Awaited<ReturnType<ControlBackend["getDashboard"]>>
+): Awaited<ReturnType<ControlBackend["getDashboard"]>> {
+  return {
+    ...dashboard,
+    runtimeVersion: "managed",
+    components: dashboard.components.map(
+      ({ technicalDetails: _technicalDetails, ...component }) => component
+    ),
+    browserSessions: [],
+    alerts: dashboard.alerts.map((alert, index) => ({
+      id: `viewer-attention-${index + 1}`,
+      kind: alert.kind,
+      title: alert.title,
+      reason: "运行产生一项需要关注的状态。",
+      requestedAction: "请在 Mac 执行端复核后处理。",
+      createdAt: alert.createdAt,
+      revision: 0,
+      deliveryState: alert.deliveryState,
+      deliveryAttempt: 0,
+      recoverable: false
+    })),
+    recoverySessions: [],
+    pendingTaskCount: 0
+  };
+}
+
+function viewerRun(
+  run: Awaited<ReturnType<ControlBackend["getRun"]>>
+): Awaited<ReturnType<ControlBackend["getRun"]>> {
+  const businessSummary =
+    run.status === "succeeded"
+      ? "任务已完成。"
+      : run.status === "waiting"
+        ? "任务正在等待处理。"
+        : ["rejected", "failed", "uncertain"].includes(run.status)
+          ? "任务没有确定完成。"
+          : run.status === "cancelled"
+            ? "任务已取消。"
+            : "任务正在运行。";
+  return {
+    ...run,
+    workflowTitle: "业务流程",
+    businessSummary,
+    timeline: run.timeline.map(({ id, at, state }) => ({
+      id,
+      at,
+      state,
+      title:
+        state === "completed"
+          ? "步骤已完成"
+          : state === "active"
+            ? "步骤正在执行"
+            : state === "waiting"
+              ? "步骤等待处理"
+              : "步骤执行失败",
+      summary: "远程只读视图不显示内部执行细节。"
+    }))
+  };
 }
 
 export async function startConsoleHost(
   options: ConsoleHostOptions
 ): Promise<ConsoleHostHandle> {
+  const accessMode = options.accessMode ?? "operator";
+  if (accessMode !== "operator" && accessMode !== "viewer") {
+    throw new Error("accessMode must be operator or viewer");
+  }
   const now = options.now ?? Date.now;
   const tokenBytes = options.tokenBytes ?? (() => randomBytes(32));
   const logError =
@@ -543,7 +610,7 @@ export async function startConsoleHost(
             "Set-Cookie",
             `${SESSION_COOKIE}=${sessionToken}; HttpOnly; SameSite=Strict; Path=/`
           );
-          writeJson(response, 200, { csrfToken, idleTimeoutMs });
+          writeJson(response, 200, { csrfToken, idleTimeoutMs, accessMode });
           return;
         }
 
@@ -551,19 +618,40 @@ export async function startConsoleHost(
           const session = getSession(request);
           writeJson(response, 200, {
             csrfToken: session.csrfToken,
-            idleTimeoutMs
+            idleTimeoutMs,
+            accessMode
           });
           return;
         }
 
+        if (accessMode === "viewer" && request.method !== "GET") {
+          getSession(request);
+          throw new HttpError(
+            403,
+            "VIEWER_READ_ONLY",
+            "当前会话只能查看运行结果，不能执行操作。"
+          );
+        }
+
         if (request.method === "GET" && path === "/api/dashboard") {
           getSession(request);
-          writeJson(response, 200, await options.backend.getDashboard());
+          const dashboard = await options.backend.getDashboard({
+            includeRecoverySessions: accessMode !== "viewer"
+          });
+          writeJson(
+            response,
+            200,
+            accessMode === "viewer" ? viewerDashboard(dashboard) : dashboard
+          );
           return;
         }
         if (request.method === "GET" && path === "/api/workflows") {
           getSession(request);
-          writeJson(response, 200, await options.backend.listWorkflows());
+          writeJson(
+            response,
+            200,
+            accessMode === "viewer" ? [] : await options.backend.listWorkflows()
+          );
           return;
         }
         if (
@@ -620,16 +708,23 @@ export async function startConsoleHost(
         const runMatch = /^\/api\/runs\/([^/]+)$/.exec(path);
         if (request.method === "GET" && runMatch) {
           getSession(request);
+          const run = await options.backend.getRun(
+            decodeURIComponent(runMatch[1]!)
+          );
           writeJson(
             response,
             200,
-            await options.backend.getRun(decodeURIComponent(runMatch[1]!))
+            accessMode === "viewer" ? viewerRun(run) : run
           );
           return;
         }
         if (request.method === "GET" && path === "/api/tasks") {
           getSession(request);
-          writeJson(response, 200, await options.backend.listTasks());
+          writeJson(
+            response,
+            200,
+            accessMode === "viewer" ? [] : await options.backend.listTasks()
+          );
           return;
         }
         const taskMatch = /^\/api\/tasks\/([^/]+)\/submit$/.exec(path);
@@ -749,24 +844,46 @@ export async function startConsoleHost(
           writeJson(
             response,
             200,
-            await options.backend.getEvidenceLineage(
-              decodeURIComponent(lineageMatch[1]!)
-            )
+            accessMode === "viewer"
+              ? {
+                  runId: decodeURIComponent(lineageMatch[1]!),
+                  sources: [],
+                  evidence: [],
+                  assets: []
+                }
+              : await options.backend.getEvidenceLineage(
+                  decodeURIComponent(lineageMatch[1]!)
+                )
           );
           return;
         }
         if (request.method === "GET" && path === "/api/downloads") {
           getSession(request);
+          const downloads = await options.backend.listDownloads(
+            url.searchParams.get("runId") ?? undefined
+          );
           writeJson(
             response,
             200,
-            await options.backend.listDownloads(url.searchParams.get("runId") ?? undefined)
+            accessMode === "viewer"
+              ? downloads.map((download) => ({
+                  ...download,
+                  fileName: sanitizeDownloadName(download.fileName)
+                }))
+              : downloads
           );
           return;
         }
         const downloadMatch = /^\/api\/downloads\/([^/]+)$/.exec(path);
         if (request.method === "GET" && downloadMatch) {
           getSession(request);
+          if (accessMode === "viewer") {
+            throw new HttpError(
+              403,
+              "VIEWER_DOWNLOAD_FORBIDDEN",
+              "远程只读会话尚未获得文件下载授权。"
+            );
+          }
           const download = await options.backend.getDownload(
             decodeURIComponent(downloadMatch[1]!)
           );

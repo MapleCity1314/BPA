@@ -1,6 +1,10 @@
 export type AttentionLevel = "normal" | "attention" | "action";
 export type HealthStatus = "healthy" | "degraded" | "unavailable";
 
+export interface ConsoleSession {
+  accessMode: "operator" | "viewer";
+}
+
 export interface ConsoleLaunchHandle {
   readonly launchUrl: string;
   close(): Promise<void>;
@@ -8,6 +12,10 @@ export interface ConsoleLaunchHandle {
 
 export interface ConsoleLaunchService {
   launch(): Promise<ConsoleLaunchHandle>;
+}
+
+export interface DashboardQuery {
+  includeRecoverySessions?: boolean;
 }
 
 export interface HealthComponent {
@@ -286,7 +294,7 @@ export interface DesignModeGrantView {
 }
 
 export interface ControlBackend {
-  getDashboard(): Promise<DashboardSnapshot>;
+  getDashboard(query?: DashboardQuery): Promise<DashboardSnapshot>;
   listWorkflows(): Promise<WorkflowSummary[]>;
   createRun(input: CreateRunInput): Promise<CreateRunResult>;
   getRun(runId: string): Promise<RunView>;

@@ -3,6 +3,7 @@ import type {
   AttentionView,
   BrowserSessionView,
   ControlBackend,
+  DashboardQuery,
   CreateRunInput,
   DashboardSnapshot,
   DatasetImportResult,
@@ -372,7 +373,7 @@ export class UdsControlBackend implements ControlBackend {
     this.#stagingUploader = options.stagingUploader;
   }
 
-  async getDashboard(): Promise<DashboardSnapshot> {
+  async getDashboard(query: DashboardQuery = {}): Promise<DashboardSnapshot> {
     const observedAt = this.#now().toISOString();
     try {
       const [
@@ -407,11 +408,13 @@ export class UdsControlBackend implements ControlBackend {
               limit: 100
             })
             .catch(() => []),
-          this.#client
-            .request<unknown>(CONSOLE_CONTROL_METHODS.recoverySessionList, {
-              limit: 100
-            })
-            .catch(() => [])
+          query.includeRecoverySessions === false
+            ? Promise.resolve([])
+            : this.#client
+                .request<unknown>(CONSOLE_CONTROL_METHODS.recoverySessionList, {
+                  limit: 100
+                })
+                .catch(() => [])
         ]);
       const doctor = record(doctorValue) ?? {};
       const persistence = record(doctor.persistence) ?? {};
