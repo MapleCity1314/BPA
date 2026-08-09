@@ -10,6 +10,7 @@ import type {
   ControlBackend,
   CreateRunInput,
   DesignModeGrantInput,
+  StartRecoverySessionInput,
   StagingLeaseRequest,
   StagedDatasetImportInput,
   SubmitTaskInput
@@ -258,6 +259,66 @@ function parseRunInput(value: unknown): CreateRunInput {
     inputs: inputs as Record<string, string | number | boolean>,
     resourceBindings
   };
+}
+
+function parseRecoverySessionInput(value: unknown): StartRecoverySessionInput {
+  const record = asRecord(value);
+  const binding = asRecord(record.pageBinding);
+  if (
+    Object.keys(record).some(
+      (key) =>
+        ![
+          "attentionId",
+          "expectedAttentionRevision",
+          "pageBinding"
+        ].includes(key)
+    ) ||
+    Object.keys(binding).some(
+      (key) =>
+        ![
+          "sessionId",
+          "browserInstanceId",
+          "profileId",
+          "tabId",
+          "observationRevision",
+          "origin",
+          "pageEpoch"
+        ].includes(key)
+    ) ||
+    !Number.isSafeInteger(record.expectedAttentionRevision) ||
+    (record.expectedAttentionRevision as number) < 0 ||
+    !Number.isSafeInteger(binding.tabId) ||
+    (binding.tabId as number) < 0 ||
+    !Number.isSafeInteger(binding.observationRevision) ||
+    (binding.observationRevision as number) < 1
+  ) {
+    throw new HttpError(400, "INVALID_REQUEST", "登录恢复页面绑定无效。");
+  }
+  return {
+    attentionId: requiredString(record, "attentionId", 200),
+    expectedAttentionRevision: record.expectedAttentionRevision as number,
+    pageBinding: {
+      sessionId: requiredString(binding, "sessionId", 200),
+      browserInstanceId: requiredString(binding, "browserInstanceId", 200),
+      profileId: requiredString(binding, "profileId", 300),
+      tabId: binding.tabId as number,
+      observationRevision: binding.observationRevision as number,
+      origin: requiredString(binding, "origin", 2048),
+      pageEpoch: requiredString(binding, "pageEpoch", 200)
+    }
+  };
+}
+
+function parseExpectedRevision(value: unknown): number {
+  const record = asRecord(value);
+  if (
+    Object.keys(record).some((key) => key !== "expectedRevision") ||
+    !Number.isSafeInteger(record.expectedRevision) ||
+    (record.expectedRevision as number) < 0
+  ) {
+    throw new HttpError(400, "INVALID_REQUEST", "恢复会话版本无效。");
+  }
+  return record.expectedRevision as number;
 }
 
 function parseTaskInput(value: unknown): SubmitTaskInput {
@@ -606,6 +667,40 @@ export async function startConsoleHost(
             expectedRevision as number
           );
           writeJson(response, 200, { accepted: true });
+          return;
+        }
+        if (request.method === "POST" && path === "/api/recovery-sessions") {
+          requireMutationSession(request);
+          writeJson(
+            response,
+            201,
+            await options.backend.startRecoverySession(
+              parseRecoverySessionInput(await readJson(request))
+            )
+          );
+          return;
+        }
+        const recoveryMatch =
+          /^\/api\/recovery-sessions\/([^/]+)\/(complete|revoke)$/.exec(path);
+        if (request.method === "POST" && recoveryMatch) {
+          requireMutationSession(request);
+          const id = decodeURIComponent(recoveryMatch[1]!);
+          const expectedRevision = parseExpectedRevision(
+            await readJson(request)
+          );
+          writeJson(
+            response,
+            200,
+            recoveryMatch[2] === "complete"
+              ? await options.backend.completeRecoverySession(
+                  id,
+                  expectedRevision
+                )
+              : await options.backend.revokeRecoverySession(
+                  id,
+                  expectedRevision
+                )
+          );
           return;
         }
         if (request.method === "POST" && path === "/api/uploads/leases") {

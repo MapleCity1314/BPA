@@ -27,6 +27,7 @@ export interface BrowserSessionView {
   authenticated: boolean;
   lastSeenAt: string;
   binding?: BrowserPageBindingSelection;
+  recoveryBinding?: RecoveryPageBindingSelection;
 }
 
 export interface BrowserPageBindingSelection {
@@ -34,6 +35,13 @@ export interface BrowserPageBindingSelection {
   browserInstanceId: string;
   tabId: number;
   observationRevision: number;
+}
+
+export interface RecoveryPageBindingSelection
+  extends BrowserPageBindingSelection {
+  profileId: string;
+  origin: string;
+  pageEpoch: string;
 }
 
 export interface AttentionView {
@@ -54,6 +62,34 @@ export interface AttentionView {
     | "missing";
   deliveryAttempt: number;
   deliveryErrorCode?: string;
+  recoverable: boolean;
+}
+
+export interface RecoverySessionView {
+  id: string;
+  attentionId: string;
+  revision: number;
+  state:
+    | "issued"
+    | "active"
+    | "completed"
+    | "expired"
+    | "revoked"
+    | "invalidated";
+  browserInstanceId: string;
+  profileId: string;
+  tabId: number;
+  origin: string;
+  issuedAt: string;
+  expiresAt: string;
+  updatedAt: string;
+  terminalReason?: string;
+}
+
+export interface StartRecoverySessionInput {
+  attentionId: string;
+  expectedAttentionRevision: number;
+  pageBinding: RecoveryPageBindingSelection;
 }
 
 export interface DashboardSnapshot {
@@ -63,6 +99,7 @@ export interface DashboardSnapshot {
   components: HealthComponent[];
   browserSessions: BrowserSessionView[];
   alerts: AttentionView[];
+  recoverySessions: RecoverySessionView[];
   activeRunCount: number;
   pendingTaskCount: number;
 }
@@ -256,6 +293,17 @@ export interface ControlBackend {
   listTasks(): Promise<TaskView[]>;
   submitTask(taskId: string, input: SubmitTaskInput): Promise<void>;
   acknowledgeAttention(id: string, expectedRevision: number): Promise<void>;
+  startRecoverySession(
+    input: StartRecoverySessionInput
+  ): Promise<RecoverySessionView>;
+  completeRecoverySession(
+    id: string,
+    expectedRevision: number
+  ): Promise<RecoverySessionView>;
+  revokeRecoverySession(
+    id: string,
+    expectedRevision: number
+  ): Promise<RecoverySessionView>;
   createStagingLease(input: StagingLeaseRequest): Promise<StagingLease>;
   uploadStagingLease(
     leaseId: string,

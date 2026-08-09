@@ -88,6 +88,7 @@ describe("UdsControlBackend", () => {
         {
           id: "run-terminal:run-login",
           runId: "run-login",
+          groupKey: "authentication",
           kind: "blocking",
           title: "浏览器登录或验证需要处理",
           reason: "浏览器返回了登录阻断。",
@@ -112,7 +113,8 @@ describe("UdsControlBackend", () => {
           revision: 3,
           observedAt: "2026-07-30T03:59:30.000Z"
         }
-      ]);
+      ])
+      .respond(CONSOLE_CONTROL_METHODS.recoverySessionList, []);
     const result = await backend(client).getDashboard();
     expect(result).toMatchObject({
       attention: "action",
@@ -122,7 +124,8 @@ describe("UdsControlBackend", () => {
         {
           id: "run-terminal:run-login",
           kind: "blocking",
-          deliveryState: "pending"
+          deliveryState: "pending",
+          recoverable: true
         }
       ],
       components: [
@@ -156,7 +159,167 @@ describe("UdsControlBackend", () => {
       {
         method: "attention.list",
         params: { limit: 100 }
+      },
+      {
+        method: "recovery-session.list",
+        params: { limit: 100 }
       }
+    ]);
+  });
+
+  it("activates a recovery session without returning its one-time token", async () => {
+    const client = new FakeRequester()
+      .respond(CONSOLE_CONTROL_METHODS.recoverySessionIssue, {
+        session: {
+          id: "recovery-1",
+          attentionId: "attention-1",
+          revision: 0,
+          state: "issued",
+          browserInstanceId: "chrome-profile-1",
+          profileId: "chrome-profile-1",
+          tabId: 7,
+          origin: "https://fxg.jinritemai.com",
+          issuedAt: "2026-07-30T04:00:00.000Z",
+          expiresAt: "2026-07-30T04:05:00.000Z",
+          updatedAt: "2026-07-30T04:00:00.000Z"
+        },
+        token: "one-time-recovery-token"
+      })
+      .respond(CONSOLE_CONTROL_METHODS.recoverySessionActivate, {
+        id: "recovery-1",
+        attentionId: "attention-1",
+        revision: 1,
+        state: "active",
+        browserInstanceId: "chrome-profile-1",
+        profileId: "chrome-profile-1",
+        tabId: 7,
+        origin: "https://fxg.jinritemai.com",
+        issuedAt: "2026-07-30T04:00:00.000Z",
+        expiresAt: "2026-07-30T04:05:00.000Z",
+        updatedAt: "2026-07-30T04:00:01.000Z"
+      });
+
+    const result = await backend(client).startRecoverySession({
+      attentionId: "attention-1",
+      expectedAttentionRevision: 0,
+      pageBinding: {
+        sessionId: "browser-session-1",
+        browserInstanceId: "chrome-profile-1",
+        profileId: "chrome-profile-1",
+        tabId: 7,
+        observationRevision: 3,
+        origin: "https://fxg.jinritemai.com",
+        pageEpoch: "tab-7:1"
+      }
+    });
+
+    expect(result).toMatchObject({
+      id: "recovery-1",
+      state: "active",
+      revision: 1
+    });
+    expect(JSON.stringify(result)).not.toContain("one-time-recovery-token");
+    expect(client.calls).toEqual([
+      {
+        method: "recovery-session.issue",
+        params: {
+          attentionId: "attention-1",
+          expectedAttentionRevision: 0,
+          browserSessionId: "browser-session-1",
+          browserInstanceId: "chrome-profile-1",
+          profileId: "chrome-profile-1",
+          tabId: 7,
+          origin: "https://fxg.jinritemai.com",
+          pageEpoch: "tab-7:1",
+          ttlSeconds: 300,
+          actor: "operator:test"
+        }
+      },
+      {
+        method: "recovery-session.activate",
+        params: {
+          id: "recovery-1",
+          expectedRevision: 0,
+          token: "one-time-recovery-token",
+          actor: "operator:test"
+        }
+      }
+    ]);
+  });
+
+  it("maps only an exact authentication-blocked page as recoverable", async () => {
+    const client = new FakeRequester()
+      .respond(CONSOLE_CONTROL_METHODS.doctor, {
+        status: "ok",
+        persistence: { adapter: "sqlite", schemaVersion: 18, writable: true },
+        browser: { connected: true, ready: true }
+      })
+      .respond(CONSOLE_CONTROL_METHODS.taskList, [])
+      .respond(CONSOLE_CONTROL_METHODS.attentionList, [
+        {
+          id: "attention-1",
+          groupKey: "authentication",
+          kind: "blocking",
+          title: "需要登录",
+          reason: "登录态失效",
+          requestedAction: "恢复登录",
+          createdAt: "2026-07-30T03:59:00.000Z",
+          revision: 0,
+          deliveryState: "delivered",
+          deliveryAttempt: 1
+        }
+      ])
+      .respond(CONSOLE_CONTROL_METHODS.browserPageObservationList, [
+        {
+          sessionId: "browser-session-1",
+          browserInstanceId: "chrome-profile-1",
+          tabId: 7,
+          origin: "https://fxg.jinritemai.com",
+          contentScriptReady: true,
+          authentication: "anonymous",
+          observationState: "auth_required",
+          pageEpoch: "tab-7:login",
+          revision: 4,
+          observedAt: "2026-07-30T03:59:50.000Z"
+        }
+      ])
+      .respond(CONSOLE_CONTROL_METHODS.recoverySessionList, [
+        {
+          id: "recovery-1",
+          attentionId: "attention-1",
+          revision: 1,
+          state: "active",
+          browserInstanceId: "chrome-profile-1",
+          profileId: "chrome-profile-1",
+          tabId: 7,
+          origin: "https://fxg.jinritemai.com",
+          issuedAt: "2026-07-30T03:59:55.000Z",
+          expiresAt: "2026-07-30T04:04:55.000Z",
+          updatedAt: "2026-07-30T03:59:56.000Z"
+        }
+      ]);
+
+    const result = await backend(client).getDashboard();
+
+    expect(result.alerts).toEqual([
+      expect.objectContaining({ id: "attention-1", recoverable: true })
+    ]);
+    expect(result.browserSessions).toEqual([
+      expect.objectContaining({
+        status: "attention",
+        recoveryBinding: {
+          sessionId: "browser-session-1",
+          browserInstanceId: "chrome-profile-1",
+          profileId: "chrome-profile-1",
+          tabId: 7,
+          observationRevision: 4,
+          origin: "https://fxg.jinritemai.com",
+          pageEpoch: "tab-7:login"
+        }
+      })
+    ]);
+    expect(result.recoverySessions).toEqual([
+      expect.objectContaining({ id: "recovery-1", state: "active" })
     ]);
   });
 

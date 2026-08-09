@@ -166,8 +166,9 @@ export function App({ api }: { api: OperatorConsoleApi }) {
             >
               <span>{item.marker}</span>
               {item.label}
-              {item.id === "tasks" && tasks.length > 0 ? (
-                <em>{tasks.length}</em>
+              {item.id === "tasks" &&
+              tasks.length + dashboard.alerts.length > 0 ? (
+                <em>{tasks.length + dashboard.alerts.length}</em>
               ) : null}
             </button>
           ))}
@@ -280,9 +281,14 @@ export function App({ api }: { api: OperatorConsoleApi }) {
           <TaskCenter
             api={api}
             alerts={dashboard.alerts}
+            browserSessions={dashboard.browserSessions}
+            recoverySessions={dashboard.recoverySessions}
             tasks={tasks}
             onCompleted={reloadTasks}
             onAttentionAcknowledged={async () => {
+              setDashboard(await api.getDashboard());
+            }}
+            onRecoveryChanged={async () => {
               setDashboard(await api.getDashboard());
             }}
           />

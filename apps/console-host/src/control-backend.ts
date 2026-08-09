@@ -11,11 +11,13 @@ import type {
   DownloadPayload,
   DownloadView,
   EvidenceLineageView,
+  RecoverySessionView,
   RunTimelineEntry,
   RunView,
   StagingLease,
   StagingLeaseRequest,
   StagedDatasetImportInput,
+  StartRecoverySessionInput,
   SubmitTaskInput,
   TaskView,
   UploadReceipt,
@@ -38,6 +40,11 @@ export const CONSOLE_CONTROL_METHODS = {
   taskSubmit: "assistance.task.submit",
   attentionList: "attention.list",
   attentionAcknowledge: "attention.acknowledge",
+  recoverySessionIssue: "recovery-session.issue",
+  recoverySessionList: "recovery-session.list",
+  recoverySessionActivate: "recovery-session.activate",
+  recoverySessionComplete: "recovery-session.complete",
+  recoverySessionRevoke: "recovery-session.revoke",
   stagingLeaseCreate: "staging.lease.create",
   datasetImportStaged: "dataset.import.staged",
   evidenceLineageGet: "evidence.lineage.get",
@@ -306,6 +313,40 @@ function designGrantView(value: unknown): DesignModeGrantView {
   };
 }
 
+function recoverySessionView(value: unknown): RecoverySessionView {
+  const session = record(value);
+  const state = text(session?.state);
+  if (
+    !session ||
+    ![
+      "issued",
+      "active",
+      "completed",
+      "expired",
+      "revoked",
+      "invalidated"
+    ].includes(state)
+  ) {
+    throw new Error("invalid Recovery Session");
+  }
+  return {
+    id: text(session.id),
+    attentionId: text(session.attentionId),
+    revision: integer(session.revision),
+    state: state as RecoverySessionView["state"],
+    browserInstanceId: text(session.browserInstanceId),
+    profileId: text(session.profileId),
+    tabId: integer(session.tabId, -1),
+    origin: text(session.origin),
+    issuedAt: safeTimestamp(session.issuedAt, new Date(0).toISOString()),
+    expiresAt: safeTimestamp(session.expiresAt, new Date(0).toISOString()),
+    updatedAt: safeTimestamp(session.updatedAt, new Date(0).toISOString()),
+    ...(text(session.terminalReason)
+      ? { terminalReason: text(session.terminalReason) }
+      : {})
+  };
+}
+
 export class UdsControlBackend implements ControlBackend {
   readonly #client: ConsoleControlRequester;
   readonly #actorId: string;
@@ -334,7 +375,13 @@ export class UdsControlBackend implements ControlBackend {
   async getDashboard(): Promise<DashboardSnapshot> {
     const observedAt = this.#now().toISOString();
     try {
-      const [doctorValue, taskValue, pageValue, attentionValue] =
+      const [
+        doctorValue,
+        taskValue,
+        pageValue,
+        attentionValue,
+        recoveryValue
+      ] =
         await Promise.all([
           this.#client.request<unknown>(CONSOLE_CONTROL_METHODS.doctor),
           this.#client
@@ -359,6 +406,11 @@ export class UdsControlBackend implements ControlBackend {
             .request<unknown>(CONSOLE_CONTROL_METHODS.attentionList, {
               limit: 100
             })
+            .catch(() => []),
+          this.#client
+            .request<unknown>(CONSOLE_CONTROL_METHODS.recoverySessionList, {
+              limit: 100
+            })
             .catch(() => [])
         ]);
       const doctor = record(doctorValue) ?? {};
@@ -380,6 +432,8 @@ export class UdsControlBackend implements ControlBackend {
               const browserInstanceId = text(page.browserInstanceId);
               const tabId = integer(page.tabId, -1);
               const observationRevision = integer(page.revision, -1);
+              const pageEpoch = text(page.pageEpoch);
+              const origin = text(page.origin);
               const validBinding =
                 sessionId.length > 0 &&
                 browserInstanceId.length > 0 &&
@@ -394,7 +448,7 @@ export class UdsControlBackend implements ControlBackend {
                     : observationState === "ready" && contentReady
                       ? "ready"
                       : "attention",
-                origin: text(page.origin, "等待选择业务来源"),
+                origin: origin || "等待选择业务来源",
                 role: text(page.observerCapabilityId, "浏览器页面"),
                 authenticated: ["authenticated", "membership"].includes(
                   authentication
@@ -409,7 +463,27 @@ export class UdsControlBackend implements ControlBackend {
                         observationRevision
                       }
                     }
-                  : {})
+                  : {}),
+                ...(
+                  validBinding &&
+                  pageEpoch.length > 0 &&
+                  origin.startsWith("https://") &&
+                  ["auth_required", "challenge"].includes(
+                    observationState
+                  ) &&
+                  !["authenticated", "membership"].includes(authentication)
+                    ? {
+                        recoveryBinding: {
+                          sessionId,
+                          browserInstanceId,
+                          profileId: browserInstanceId,
+                          tabId,
+                          observationRevision,
+                          origin,
+                          pageEpoch
+                        }
+                      }
+                    : {})
               };
             })
           : browserConnected
@@ -467,11 +541,20 @@ export class UdsControlBackend implements ControlBackend {
             revision: integer(item.revision),
             deliveryState: deliveryState as AttentionView["deliveryState"],
             deliveryAttempt: integer(item.deliveryAttempt),
+            recoverable:
+              item.groupKey === "authentication" && kind === "blocking",
             ...(text(item.deliveryErrorCode)
               ? { deliveryErrorCode: text(item.deliveryErrorCode) }
               : {})
           }
         ];
+      });
+      const recoverySessions = records(recoveryValue).flatMap((value) => {
+        try {
+          return [recoverySessionView(value)];
+        } catch {
+          return [];
+        }
       });
       return {
         attention:
@@ -533,6 +616,7 @@ export class UdsControlBackend implements ControlBackend {
         ],
         browserSessions,
         alerts,
+        recoverySessions,
         activeRunCount: 0,
         pendingTaskCount
       };
@@ -551,6 +635,7 @@ export class UdsControlBackend implements ControlBackend {
         ],
         browserSessions: [],
         alerts: [],
+        recoverySessions: [],
         activeRunCount: 0,
         pendingTaskCount: 0
       };
@@ -759,6 +844,114 @@ export class UdsControlBackend implements ControlBackend {
       );
     } catch {
       throw failureMessage("确认运行问题");
+    }
+  }
+
+  async startRecoverySession(
+    input: StartRecoverySessionInput
+  ): Promise<RecoverySessionView> {
+    const binding = input.pageBinding;
+    if (
+      !input.attentionId ||
+      !Number.isSafeInteger(input.expectedAttentionRevision) ||
+      input.expectedAttentionRevision < 0 ||
+      !binding.sessionId ||
+      !binding.browserInstanceId ||
+      binding.profileId !== binding.browserInstanceId ||
+      !Number.isSafeInteger(binding.tabId) ||
+      binding.tabId < 0 ||
+      !binding.origin ||
+      !binding.pageEpoch
+    ) {
+      throw new ConsoleUserFacingError("恢复登录的页面绑定无效，请刷新后重试。");
+    }
+    try {
+      const issuedValue = await this.#client.request<unknown>(
+        CONSOLE_CONTROL_METHODS.recoverySessionIssue,
+        {
+          attentionId: input.attentionId,
+          expectedAttentionRevision: input.expectedAttentionRevision,
+          browserSessionId: binding.sessionId,
+          browserInstanceId: binding.browserInstanceId,
+          profileId: binding.profileId,
+          tabId: binding.tabId,
+          origin: binding.origin,
+          pageEpoch: binding.pageEpoch,
+          ttlSeconds: 300,
+          actor: this.#actorId
+        },
+        { requestId: this.#operationId() }
+      );
+      const issued = record(issuedValue);
+      const session = record(issued?.session);
+      const token = text(issued?.token);
+      if (!session || !token || session.state !== "issued") {
+        throw new Error("Recovery Session issue result is invalid");
+      }
+      const id = text(session.id);
+      const revision = integer(session.revision, -1);
+      try {
+        return recoverySessionView(
+          await this.#client.request<unknown>(
+            CONSOLE_CONTROL_METHODS.recoverySessionActivate,
+            {
+              id,
+              expectedRevision: revision,
+              token,
+              actor: this.#actorId
+            },
+            { requestId: this.#operationId() }
+          )
+        );
+      } catch (error) {
+        await this.#client.request<unknown>(
+          CONSOLE_CONTROL_METHODS.recoverySessionRevoke,
+          {
+            id,
+            expectedRevision: revision,
+            actor: this.#actorId
+          },
+          { requestId: this.#operationId() }
+        ).catch(() => undefined);
+        throw error;
+      }
+    } catch (error) {
+      if (error instanceof ConsoleUserFacingError) throw error;
+      throw failureMessage("开启登录恢复");
+    }
+  }
+
+  async completeRecoverySession(
+    id: string,
+    expectedRevision: number
+  ): Promise<RecoverySessionView> {
+    try {
+      return recoverySessionView(
+        await this.#client.request<unknown>(
+          CONSOLE_CONTROL_METHODS.recoverySessionComplete,
+          { id, expectedRevision, actor: this.#actorId },
+          { requestId: this.#operationId() }
+        )
+      );
+    } catch {
+      throw failureMessage("验证登录恢复结果");
+    }
+  }
+
+  async revokeRecoverySession(
+    id: string,
+    expectedRevision: number
+  ): Promise<RecoverySessionView> {
+    try {
+      return recoverySessionView(
+        await this.#client.request<unknown>(
+          CONSOLE_CONTROL_METHODS.recoverySessionRevoke,
+          { id, expectedRevision, actor: this.#actorId },
+          { requestId: this.#operationId() }
+        )
+      );
+    } catch {
+      throw failureMessage("结束登录恢复");
     }
   }
 

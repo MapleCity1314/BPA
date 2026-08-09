@@ -6,6 +6,7 @@ import type {
   ControlBackend,
   CreateRunInput,
   DesignModeGrantInput,
+  StartRecoverySessionInput,
   StagingLeaseRequest,
   StagedDatasetImportInput,
   SubmitTaskInput
@@ -18,6 +19,51 @@ class RecordingBackend implements ControlBackend {
   readonly submitTask = vi.fn(async (_taskId: string, _input: SubmitTaskInput) => {});
   readonly acknowledgeAttention = vi.fn(
     async (_id: string, _expectedRevision: number) => {}
+  );
+  readonly startRecoverySession = vi.fn(
+    async (input: StartRecoverySessionInput) => ({
+      id: "recovery-1",
+      attentionId: input.attentionId,
+      revision: 1,
+      state: "active" as const,
+      browserInstanceId: input.pageBinding.browserInstanceId,
+      profileId: input.pageBinding.profileId,
+      tabId: input.pageBinding.tabId,
+      origin: input.pageBinding.origin,
+      issuedAt: "2030-01-01T00:00:00.000Z",
+      expiresAt: "2030-01-01T00:05:00.000Z",
+      updatedAt: "2030-01-01T00:00:01.000Z"
+    })
+  );
+  readonly completeRecoverySession = vi.fn(
+    async (id: string, expectedRevision: number) => ({
+      id,
+      attentionId: "attention-1",
+      revision: expectedRevision + 1,
+      state: "completed" as const,
+      browserInstanceId: "browser-1",
+      profileId: "browser-1",
+      tabId: 7,
+      origin: "https://fxg.jinritemai.com",
+      issuedAt: "2030-01-01T00:00:00.000Z",
+      expiresAt: "2030-01-01T00:05:00.000Z",
+      updatedAt: "2030-01-01T00:01:00.000Z"
+    })
+  );
+  readonly revokeRecoverySession = vi.fn(
+    async (id: string, expectedRevision: number) => ({
+      id,
+      attentionId: "attention-1",
+      revision: expectedRevision + 1,
+      state: "revoked" as const,
+      browserInstanceId: "browser-1",
+      profileId: "browser-1",
+      tabId: 7,
+      origin: "https://fxg.jinritemai.com",
+      issuedAt: "2030-01-01T00:00:00.000Z",
+      expiresAt: "2030-01-01T00:05:00.000Z",
+      updatedAt: "2030-01-01T00:01:00.000Z"
+    })
   );
   readonly createStagingLease = vi.fn(async (_input: StagingLeaseRequest) => ({
     id: "lease-1",
@@ -82,6 +128,7 @@ class RecordingBackend implements ControlBackend {
       components: [],
       browserSessions: [],
       alerts: [],
+      recoverySessions: [],
       activeRunCount: 0,
       pendingTaskCount: 0
     };
@@ -241,6 +288,70 @@ describe("Console Host security boundary", () => {
       "run-terminal:run-1",
       0
     );
+  });
+
+  it("opens and completes recovery only through closed CSRF mutations", async () => {
+    const { handle, cookie, csrf, backend } = await launch();
+    const input = {
+      attentionId: "run-terminal:run-1",
+      expectedAttentionRevision: 0,
+      pageBinding: {
+        sessionId: "browser-session-1",
+        browserInstanceId: "browser-1",
+        profileId: "browser-1",
+        tabId: 7,
+        observationRevision: 3,
+        origin: "https://fxg.jinritemai.com",
+        pageEpoch: "tab-7:1"
+      }
+    };
+    const opened = await fetch(`${handle.origin}/api/recovery-sessions`, {
+      method: "POST",
+      headers: {
+        Cookie: cookie,
+        Origin: handle.origin,
+        "X-BPA-CSRF-Token": csrf,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(input)
+    });
+    expect(opened.status).toBe(201);
+    expect(backend.startRecoverySession).toHaveBeenCalledWith(input);
+
+    const completed = await fetch(
+      `${handle.origin}/api/recovery-sessions/recovery-1/complete`,
+      {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: handle.origin,
+          "X-BPA-CSRF-Token": csrf,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ expectedRevision: 1 })
+      }
+    );
+    expect(completed.status).toBe(200);
+    expect(backend.completeRecoverySession).toHaveBeenCalledWith(
+      "recovery-1",
+      1
+    );
+
+    const unknownField = await fetch(
+      `${handle.origin}/api/recovery-sessions`,
+      {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: handle.origin,
+          "X-BPA-CSRF-Token": csrf,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ ...input, cookie: "forbidden" })
+      }
+    );
+    expect(unknownField.status).toBe(400);
+    expect(backend.startRecoverySession).toHaveBeenCalledOnce();
   });
 
   it("rejects foreign Host, foreign Origin, and missing CSRF", async () => {

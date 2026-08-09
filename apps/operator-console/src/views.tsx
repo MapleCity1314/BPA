@@ -8,6 +8,7 @@ import type {
   DesignModeGrantView,
   DownloadView,
   EvidenceLineageView,
+  RecoverySessionView,
   RunView,
   TaskView,
   WorkflowSummary
@@ -150,7 +151,8 @@ export function OverviewView({
         <div className="section-heading">
           <div>
               <p className="eyebrow">无法自动解决</p>
-              <h3>按提示完成后，任务会自动继续</h3>
+              <h3>按提示处理后，由系统重新验证状态</h3>
+              <p className="muted">终态任务不会自动重试，需要时请显式发起新任务。</p>
           </div>
         </div>
         <div className="health-list">
@@ -701,15 +703,21 @@ export function RunTimelineView({
 export function TaskCenter({
   api,
   alerts,
+  browserSessions,
+  recoverySessions,
   tasks,
   onCompleted,
-  onAttentionAcknowledged
+  onAttentionAcknowledged,
+  onRecoveryChanged
 }: {
   api: OperatorConsoleApi;
   alerts: AttentionView[];
+  browserSessions: BrowserSessionView[];
+  recoverySessions: RecoverySessionView[];
   tasks: TaskView[];
   onCompleted(): Promise<void>;
   onAttentionAcknowledged(): Promise<void>;
+  onRecoveryChanged(): Promise<void>;
 }) {
   const deliveryLabel: Record<AttentionView["deliveryState"], string> = {
     pending: "通知待投递",
@@ -721,6 +729,12 @@ export function TaskCenter({
   };
   const [busyId, setBusyId] = useState("");
   const [message, setMessage] = useState("");
+  const recoveryPages = browserSessions.filter(
+    (session) => session.recoveryBinding
+  );
+  const [selectedRecoveryPageId, setSelectedRecoveryPageId] = useState(
+    recoveryPages[0]?.id ?? ""
+  );
   async function submit(task: TaskView, decision: string) {
     setBusyId(task.id);
     setMessage("");
@@ -743,6 +757,53 @@ export function TaskCenter({
       await onAttentionAcknowledged();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "确认失败。");
+    } finally {
+      setBusyId("");
+    }
+  }
+  async function startRecovery(alert: AttentionView) {
+    const selected = recoveryPages.find(
+      (session) => session.id === selectedRecoveryPageId
+    ) ?? recoveryPages[0];
+    if (!selected?.recoveryBinding) {
+      setMessage("没有可恢复的登录页面，请先在受管 Chrome 中打开登录页。");
+      return;
+    }
+    setBusyId(alert.id);
+    setMessage("");
+    try {
+      await api.startRecoverySession({
+        attentionId: alert.id,
+        expectedAttentionRevision: alert.revision,
+        pageBinding: selected.recoveryBinding
+      });
+      setMessage(
+        "恢复会话已开启。请只在绑定的 Chrome 标签页完成登录，然后点击“验证登录结果”。"
+      );
+      await onRecoveryChanged();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "开启恢复失败。");
+    } finally {
+      setBusyId("");
+    }
+  }
+  async function finishRecovery(
+    recovery: RecoverySessionView,
+    action: "complete" | "revoke"
+  ) {
+    setBusyId(recovery.attentionId);
+    setMessage("");
+    try {
+      if (action === "complete") {
+        await api.completeRecoverySession(recovery.id, recovery.revision);
+        setMessage("登录状态已由同一标签页重新证明；旧 Run 不会自动重试。");
+      } else {
+        await api.revokeRecoverySession(recovery.id, recovery.revision);
+        setMessage("恢复会话已结束，浏览器资源已释放。");
+      }
+      await onRecoveryChanged();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "恢复操作失败。");
     } finally {
       setBusyId("");
     }
@@ -785,6 +846,58 @@ export function TaskCenter({
                 ) : null}
               </div>
               <div className="choice-row">
+                {alert.recoverable ? (() => {
+                  const recovery = recoverySessions.find(
+                    (session) =>
+                      session.attentionId === alert.id &&
+                      ["issued", "active"].includes(session.state)
+                  );
+                  return recovery ? (
+                    <>
+                      <button
+                        disabled={busyId === alert.id}
+                        onClick={() => void finishRecovery(recovery, "complete")}
+                        type="button"
+                      >
+                        验证登录结果
+                      </button>
+                      <button
+                        disabled={busyId === alert.id}
+                        onClick={() => void finishRecovery(recovery, "revoke")}
+                        type="button"
+                      >
+                        结束恢复
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {recoveryPages.length > 1 ? (
+                        <select
+                          aria-label="选择登录页面"
+                          value={selectedRecoveryPageId}
+                          onChange={(event) =>
+                            setSelectedRecoveryPageId(event.target.value)
+                          }
+                        >
+                          {recoveryPages.map((session) => (
+                            <option key={session.id} value={session.id}>
+                              {session.label} · {session.origin}
+                            </option>
+                          ))}
+                        </select>
+                      ) : null}
+                      <button
+                        disabled={
+                          busyId === alert.id || recoveryPages.length === 0
+                        }
+                        onClick={() => void startRecovery(alert)}
+                        type="button"
+                      >
+                        开始恢复登录
+                      </button>
+                    </>
+                  );
+                })() : null}
                 <button
                   disabled={busyId === alert.id}
                   onClick={() => void acknowledge(alert)}

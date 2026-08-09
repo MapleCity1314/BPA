@@ -3346,24 +3346,44 @@ export class SqlitePersistence implements Persistence {
     capabilityDigest?: string;
     disconnectedAt?: string;
   }): BrowserSessionRecord {
-    const current = this.#getBrowserSession(input.id);
-    if (!current) throw new Error(`Browser session not found: ${input.id}`);
-    this.#db
-      .prepare(
-        `UPDATE browser_sessions
-         SET last_seq = ?, outgoing_seq = ?, last_acked_command_seq = ?,
-             capability_digest = ?, disconnected_at = ?
-         WHERE id = ?`
-      )
-      .run(
-        input.incomingSeq ?? current.incomingSeq,
-        input.outgoingSeq ?? current.outgoingSeq,
-        input.lastAckedCommandSeq ?? current.lastAckedCommandSeq,
-        input.capabilityDigest ?? current.capabilityDigest ?? null,
-        input.disconnectedAt ?? current.disconnectedAt ?? null,
-        input.id
-      );
-    return this.#getBrowserSession(input.id)!;
+    return this.#db.transaction(() => {
+      const current = this.#getBrowserSession(input.id);
+      if (!current) throw new Error(`Browser session not found: ${input.id}`);
+      this.#db
+        .prepare(
+          `UPDATE browser_sessions
+           SET last_seq = ?, outgoing_seq = ?, last_acked_command_seq = ?,
+               capability_digest = ?, disconnected_at = ?
+           WHERE id = ?`
+        )
+        .run(
+          input.incomingSeq ?? current.incomingSeq,
+          input.outgoingSeq ?? current.outgoingSeq,
+          input.lastAckedCommandSeq ?? current.lastAckedCommandSeq,
+          input.capabilityDigest ?? current.capabilityDigest ?? null,
+          input.disconnectedAt ?? current.disconnectedAt ?? null,
+          input.id
+        );
+      if (input.disconnectedAt && !current.disconnectedAt) {
+        const active = this.#db.prepare(
+          `SELECT * FROM recovery_sessions
+           WHERE browser_session_id = ? AND state IN ('issued', 'active')
+           ORDER BY recovery_session_id`
+        ).all(input.id) as SqlRow[];
+        for (const row of active) {
+          const recovery = this.#readRecoverySession(row);
+          this.terminateRecoverySession({
+            id: recovery.id,
+            expectedRevision: recovery.revision,
+            nextState: "invalidated",
+            actor: "system:browser-disconnect",
+            occurredAt: input.disconnectedAt,
+            reason: "RECOVERY_BROWSER_DISCONNECTED"
+          });
+        }
+      }
+      return this.#getBrowserSession(input.id)!;
+    })();
   }
 
   getBrowserSession(id: string): BrowserSessionRecord | undefined {

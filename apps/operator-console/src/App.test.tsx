@@ -28,6 +28,7 @@ const dashboard: DashboardSnapshot = {
   activeRunCount: 1,
   pendingTaskCount: 1,
   alerts: [],
+  recoverySessions: [],
   components: [
     {
       id: "core",
@@ -149,6 +150,45 @@ function mockApi(): OperatorConsoleApi {
     listTasks: vi.fn(async () => tasks),
     submitTask: vi.fn(async () => {}),
     acknowledgeAttention: vi.fn(async () => {}),
+    startRecoverySession: vi.fn(async (input) => ({
+      id: "recovery-1",
+      attentionId: input.attentionId,
+      revision: 1,
+      state: "active" as const,
+      browserInstanceId: input.pageBinding.browserInstanceId,
+      profileId: input.pageBinding.profileId,
+      tabId: input.pageBinding.tabId,
+      origin: input.pageBinding.origin,
+      issuedAt: "2026-07-30T04:00:00.000Z",
+      expiresAt: "2026-07-30T04:05:00.000Z",
+      updatedAt: "2026-07-30T04:00:01.000Z"
+    })),
+    completeRecoverySession: vi.fn(async (id, revision) => ({
+      id,
+      attentionId: "run-terminal:run-login",
+      revision: revision + 1,
+      state: "completed" as const,
+      browserInstanceId: "chrome-profile-1",
+      profileId: "chrome-profile-1",
+      tabId: 7,
+      origin: "https://fxg.jinritemai.com",
+      issuedAt: "2026-07-30T04:00:00.000Z",
+      expiresAt: "2026-07-30T04:05:00.000Z",
+      updatedAt: "2026-07-30T04:01:00.000Z"
+    })),
+    revokeRecoverySession: vi.fn(async (id, revision) => ({
+      id,
+      attentionId: "run-terminal:run-login",
+      revision: revision + 1,
+      state: "revoked" as const,
+      browserInstanceId: "chrome-profile-1",
+      profileId: "chrome-profile-1",
+      tabId: 7,
+      origin: "https://fxg.jinritemai.com",
+      issuedAt: "2026-07-30T04:00:00.000Z",
+      expiresAt: "2026-07-30T04:05:00.000Z",
+      updatedAt: "2026-07-30T04:01:00.000Z"
+    })),
     importDataset: vi.fn(async () => ({
       status: "published" as const,
       stagingId: "staging-1",
@@ -226,7 +266,8 @@ describe("Operator Console", () => {
           revision: 0,
           deliveryState: "uncertain" as const,
           deliveryAttempt: 1,
-          deliveryErrorCode: "DELIVERY_LEASE_EXPIRED"
+          deliveryErrorCode: "DELIVERY_LEASE_EXPIRED",
+          recoverable: true
         }
       ]
     }));
@@ -248,6 +289,69 @@ describe("Operator Console", () => {
       "run-terminal:run-login",
       0
     );
+  });
+
+  it("starts login recovery from an exact unauthenticated page binding", async () => {
+    const user = userEvent.setup();
+    const api = mockApi();
+    vi.mocked(api.getDashboard).mockResolvedValue({
+      ...dashboard,
+      headline: "发现 1 项运行问题",
+      alerts: [
+        {
+          id: "run-terminal:run-login",
+          runId: "run-login",
+          kind: "blocking",
+          title: "浏览器登录或验证需要处理",
+          reason: "浏览器返回了登录阻断。",
+          requestedAction: "在受管 Chrome Profile 中完成人工登录。",
+          createdAt: "2026-07-30T03:58:00.000Z",
+          revision: 0,
+          deliveryState: "delivered",
+          deliveryAttempt: 1,
+          recoverable: true
+        }
+      ],
+      browserSessions: [
+        {
+          id: "chrome-profile-1:7:4",
+          label: "Chrome 标签页 7",
+          status: "attention",
+          origin: "https://fxg.jinritemai.com",
+          authenticated: false,
+          lastSeenAt: "2026-07-30T04:00:00.000Z",
+          recoveryBinding: {
+            sessionId: "session-1",
+            browserInstanceId: "chrome-profile-1",
+            profileId: "chrome-profile-1",
+            tabId: 7,
+            observationRevision: 4,
+            origin: "https://fxg.jinritemai.com",
+            pageEpoch: "tab-7:login"
+          }
+        }
+      ]
+    });
+    await renderReady(api);
+    await user.click(screen.getByRole("button", { name: "查看 1 项问题" }));
+    await user.click(screen.getByRole("button", { name: "开始恢复登录" }));
+
+    await waitFor(() =>
+      expect(api.startRecoverySession).toHaveBeenCalledWith({
+        attentionId: "run-terminal:run-login",
+        expectedAttentionRevision: 0,
+        pageBinding: {
+          sessionId: "session-1",
+          browserInstanceId: "chrome-profile-1",
+          profileId: "chrome-profile-1",
+          tabId: 7,
+          observationRevision: 4,
+          origin: "https://fxg.jinritemai.com",
+          pageEpoch: "tab-7:login"
+        }
+      })
+    );
+    expect(screen.getByText(/恢复会话已开启/u)).toBeInTheDocument();
   });
 
   it("shows business work first and keeps diagnostics in advanced mode", async () => {
