@@ -10,6 +10,20 @@ export interface CreatedTab {
   readonly openerTabId?: number | undefined;
 }
 
+export const MANAGED_TAB_CAPACITY = 8;
+
+export type ManagedTabAdmission =
+  | { readonly status: "unmanaged" }
+  | {
+      readonly status: "managed";
+      readonly observation: ManagedTabObservation;
+    }
+  | {
+      readonly status: "unreserved";
+      readonly tabId: number;
+      readonly commandId: string;
+    };
+
 /**
  * Tracks only tabs that Chrome explicitly attributes to a running BPA command
  * through an opener or a created-navigation source. Tabs without either form
@@ -22,20 +36,47 @@ export class ManagedTabLifecycle {
     { commandId: string; sourceTabId: number }
   >();
   private readonly derivedTabs = new Map<number, ManagedTabObservation>();
+  private readonly reservations = new Map<string, number>();
 
   start(commandId: string, sourceTabId: number): void {
     this.sourceOwners.set(sourceTabId, { commandId, sourceTabId });
   }
 
   restore(observation: ManagedTabObservation): void {
+    if (
+      !this.derivedTabs.has(observation.tabId) &&
+      this.derivedTabs.size >= MANAGED_TAB_CAPACITY
+    ) {
+      throw new Error("BROWSER_MANAGED_TAB_RECOVERY_CAPACITY_EXCEEDED");
+    }
     this.derivedTabs.set(observation.tabId, observation);
+  }
+
+  reserve(commandId: string): boolean {
+    const active = [...this.sourceOwners.values()].some(
+      (owner) => owner.commandId === commandId
+    );
+    if (!active || this.#occupiedSlots() >= MANAGED_TAB_CAPACITY) {
+      return false;
+    }
+    this.reservations.set(
+      commandId,
+      (this.reservations.get(commandId) ?? 0) + 1
+    );
+    return true;
+  }
+
+  releaseReservation(commandId: string): void {
+    this.#consumeReservation(commandId);
   }
 
   observeCreated(
     tab: CreatedTab,
     createdAt = new Date().toISOString()
-  ): ManagedTabObservation | undefined {
-    if (tab.id == null || tab.openerTabId == null) return undefined;
+  ): ManagedTabAdmission {
+    if (tab.id == null || tab.openerTabId == null) {
+      return { status: "unmanaged" };
+    }
     return this.observeAttributed(tab.id, tab.openerTabId, createdAt);
   }
 
@@ -43,10 +84,22 @@ export class ManagedTabLifecycle {
     tabId: number,
     sourceTabId: number,
     createdAt = new Date().toISOString()
-  ): ManagedTabObservation | undefined {
+  ): ManagedTabAdmission {
+    const existing = this.derivedTabs.get(tabId);
+    if (existing) {
+      return { status: "managed", observation: existing };
+    }
     const owner =
       this.sourceOwners.get(sourceTabId) ?? this.derivedTabs.get(sourceTabId);
-    if (!owner) return undefined;
+    if (!owner) return { status: "unmanaged" };
+    if ((this.reservations.get(owner.commandId) ?? 0) < 1) {
+      return {
+        status: "unreserved",
+        tabId,
+        commandId: owner.commandId
+      };
+    }
+    this.#consumeReservation(owner.commandId);
     const observation = {
       tabId,
       commandId: owner.commandId,
@@ -54,13 +107,14 @@ export class ManagedTabLifecycle {
       createdAt
     } satisfies ManagedTabObservation;
     this.derivedTabs.set(tabId, observation);
-    return observation;
+    return { status: "managed", observation };
   }
 
   finish(commandId: string): readonly number[] {
     for (const [sourceTabId, owner] of this.sourceOwners) {
       if (owner.commandId === commandId) this.sourceOwners.delete(sourceTabId);
     }
+    this.reservations.delete(commandId);
     return [...this.derivedTabs.values()]
       .filter((tab) => tab.commandId === commandId)
       .map((tab) => tab.tabId);
@@ -74,6 +128,37 @@ export class ManagedTabLifecycle {
     return [...this.derivedTabs.values()].sort(
       (left, right) => left.tabId - right.tabId
     );
+  }
+
+  usage(): {
+    readonly active: number;
+    readonly reserved: number;
+    readonly capacity: number;
+  } {
+    return {
+      active: this.derivedTabs.size,
+      reserved: this.#reservationCount(),
+      capacity: MANAGED_TAB_CAPACITY
+    };
+  }
+
+  #consumeReservation(commandId: string): void {
+    const current = this.reservations.get(commandId) ?? 0;
+    if (current <= 1) {
+      this.reservations.delete(commandId);
+    } else {
+      this.reservations.set(commandId, current - 1);
+    }
+  }
+
+  #reservationCount(): number {
+    let total = 0;
+    for (const count of this.reservations.values()) total += count;
+    return total;
+  }
+
+  #occupiedSlots(): number {
+    return this.derivedTabs.size + this.#reservationCount();
   }
 }
 

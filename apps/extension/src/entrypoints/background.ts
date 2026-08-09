@@ -69,7 +69,8 @@ import {
 import { matchesFrozenPageBinding } from "../lib/frozen-page-binding";
 import {
   ManagedTabLifecycle,
-  parseManagedTabObservations
+  parseManagedTabObservations,
+  type ManagedTabAdmission
 } from "../lib/managed-tab-lifecycle";
 import { NativeConnectionSupervisor } from "../lib/native-connection-supervisor";
 import {
@@ -138,6 +139,26 @@ export default defineBackground(() => {
         })
       );
     await managedTabsPersistence;
+  };
+
+  const handleManagedTabAdmission = async (
+    admission: ManagedTabAdmission
+  ): Promise<void> => {
+    if (admission.status === "unmanaged") return;
+    if (admission.status === "managed") {
+      await persistManagedTabs();
+      return;
+    }
+    cancelledCommands.add(admission.commandId);
+    const closed = await browser.tabs
+      .remove(admission.tabId)
+      .then(() => true)
+      .catch(() => false);
+    await updateStatus({
+      lastError: closed
+        ? "BROWSER_MANAGED_TAB_UNRESERVED"
+        : "BROWSER_MANAGED_TAB_OVERFLOW_CLOSE_FAILED"
+    });
   };
 
   const recoverManagedTabs = async (): Promise<void> => {
@@ -1139,6 +1160,9 @@ export default defineBackground(() => {
             sourceTabId: tab.id,
             deadline: String(payload.deadline),
             isCancelled: () => cancelledCommands.has(commandId),
+            reserveManagedTab: () => managedTabs.reserve(commandId),
+            releaseManagedTabReservation: () =>
+              managedTabs.releaseReservation(commandId),
             onAllianceStageStarted: (stage) => {
               activeAllianceStages.set(commandId, stage);
             },
@@ -1613,6 +1637,7 @@ export default defineBackground(() => {
       }
       case "heartbeat.ping": {
         const usage = runtimeResources.usage();
+        const managedTabUsage = managedTabs.usage();
         send(
           envelope(
             "heartbeat.pong",
@@ -1626,7 +1651,9 @@ export default defineBackground(() => {
                 cancellation_stop_barriers: cancellationStopBarriers.size,
                 observed_tabs: observedTabs.size,
                 observation_capacity: EXTENSION_RUNTIME_LIMITS.observations,
-                managed_tabs: managedTabs.snapshot().length,
+                managed_tabs: managedTabUsage.active,
+                managed_tab_reservations: managedTabUsage.reserved,
+                managed_tab_capacity: managedTabUsage.capacity,
                 pacing_reservations: {
                   active: usage.pacingReservations.active,
                   capacity: usage.pacingReservations.capacity,
@@ -1854,16 +1881,12 @@ export default defineBackground(() => {
     void probeTab(tabId);
   });
   browser.tabs.onCreated.addListener((tab) => {
-    if (!managedTabs.observeCreated(tab)) return;
-    void persistManagedTabs();
+    void handleManagedTabAdmission(managedTabs.observeCreated(tab));
   });
   browser.webNavigation.onCreatedNavigationTarget.addListener((details) => {
-    if (
-      !managedTabs.observeAttributed(details.tabId, details.sourceTabId)
-    ) {
-      return;
-    }
-    void persistManagedTabs();
+    void handleManagedTabAdmission(
+      managedTabs.observeAttributed(details.tabId, details.sourceTabId)
+    );
   });
   browser.tabs.onRemoved.addListener((tabId) => {
     managedTabs.forget(tabId);

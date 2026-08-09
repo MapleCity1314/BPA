@@ -228,6 +228,38 @@ describe("alliance retired-products browser navigation", () => {
     expect(state.removed).toEqual([]);
   });
 
+  it("rejects before a tab-opening stage when no managed slot is available", async () => {
+    const state = installBrowser(
+      [
+        {
+          id: 1,
+          windowId: 10,
+          active: true,
+          status: "complete",
+          url: "https://fxg.jinritemai.com/ffa/g/list"
+        }
+      ],
+      () => undefined
+    );
+    const releaseManagedTabReservation = vi.fn();
+    const driver = createAllianceRetiredBrowserDriver({
+      sourceTabId: 1,
+      deadline: new Date(Date.now() + 10_000).toISOString(),
+      reserveManagedTab: () => false,
+      releaseManagedTabReservation
+    });
+
+    await expect(driver.openPromotion(shop)).rejects.toMatchObject({
+      code: "BROWSER_TAB_CAPACITY_EXCEEDED"
+    });
+    expect(releaseManagedTabReservation).not.toHaveBeenCalled();
+    expect(
+      state.sentMessages.some(
+        (message) => message.type === "bpa.doudian.alliance.stage"
+      )
+    ).toBe(false);
+  });
+
   it("reuses an existing Buyin tab without claiming or closing it", async () => {
     const state = installBrowser(
       [

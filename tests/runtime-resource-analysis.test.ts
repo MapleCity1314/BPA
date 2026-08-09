@@ -93,6 +93,8 @@ function sample(
                 observedTabs: 1,
                 observationCapacity: 64,
                 managedTabs: 0,
+                managedTabReservations: 0,
+                managedTabCapacity: 8,
                 pacingReservations: {
                   active: 0,
                   capacity: 64,
@@ -255,6 +257,7 @@ describe("runtime resource analysis", () => {
         pageProbeTtlMs: [10_000],
         extension: {
           observationCapacity: [64],
+          managedTabCapacity: [8],
           pacingCapacity: [64],
           pacingTtlMs: [120_000],
           probeCapacity: [32],

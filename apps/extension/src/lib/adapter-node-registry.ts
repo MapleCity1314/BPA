@@ -79,6 +79,8 @@ interface AdapterNodeExecutionContext {
   readonly sourceTabId: number;
   readonly deadline: string;
   readonly isCancelled?: () => boolean;
+  readonly reserveManagedTab?: () => boolean;
+  readonly releaseManagedTabReservation?: () => void;
   readonly onAllianceStageStarted?: (stage: {
     readonly tabId: number;
     readonly requestId: string;
@@ -224,6 +226,7 @@ const ALLIANCE_SCAN_ERRORS = new Set<DoudianAllianceNodeErrorCode>([
   "ALLIANCE_TAB_TIMEOUT",
   "AUTH_REQUIRED",
   "BROWSER_DISCONNECTED",
+  "BROWSER_TAB_CAPACITY_EXCEEDED",
   "CAPTCHA_REQUIRED",
   "COMMAND_RESULT_TOO_LARGE",
   "COMMAND_CANCELLED",
@@ -346,6 +349,15 @@ const discoverAllianceShops: AdapterNodeHandler = async (input, context) => {
     sourceTabId: context.sourceTabId,
     deadline: context.deadline,
     ...(context.isCancelled ? { isCancelled: context.isCancelled } : {}),
+    ...(context.reserveManagedTab
+      ? { reserveManagedTab: context.reserveManagedTab }
+      : {}),
+    ...(context.releaseManagedTabReservation
+      ? {
+          releaseManagedTabReservation:
+            context.releaseManagedTabReservation
+        }
+      : {}),
     ...(context.onAllianceStageStarted
       ? { onStageStarted: context.onAllianceStageStarted }
       : {}),
@@ -434,6 +446,15 @@ const scanAllianceShop: AdapterNodeHandler = async (input, context) => {
     sourceTabId: context.sourceTabId,
     deadline: context.deadline,
     ...(context.isCancelled ? { isCancelled: context.isCancelled } : {}),
+    ...(context.reserveManagedTab
+      ? { reserveManagedTab: context.reserveManagedTab }
+      : {}),
+    ...(context.releaseManagedTabReservation
+      ? {
+          releaseManagedTabReservation:
+            context.releaseManagedTabReservation
+        }
+      : {}),
     ...(context.onAllianceStageStarted
       ? { onStageStarted: context.onAllianceStageStarted }
       : {}),
@@ -574,6 +595,15 @@ const activateInventoryShop: AdapterNodeHandler = async (input, context) => {
     sourceTabId: context.sourceTabId,
     deadline: context.deadline,
     ...(context.isCancelled ? { isCancelled: context.isCancelled } : {}),
+    ...(context.reserveManagedTab
+      ? { reserveManagedTab: context.reserveManagedTab }
+      : {}),
+    ...(context.releaseManagedTabReservation
+      ? {
+          releaseManagedTabReservation:
+            context.releaseManagedTabReservation
+        }
+      : {}),
     ...(context.onAllianceStageStarted
       ? { onStageStarted: context.onAllianceStageStarted }
       : {}),

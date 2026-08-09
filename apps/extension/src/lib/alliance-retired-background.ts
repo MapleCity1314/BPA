@@ -152,6 +152,8 @@ export function createAllianceRetiredBrowserDriver(input: {
   readonly deadline: string;
   readonly isCancelled?: () => boolean;
   readonly stageResponseTimeoutMs?: number;
+  readonly reserveManagedTab?: () => boolean;
+  readonly releaseManagedTabReservation?: () => void;
   readonly onStageStarted?: (stage: {
     readonly tabId: number;
     readonly requestId: string;
@@ -176,6 +178,21 @@ export function createAllianceRetiredBrowserDriver(input: {
   const assertNotCancelled = (): void => {
     if (input.isCancelled?.()) {
       throw new AllianceRetiredDriverError("COMMAND_CANCELLED");
+    }
+  };
+
+  const withManagedTabReservation = async <T>(
+    operation: () => Promise<T>
+  ): Promise<T> => {
+    if (input.reserveManagedTab && !input.reserveManagedTab()) {
+      throw new AllianceRetiredDriverError(
+        "BROWSER_TAB_CAPACITY_EXCEEDED"
+      );
+    }
+    try {
+      return await operation();
+    } finally {
+      input.releaseManagedTabReservation?.();
     }
   };
 
@@ -389,54 +406,61 @@ export function createAllianceRetiredBrowserDriver(input: {
       );
     },
     async openPromotion(_shop) {
-      const before = await captureTabs();
-      await stage(
-        input.sourceTabId,
-        { stage: "open-promotion" },
-        "open-promotion"
-      );
-      const landingTabId = await waitForAttributedTab(
-        before,
-        input.sourceTabId,
-        (tab) =>
-          typeof tab.url === "string" &&
-          tab.url.startsWith(`${BUYIN_ORIGIN}/dashboard`),
-        "ALLIANCE_TAB_TIMEOUT"
-      );
+      const landingTabId = await withManagedTabReservation(async () => {
+        const before = await captureTabs();
+        await stage(
+          input.sourceTabId,
+          { stage: "open-promotion" },
+          "open-promotion"
+        );
+        return waitForAttributedTab(
+          before,
+          input.sourceTabId,
+          (tab) =>
+            typeof tab.url === "string" &&
+            tab.url.startsWith(`${BUYIN_ORIGIN}/dashboard`),
+          "ALLIANCE_TAB_TIMEOUT"
+        );
+      });
       const landingTab = await browser.tabs.get(landingTabId);
       if (tabMatches(landingTab, BUYIN_ORIGIN, PROMOTE_PATH)) {
         promoteTabId = landingTabId;
         return;
       }
-      const beforePromote = await captureTabs();
-      await stage(
-        landingTabId,
-        { stage: "open-product-promotion" },
-        "open-product-promotion"
-      );
-      promoteTabId = await waitForAttributedTab(
-        beforePromote,
-        landingTabId,
-        (tab) => tabMatches(tab, BUYIN_ORIGIN, PROMOTE_PATH),
-        "ALLIANCE_TAB_TIMEOUT"
-      );
+      promoteTabId = await withManagedTabReservation(async () => {
+        const beforePromote = await captureTabs();
+        await stage(
+          landingTabId,
+          { stage: "open-product-promotion" },
+          "open-product-promotion"
+        );
+        return waitForAttributedTab(
+          beforePromote,
+          landingTabId,
+          (tab) => tabMatches(tab, BUYIN_ORIGIN, PROMOTE_PATH),
+          "ALLIANCE_TAB_TIMEOUT"
+        );
+      });
     },
     async openRetiredProducts(_shop) {
       if (promoteTabId == null) {
         throw new AllianceRetiredDriverError("PROMOTION_TAB_MISSING");
       }
-      const before = await captureTabs();
-      await stage(
-        promoteTabId,
-        { stage: "open-retired-products" },
-        "open-retired-products"
-      );
-      retiredTabId = await waitForAttributedTab(
-        before,
-        promoteTabId,
-        (tab) => tabMatches(tab, BUYIN_ORIGIN, RETIRED_PATH),
-        "ALLIANCE_TAB_TIMEOUT"
-      );
+      const promotionSourceTabId = promoteTabId;
+      retiredTabId = await withManagedTabReservation(async () => {
+        const before = await captureTabs();
+        await stage(
+          promotionSourceTabId,
+          { stage: "open-retired-products" },
+          "open-retired-products"
+        );
+        return waitForAttributedTab(
+          before,
+          promotionSourceTabId,
+          (tab) => tabMatches(tab, BUYIN_ORIGIN, RETIRED_PATH),
+          "ALLIANCE_TAB_TIMEOUT"
+        );
+      });
     },
     async collectRetiredProducts(
       shop: AllianceShop

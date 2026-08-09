@@ -72,6 +72,8 @@ describe("runtime resource collector", () => {
               observedTabs: 2,
               observationCapacity: 64,
               managedTabs: 0,
+              managedTabReservations: 0,
+              managedTabCapacity: 8,
               pacingReservations: {
                 active: 1,
                 capacity: 64,
@@ -138,6 +140,8 @@ describe("runtime resource collector", () => {
             observedTabs: 2,
             observationCapacity: 64,
             managedTabs: 0,
+            managedTabReservations: 0,
+            managedTabCapacity: 8,
             pacingReservations: {
               active: 1,
               capacity: 64,

@@ -85,6 +85,8 @@ export interface ExtensionResourceUsage {
   observedTabs: number;
   observationCapacity: number;
   managedTabs: number;
+  managedTabReservations: number;
+  managedTabCapacity: number;
   pacingReservations: {
     active: number;
     capacity: number;
@@ -166,6 +168,8 @@ function parseExtensionResourceUsage(
     record.observed_tabs,
     record.observation_capacity,
     record.managed_tabs,
+    record.managed_tab_reservations,
+    record.managed_tab_capacity,
     pacingRecord.active,
     pacingRecord.capacity,
     pacingRecord.ttl_ms,
@@ -189,6 +193,8 @@ function parseExtensionResourceUsage(
     observedTabs: Number(record.observed_tabs),
     observationCapacity: Number(record.observation_capacity),
     managedTabs: Number(record.managed_tabs),
+    managedTabReservations: Number(record.managed_tab_reservations),
+    managedTabCapacity: Number(record.managed_tab_capacity),
     pacingReservations: {
       active: Number(pacingRecord.active),
       capacity: Number(pacingRecord.capacity),
@@ -207,6 +213,9 @@ function parseExtensionResourceUsage(
     usage.cancellationStopBarriers === usage.cancellationRequests &&
     usage.observationCapacity === 64 &&
     usage.observedTabs <= usage.observationCapacity &&
+    usage.managedTabCapacity === 8 &&
+    usage.managedTabs + usage.managedTabReservations <=
+      usage.managedTabCapacity &&
     usage.pacingReservations.capacity === 64 &&
     usage.pacingReservations.active <= usage.pacingReservations.capacity &&
     usage.pacingReservations.ttlMs === 120_000 &&
