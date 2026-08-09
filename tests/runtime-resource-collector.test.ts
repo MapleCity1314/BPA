@@ -45,6 +45,26 @@ describe("runtime resource collector", () => {
           pid: 42,
           runtimeIdentity: "0.6.0-test",
           ignored: "must not escape",
+          process: {
+            rssBytes: 100_000,
+            heapTotalBytes: 80_000,
+            heapUsedBytes: 40_000,
+            externalBytes: 10_000,
+            arrayBuffersBytes: 5_000,
+            ignored: "must not escape"
+          },
+          browserGateway: {
+            connectionCount: 1,
+            readySessionCount: 1,
+            pendingCancelRequestCount: 0,
+            pageProbes: {
+              active: 2,
+              capacity: 32,
+              ttlMs: 10_000,
+              ignored: "must not escape"
+            },
+            ignored: "must not escape"
+          },
           sqlite: {
             measurement: "same_connection_db_status64",
             configuredCacheBytes: 16_384_000,
@@ -70,6 +90,23 @@ describe("runtime resource collector", () => {
         sampledAt: "2026-08-06T12:00:00.000Z",
         pid: 42,
         runtimeIdentity: "0.6.0-test",
+        process: {
+          rssBytes: 100_000,
+          heapTotalBytes: 80_000,
+          heapUsedBytes: 40_000,
+          externalBytes: 10_000,
+          arrayBuffersBytes: 5_000
+        },
+        browserGateway: {
+          connectionCount: 1,
+          readySessionCount: 1,
+          pendingCancelRequestCount: 0,
+          pageProbes: {
+            active: 2,
+            capacity: 32,
+            ttlMs: 10_000
+          }
+        },
         sqlite: {
           measurement: "same_connection_db_status64",
           configuredCacheBytes: 16_384_000,

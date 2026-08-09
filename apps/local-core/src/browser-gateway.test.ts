@@ -222,6 +222,48 @@ describe("local browser gateway", () => {
       authentication: "authenticated",
       authenticationContextRef: "auth-context-shop-1"
     });
+    const probe = gateway.requestPageProbe({
+      sessionId,
+      browserInstanceId: "browser-observation",
+      tabId: 42,
+      windowId: 7,
+      origin: "https://fxg.jinritemai.com"
+    });
+    expect(gateway.status().resourceUsage.pageProbes.active).toBe(1);
+    expect(() =>
+      gateway.requestPageProbe({
+        sessionId,
+        browserInstanceId: "browser-observation",
+        tabId: 42,
+        windowId: 7,
+        origin: "https://fxg.jinritemai.com"
+      })
+    ).toThrow("PAGE_PROBE_THROTTLED");
+    gateway.handle(
+      {
+        protocol: "bpa.browser/2",
+        version: "2.0.0",
+        message_id: "page-probe-result",
+        session_id: sessionId,
+        seq: 3,
+        sent_at: new Date().toISOString(),
+        type: "page.probe.result",
+        trace_id: "trace-page-probe",
+        payload: {
+          request_id: probe.requestId,
+          tab_ref: {
+            browser_instance_id: "browser-observation",
+            tab_id: 42,
+            window_id: 7,
+            origin: "https://fxg.jinritemai.com"
+          },
+          accepted: true,
+          observation_revision: 1
+        }
+      },
+      connectionId
+    );
+    expect(gateway.status().resourceUsage.pageProbes.active).toBe(0);
     gateway.detach(connectionId);
     expect(
       persistence.getBrowserPageObservation(sessionId, 42)

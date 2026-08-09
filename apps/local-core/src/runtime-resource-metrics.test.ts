@@ -25,6 +25,21 @@ const metrics = {
   statementUsedBytes: 2048
 };
 
+const processMemory = {
+  rss: 100_000,
+  heapTotal: 80_000,
+  heapUsed: 40_000,
+  external: 10_000,
+  arrayBuffers: 5_000
+};
+
+const browserGateway = {
+  connectionCount: 1,
+  readySessionCount: 1,
+  pendingCancelRequestCount: 0,
+  pageProbes: { active: 2, capacity: 32, ttlMs: 10_000 }
+};
+
 describe("Core runtime resource metrics", () => {
   it("atomically publishes only the allowlisted same-connection metrics", () => {
     const root = mkdtempSync(join(tmpdir(), "bpa-runtime-metrics-"));
@@ -33,13 +48,23 @@ describe("Core runtime resource metrics", () => {
       const snapshot = writeRuntimeResourceMetrics(path, metrics, {
         now: () => new Date("2026-08-06T12:00:00.000Z"),
         processId: 42,
-        runtimeIdentity: "0.6.0-test"
+        runtimeIdentity: "0.6.0-test",
+        processMemoryUsage: () => processMemory,
+        browserGateway
       });
       expect(snapshot).toEqual({
         schema: RUNTIME_RESOURCE_METRICS_SCHEMA,
         sampledAt: "2026-08-06T12:00:00.000Z",
         pid: 42,
         runtimeIdentity: "0.6.0-test",
+        process: {
+          rssBytes: 100_000,
+          heapTotalBytes: 80_000,
+          heapUsedBytes: 40_000,
+          externalBytes: 10_000,
+          arrayBuffersBytes: 5_000
+        },
+        browserGateway,
         sqlite: {
           measurement: "same_connection_db_status64",
           ...metrics
@@ -50,7 +75,9 @@ describe("Core runtime resource metrics", () => {
         expect(statSync(path).mode & 0o777).toBe(0o600);
       }
       expect(Object.keys(snapshot).sort()).toEqual([
+        "browserGateway",
         "pid",
+        "process",
         "runtimeIdentity",
         "sampledAt",
         "schema",
@@ -80,6 +107,8 @@ describe("Core runtime resource metrics", () => {
       expect(() =>
         writeRuntimeResourceMetrics(path, metrics, {
           processId: 42,
+          processMemoryUsage: () => processMemory,
+          browserGateway,
           temporaryIdFactory: () => "collision"
         })
       ).toThrow();
@@ -101,6 +130,8 @@ describe("Core runtime resource metrics", () => {
           { ...metrics, cacheUsedBytes: 1n as unknown as number },
           {
             processId: 42,
+            processMemoryUsage: () => processMemory,
+            browserGateway,
             temporaryIdFactory: () => "serialization-failure"
           }
         )
@@ -134,6 +165,8 @@ describe("Core runtime resource metrics", () => {
             { ...metrics, cacheUsedBytes: failingValue as unknown as number },
             {
               processId: 42,
+              processMemoryUsage: () => processMemory,
+              browserGateway,
               temporaryIdFactory: () => "aggregate-error"
             }
           );

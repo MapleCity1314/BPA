@@ -355,6 +355,117 @@ function sqliteSummary(samples, expectedIntervalSeconds) {
   };
 }
 
+function coreResidentSummary(samples, expectedIntervalSeconds) {
+  const firstTimestamp = samples[0].timestamp;
+  const durationHours =
+    (samples.at(-1).timestamp - firstTimestamp) / (60 * 60 * 1_000);
+  const measured = samples.flatMap(({ sample, timestamp }) => {
+    const metrics = sample.coreMetrics;
+    const metricsTimestamp = Date.parse(metrics?.sampledAt);
+    const corePid = sample.services["com.bpa.core"]?.pid;
+    const ageSeconds = (timestamp - metricsTimestamp) / 1_000;
+    const processMetrics = metrics?.process;
+    const browserGateway = metrics?.browserGateway;
+    const pageProbes = browserGateway?.pageProbes;
+    const valid =
+      metrics?.status === "available" &&
+      Number.isFinite(metricsTimestamp) &&
+      ageSeconds >= -5 &&
+      ageSeconds <= expectedIntervalSeconds * 2 &&
+      metrics.pid === corePid &&
+      processMetrics &&
+      browserGateway &&
+      pageProbes &&
+      [
+        processMetrics.rssBytes,
+        processMetrics.heapTotalBytes,
+        processMetrics.heapUsedBytes,
+        processMetrics.externalBytes,
+        processMetrics.arrayBuffersBytes,
+        browserGateway.connectionCount,
+        browserGateway.readySessionCount,
+        browserGateway.pendingCancelRequestCount,
+        pageProbes.active,
+        pageProbes.capacity,
+        pageProbes.ttlMs
+      ].every((value) => Number.isSafeInteger(value) && value >= 0) &&
+      processMetrics.heapUsedBytes <= processMetrics.heapTotalBytes &&
+      browserGateway.readySessionCount <= browserGateway.connectionCount &&
+      pageProbes.capacity >= 1 &&
+      pageProbes.active <= pageProbes.capacity &&
+      pageProbes.ttlMs >= 1;
+    return valid
+      ? [{ metrics, hour: (timestamp - firstTimestamp) / (60 * 60 * 1_000) }]
+      : [];
+  });
+  const complete = measured.length === samples.length;
+  const summarize = (select, label) =>
+    complete
+      ? seriesSummary(
+          measured.map(({ metrics, hour }) => ({
+            hour,
+            value: finiteNumber(select(metrics), label)
+          })),
+          durationHours
+        )
+      : null;
+  return {
+    status: complete ? "measured" : "not_measured",
+    measuredSamples: measured.length,
+    missingSamples: samples.length - measured.length,
+    process: {
+      rssBytes: summarize(
+        (metrics) => metrics.process.rssBytes,
+        "Core process rssBytes"
+      ),
+      heapTotalBytes: summarize(
+        (metrics) => metrics.process.heapTotalBytes,
+        "Core process heapTotalBytes"
+      ),
+      heapUsedBytes: summarize(
+        (metrics) => metrics.process.heapUsedBytes,
+        "Core process heapUsedBytes"
+      ),
+      externalBytes: summarize(
+        (metrics) => metrics.process.externalBytes,
+        "Core process externalBytes"
+      ),
+      arrayBuffersBytes: summarize(
+        (metrics) => metrics.process.arrayBuffersBytes,
+        "Core process arrayBuffersBytes"
+      )
+    },
+    browserGateway: {
+      connectionCount: summarize(
+        (metrics) => metrics.browserGateway.connectionCount,
+        "Browser Gateway connectionCount"
+      ),
+      readySessionCount: summarize(
+        (metrics) => metrics.browserGateway.readySessionCount,
+        "Browser Gateway readySessionCount"
+      ),
+      pendingCancelRequestCount: summarize(
+        (metrics) => metrics.browserGateway.pendingCancelRequestCount,
+        "Browser Gateway pendingCancelRequestCount"
+      ),
+      activePageProbes: summarize(
+        (metrics) => metrics.browserGateway.pageProbes.active,
+        "Browser Gateway active page probes"
+      ),
+      pageProbeCapacity: complete
+        ? [...new Set(measured.map(({ metrics }) =>
+            metrics.browserGateway.pageProbes.capacity
+          ))]
+        : [],
+      pageProbeTtlMs: complete
+        ? [...new Set(measured.map(({ metrics }) =>
+            metrics.browserGateway.pageProbes.ttlMs
+          ))]
+        : []
+    }
+  };
+}
+
 function coreStabilitySummary(
   samples,
   durationHours,
@@ -549,6 +660,10 @@ function analyze(samples, options) {
     inventoryMonitorPidStable &&
     chromeProfileComplete;
   const sqlite = sqliteSummary(samples, options.expectedIntervalSeconds);
+  const coreResident = coreResidentSummary(
+    samples,
+    options.expectedIntervalSeconds
+  );
   const sqlitePageCacheMeasurable =
     windowComplete &&
     continuityComplete &&
@@ -612,6 +727,7 @@ function analyze(samples, options) {
       ]
     },
     coreIdentity,
+    coreResident,
     stabilityGate,
     services: Object.fromEntries(
       serviceLabels.map((label) => [

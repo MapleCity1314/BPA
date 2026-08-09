@@ -89,7 +89,7 @@ describe("Team Runtime Provider process lifecycle", () => {
         version: "2.0.0"
       })
     ).toThrow(/does not support/);
-    provider.stop();
+    provider.dispose();
   });
 
   it("settles a crash and restarts on the next invocation", async () => {
@@ -111,7 +111,7 @@ describe("Team Runtime Provider process lifecycle", () => {
       status: "succeeded",
       output: { requestId: "success-after-restart" }
     });
-    provider.stop();
+    provider.dispose();
   });
 
   it("times out and cancels pending child-process invocations", async () => {
@@ -132,7 +132,7 @@ describe("Team Runtime Provider process lifecycle", () => {
       status: "cancelled",
       error: { code: "TEAM_HANDLER_CANCELLED" }
     });
-    provider.stop();
+    provider.dispose();
   });
 
   it("rejects mismatched worker code digests", async () => {
@@ -155,7 +155,7 @@ describe("Team Runtime Provider process lifecycle", () => {
         retryable: false
       }
     });
-    provider.stop();
+    provider.dispose();
   });
 
   it("settles malformed worker frames as protocol failures", async () => {
@@ -173,6 +173,6 @@ describe("Team Runtime Provider process lifecycle", () => {
         retryable: false
       }
     });
-    provider.stop();
+    provider.dispose();
   });
 });

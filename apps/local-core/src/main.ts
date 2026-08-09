@@ -74,7 +74,10 @@ const writeResourceMetrics = (): void => {
   writeRuntimeResourceMetrics(
     paths.resourceMetrics,
     persistence.readSqliteResourceMetrics(),
-    { runtimeIdentity: process.env.BPA_RUNTIME_ID?.trim() || null }
+    {
+      runtimeIdentity: process.env.BPA_RUNTIME_ID?.trim() || null,
+      browserGateway: browserGateway.status().resourceUsage
+    }
   );
 };
 try {
@@ -187,6 +190,13 @@ const shutdown = async (): Promise<void> => {
   if (attentionDeliveryTimer) clearInterval(attentionDeliveryTimer);
   await server.stop().catch(() => undefined);
   await stagingServer.stop().catch(() => undefined);
+  await service.dispose().catch((error) => {
+    process.stderr.write(
+      `[runtime-provider-dispose] ${
+        error instanceof Error ? error.stack ?? error.message : String(error)
+      }\n`
+    );
+  });
   persistence.close();
   instanceLock.release();
   process.exit(0);
