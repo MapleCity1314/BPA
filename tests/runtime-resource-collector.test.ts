@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -40,7 +40,7 @@ describe("runtime resource collector", () => {
       writeFileSync(
         metricsPath,
         `${JSON.stringify({
-          schema: "bpa.core-runtime-metrics/2",
+          schema: "bpa.core-runtime-metrics/3",
           sampledAt: "2026-08-06T12:00:00.000Z",
           pid: 42,
           runtimeIdentity: "0.6.0-test",
@@ -62,6 +62,20 @@ describe("runtime resource collector", () => {
             p50Ms: 20.1,
             p95Ms: 21.5,
             p99Ms: 30.2,
+            ignored: "must not escape"
+          },
+          activity: {
+            activeRunCount: 0,
+            activeTriggerOccurrenceCount: 0,
+            activeTriggerAttemptCount: 0,
+            pendingEngineOutboxCount: 0,
+            activeControlLeaseCount: 0,
+            activeExternalDomainLeaseCount: 0,
+            activeStagingLeaseCount: 0,
+            activeRecoverySessionCount: 0,
+            activeAttentionDeliveryCount: 0,
+            terminalRunCount: 1,
+            latestTerminalRunAt: "2026-08-06T11:30:00.000Z",
             ignored: "must not escape"
           },
           browserGateway: {
@@ -152,6 +166,19 @@ describe("runtime resource collector", () => {
           p95Ms: 21.5,
           p99Ms: 30.2
         },
+        activity: {
+          activeRunCount: 0,
+          activeTriggerOccurrenceCount: 0,
+          activeTriggerAttemptCount: 0,
+          pendingEngineOutboxCount: 0,
+          activeControlLeaseCount: 0,
+          activeExternalDomainLeaseCount: 0,
+          activeStagingLeaseCount: 0,
+          activeRecoverySessionCount: 0,
+          activeAttentionDeliveryCount: 0,
+          terminalRunCount: 1,
+          latestTerminalRunAt: "2026-08-06T11:30:00.000Z"
+        },
         browserGateway: {
           connectionCount: 1,
           readySessionCount: 1,
@@ -199,6 +226,19 @@ describe("runtime resource collector", () => {
         }
       });
       expect(JSON.stringify(sample)).not.toContain("must not escape");
+
+      const futureTerminal = JSON.parse(readFileSync(metricsPath, "utf8"));
+      futureTerminal.activity.latestTerminalRunAt =
+        "2026-08-06T12:01:00.000Z";
+      writeFileSync(metricsPath, `${JSON.stringify(futureTerminal)}\n`);
+      const rejected = JSON.parse(
+        execFileSync(
+          process.execPath,
+          [collector, "--core-metrics", metricsPath, "--label", "test.none"],
+          { encoding: "utf8" }
+        )
+      );
+      expect(rejected.coreMetrics).toEqual({ status: "invalid" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -10,6 +10,7 @@ const CORE_RSS_ABSOLUTE_GROWTH_LIMIT_KIB = 8 * 1024;
 const CORE_RSS_RELATIVE_GROWTH_LIMIT = 0.1;
 const CORE_RSS_MONOTONIC_RATIO_LIMIT = 0.8;
 const CORE_RSS_MONOTONIC_GROWTH_FLOOR_KIB = 4 * 1024;
+const RUNTIME_QUIESCENCE_REQUIRED_MS = 15 * 60 * 1_000;
 
 function usage() {
   return [
@@ -366,6 +367,7 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
     const ageSeconds = (timestamp - metricsTimestamp) / 1_000;
     const processMetrics = metrics?.process;
     const eventLoop = metrics?.eventLoop;
+    const activity = metrics?.activity;
     const browserGateway = metrics?.browserGateway;
     const gatewayQueue = browserGateway?.queue;
     const pageProbes = browserGateway?.pageProbes;
@@ -380,6 +382,7 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
       metrics.pid === corePid &&
       processMetrics &&
       eventLoop &&
+      activity &&
       browserGateway &&
       gatewayQueue &&
       pageProbes &&
@@ -394,6 +397,16 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         processMetrics.arrayBuffersBytes,
         eventLoop.resolutionMs,
         eventLoop.sampleCount,
+        activity.activeRunCount,
+        activity.activeTriggerOccurrenceCount,
+        activity.activeTriggerAttemptCount,
+        activity.pendingEngineOutboxCount,
+        activity.activeControlLeaseCount,
+        activity.activeExternalDomainLeaseCount,
+        activity.activeStagingLeaseCount,
+        activity.activeRecoverySessionCount,
+        activity.activeAttentionDeliveryCount,
+        activity.terminalRunCount,
         browserGateway.connectionCount,
         browserGateway.readySessionCount,
         browserGateway.pendingCancelRequestCount,
@@ -423,6 +436,11 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         extensionProbes.capacity,
         extensionProbes.ttlMs
       ].every((value) => Number.isSafeInteger(value) && value >= 0) &&
+      (activity.latestTerminalRunAt === null ||
+        (Number.isFinite(Date.parse(activity.latestTerminalRunAt)) &&
+          Date.parse(activity.latestTerminalRunAt) <= metricsTimestamp)) &&
+      ((activity.terminalRunCount === 0) ===
+        (activity.latestTerminalRunAt === null)) &&
       [
         eventLoop.minimumMs,
         eventLoop.maximumMs,
@@ -549,6 +567,48 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
             )
           ]
         : []
+    },
+    activity: {
+      activeRuns: summarize(
+        (metrics) => metrics.activity.activeRunCount,
+        "Active Runs"
+      ),
+      activeTriggerOccurrences: summarize(
+        (metrics) => metrics.activity.activeTriggerOccurrenceCount,
+        "Active Trigger Occurrences"
+      ),
+      activeTriggerAttempts: summarize(
+        (metrics) => metrics.activity.activeTriggerAttemptCount,
+        "Active Trigger Attempts"
+      ),
+      pendingEngineOutbox: summarize(
+        (metrics) => metrics.activity.pendingEngineOutboxCount,
+        "Pending Engine outbox"
+      ),
+      activeControlLeases: summarize(
+        (metrics) => metrics.activity.activeControlLeaseCount,
+        "Active control leases"
+      ),
+      activeExternalDomainLeases: summarize(
+        (metrics) => metrics.activity.activeExternalDomainLeaseCount,
+        "Active external domain leases"
+      ),
+      activeStagingLeases: summarize(
+        (metrics) => metrics.activity.activeStagingLeaseCount,
+        "Active staging leases"
+      ),
+      activeRecoverySessions: summarize(
+        (metrics) => metrics.activity.activeRecoverySessionCount,
+        "Active recovery sessions"
+      ),
+      activeAttentionDeliveries: summarize(
+        (metrics) => metrics.activity.activeAttentionDeliveryCount,
+        "Active Attention deliveries"
+      ),
+      terminalRuns: summarize(
+        (metrics) => metrics.activity.terminalRunCount,
+        "Terminal Runs"
+      )
     },
     browserGateway: {
       connectionCount: summarize(
@@ -680,6 +740,185 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
           : []
       }
     }
+  };
+}
+
+function runtimeQuiescenceSummary(samples, expectedIntervalSeconds) {
+  let measuredSamples = 0;
+  let previousTimestamp;
+  let candidate;
+  let markedTerminalIdentity;
+  const markers = [];
+  let currentState = "not_measured";
+  let latestTerminalRunAt = null;
+
+  for (const { sample, timestamp } of samples) {
+    const metrics = sample.coreMetrics;
+    const metricsTimestamp = Date.parse(metrics?.sampledAt);
+    const corePid = sample.services["com.bpa.core"]?.pid;
+    const activity = metrics?.activity;
+    const browserGateway = metrics?.browserGateway;
+    const queue = browserGateway?.queue;
+    const pageProbes = browserGateway?.pageProbes;
+    const extension = browserGateway?.extension;
+    const pacing = extension?.pacingReservations;
+    const probes = extension?.probes;
+    const activityCounts = activity
+      ? [
+          activity.activeRunCount,
+          activity.activeTriggerOccurrenceCount,
+          activity.activeTriggerAttemptCount,
+          activity.pendingEngineOutboxCount,
+          activity.activeControlLeaseCount,
+          activity.activeExternalDomainLeaseCount,
+          activity.activeStagingLeaseCount,
+          activity.activeRecoverySessionCount,
+          activity.activeAttentionDeliveryCount
+        ]
+      : [];
+    const transientCounts = [
+      browserGateway?.pendingCancelRequestCount,
+      queue?.pendingBrowserOutbox,
+      queue?.queuedCommands,
+      queue?.inFlightCommands,
+      queue?.terminalResultsPendingApplication,
+      queue?.totalPending,
+      pageProbes?.active,
+      extension?.activeCommands,
+      extension?.activeTabCommands,
+      extension?.activeAllianceStages,
+      extension?.cancellationRequests,
+      extension?.cancellationStopBarriers,
+      extension?.managedTabReservations,
+      pacing?.active,
+      probes?.active
+    ];
+    const valid =
+      metrics?.status === "available" &&
+      Number.isFinite(metricsTimestamp) &&
+      timestamp - metricsTimestamp >= -5_000 &&
+      timestamp - metricsTimestamp <= expectedIntervalSeconds * 2_000 &&
+      metrics.pid === corePid &&
+      activity &&
+      browserGateway &&
+      queue &&
+      pageProbes &&
+      extension &&
+      pacing &&
+      probes &&
+      activityCounts.length === 9 &&
+      activityCounts.every(
+        (value) => Number.isSafeInteger(value) && value >= 0
+      ) &&
+      transientCounts.every(
+        (value) => Number.isSafeInteger(value) && value >= 0
+      ) &&
+      queue.totalPending ===
+        queue.pendingBrowserOutbox +
+          queue.queuedCommands +
+          queue.inFlightCommands +
+          queue.terminalResultsPendingApplication &&
+      extension.activeTabCommands <= extension.activeCommands &&
+      extension.activeAllianceStages <= extension.activeCommands &&
+      extension.cancellationRequests <= extension.activeCommands &&
+      extension.cancellationStopBarriers ===
+        extension.cancellationRequests &&
+      (activity.latestTerminalRunAt === null ||
+        (Number.isFinite(Date.parse(activity.latestTerminalRunAt)) &&
+          Date.parse(activity.latestTerminalRunAt) <= metricsTimestamp)) &&
+      Number.isSafeInteger(activity.terminalRunCount) &&
+      activity.terminalRunCount >= 0 &&
+      ((activity.terminalRunCount === 0) ===
+        (activity.latestTerminalRunAt === null));
+    if (!valid) {
+      candidate = undefined;
+      previousTimestamp = undefined;
+      continue;
+    }
+    measuredSamples += 1;
+    const gapTooLarge =
+      previousTimestamp !== undefined &&
+      timestamp - previousTimestamp > expectedIntervalSeconds * 2_000;
+    previousTimestamp = timestamp;
+    if (gapTooLarge) candidate = undefined;
+    latestTerminalRunAt = activity.latestTerminalRunAt;
+    if (latestTerminalRunAt === null) {
+      candidate = undefined;
+      currentState = "no_terminal_run";
+      continue;
+    }
+    const quiet =
+      activityCounts.every((value) => value === 0) &&
+      browserGateway.pendingCancelRequestCount === 0 &&
+      queue.totalPending === 0 &&
+      pageProbes.active === 0 &&
+      extension.activeCommands === 0 &&
+      extension.activeTabCommands === 0 &&
+      extension.activeAllianceStages === 0 &&
+      extension.cancellationRequests === 0 &&
+      extension.cancellationStopBarriers === 0 &&
+      extension.managedTabReservations === 0 &&
+      pacing.active === 0 &&
+      probes.active === 0;
+    if (!quiet) {
+      candidate = undefined;
+      currentState = "busy";
+      continue;
+    }
+    if (
+      !candidate ||
+      candidate.terminalAt !== latestTerminalRunAt ||
+      candidate.terminalRunCount !== activity.terminalRunCount
+    ) {
+      candidate = {
+        terminalAt: latestTerminalRunAt,
+        terminalRunCount: activity.terminalRunCount,
+        quietStartedAt: timestamp
+      };
+    }
+    const quietDurationMs = timestamp - candidate.quietStartedAt;
+    currentState =
+      quietDurationMs >= RUNTIME_QUIESCENCE_REQUIRED_MS
+        ? "quiescent"
+        : "pending";
+    if (
+      currentState === "quiescent" &&
+      markedTerminalIdentity !==
+        `${activity.terminalRunCount}:${latestTerminalRunAt}`
+    ) {
+      markedTerminalIdentity =
+        `${activity.terminalRunCount}:${latestTerminalRunAt}`;
+      markers.push({
+        terminalAt: latestTerminalRunAt,
+        terminalRunCount: activity.terminalRunCount,
+        quietStartedAt: new Date(candidate.quietStartedAt).toISOString(),
+        observedAt: new Date(timestamp).toISOString(),
+        quietDurationMs
+      });
+    }
+  }
+
+  const complete = measuredSamples === samples.length;
+  const quietDurationMs =
+    complete && candidate
+      ? samples.at(-1).timestamp - candidate.quietStartedAt
+      : null;
+  return {
+    status: complete ? "measured" : "not_measured",
+    requiredQuietMs: RUNTIME_QUIESCENCE_REQUIRED_MS,
+    measuredSamples,
+    missingSamples: samples.length - measuredSamples,
+    currentState: complete ? currentState : "not_measured",
+    latestTerminalRunAt: complete ? latestTerminalRunAt : null,
+    terminalRunCount:
+      complete ? samples.at(-1).sample.coreMetrics.activity.terminalRunCount : null,
+    quietStartedAt:
+      complete && candidate
+        ? new Date(candidate.quietStartedAt).toISOString()
+        : null,
+    quietDurationMs,
+    observedMarkerCount: markers.length,
+    lastObservedMarker: markers.at(-1) ?? null
   };
 }
 
@@ -882,6 +1121,12 @@ function analyze(samples, options) {
     options.expectedIntervalSeconds
   );
   const coreResidentMeasurable = coreResident.status === "measured";
+  const runtimeQuiescence = runtimeQuiescenceSummary(
+    samples,
+    options.expectedIntervalSeconds
+  );
+  const runtimeQuiescenceMeasurable =
+    runtimeQuiescence.status === "measured";
   const sqlitePageCacheMeasurable =
     windowComplete &&
     continuityComplete &&
@@ -916,10 +1161,12 @@ function analyze(samples, options) {
       nodeAndChromeMeasurable,
       sqlitePageCacheMeasurable,
       coreResidentMeasurable,
+      runtimeQuiescenceMeasurable,
       phaseZeroResourceMeasurementComplete:
         nodeAndChromeMeasurable &&
         coreIdentityStable &&
         coreResidentMeasurable &&
+        runtimeQuiescenceMeasurable &&
         sqlitePageCacheMeasurable,
       blockers: [
         ...(!windowComplete ? ["minimum_duration_not_reached"] : []),
@@ -951,6 +1198,7 @@ function analyze(samples, options) {
     },
     coreIdentity,
     coreResident,
+    runtimeQuiescence,
     stabilityGate,
     services: Object.fromEntries(
       serviceLabels.map((label) => [

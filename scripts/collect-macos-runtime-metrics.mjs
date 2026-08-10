@@ -185,6 +185,7 @@ function coreMetrics(path) {
   const sqlite = document?.sqlite;
   const processMetrics = document?.process;
   const eventLoop = document?.eventLoop;
+  const activity = document?.activity;
   const browserGateway = document?.browserGateway;
   const gatewayQueue = browserGateway?.queue;
   const pageProbes = browserGateway?.pageProbes;
@@ -192,7 +193,7 @@ function coreMetrics(path) {
   const pacingReservations = extension?.pacingReservations;
   const extensionProbes = extension?.probes;
   const valid =
-    document?.schema === "bpa.core-runtime-metrics/2" &&
+    document?.schema === "bpa.core-runtime-metrics/3" &&
     Number.isFinite(Date.parse(document.sampledAt)) &&
     safeInteger(document.pid, 1) &&
     (document.runtimeIdentity === null ||
@@ -220,6 +221,25 @@ function coreMetrics(path) {
     eventLoop.p50Ms <= eventLoop.p95Ms &&
     eventLoop.p95Ms <= eventLoop.p99Ms &&
     eventLoop.p99Ms <= eventLoop.maximumMs &&
+    activity &&
+    [
+      activity.activeRunCount,
+      activity.activeTriggerOccurrenceCount,
+      activity.activeTriggerAttemptCount,
+      activity.pendingEngineOutboxCount,
+      activity.activeControlLeaseCount,
+      activity.activeExternalDomainLeaseCount,
+      activity.activeStagingLeaseCount,
+      activity.activeRecoverySessionCount,
+      activity.activeAttentionDeliveryCount,
+      activity.terminalRunCount
+    ].every((value) => safeInteger(value)) &&
+    ((activity.terminalRunCount === 0) ===
+      (activity.latestTerminalRunAt === null)) &&
+    (activity.latestTerminalRunAt === null ||
+      (Number.isFinite(Date.parse(activity.latestTerminalRunAt)) &&
+        Date.parse(activity.latestTerminalRunAt) <=
+          Date.parse(document.sampledAt))) &&
     safeInteger(browserGateway?.connectionCount) &&
     safeInteger(browserGateway?.readySessionCount) &&
     browserGateway.readySessionCount <= browserGateway.connectionCount &&
@@ -295,6 +315,20 @@ function coreMetrics(path) {
       p50Ms: eventLoop.p50Ms,
       p95Ms: eventLoop.p95Ms,
       p99Ms: eventLoop.p99Ms
+    },
+    activity: {
+      activeRunCount: activity.activeRunCount,
+      activeTriggerOccurrenceCount: activity.activeTriggerOccurrenceCount,
+      activeTriggerAttemptCount: activity.activeTriggerAttemptCount,
+      pendingEngineOutboxCount: activity.pendingEngineOutboxCount,
+      activeControlLeaseCount: activity.activeControlLeaseCount,
+      activeExternalDomainLeaseCount:
+        activity.activeExternalDomainLeaseCount,
+      activeStagingLeaseCount: activity.activeStagingLeaseCount,
+      activeRecoverySessionCount: activity.activeRecoverySessionCount,
+      activeAttentionDeliveryCount: activity.activeAttentionDeliveryCount,
+      terminalRunCount: activity.terminalRunCount,
+      latestTerminalRunAt: activity.latestTerminalRunAt
     },
     browserGateway: {
       connectionCount: browserGateway.connectionCount,

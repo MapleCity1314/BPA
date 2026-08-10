@@ -85,6 +85,19 @@ function sample(
               p95Ms: 21.5,
               p99Ms: 30.2
             },
+            activity: {
+              activeRunCount: 0,
+              activeTriggerOccurrenceCount: 0,
+              activeTriggerAttemptCount: 0,
+              pendingEngineOutboxCount: 0,
+              activeControlLeaseCount: 0,
+              activeExternalDomainLeaseCount: 0,
+              activeStagingLeaseCount: 0,
+              activeRecoverySessionCount: 0,
+              activeAttentionDeliveryCount: 0,
+              terminalRunCount: 0,
+              latestTerminalRunAt: null
+            },
             browserGateway: {
               connectionCount: 1,
               readySessionCount: 1,
@@ -149,6 +162,24 @@ function sevenDaySamples(
       4_096 + (hour % 4) * 128
     );
   });
+}
+
+function quietRuntimeSample(
+  sampledAt: string,
+  terminalAt: string
+): RuntimeSampleFixture {
+  const fixture = sample(sampledAt, 10, 120, 8192);
+  const metrics = fixture.coreMetrics as Record<string, any>;
+  metrics.activity.terminalRunCount = 1;
+  metrics.activity.latestTerminalRunAt = terminalAt;
+  metrics.browserGateway.queue = {
+    pendingBrowserOutbox: 0,
+    queuedCommands: 0,
+    inFlightCommands: 0,
+    terminalResultsPendingApplication: 0,
+    totalPending: 0
+  };
+  return fixture;
 }
 
 describe("runtime resource analysis", () => {
@@ -300,6 +331,12 @@ describe("runtime resource analysis", () => {
       terminalResultsPendingApplication: { start: 0, end: 0 },
       totalPending: { start: 4, end: 4 }
     });
+    expect(result.runtimeQuiescence).toMatchObject({
+      status: "measured",
+      currentState: "no_terminal_run",
+      terminalRunCount: 0,
+      observedMarkerCount: 0
+    });
     expect(result.sqlite.pageCache.runtimeIdentities).toEqual(["0.6.0-test"]);
     expect(result.conclusionGate).toMatchObject({
       windowComplete: true,
@@ -311,6 +348,7 @@ describe("runtime resource analysis", () => {
       chromeProfileComplete: true,
       nodeAndChromeMeasurable: true,
       coreResidentMeasurable: true,
+      runtimeQuiescenceMeasurable: true,
       sqlitePageCacheMeasurable: true,
       phaseZeroResourceMeasurementComplete: true,
       blockers: []
@@ -323,6 +361,153 @@ describe("runtime resource analysis", () => {
       runtimeIdentities: ["0.6.0-test"],
       runtimeIdentityExpected: true,
       runtimeIdentityStable: true
+    });
+  });
+
+  it("emits a quiescence marker only after 15 continuous quiet minutes", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-quiescence-"));
+    const input = join(root, "samples.jsonl");
+    const startedAt = Date.parse("2026-08-06T00:00:00.000Z");
+    const terminalAt = "2026-08-05T23:59:00.000Z";
+    const samples = Array.from({ length: 22 }, (_, minute) => {
+      const sampledAt = new Date(startedAt + minute * 60_000).toISOString();
+      const fixture = quietRuntimeSample(sampledAt, terminalAt);
+      const metrics = fixture.coreMetrics as Record<string, any>;
+      if (minute === 5) metrics.activity.activeRunCount = 1;
+      return fixture;
+    });
+    writeFileSync(
+      input,
+      `${samples.map((fixture) => JSON.stringify(fixture)).join("\n")}\n`
+    );
+
+    const result = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          script,
+          "--input",
+          input,
+          "--expected-interval-seconds",
+          "60",
+          "--minimum-duration-hours",
+          "0.25"
+        ],
+        { encoding: "utf8" }
+      )
+    );
+
+    expect(result.runtimeQuiescence).toEqual({
+      status: "measured",
+      requiredQuietMs: 900_000,
+      measuredSamples: 22,
+      missingSamples: 0,
+      currentState: "quiescent",
+      latestTerminalRunAt: terminalAt,
+      terminalRunCount: 1,
+      quietStartedAt: "2026-08-06T00:06:00.000Z",
+      quietDurationMs: 900_000,
+      observedMarkerCount: 1,
+      lastObservedMarker: {
+        terminalAt,
+        terminalRunCount: 1,
+        quietStartedAt: "2026-08-06T00:06:00.000Z",
+        observedAt: "2026-08-06T00:21:00.000Z",
+        quietDurationMs: 900_000
+      }
+    });
+    expect(result.conclusionGate.runtimeQuiescenceMeasurable).toBe(true);
+  });
+
+  it("restarts the quiescence window after a sampling gap", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-quiescence-gap-"));
+    const input = join(root, "samples.jsonl");
+    const startedAt = Date.parse("2026-08-06T00:00:00.000Z");
+    const terminalAt = "2026-08-05T23:59:00.000Z";
+    const minutes = [0, 1, 2, 3, 10, ...Array.from(
+      { length: 15 },
+      (_, index) => index + 11
+    )];
+    const samples = minutes.map((minute) =>
+      quietRuntimeSample(
+        new Date(startedAt + minute * 60_000).toISOString(),
+        terminalAt
+      )
+    );
+    writeFileSync(
+      input,
+      `${samples.map((fixture) => JSON.stringify(fixture)).join("\n")}\n`
+    );
+
+    const result = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          script,
+          "--input",
+          input,
+          "--expected-interval-seconds",
+          "60"
+        ],
+        { encoding: "utf8" }
+      )
+    );
+
+    expect(result.runtimeQuiescence).toMatchObject({
+      status: "measured",
+      currentState: "quiescent",
+      quietStartedAt: "2026-08-06T00:10:00.000Z",
+      quietDurationMs: 900_000,
+      observedMarkerCount: 1
+    });
+    expect(result.conclusionGate.continuityComplete).toBe(false);
+  });
+
+  it("restarts quiescence when a new terminal Run shares the timestamp", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-quiescence-run-"));
+    const input = join(root, "samples.jsonl");
+    const startedAt = Date.parse("2026-08-06T00:00:00.000Z");
+    const terminalAt = "2026-08-05T23:59:00.000Z";
+    const samples = Array.from({ length: 32 }, (_, minute) => {
+      const sampledAt = new Date(startedAt + minute * 60_000).toISOString();
+      const fixture = quietRuntimeSample(sampledAt, terminalAt);
+      if (minute >= 16) {
+        const metrics = fixture.coreMetrics as Record<string, any>;
+        metrics.activity.terminalRunCount = 2;
+      }
+      return fixture;
+    });
+    writeFileSync(
+      input,
+      `${samples.map((fixture) => JSON.stringify(fixture)).join("\n")}\n`
+    );
+
+    const result = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          script,
+          "--input",
+          input,
+          "--expected-interval-seconds",
+          "60"
+        ],
+        { encoding: "utf8" }
+      )
+    );
+
+    expect(result.runtimeQuiescence).toMatchObject({
+      currentState: "quiescent",
+      terminalRunCount: 2,
+      quietStartedAt: "2026-08-06T00:16:00.000Z",
+      quietDurationMs: 900_000,
+      observedMarkerCount: 2,
+      lastObservedMarker: {
+        terminalAt,
+        terminalRunCount: 2,
+        quietStartedAt: "2026-08-06T00:16:00.000Z",
+        observedAt: "2026-08-06T00:31:00.000Z"
+      }
     });
   });
 

@@ -222,7 +222,8 @@ Schema 降级描述成可恢复旧二进制，也不得复制登录态。
 3. **标签页硬上限**：本代码候选要求每个受控开页 stage 在 DOM effect 前取得 reservation，
    受管页与预留槽位合计上限为 8；无 reservation 的归属页会被立即关闭并停止所属命令。
    active/reserved/capacity 均进入脱敏心跳、Core 校验、采集器与分析结果。尚未完成真实 Chrome
-   弹页/关闭失败 E2E，也未统计 Profile 全部标签页，因此不能替代灰度停止线。
+   弹页/关闭失败 E2E；Profile 全部标签页虽已计数，但尚无真实 Chrome 长窗证据，因此不能替代
+   灰度停止线。
 4. **有界内存结构**：Extension 与 Core 的常驻集合必须有与生命周期匹配的容量、回收规则
    和 size 指标；24 小时窗口前先通过增长反例。本代码候选已把 Core page probe 表限制为
    32 项、10 秒 TTL，完成、断线和超时均回收，迟到响应不能清除同页新请求。Extension
@@ -248,9 +249,13 @@ Schema 降级描述成可恢复旧二进制，也不得复制登录态。
    pacing、probe、受管标签页及其 reservation/capacity 的白名单计数纳入原子资源快照、
    采集器与分析结果。本代码候选也用 Node 原生直方图按采样窗口记录 event-loop
    min/max/mean/p50/p95/p99，并统计 Browser outbox、queued/in-flight command 与待回灌终态
-   的 Gateway 队列深度；计数守恒或分位数漂移会使阶段 0 门禁 fail-closed。其余进程角色、
-   Profile 全部标签页数也由 Extension 的无条件 `tabs.query({})` 进入同一快照，查询失败或
-   超过 1024 时不伪造 0。其余进程角色和 quiescence 仍未完成。
+   的 Gateway 队列深度；计数守恒或分位数漂移会使阶段 0 门禁 fail-closed。Profile 全部
+   标签页数也由 Extension 的无条件 `tabs.query({})` 进入同一快照，查询失败或超过 1024 时
+   不伪造 0。Core v3 快照还记录 active Run/Trigger、待处理 Engine outbox、控制/外部/暂存
+   租约、Recovery Session 与 Attention Delivery。分析器只有在最新 Run 终态后连续 15 分钟
+   这些计数及浏览器瞬态命令、取消、probe、reservation 和队列均保持 0 时才产生 quiescence
+   marker；采样缺口或中途活动会重置窗口。真实 marker 仍待灰度采集，剩余代码缺口是 Native
+   Host、Team Worker 与短命 Node 子进程的独立 PID 曲线。
 9. **入口清退**：旧 source/tsx launchd、Inventory Scheduler 模式与签名闭包 Core 不能并存。
    灰度前选定签名闭包为唯一 Core；legacy recovery 仍会按步骤启动短命 Node 子进程，只有
    正式库存 Workflow 接管后，per-step Node spawn 才能归零。

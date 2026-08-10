@@ -73,12 +73,17 @@ const service = new LocalCoreService(
 const eventLoopMonitor = new RuntimeEventLoopMonitor();
 const writeResourceMetrics = (): void => {
   if (sqliteObservability.status !== "available") return;
+  const sampledAt = new Date();
   writeRuntimeResourceMetrics(
     paths.resourceMetrics,
     persistence.readSqliteResourceMetrics(),
     {
+      now: () => sampledAt,
       runtimeIdentity: process.env.BPA_RUNTIME_ID?.trim() || null,
       eventLoop: eventLoopMonitor.snapshot(),
+      activity: persistence.readRuntimeActivityMetrics(
+        sampledAt.toISOString()
+      ),
       browserGateway: browserGateway.status().resourceUsage
     }
   );
