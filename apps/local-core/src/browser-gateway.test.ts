@@ -1107,6 +1107,30 @@ describe("local browser gateway", () => {
         .filter((event) => event.type === "RUNTIME_RESULT_APPLIED")
     ).toHaveLength(1);
     expect(gateway.status().lastError).toBeUndefined();
+    gateway.handle(
+      {
+        protocol: "bpa.browser/2",
+        version: "2.0.0",
+        message_id: "replacement-terminal-cancel-effective",
+        session_id: replacementSessionId,
+        seq: 4,
+        sent_at: new Date().toISOString(),
+        type: "cancel.effective",
+        trace_id: command.trace_id,
+        payload: {
+          command_id: command.payload.command_id,
+          node_execution_id: command.payload.node_execution_id,
+          fencing_token: 1,
+          status: "cancelled",
+          safe_stop: true
+        }
+      },
+      replacementConnectionId
+    );
+    expect(
+      persistence.getGatewayCommand(String(command.payload.command_id))?.result
+    ).toEqual(result.payload);
+    expect(gateway.status().lastError).toBeUndefined();
 
     const riskRun = service.handle({
       id: "risk-trigger-fire",
@@ -1128,7 +1152,7 @@ describe("local browser gateway", () => {
         version: "2.0.0",
         message_id: "replacement-active-result",
         session_id: replacementSessionId,
-        seq: 4,
+        seq: 5,
         sent_at: new Date().toISOString(),
         type: "command.result",
         trace_id: riskCommand.trace_id,

@@ -1265,8 +1265,10 @@ export class LocalBrowserGateway implements RuntimeProvider {
     ) {
       throw new Error("Cancel Effective does not match an active command");
     }
-    this.#assertCommandSession(connection, command);
-    this.#commitResult(message.message_id, {
+    if (command.state !== "terminal") {
+      this.#assertCommandSession(connection, command);
+    }
+    const outcome = this.#commitResult(message.message_id, {
       command_seq: command.commandSeq,
       command_id: command.id,
       node_execution_id: command.nodeExecutionId,
@@ -1274,6 +1276,9 @@ export class LocalBrowserGateway implements RuntimeProvider {
       fencing_token: command.fencingToken,
       status: message.payload.status
     });
+    if (outcome === "accepted" || outcome === "duplicate") {
+      delete connection.lastError;
+    }
     connection.cancelRequests.delete(command.id);
   }
 
