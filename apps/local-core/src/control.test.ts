@@ -14,16 +14,19 @@ import {
   type ControlRequestEnvelope
 } from "@bpa/control-protocol";
 import { projectTerminalRunAttention } from "@bpa/attention-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { resolveLocalIpcEndpoint } from "@bpa/platform-runtime";
 import { RuntimeProviderRegistry } from "@bpa/node-runtime";
 import { createTerminalAttentionDelivery } from "./attention-delivery.js";
 import {
+  attachFrameDecoder,
+  encodeFrame,
   LocalControlServer,
   LocalCoreService,
   sendControlRequest
 } from "./control.js";
+import type { LocalBrowserGateway } from "./browser-gateway.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 const controlEndpoint = (root: string) =>
@@ -103,6 +106,21 @@ function sendNegotiatedV1(
         newline = buffered.indexOf(0x0a);
       }
     });
+    socket.on("error", reject);
+  });
+}
+
+function sendLegacyFrame(
+  socketPath: string,
+  message: unknown
+): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection(socketPath);
+    attachFrameDecoder(socket, (response) => {
+      socket.end();
+      resolve(response);
+    });
+    socket.on("connect", () => socket.write(encodeFrame(message)));
     socket.on("error", reject);
   });
 }
@@ -372,6 +390,66 @@ describe("local control socket", () => {
     });
   });
 
+  it("binds a strict Native Host PID during legacy attach", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "bpa-native-attach-"));
+    const socketPath = controlEndpoint(directory);
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const attach = vi.fn(() => "native-connection");
+    const detach = vi.fn();
+    const browserGateway = {
+      id: "browser",
+      supports: () => false,
+      invoke: async () => ({
+        status: "rejected" as const,
+        error: { code: "UNUSED", message: "unused", retryable: false },
+        evidence: [],
+        riskSignals: []
+      }),
+      attach,
+      detach
+    } as unknown as LocalBrowserGateway;
+    const service = new LocalCoreService(persistence, browserGateway);
+    const server = new LocalControlServer(socketPath, service);
+    await server.start();
+    cleanups.push(async () => {
+      await server.stop();
+      persistence.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    await expect(
+      sendLegacyFrame(socketPath, {
+        id: "native-valid",
+        method: "native.attach",
+        params: {
+          origin: "chrome-extension://hoobbnlkcdhbemedpfhhoicklplggmbc/",
+          processId: 4242
+        }
+      })
+    ).resolves.toMatchObject({ ok: true, result: { attached: true } });
+    expect(attach).toHaveBeenCalledWith(
+      "chrome-extension://hoobbnlkcdhbemedpfhhoicklplggmbc/",
+      4242,
+      expect.any(Function)
+    );
+
+    await expect(
+      sendLegacyFrame(socketPath, {
+        id: "native-extra",
+        method: "native.attach",
+        params: {
+          origin: "chrome-extension://hoobbnlkcdhbemedpfhhoicklplggmbc/",
+          processId: 4243,
+          extra: true
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "NATIVE_ATTACH_REJECTED" }
+    });
+    expect(attach).toHaveBeenCalledTimes(1);
+  });
+
   it("disposes registered Runtime Providers with the Core service", async () => {
     const persistence = new SqlitePersistence({ path: ":memory:" });
     const providers = new RuntimeProviderRegistry();
@@ -399,6 +477,20 @@ describe("local control socket", () => {
     await service.dispose();
 
     expect(disposed).toBe(1);
+    persistence.close();
+  });
+
+  it("reports the default Team Worker as stopped before its first invocation", async () => {
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const service = new LocalCoreService(persistence);
+    expect(service.runtimeProcessUsage()).toEqual({
+      teamWorker: {
+        state: "stopped",
+        pid: null,
+        pendingInvocationCount: 0
+      }
+    });
+    await service.dispose();
     persistence.close();
   });
 

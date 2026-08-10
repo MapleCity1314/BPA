@@ -158,6 +158,7 @@ describe("local browser gateway", () => {
     );
     gateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      1001,
       () => undefined
     );
     gateway.handle({
@@ -202,6 +203,7 @@ describe("local browser gateway", () => {
     const outgoing: Array<Record<string, any>> = [];
     gateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      1001,
       (message) => outgoing.push(message)
     );
     gateway.handle({
@@ -247,6 +249,7 @@ describe("local browser gateway", () => {
     const outgoing: Array<Record<string, any>> = [];
     const connectionId = gateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      1001,
       (message) => outgoing.push(message)
     );
     gateway.handle(
@@ -431,6 +434,7 @@ describe("local browser gateway", () => {
     const outgoing: Array<Record<string, any>> = [];
     const connectionId = gateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      1001,
       (message) => outgoing.push(message)
     );
     gateway.handle(
@@ -640,6 +644,7 @@ describe("local browser gateway", () => {
     const outgoing: Array<Record<string, any>> = [];
     gateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      1001,
       (message) => outgoing.push(message)
     );
     gateway.handle({
@@ -1040,8 +1045,17 @@ describe("local browser gateway", () => {
     const outgoing: Array<Record<string, any>> = [];
     const firstConnection = gateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      1001,
       (message) => outgoing.push(message)
     );
+    expect(gateway.status().resourceUsage.nativeHostPids).toEqual([1001]);
+    expect(() =>
+      gateway.attach(
+        `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+        1001,
+        () => undefined
+      )
+    ).toThrow("Native Host process already has an active connection");
     gateway.handle({
       protocol: "bpa.browser/2",
       version: "2.0.0",
@@ -1083,12 +1097,15 @@ describe("local browser gateway", () => {
       observedAt: new Date().toISOString()
     });
     gateway.detach(firstConnection);
+    expect(gateway.status().resourceUsage.nativeHostPids).toEqual([]);
 
     const marker = outgoing.length;
     gateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      1002,
       (message) => outgoing.push(message)
     );
+    expect(gateway.status().resourceUsage.nativeHostPids).toEqual([1002]);
     gateway.handle({
       protocol: "bpa.browser/2",
       version: "2.0.0",

@@ -7,6 +7,7 @@ import type {
 import type { ArtifactRef } from "@bpa/workflow-ir";
 import {
   TeamWorkerClient,
+  type TeamWorkerClientStatus,
   type TeamWorkerClientOptions
 } from "./client.js";
 import { teamNodeRef } from "./protocol.js";
@@ -46,6 +47,10 @@ export class TeamRuntimeProvider implements RuntimeProvider {
 
   async cancel(invocationId: string, fencingToken: number): Promise<void> {
     this.client.cancel(invocationId, fencingToken);
+  }
+
+  status(): TeamWorkerClientStatus {
+    return this.client.status();
   }
 
   dispose(): void {

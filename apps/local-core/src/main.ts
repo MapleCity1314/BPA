@@ -84,6 +84,7 @@ const writeResourceMetrics = (): void => {
       activity: persistence.readRuntimeActivityMetrics(
         sampledAt.toISOString()
       ),
+      teamWorker: service.runtimeProcessUsage().teamWorker,
       browserGateway: browserGateway.status().resourceUsage
     }
   );

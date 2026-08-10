@@ -2,8 +2,8 @@
 
 import { readFile, writeFile } from "node:fs/promises";
 
-const INPUT_SCHEMA = "bpa.runtime-resource-sample/1";
-const OUTPUT_SCHEMA = "bpa.runtime-resource-analysis/1";
+const INPUT_SCHEMA = "bpa.runtime-resource-sample/2";
+const OUTPUT_SCHEMA = "bpa.runtime-resource-analysis/2";
 const CORE_STABILITY_WINDOW_HOURS = 168;
 const CORE_RSS_BASELINE_WINDOW_HOURS = 24;
 const CORE_RSS_ABSOLUTE_GROWTH_LIMIT_KIB = 8 * 1024;
@@ -189,6 +189,182 @@ function processSummary(samples, select) {
   };
 }
 
+function publicProcessIsValid(process) {
+  return (
+    process !== null &&
+    typeof process === "object" &&
+    Number.isSafeInteger(process.pid) &&
+    process.pid > 0 &&
+    Number.isSafeInteger(process.parentPid) &&
+    process.parentPid >= 0 &&
+    typeof process.cpuPercent === "number" &&
+    Number.isFinite(process.cpuPercent) &&
+    process.cpuPercent >= 0 &&
+    Number.isSafeInteger(process.rssKiB) &&
+    process.rssKiB >= 0 &&
+    typeof process.elapsed === "string" &&
+    process.elapsed.length > 0
+  );
+}
+
+function runtimeProcessRolesSummary(samples) {
+  const observations = samples.map(({ sample, timestamp }) => {
+    const metrics = sample.coreMetrics;
+    const roles = sample.runtimeProcesses;
+    const nativeHosts = roles?.nativeHosts;
+    const teamWorker = roles?.teamWorker;
+    const shortLived = roles?.shortLivedNodeChildren;
+    const declaredNativePids = nativeHosts?.declaredPids;
+    const missingNativePids = nativeHosts?.missingPids;
+    const nativeProcesses = nativeHosts?.processes;
+    const valid =
+      metrics?.status === "available" &&
+      roles &&
+      nativeHosts &&
+      teamWorker &&
+      Array.isArray(declaredNativePids) &&
+      Array.isArray(missingNativePids) &&
+      Array.isArray(nativeProcesses) &&
+      Array.isArray(shortLived) &&
+      declaredNativePids.every(
+        (pid) => Number.isSafeInteger(pid) && pid > 0
+      ) &&
+      new Set(declaredNativePids).size === declaredNativePids.length &&
+      declaredNativePids.every(
+        (pid, index) => index === 0 || declaredNativePids[index - 1] < pid
+      ) &&
+      missingNativePids.every((pid) => declaredNativePids.includes(pid)) &&
+      new Set(missingNativePids).size === missingNativePids.length &&
+      nativeProcesses.every(publicProcessIsValid) &&
+      nativeProcesses.every((process) =>
+        declaredNativePids.includes(process.pid)
+      ) &&
+      missingNativePids.every(
+        (pid) => !nativeProcesses.some((process) => process.pid === pid)
+      ) &&
+      new Set(nativeProcesses.map((process) => process.pid)).size ===
+        nativeProcesses.length &&
+      nativeProcesses.length + missingNativePids.length ===
+        declaredNativePids.length &&
+      JSON.stringify(declaredNativePids) ===
+        JSON.stringify(metrics.browserGateway?.nativeHostPids) &&
+      ["stopped", "starting", "ready"].includes(teamWorker.state) &&
+      teamWorker.state === metrics.teamWorker?.state &&
+      teamWorker.declaredPid === metrics.teamWorker?.pid &&
+      (teamWorker.process === null || publicProcessIsValid(teamWorker.process)) &&
+      (teamWorker.declaredPid === null
+        ? teamWorker.process === null && teamWorker.state === "stopped"
+        : Number.isSafeInteger(teamWorker.declaredPid) &&
+          teamWorker.declaredPid > 0 &&
+          (teamWorker.process === null ||
+            (teamWorker.process.pid === teamWorker.declaredPid &&
+              teamWorker.process.parentPid ===
+                sample.services["com.bpa.core"]?.pid))) &&
+      shortLived.every(publicProcessIsValid) &&
+      new Set(shortLived.map((process) => process.pid)).size ===
+        shortLived.length &&
+      shortLived.every(
+        (process) =>
+          !declaredNativePids.includes(process.pid) &&
+          process.pid !== teamWorker.declaredPid
+      );
+    return valid ? { timestamp, roles } : null;
+  });
+  const measured = observations.filter((value) => value !== null);
+  const nativeProcesses = measured.flatMap(
+    ({ roles }) => roles.nativeHosts.processes
+  );
+  const teamProcesses = measured.flatMap(({ roles }) =>
+    roles.teamWorker.process ? [roles.teamWorker.process] : []
+  );
+  const shortLivedProcesses = measured.flatMap(
+    ({ roles }) => roles.shortLivedNodeChildren
+  );
+  const uniqueSortedPids = (processes) =>
+    [...new Set(processes.map((process) => process.pid))].sort(
+      (left, right) => left - right
+    );
+  const collectionPoints = (select) =>
+    measured.map(({ timestamp, roles }) => ({
+      timestamp,
+      processes: select(roles)
+    }));
+  const summarizeCollection = (points) => {
+    const firstTimestamp = samples[0].timestamp;
+    const durationHours =
+      (samples.at(-1).timestamp - firstTimestamp) / (60 * 60 * 1_000);
+    return {
+      processCount: seriesSummary(
+        points.map(({ timestamp, processes }) => ({
+          hour: (timestamp - firstTimestamp) / (60 * 60 * 1_000),
+          value: processes.length
+        })),
+        durationHours
+      ),
+      rssKiB: seriesSummary(
+        points.map(({ timestamp, processes }) => ({
+          hour: (timestamp - firstTimestamp) / (60 * 60 * 1_000),
+          value: processes.reduce((sum, process) => sum + process.rssKiB, 0)
+        })),
+        durationHours
+      ),
+      cpuPercent: seriesSummary(
+        points.map(({ timestamp, processes }) => ({
+          hour: (timestamp - firstTimestamp) / (60 * 60 * 1_000),
+          value: processes.reduce(
+            (sum, process) => sum + process.cpuPercent,
+            0
+          )
+        })),
+        durationHours
+      )
+    };
+  };
+  const nativePoints = collectionPoints((roles) => roles.nativeHosts.processes);
+  const teamPoints = collectionPoints((roles) =>
+    roles.teamWorker.process ? [roles.teamWorker.process] : []
+  );
+  const shortLivedPoints = collectionPoints(
+    (roles) => roles.shortLivedNodeChildren
+  );
+  const missingNativeSamples = measured.filter(
+    ({ roles }) => roles.nativeHosts.missingPids.length > 0
+  ).length;
+  const unexpectedNativeHostCountSamples = measured.filter(
+    ({ roles }) => roles.nativeHosts.processes.length !== 1
+  ).length;
+  const missingTeamSamples = measured.filter(
+    ({ roles }) =>
+      roles.teamWorker.declaredPid !== null &&
+      roles.teamWorker.process === null
+  ).length;
+  const complete =
+    measured.length === samples.length &&
+    missingNativeSamples === 0 &&
+    unexpectedNativeHostCountSamples === 0 &&
+    missingTeamSamples === 0;
+  return {
+    status: complete ? "measured" : "not_measured",
+    measuredSamples: measured.length,
+    missingSamples: samples.length - measured.length,
+    nativeHosts: {
+      ...summarizeCollection(nativePoints),
+      uniquePids: uniqueSortedPids(nativeProcesses),
+      missingDeclaredSamples: missingNativeSamples,
+      unexpectedProcessCountSamples: unexpectedNativeHostCountSamples
+    },
+    teamWorker: {
+      ...summarizeCollection(teamPoints),
+      uniquePids: uniqueSortedPids(teamProcesses),
+      missingDeclaredSamples: missingTeamSamples
+    },
+    shortLivedNodeChildren: {
+      ...summarizeCollection(shortLivedPoints),
+      uniquePids: uniqueSortedPids(shortLivedProcesses)
+    }
+  };
+}
+
 function chromeSummary(samples) {
   const firstTimestamp = samples[0].timestamp;
   const durationHours =
@@ -368,6 +544,7 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
     const processMetrics = metrics?.process;
     const eventLoop = metrics?.eventLoop;
     const activity = metrics?.activity;
+    const teamWorker = metrics?.teamWorker;
     const browserGateway = metrics?.browserGateway;
     const gatewayQueue = browserGateway?.queue;
     const pageProbes = browserGateway?.pageProbes;
@@ -383,6 +560,7 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
       processMetrics &&
       eventLoop &&
       activity &&
+      teamWorker &&
       browserGateway &&
       gatewayQueue &&
       pageProbes &&
@@ -407,6 +585,7 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         activity.activeRecoverySessionCount,
         activity.activeAttentionDeliveryCount,
         activity.terminalRunCount,
+        teamWorker.pendingInvocationCount,
         browserGateway.connectionCount,
         browserGateway.readySessionCount,
         browserGateway.pendingCancelRequestCount,
@@ -441,6 +620,24 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
           Date.parse(activity.latestTerminalRunAt) <= metricsTimestamp)) &&
       ((activity.terminalRunCount === 0) ===
         (activity.latestTerminalRunAt === null)) &&
+      ["stopped", "starting", "ready"].includes(teamWorker.state) &&
+      ((teamWorker.state === "stopped" &&
+        teamWorker.pid === null &&
+        teamWorker.pendingInvocationCount === 0) ||
+        (teamWorker.state !== "stopped" &&
+          Number.isSafeInteger(teamWorker.pid) &&
+          teamWorker.pid > 0)) &&
+      Array.isArray(browserGateway.nativeHostPids) &&
+      browserGateway.nativeHostPids.length ===
+        browserGateway.connectionCount &&
+      browserGateway.nativeHostPids.every(
+        (pid) => Number.isSafeInteger(pid) && pid > 0
+      ) &&
+      new Set(browserGateway.nativeHostPids).size ===
+        browserGateway.nativeHostPids.length &&
+      browserGateway.nativeHostPids.every(
+        (pid, index, values) => index === 0 || values[index - 1] < pid
+      ) &&
       [
         eventLoop.minimumMs,
         eventLoop.maximumMs,
@@ -610,6 +807,22 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         "Terminal Runs"
       )
     },
+    teamWorker: {
+      pendingInvocations: summarize(
+        (metrics) => metrics.teamWorker.pendingInvocationCount,
+        "Team Worker pending invocations"
+      ),
+      states: complete
+        ? [...new Set(measured.map(({ metrics }) => metrics.teamWorker.state))]
+        : [],
+      pids: complete
+        ? [...new Set(
+            measured
+              .map(({ metrics }) => metrics.teamWorker.pid)
+              .filter((pid) => pid !== null)
+          )]
+        : []
+    },
     browserGateway: {
       connectionCount: summarize(
         (metrics) => metrics.browserGateway.connectionCount,
@@ -757,6 +970,7 @@ function runtimeQuiescenceSummary(samples, expectedIntervalSeconds) {
     const metricsTimestamp = Date.parse(metrics?.sampledAt);
     const corePid = sample.services["com.bpa.core"]?.pid;
     const activity = metrics?.activity;
+    const teamWorker = metrics?.teamWorker;
     const browserGateway = metrics?.browserGateway;
     const queue = browserGateway?.queue;
     const pageProbes = browserGateway?.pageProbes;
@@ -800,6 +1014,7 @@ function runtimeQuiescenceSummary(samples, expectedIntervalSeconds) {
       timestamp - metricsTimestamp <= expectedIntervalSeconds * 2_000 &&
       metrics.pid === corePid &&
       activity &&
+      teamWorker &&
       browserGateway &&
       queue &&
       pageProbes &&
@@ -812,6 +1027,26 @@ function runtimeQuiescenceSummary(samples, expectedIntervalSeconds) {
       ) &&
       transientCounts.every(
         (value) => Number.isSafeInteger(value) && value >= 0
+      ) &&
+      Number.isSafeInteger(teamWorker.pendingInvocationCount) &&
+      teamWorker.pendingInvocationCount >= 0 &&
+      ["stopped", "starting", "ready"].includes(teamWorker.state) &&
+      ((teamWorker.state === "stopped" &&
+        teamWorker.pid === null &&
+        teamWorker.pendingInvocationCount === 0) ||
+        (teamWorker.state !== "stopped" &&
+          Number.isSafeInteger(teamWorker.pid) &&
+          teamWorker.pid > 0)) &&
+      Array.isArray(browserGateway.nativeHostPids) &&
+      browserGateway.nativeHostPids.length ===
+        browserGateway.connectionCount &&
+      browserGateway.nativeHostPids.every(
+        (pid) => Number.isSafeInteger(pid) && pid > 0
+      ) &&
+      new Set(browserGateway.nativeHostPids).size ===
+        browserGateway.nativeHostPids.length &&
+      browserGateway.nativeHostPids.every(
+        (pid, index, values) => index === 0 || values[index - 1] < pid
       ) &&
       queue.totalPending ===
         queue.pendingBrowserOutbox +
@@ -849,6 +1084,7 @@ function runtimeQuiescenceSummary(samples, expectedIntervalSeconds) {
     }
     const quiet =
       activityCounts.every((value) => value === 0) &&
+      teamWorker.pendingInvocationCount === 0 &&
       browserGateway.pendingCancelRequestCount === 0 &&
       queue.totalPending === 0 &&
       pageProbes.active === 0 &&
@@ -1121,6 +1357,9 @@ function analyze(samples, options) {
     options.expectedIntervalSeconds
   );
   const coreResidentMeasurable = coreResident.status === "measured";
+  const runtimeProcessRoles = runtimeProcessRolesSummary(samples);
+  const runtimeProcessRolesMeasurable =
+    runtimeProcessRoles.status === "measured";
   const runtimeQuiescence = runtimeQuiescenceSummary(
     samples,
     options.expectedIntervalSeconds
@@ -1161,11 +1400,13 @@ function analyze(samples, options) {
       nodeAndChromeMeasurable,
       sqlitePageCacheMeasurable,
       coreResidentMeasurable,
+      runtimeProcessRolesMeasurable,
       runtimeQuiescenceMeasurable,
       phaseZeroResourceMeasurementComplete:
         nodeAndChromeMeasurable &&
         coreIdentityStable &&
         coreResidentMeasurable &&
+        runtimeProcessRolesMeasurable &&
         runtimeQuiescenceMeasurable &&
         sqlitePageCacheMeasurable,
       blockers: [
@@ -1191,6 +1432,9 @@ function analyze(samples, options) {
         ...(!coreResidentMeasurable
           ? ["core_resident_metrics_not_measured"]
           : []),
+        ...(!runtimeProcessRolesMeasurable
+          ? ["runtime_process_roles_not_measured"]
+          : []),
         ...(sqlite.pageCache.status !== "measured"
           ? ["sqlite_page_cache_not_measured"]
           : [])
@@ -1198,6 +1442,7 @@ function analyze(samples, options) {
     },
     coreIdentity,
     coreResident,
+    runtimeProcessRoles,
     runtimeQuiescence,
     stabilityGate,
     services: Object.fromEntries(

@@ -7,10 +7,10 @@ import {
   readFileSync,
   statSync
 } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const SCHEMA = "bpa.runtime-resource-sample/1";
+const SCHEMA = "bpa.runtime-resource-sample/2";
 const DEFAULT_LABELS = [
   "com.bpa.core",
   "com.bpa.inventory-monitor",
@@ -129,6 +129,98 @@ function publicProcess(process) {
   };
 }
 
+function isNodeProcess(process) {
+  const executable = process.command.trim().split(/\s+/u)[0]?.replace(
+    /^['"]|['"]$/gu,
+    ""
+  );
+  if (!executable) return false;
+  return /^node(?:-[a-z0-9._-]+)?$/iu.test(basename(executable));
+}
+
+function isNativeHostProcess(process) {
+  const executable = process.command.trim().split(/\s+/u)[0]?.replace(
+    /^['"]|['"]$/gu,
+    ""
+  );
+  if (!executable) return false;
+  return (
+    basename(executable) === "bpa-native-host" ||
+    (isNodeProcess(process) &&
+      process.command.includes("apps/native-host/src/main.ts"))
+  );
+}
+
+export function classifyRuntimeProcesses(processes, services, metrics) {
+  if (metrics?.status !== "available") return null;
+  const byPid = new Map(processes.map((process) => [process.pid, process]));
+  const nativeHostPids = metrics.browserGateway.nativeHostPids;
+  const nativeHostProcesses = nativeHostPids.flatMap((pid) => {
+    const process = byPid.get(pid);
+    return process && isNativeHostProcess(process)
+      ? [publicProcess(process)]
+      : [];
+  });
+  const teamWorkerPid = metrics.teamWorker.pid;
+  const corePid = services["com.bpa.core"]?.pid;
+  const teamWorkerCandidate = teamWorkerPid === null
+    ? undefined
+    : byPid.get(teamWorkerPid);
+  const teamWorkerProcess =
+    teamWorkerCandidate && teamWorkerCandidate.parentPid === corePid
+      ? publicProcess(teamWorkerCandidate)
+      : null;
+  const rootPids = [
+    services["com.bpa.core"]?.pid,
+    services["com.bpa.inventory-monitor"]?.pid
+  ].filter((pid) => Number.isSafeInteger(pid) && pid > 0);
+  const descendantPids = new Set();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const process of processes) {
+      if (
+        descendantPids.has(process.pid) ||
+        (!rootPids.includes(process.parentPid) &&
+          !descendantPids.has(process.parentPid))
+      ) {
+        continue;
+      }
+      descendantPids.add(process.pid);
+      changed = true;
+    }
+  }
+  const excludedPids = new Set([
+    ...rootPids,
+    ...nativeHostPids,
+    ...(teamWorkerPid === null ? [] : [teamWorkerPid])
+  ]);
+  const shortLivedNodeChildren = processes
+    .filter(
+      (process) =>
+        descendantPids.has(process.pid) &&
+        !excludedPids.has(process.pid) &&
+        isNodeProcess(process)
+    )
+    .sort((left, right) => left.pid - right.pid)
+    .map(publicProcess);
+  return {
+    nativeHosts: {
+      declaredPids: [...nativeHostPids],
+      missingPids: nativeHostPids.filter(
+        (pid) => !nativeHostProcesses.some((process) => process.pid === pid)
+      ),
+      processes: nativeHostProcesses
+    },
+    teamWorker: {
+      state: metrics.teamWorker.state,
+      declaredPid: teamWorkerPid,
+      process: teamWorkerProcess
+    },
+    shortLivedNodeChildren
+  };
+}
+
 function aggregateChrome(processes, profilePath) {
   if (!profilePath) return null;
   const marker = `--user-data-dir=${profilePath}`;
@@ -190,10 +282,11 @@ function coreMetrics(path) {
   const gatewayQueue = browserGateway?.queue;
   const pageProbes = browserGateway?.pageProbes;
   const extension = browserGateway?.extension;
+  const teamWorker = document?.teamWorker;
   const pacingReservations = extension?.pacingReservations;
   const extensionProbes = extension?.probes;
   const valid =
-    document?.schema === "bpa.core-runtime-metrics/3" &&
+    document?.schema === "bpa.core-runtime-metrics/4" &&
     Number.isFinite(Date.parse(document.sampledAt)) &&
     safeInteger(document.pid, 1) &&
     (document.runtimeIdentity === null ||
@@ -240,10 +333,25 @@ function coreMetrics(path) {
       (Number.isFinite(Date.parse(activity.latestTerminalRunAt)) &&
         Date.parse(activity.latestTerminalRunAt) <=
           Date.parse(document.sampledAt))) &&
+    teamWorker &&
+    ["stopped", "starting", "ready"].includes(teamWorker.state) &&
+    safeInteger(teamWorker.pendingInvocationCount) &&
+    ((teamWorker.state === "stopped" &&
+      teamWorker.pid === null &&
+      teamWorker.pendingInvocationCount === 0) ||
+      (teamWorker.state !== "stopped" && safeInteger(teamWorker.pid, 1))) &&
     safeInteger(browserGateway?.connectionCount) &&
     safeInteger(browserGateway?.readySessionCount) &&
     browserGateway.readySessionCount <= browserGateway.connectionCount &&
     safeInteger(browserGateway?.pendingCancelRequestCount) &&
+    Array.isArray(browserGateway?.nativeHostPids) &&
+    browserGateway.nativeHostPids.length === browserGateway.connectionCount &&
+    browserGateway.nativeHostPids.every((pid) => safeInteger(pid, 1)) &&
+    new Set(browserGateway.nativeHostPids).size ===
+      browserGateway.nativeHostPids.length &&
+    browserGateway.nativeHostPids.every(
+      (pid, index, values) => index === 0 || values[index - 1] < pid
+    ) &&
     safeInteger(gatewayQueue?.pendingBrowserOutbox) &&
     safeInteger(gatewayQueue?.queuedCommands) &&
     safeInteger(gatewayQueue?.inFlightCommands) &&
@@ -330,11 +438,17 @@ function coreMetrics(path) {
       terminalRunCount: activity.terminalRunCount,
       latestTerminalRunAt: activity.latestTerminalRunAt
     },
+    teamWorker: {
+      state: teamWorker.state,
+      pid: teamWorker.pid,
+      pendingInvocationCount: teamWorker.pendingInvocationCount
+    },
     browserGateway: {
       connectionCount: browserGateway.connectionCount,
       readySessionCount: browserGateway.readySessionCount,
       pendingCancelRequestCount:
         browserGateway.pendingCancelRequestCount,
+      nativeHostPids: [...browserGateway.nativeHostPids],
       queue: {
         pendingBrowserOutbox: gatewayQueue.pendingBrowserOutbox,
         queuedCommands: gatewayQueue.queuedCommands,
@@ -391,13 +505,19 @@ function collectSample(options) {
   const services = Object.fromEntries(
     options.labels.map((label) => [label, publicProcess(byPid.get(pids.get(label)))])
   );
+  const collectedCoreMetrics = coreMetrics(options.coreMetricsPath);
   return {
     schema: SCHEMA,
     sampledAt: new Date().toISOString(),
     services,
     chromeProfile: aggregateChrome(processes, options.chromeProfile),
     sqlite: sqliteFiles(options.sqlitePath),
-    coreMetrics: coreMetrics(options.coreMetricsPath)
+    coreMetrics: collectedCoreMetrics,
+    runtimeProcesses: classifyRuntimeProcesses(
+      processes,
+      services,
+      collectedCoreMetrics
+    )
   };
 }
 

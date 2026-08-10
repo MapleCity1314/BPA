@@ -43,7 +43,11 @@ import {
   BuiltinRuntimeProvider,
   RuntimeProviderRegistry
 } from "@bpa/node-runtime";
-import { registerTeamRuntimeProvider } from "@bpa/team-runtime";
+import {
+  registerTeamRuntimeProvider,
+  TeamRuntimeProvider,
+  type TeamWorkerClientStatus
+} from "@bpa/team-runtime";
 import {
   compileDataValidator,
   formatValidationErrors,
@@ -186,6 +190,7 @@ export class LocalCoreService {
   readonly #resourceBindings: RuntimeResourceBindingService;
   readonly #trustedEvidence: TrustedEvidenceQueryService;
   readonly #runtimeProviders: RuntimeProviderRegistry;
+  readonly #teamRuntimeProvider: TeamRuntimeProvider | undefined;
 
   constructor(
     readonly persistence: Persistence,
@@ -310,6 +315,7 @@ export class LocalCoreService {
         )
       );
     }
+    let teamRuntimeProvider: TeamRuntimeProvider | undefined;
     if (!providers.list().includes("team")) {
       const packagedWorker = resolve(
         import.meta.dirname,
@@ -322,7 +328,7 @@ export class LocalCoreService {
             "tsx",
             resolve(import.meta.dirname, "../../team-worker/src/main.ts")
           ];
-      registerTeamRuntimeProvider(providers, {
+      teamRuntimeProvider = registerTeamRuntimeProvider(providers, {
         process: {
           command: process.execPath,
           args: workerArgs,
@@ -338,7 +344,13 @@ export class LocalCoreService {
         expectedCodeDigest: TEAM_WORKER_CODE_DIGEST,
         expectedHandlerRefs: TEAM_WORKER_HANDLER_REFS
       });
+    } else {
+      const provider = providers.get("team");
+      if (provider instanceof TeamRuntimeProvider) {
+        teamRuntimeProvider = provider;
+      }
     }
+    this.#teamRuntimeProvider = teamRuntimeProvider;
     this.ir2Runtime = new Ir2WorkflowRuntime(persistence, providers, {
       externalDomainLeaseCanUse: (requestId) =>
         this.externalDomainLeases.canStart(requestId),
@@ -538,6 +550,12 @@ export class LocalCoreService {
 
   async dispose(): Promise<void> {
     await this.#runtimeProviders.dispose();
+  }
+
+  runtimeProcessUsage(): { teamWorker: TeamWorkerClientStatus | null } {
+    return {
+      teamWorker: this.#teamRuntimeProvider?.status() ?? null
+    };
   }
 
   async #dispatchAssistance(
@@ -2522,8 +2540,19 @@ export class LocalControlServer {
             return;
           }
           try {
+            const params = request.params;
+            if (
+              !params ||
+              Object.keys(params).sort().join(",") !== "origin,processId" ||
+              typeof params.origin !== "string" ||
+              !Number.isSafeInteger(params.processId) ||
+              Number(params.processId) <= 0
+            ) {
+              throw new Error("Native attach parameters are invalid");
+            }
             nativeConnectionId = this.service.browserGateway.attach(
-              String(request.params?.origin),
+              params.origin,
+              Number(params.processId),
               (browserMessage) => socket.write(encodeFrame(browserMessage))
             );
             socket.write(

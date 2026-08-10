@@ -222,6 +222,7 @@ describe("IR2 browser provider", () => {
     const outgoing: Array<Record<string, any>> = [];
     const primaryConnection = gateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      1001,
       (message) => outgoing.push(message)
     );
     gateway.handle({
@@ -303,6 +304,7 @@ describe("IR2 browser provider", () => {
     const decoyOutgoing: Array<Record<string, any>> = [];
     const decoyConnection = gateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      1002,
       (message) => decoyOutgoing.push(message)
     );
     gateway.handle({
@@ -509,6 +511,7 @@ describe("IR2 browser provider", () => {
     const firstOutgoing: Array<Record<string, any>> = [];
     const firstConnection = firstGateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      1003,
       (message) => firstOutgoing.push(message)
     );
     firstGateway.handle({
@@ -603,6 +606,7 @@ describe("IR2 browser provider", () => {
     const restartedOutgoing: Array<Record<string, any>> = [];
     restartedGateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      1004,
       (message) => restartedOutgoing.push(message)
     );
     restartedGateway.handle({

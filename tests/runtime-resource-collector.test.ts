@@ -3,7 +3,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { collectUntilComplete } from "../scripts/collect-macos-runtime-metrics.mjs";
+import {
+  classifyRuntimeProcesses,
+  collectUntilComplete
+} from "../scripts/collect-macos-runtime-metrics.mjs";
 
 const collector = resolve("scripts/collect-macos-runtime-metrics.mjs");
 
@@ -40,7 +43,7 @@ describe("runtime resource collector", () => {
       writeFileSync(
         metricsPath,
         `${JSON.stringify({
-          schema: "bpa.core-runtime-metrics/3",
+          schema: "bpa.core-runtime-metrics/4",
           sampledAt: "2026-08-06T12:00:00.000Z",
           pid: 42,
           runtimeIdentity: "0.6.0-test",
@@ -78,10 +81,17 @@ describe("runtime resource collector", () => {
             latestTerminalRunAt: "2026-08-06T11:30:00.000Z",
             ignored: "must not escape"
           },
+          teamWorker: {
+            state: "ready",
+            pid: 99_999_998,
+            pendingInvocationCount: 1,
+            ignored: "must not escape"
+          },
           browserGateway: {
             connectionCount: 1,
             readySessionCount: 1,
             pendingCancelRequestCount: 0,
+            nativeHostPids: [99_999_999],
             queue: {
               pendingBrowserOutbox: 1,
               queuedCommands: 2,
@@ -144,6 +154,7 @@ describe("runtime resource collector", () => {
         )
       );
 
+      expect(sample.schema).toBe("bpa.runtime-resource-sample/2");
       expect(sample.coreMetrics).toEqual({
         status: "available",
         sampledAt: "2026-08-06T12:00:00.000Z",
@@ -179,10 +190,16 @@ describe("runtime resource collector", () => {
           terminalRunCount: 1,
           latestTerminalRunAt: "2026-08-06T11:30:00.000Z"
         },
+        teamWorker: {
+          state: "ready",
+          pid: 99_999_998,
+          pendingInvocationCount: 1
+        },
         browserGateway: {
           connectionCount: 1,
           readySessionCount: 1,
           pendingCancelRequestCount: 0,
+          nativeHostPids: [99_999_999],
           queue: {
             pendingBrowserOutbox: 1,
             queuedCommands: 2,
@@ -226,6 +243,19 @@ describe("runtime resource collector", () => {
         }
       });
       expect(JSON.stringify(sample)).not.toContain("must not escape");
+      expect(sample.runtimeProcesses).toEqual({
+        nativeHosts: {
+          declaredPids: [99_999_999],
+          missingPids: [99_999_999],
+          processes: []
+        },
+        teamWorker: {
+          state: "ready",
+          declaredPid: 99_999_998,
+          process: null
+        },
+        shortLivedNodeChildren: []
+      });
 
       const futureTerminal = JSON.parse(readFileSync(metricsPath, "utf8"));
       futureTerminal.activity.latestTerminalRunAt =
@@ -242,6 +272,101 @@ describe("runtime resource collector", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("classifies declared roles and only Node descendants as short-lived", () => {
+    const process = (
+      pid: number,
+      parentPid: number,
+      command: string
+    ) => ({
+      pid,
+      parentPid,
+      cpuPercent: pid / 100,
+      rssKiB: pid * 10,
+      elapsed: "00:10",
+      command
+    });
+    const processes = [
+      process(10, 1, "/runtime/node core.js"),
+      process(20, 1, "/runtime/node inventory.js"),
+      process(30, 300, "/runtime/bpa-native-host"),
+      process(40, 10, "/runtime/node team-worker.js"),
+      process(50, 20, "/runtime/node refresh-risk.ts"),
+      process(51, 50, "/runtime/node nested-task.ts"),
+      process(60, 20, "/bin/sh helper.sh"),
+      process(70, 1, "/runtime/node unrelated.js")
+    ];
+    const services = {
+      "com.bpa.core": { pid: 10 },
+      "com.bpa.inventory-monitor": { pid: 20 }
+    };
+    const metrics = {
+      status: "available",
+      teamWorker: { state: "ready", pid: 40, pendingInvocationCount: 0 },
+      browserGateway: { nativeHostPids: [30] }
+    };
+
+    const classified = classifyRuntimeProcesses(processes, services, metrics);
+    expect(classified).toEqual({
+      nativeHosts: {
+        declaredPids: [30],
+        missingPids: [],
+        processes: [
+          {
+            pid: 30,
+            parentPid: 300,
+            cpuPercent: 0.3,
+            rssKiB: 300,
+            elapsed: "00:10"
+          }
+        ]
+      },
+      teamWorker: {
+        state: "ready",
+        declaredPid: 40,
+        process: {
+          pid: 40,
+          parentPid: 10,
+          cpuPercent: 0.4,
+          rssKiB: 400,
+          elapsed: "00:10"
+        }
+      },
+      shortLivedNodeChildren: [
+        {
+          pid: 50,
+          parentPid: 20,
+          cpuPercent: 0.5,
+          rssKiB: 500,
+          elapsed: "00:10"
+        },
+        {
+          pid: 51,
+          parentPid: 50,
+          cpuPercent: 0.51,
+          rssKiB: 510,
+          elapsed: "00:10"
+        }
+      ]
+    });
+    expect(JSON.stringify(classified)).not.toContain("refresh-risk");
+    expect(JSON.stringify(classified)).not.toContain("unrelated");
+
+    expect(
+      classifyRuntimeProcesses(processes, services, {
+        status: "available",
+        teamWorker: {
+          state: "ready",
+          pid: 70,
+          pendingInvocationCount: 0
+        },
+        browserGateway: { nativeHostPids: [60] }
+      })
+    ).toMatchObject({
+      nativeHosts: { declaredPids: [60], missingPids: [60], processes: [] },
+      teamWorker: { state: "ready", declaredPid: 70, process: null }
+    });
   });
 
   it("marks malformed metrics invalid without copying their contents", () => {

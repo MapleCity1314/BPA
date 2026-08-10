@@ -93,7 +93,7 @@ socket.once("connect", () => {
     encodeCoreFrame({
       id: attachId,
       method: "native.attach",
-      params: { origin }
+      params: { origin, processId: process.pid }
     })
   );
 });

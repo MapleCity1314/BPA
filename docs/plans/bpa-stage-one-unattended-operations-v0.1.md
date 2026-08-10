@@ -251,11 +251,14 @@ Schema 降级描述成可恢复旧二进制，也不得复制登录态。
    min/max/mean/p50/p95/p99，并统计 Browser outbox、queued/in-flight command 与待回灌终态
    的 Gateway 队列深度；计数守恒或分位数漂移会使阶段 0 门禁 fail-closed。Profile 全部
    标签页数也由 Extension 的无条件 `tabs.query({})` 进入同一快照，查询失败或超过 1024 时
-   不伪造 0。Core v3 快照还记录 active Run/Trigger、待处理 Engine outbox、控制/外部/暂存
+   不伪造 0。Core v4 快照还记录 active Run/Trigger、待处理 Engine outbox、控制/外部/暂存
    租约、Recovery Session 与 Attention Delivery。分析器只有在最新 Run 终态后连续 15 分钟
    这些计数及浏览器瞬态命令、取消、probe、reservation 和队列均保持 0 时才产生 quiescence
-   marker；采样缺口或中途活动会重置窗口。真实 marker 仍待灰度采集，剩余代码缺口是 Native
-   Host、Team Worker 与短命 Node 子进程的独立 PID 曲线。
+   marker；采样缺口或中途活动会重置窗口。v4 同时记录连接绑定的 Native Host PID 和真实
+   `spawn()` 的 Team Worker PID/状态/未完成调用数。采集器与 OS 进程表交叉核对这些 PID，
+   并从 Core/Inventory Monitor 的进程树识别其他 Node 子进程，只输出 PID/PPID/CPU/RSS/存活
+   时间；声明 PID 缺失、跨层不一致或任一样本不是恰好一个 Native Host 会 fail-closed。
+   代码可见性已闭合，但真实角色曲线与 quiescence marker 仍待获授权后的新采集窗口。
 9. **入口清退**：旧 source/tsx launchd、Inventory Scheduler 模式与签名闭包 Core 不能并存。
    灰度前选定签名闭包为唯一 Core；legacy recovery 仍会按步骤启动短命 Node 子进程，只有
    正式库存 Workflow 接管后，per-step Node spawn 才能归零。

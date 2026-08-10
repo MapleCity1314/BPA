@@ -37,6 +37,7 @@ const browserGateway = {
   connectionCount: 1,
   readySessionCount: 1,
   pendingCancelRequestCount: 0,
+  nativeHostPids: [84],
   queue: {
     pendingBrowserOutbox: 1,
     queuedCommands: 2,
@@ -87,6 +88,12 @@ const activity = {
   latestTerminalRunAt: "2026-08-06T11:30:00.000Z"
 };
 
+const teamWorker = {
+  state: "ready" as const,
+  pid: 85,
+  pendingInvocationCount: 1
+};
+
 describe("Core runtime resource metrics", () => {
   it("atomically publishes only the allowlisted same-connection metrics", () => {
     const root = mkdtempSync(join(tmpdir(), "bpa-runtime-metrics-"));
@@ -99,6 +106,7 @@ describe("Core runtime resource metrics", () => {
         processMemoryUsage: () => processMemory,
         eventLoop,
         activity,
+        teamWorker,
         browserGateway
       });
       expect(snapshot).toEqual({
@@ -115,6 +123,7 @@ describe("Core runtime resource metrics", () => {
         },
         eventLoop,
         activity,
+        teamWorker,
         browserGateway,
         sqlite: {
           measurement: "same_connection_db_status64",
@@ -134,7 +143,8 @@ describe("Core runtime resource metrics", () => {
         "runtimeIdentity",
         "sampledAt",
         "schema",
-        "sqlite"
+        "sqlite",
+        "teamWorker"
       ]);
       expect(Object.keys(snapshot.sqlite).sort()).toEqual([
         "cacheSizeSetting",
@@ -163,6 +173,7 @@ describe("Core runtime resource metrics", () => {
           processMemoryUsage: () => processMemory,
           eventLoop,
           activity,
+          teamWorker,
           browserGateway,
           temporaryIdFactory: () => "collision"
         })
@@ -188,6 +199,7 @@ describe("Core runtime resource metrics", () => {
             processMemoryUsage: () => processMemory,
             eventLoop,
             activity,
+            teamWorker,
             browserGateway,
             temporaryIdFactory: () => "serialization-failure"
           }
@@ -225,6 +237,7 @@ describe("Core runtime resource metrics", () => {
               processMemoryUsage: () => processMemory,
               eventLoop,
               activity,
+              teamWorker,
               browserGateway,
               temporaryIdFactory: () => "aggregate-error"
             }

@@ -15,9 +15,10 @@ import type {
 } from "@bpa/persistence-sqlite";
 import type { BrowserGatewayStatus } from "./browser-gateway.js";
 import type { EventLoopLagSnapshot } from "./runtime-event-loop-monitor.js";
+import type { TeamWorkerClientStatus } from "@bpa/team-runtime";
 
 export const RUNTIME_RESOURCE_METRICS_SCHEMA =
-  "bpa.core-runtime-metrics/3";
+  "bpa.core-runtime-metrics/4";
 
 export interface RuntimeResourceMetricsSnapshot {
   schema: typeof RUNTIME_RESOURCE_METRICS_SCHEMA;
@@ -33,6 +34,7 @@ export interface RuntimeResourceMetricsSnapshot {
   };
   eventLoop: EventLoopLagSnapshot;
   activity: RuntimeActivityMetrics;
+  teamWorker: TeamWorkerClientStatus | null;
   browserGateway: BrowserGatewayStatus["resourceUsage"];
   sqlite: SqliteResourceMetrics & {
     measurement: "same_connection_db_status64";
@@ -49,6 +51,7 @@ export function writeRuntimeResourceMetrics(
     processMemoryUsage?: () => NodeJS.MemoryUsage;
     eventLoop: EventLoopLagSnapshot;
     activity: RuntimeActivityMetrics;
+    teamWorker: TeamWorkerClientStatus | null;
     browserGateway: BrowserGatewayStatus["resourceUsage"];
     temporaryIdFactory?: () => string;
   }
@@ -68,6 +71,7 @@ export function writeRuntimeResourceMetrics(
     },
     eventLoop: options.eventLoop,
     activity: options.activity,
+    teamWorker: options.teamWorker,
     browserGateway: options.browserGateway,
     sqlite: {
       measurement: "same_connection_db_status64",

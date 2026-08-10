@@ -49,13 +49,16 @@ Core 校验后进入 24 小时采集与分析结果。本代码候选进一步�
 min/max/mean/p50/p95/p99，并记录 Browser outbox、queued/in-flight command 和待回灌终态的
 Gateway 队列深度；Extension 还以无条件 `tabs.query({})` 记录当前 Profile 全部标签页数，
 查询失败或超过 1024 时不伪造 0。任一新指标缺失或守恒失败都会阻断阶段 0 结论。
-Core 的 v3 快照还从同一 SQLite 连接记录 active Run、Trigger、待处理 Engine outbox、
+Core 的 v4 快照还从同一 SQLite 连接记录 active Run、Trigger、待处理 Engine outbox、
 控制/外部/暂存租约、Recovery Session 与 Attention Delivery 数量。分析器只有在最新 Run
 终态后连续 15 分钟所有上述计数和浏览器瞬态队列均为 0 时，才产生 quiescence marker；
 采样缺口或任一中途活动都会重置窗口。本代码候选尚未取得真实 marker，不能把单元测试当作
-灰度排空证据。Native Host、Team Worker 和短命进程的独立 PID 曲线仍是工程缺口。本机当前没有 BPA
-launchd/进程，因此这只是仓库形态审计，不能当作公司 Mac 当前进程事实。灰度候选、预算与
-停止线见阶段 1 计划。
+灰度排空证据。v4 还记录与 Native Host 连接绑定的 PID，以及 Core 实际 `spawn()` 的 Team
+Worker PID、状态和未完成调用数；采集器与 OS 进程表交叉核对声明 PID，并只用脱敏进程字段
+汇总 Core/Inventory Monitor 进程树内的其他 Node 子进程，命令行不会进入证据。任一声明 PID
+缺失或任一样本不是恰好一个 Native Host 都会阻断阶段 0 门禁。本机当前没有 BPA launchd/
+进程，因此这些仍只是仓库形态与合成反例，不能当作公司 Mac 当前进程曲线或生产事实。灰度
+候选、预算与停止线见阶段 1 计划。
 
 ## 2. 阶段状态板
 
