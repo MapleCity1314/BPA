@@ -32,7 +32,7 @@ function sample(
   metricsSampledAt = sampledAt
 ): RuntimeSampleFixture {
   return {
-    schema: "bpa.runtime-resource-sample/1",
+    schema: "bpa.runtime-resource-sample/2",
     sampledAt,
     services: {
       "com.bpa.core": {
@@ -59,6 +59,27 @@ function sample(
       databaseBytes: 1024,
       walBytes: 128,
       shmBytes: 32
+    },
+    runtimeProcesses: {
+      nativeHosts: {
+        declaredPids: [30],
+        missingPids: [],
+        processes: [
+          {
+            pid: 30,
+            parentPid: 300,
+            cpuPercent: 0.1,
+            rssKiB: 12_000,
+            elapsed: "01:00"
+          }
+        ]
+      },
+      teamWorker: {
+        state: "stopped",
+        declaredPid: null,
+        process: null
+      },
+      shortLivedNodeChildren: []
     },
     ...(cacheUsedBytes === undefined
       ? {}
@@ -98,10 +119,16 @@ function sample(
               terminalRunCount: 0,
               latestTerminalRunAt: null
             },
+            teamWorker: {
+              state: "stopped",
+              pid: null,
+              pendingInvocationCount: 0
+            },
             browserGateway: {
               connectionCount: 1,
               readySessionCount: 1,
               pendingCancelRequestCount: 0,
+              nativeHostPids: [30],
               queue: {
                 pendingBrowserOutbox: 1,
                 queuedCommands: 2,
@@ -226,6 +253,7 @@ describe("runtime resource analysis", () => {
     expect(result.conclusionGate.blockers).toEqual([
       "core_pid_changed",
       "core_resident_metrics_not_measured",
+      "runtime_process_roles_not_measured",
       "sqlite_page_cache_not_measured"
     ]);
   });
@@ -265,6 +293,7 @@ describe("runtime resource analysis", () => {
     });
     expect(result.conclusionGate.blockers).toEqual([
       "core_resident_metrics_not_measured",
+      "runtime_process_roles_not_measured",
       "sqlite_page_cache_not_measured"
     ]);
   });
@@ -348,6 +377,7 @@ describe("runtime resource analysis", () => {
       chromeProfileComplete: true,
       nodeAndChromeMeasurable: true,
       coreResidentMeasurable: true,
+      runtimeProcessRolesMeasurable: true,
       runtimeQuiescenceMeasurable: true,
       sqlitePageCacheMeasurable: true,
       phaseZeroResourceMeasurementComplete: true,
@@ -361,6 +391,27 @@ describe("runtime resource analysis", () => {
       runtimeIdentities: ["0.6.0-test"],
       runtimeIdentityExpected: true,
       runtimeIdentityStable: true
+    });
+    expect(result.runtimeProcessRoles).toMatchObject({
+      status: "measured",
+      measuredSamples: 2,
+      missingSamples: 0,
+      nativeHosts: {
+        uniquePids: [30],
+        missingDeclaredSamples: 0,
+        unexpectedProcessCountSamples: 0,
+        processCount: { start: 1, end: 1 },
+        rssKiB: { start: 12_000, end: 12_000 }
+      },
+      teamWorker: {
+        uniquePids: [],
+        missingDeclaredSamples: 0,
+        processCount: { start: 0, end: 0 }
+      },
+      shortLivedNodeChildren: {
+        uniquePids: [],
+        processCount: { start: 0, end: 0 }
+      }
     });
   });
 
@@ -539,6 +590,7 @@ describe("runtime resource analysis", () => {
       )
     );
 
+    expect(result.schema).toBe("bpa.runtime-resource-analysis/2");
     expect(result.coreResident).toMatchObject({
       status: "not_measured",
       measuredSamples: 0,
@@ -549,6 +601,124 @@ describe("runtime resource analysis", () => {
       sqlitePageCacheMeasurable: true,
       phaseZeroResourceMeasurementComplete: false,
       blockers: ["core_resident_metrics_not_measured"]
+    });
+  });
+
+  it("fails the phase-zero gate when a declared runtime PID is absent", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-role-missing-"));
+    const input = join(root, "samples.jsonl");
+    const first = sample("2026-08-05T00:00:00.000Z", 10, 100, 4096);
+    const last = sample("2026-08-06T00:00:00.000Z", 10, 120, 8192);
+    const roles = last.runtimeProcesses as Record<string, any>;
+    roles.nativeHosts.missingPids = [30];
+    roles.nativeHosts.processes = [];
+    writeFileSync(
+      input,
+      `${JSON.stringify(first)}\n${JSON.stringify(last)}\n`
+    );
+
+    const result = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          script,
+          "--input",
+          input,
+          "--expected-interval-seconds",
+          "43200"
+        ],
+        { encoding: "utf8" }
+      )
+    );
+
+    expect(result.runtimeProcessRoles).toMatchObject({
+      status: "not_measured",
+      measuredSamples: 2,
+      missingSamples: 0,
+      nativeHosts: { missingDeclaredSamples: 1 }
+    });
+    expect(result.conclusionGate).toMatchObject({
+      runtimeProcessRolesMeasurable: false,
+      phaseZeroResourceMeasurementComplete: false
+    });
+    expect(result.conclusionGate.blockers).toContain(
+      "runtime_process_roles_not_measured"
+    );
+  });
+
+  it("keeps Team Worker and short-lived Node PID curves separate", () => {
+    const root = mkdtempSync(join(tmpdir(), "bpa-runtime-role-curves-"));
+    const input = join(root, "samples.jsonl");
+    const first = sample("2026-08-05T00:00:00.000Z", 10, 100, 4096);
+    const last = sample("2026-08-06T00:00:00.000Z", 10, 120, 8192);
+    const firstMetrics = first.coreMetrics as Record<string, any>;
+    firstMetrics.teamWorker = {
+      state: "ready",
+      pid: 40,
+      pendingInvocationCount: 0
+    };
+    const firstRoles = first.runtimeProcesses as Record<string, any>;
+    firstRoles.teamWorker = {
+      state: "ready",
+      declaredPid: 40,
+      process: {
+        pid: 40,
+        parentPid: 10,
+        cpuPercent: 0.4,
+        rssKiB: 40_000,
+        elapsed: "00:10"
+      }
+    };
+    firstRoles.shortLivedNodeChildren = [
+      {
+        pid: 50,
+        parentPid: 20,
+        cpuPercent: 0.5,
+        rssKiB: 5_000,
+        elapsed: "00:05"
+      }
+    ];
+    const lastRoles = last.runtimeProcesses as Record<string, any>;
+    lastRoles.shortLivedNodeChildren = [
+      {
+        pid: 51,
+        parentPid: 20,
+        cpuPercent: 0.25,
+        rssKiB: 4_000,
+        elapsed: "00:03"
+      }
+    ];
+    writeFileSync(
+      input,
+      `${JSON.stringify(first)}\n${JSON.stringify(last)}\n`
+    );
+
+    const result = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          script,
+          "--input",
+          input,
+          "--expected-interval-seconds",
+          "43200"
+        ],
+        { encoding: "utf8" }
+      )
+    );
+
+    expect(result.runtimeProcessRoles).toMatchObject({
+      status: "measured",
+      teamWorker: {
+        uniquePids: [40],
+        processCount: { start: 1, end: 0 },
+        rssKiB: { start: 40_000, end: 0 }
+      },
+      shortLivedNodeChildren: {
+        uniquePids: [50, 51],
+        processCount: { start: 1, end: 1 },
+        rssKiB: { start: 5_000, end: 4_000 }
+      }
     });
   });
 

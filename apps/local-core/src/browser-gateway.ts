@@ -66,6 +66,7 @@ export interface BrowserGatewayStatus {
     connectionCount: number;
     readySessionCount: number;
     pendingCancelRequestCount: number;
+    nativeHostPids: number[];
     queue: {
       pendingBrowserOutbox: number;
       queuedCommands: number;
@@ -129,6 +130,7 @@ const BROWSER_HEARTBEAT_INTERVAL_MS = 20_000;
 interface BrowserConnection {
   id: string;
   attachedOrder: number;
+  nativeHostPid: number;
   send: (message: Message) => void;
   session?: ActiveSession;
   lastError?: string;
@@ -364,12 +366,27 @@ export class LocalBrowserGateway implements RuntimeProvider {
     });
   }
 
-  attach(origin: string, send: (message: Message) => void): string {
+  attach(
+    origin: string,
+    nativeHostPid: number,
+    send: (message: Message) => void
+  ): string {
     assertNativeHostOrigin(origin, this.#extensionId);
+    if (!Number.isSafeInteger(nativeHostPid) || nativeHostPid <= 0) {
+      throw new Error("Native Host process ID is invalid");
+    }
+    if (
+      [...this.#connections.values()].some(
+        (connection) => connection.nativeHostPid === nativeHostPid
+      )
+    ) {
+      throw new Error("Native Host process already has an active connection");
+    }
     const connectionId = randomUUID();
     this.#connections.set(connectionId, {
       id: connectionId,
       attachedOrder: ++this.#attachedOrder,
+      nativeHostPid,
       send,
       cancelRequests: new Set()
     });
@@ -431,6 +448,9 @@ export class LocalBrowserGateway implements RuntimeProvider {
           (total, connection) => total + connection.cancelRequests.size,
           0
         ),
+        nativeHostPids: [...this.#connections.values()]
+          .map((connection) => connection.nativeHostPid)
+          .sort((left, right) => left - right),
         queue: {
           pendingBrowserOutbox,
           queuedCommands,

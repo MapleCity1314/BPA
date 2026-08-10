@@ -33,6 +33,12 @@ export interface TeamWorkerClientOptions {
   readonly helloTimeoutMs?: number;
 }
 
+export interface TeamWorkerClientStatus {
+  readonly state: "stopped" | "starting" | "ready";
+  readonly pid: number | null;
+  readonly pendingInvocationCount: number;
+}
+
 interface PendingInvocation {
   readonly fencingToken: number;
   readonly resolve: (outcome: RuntimeOutcome) => void;
@@ -83,6 +89,7 @@ export class TeamWorkerClient {
   #handshake: Handshake | undefined;
   #stderr = "";
   #stopping = false;
+  #ready = false;
 
   constructor(readonly options: TeamWorkerClientOptions) {
     if (!isAbsolute(options.process.command)) {
@@ -96,6 +103,7 @@ export class TeamWorkerClient {
   async start(): Promise<void> {
     if (this.#child && this.#handshake) return this.#handshake.promise;
     this.#stopping = false;
+    this.#ready = false;
     this.#decoder.reset();
     this.#stderr = "";
     const child = spawn(
@@ -295,8 +303,18 @@ export class TeamWorkerClient {
     );
   }
 
+  status(): TeamWorkerClientStatus {
+    const pid = this.#child?.pid;
+    return {
+      state: this.#child ? (this.#ready ? "ready" : "starting") : "stopped",
+      pid: Number.isSafeInteger(pid) && Number(pid) > 0 ? Number(pid) : null,
+      pendingInvocationCount: this.#pending.size
+    };
+  }
+
   stop(): void {
     this.#stopping = true;
+    this.#ready = false;
     const child = this.#child;
     this.#child = undefined;
     this.#rejectHandshake(
@@ -363,6 +381,7 @@ export class TeamWorkerClient {
       const handshake = this.#handshake;
       if (!handshake) return;
       clearTimeout(handshake.timer);
+      this.#ready = true;
       handshake.resolve();
       return;
     }
@@ -455,6 +474,7 @@ export class TeamWorkerClient {
   ): void {
     if (this.#child !== child) return;
     this.#child = undefined;
+    this.#ready = false;
     this.#rejectHandshake(new TeamClientError(code, message, retryable));
     for (const invocationId of [...this.#pending.keys()]) {
       this.#settle(
@@ -471,6 +491,7 @@ export class TeamWorkerClient {
   ): void {
     if (this.#child !== child) return;
     this.#child = undefined;
+    this.#ready = false;
     const code = this.#stopping
       ? "TEAM_WORKER_STOPPED"
       : "TEAM_WORKER_CRASHED";

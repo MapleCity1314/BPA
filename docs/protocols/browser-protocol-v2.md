@@ -12,6 +12,7 @@
 Native Host 只负责：
 
 - 校验 Chrome 传入的精确 Extension Origin。
+- 在本地 attach 时声明自身 PID，供 Core 按连接绑定并与 OS 进程表交叉核对。
 - Chrome stdio framing。
 - 将完整协议消息转发到 Local Core 的受限 Unix Socket。
 

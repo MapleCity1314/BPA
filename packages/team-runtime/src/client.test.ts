@@ -92,6 +92,28 @@ describe("Team Runtime Provider process lifecycle", () => {
     provider.dispose();
   });
 
+  it("reports the exact child PID and lifecycle without exposing process input", async () => {
+    const client = new TeamWorkerClient(options());
+    expect(client.status()).toEqual({
+      state: "stopped",
+      pid: null,
+      pendingInvocationCount: 0
+    });
+    await client.start();
+    expect(client.status()).toMatchObject({
+      state: "ready",
+      pendingInvocationCount: 0
+    });
+    expect(client.status().pid).toEqual(expect.any(Number));
+    expect(client.status().pid).toBeGreaterThan(0);
+    client.stop();
+    expect(client.status()).toEqual({
+      state: "stopped",
+      pid: null,
+      pendingInvocationCount: 0
+    });
+  });
+
   it("settles a crash and restarts on the next invocation", async () => {
     const provider = new TeamRuntimeProvider(
       new TeamWorkerClient(options())
