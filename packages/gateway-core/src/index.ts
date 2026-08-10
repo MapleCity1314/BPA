@@ -16,6 +16,7 @@ import {
 export const BROWSER_PROTOCOL = "bpa.browser/2" as const;
 export const BROWSER_PROTOCOL_VERSION = "2.0.0" as const;
 export const BROWSER_PROTOCOL_MAX_MESSAGE_BYTES = 512 * 1024;
+export const BROWSER_PROTOCOL_RECENT_MESSAGE_ID_LIMIT = 4096;
 export const EVIDENCE_CHUNK_BYTES = 256 * 1024;
 export const RESUME_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -138,7 +139,7 @@ export type ProtocolAcceptance =
 export class ProtocolSessionGuard {
   #sessionId: string | undefined;
   #lastSequence = -1;
-  readonly #messageIds = new Set<string>();
+  readonly #recentMessageIds = new Set<string>();
 
   establish(sessionId: string, lastSequence = 0): void {
     if (!sessionId || sessionId === "new") {
@@ -146,7 +147,7 @@ export class ProtocolSessionGuard {
     }
     this.#sessionId = sessionId;
     this.#lastSequence = lastSequence;
-    this.#messageIds.clear();
+    this.#recentMessageIds.clear();
   }
 
   accept(value: unknown): ProtocolAcceptance {
@@ -175,7 +176,7 @@ export class ProtocolSessionGuard {
       );
     }
     const message = value;
-    if (this.#messageIds.has(message.message_id)) {
+    if (this.#recentMessageIds.has(message.message_id)) {
       return { status: "duplicate", message };
     }
     const isHello = message.type === "session.hello";
@@ -195,7 +196,14 @@ export class ProtocolSessionGuard {
         `Sequence ${message.seq} is not greater than ${this.#lastSequence}`
       );
     }
-    this.#messageIds.add(message.message_id);
+    this.#recentMessageIds.add(message.message_id);
+    if (
+      this.#recentMessageIds.size >
+      BROWSER_PROTOCOL_RECENT_MESSAGE_ID_LIMIT
+    ) {
+      const oldest = this.#recentMessageIds.values().next().value;
+      if (oldest !== undefined) this.#recentMessageIds.delete(oldest);
+    }
     if (!isHello) this.#lastSequence = message.seq;
     return { status: "accepted", message };
   }
