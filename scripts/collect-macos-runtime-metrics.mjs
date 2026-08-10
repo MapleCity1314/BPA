@@ -251,6 +251,8 @@ function coreMetrics(path) {
     safeInteger(extension.observedTabs) &&
     safeInteger(extension.observationCapacity, 1) &&
     extension.observedTabs <= extension.observationCapacity &&
+    safeInteger(extension.profileTabs) &&
+    extension.profileTabs <= 1024 &&
     safeInteger(extension.managedTabs) &&
     safeInteger(extension.managedTabReservations) &&
     extension.managedTabCapacity === 8 &&
@@ -320,6 +322,7 @@ function coreMetrics(path) {
         cancellationStopBarriers: extension.cancellationStopBarriers,
         observedTabs: extension.observedTabs,
         observationCapacity: extension.observationCapacity,
+        profileTabs: extension.profileTabs,
         managedTabs: extension.managedTabs,
         managedTabReservations: extension.managedTabReservations,
         managedTabCapacity: extension.managedTabCapacity,

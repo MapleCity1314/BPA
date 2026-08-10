@@ -34,6 +34,7 @@ const extensionResourceUsage = {
   cancellation_stop_barriers: 0,
   observed_tabs: 2,
   observation_capacity: 64,
+  profile_tabs: 3,
   managed_tabs: 0,
   managed_tab_reservations: 0,
   managed_tab_capacity: 8,
@@ -323,6 +324,7 @@ describe("local browser gateway", () => {
     expect(gateway.status().resourceUsage.extension).toMatchObject({
       activeCommands: 1,
       observedTabs: 2,
+      profileTabs: 3,
       pacingReservations: { active: 1, capacity: 64, ttlMs: 120_000 },
       probes: { active: 1, capacity: 32, ttlMs: 30_000 }
     });

@@ -412,6 +412,7 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         extension.cancellationStopBarriers,
         extension.observedTabs,
         extension.observationCapacity,
+        extension.profileTabs,
         extension.managedTabs,
         extension.managedTabReservations,
         extension.managedTabCapacity,
@@ -457,6 +458,7 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         extension.cancellationRequests &&
       extension.observationCapacity >= 1 &&
       extension.observedTabs <= extension.observationCapacity &&
+      extension.profileTabs <= 1024 &&
       extension.managedTabCapacity === 8 &&
       extension.managedTabs + extension.managedTabReservations <=
         extension.managedTabCapacity &&
@@ -623,6 +625,10 @@ function coreResidentSummary(samples, expectedIntervalSeconds) {
         observedTabs: summarize(
           (metrics) => metrics.browserGateway.extension.observedTabs,
           "Extension observedTabs"
+        ),
+        profileTabs: summarize(
+          (metrics) => metrics.browserGateway.extension.profileTabs,
+          "Extension profileTabs"
         ),
         managedTabs: summarize(
           (metrics) => metrics.browserGateway.extension.managedTabs,

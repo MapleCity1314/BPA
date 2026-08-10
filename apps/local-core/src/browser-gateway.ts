@@ -91,6 +91,7 @@ export interface ExtensionResourceUsage {
   cancellationStopBarriers: number;
   observedTabs: number;
   observationCapacity: number;
+  profileTabs: number;
   managedTabs: number;
   managedTabReservations: number;
   managedTabCapacity: number;
@@ -174,6 +175,7 @@ function parseExtensionResourceUsage(
     record.cancellation_stop_barriers,
     record.observed_tabs,
     record.observation_capacity,
+    record.profile_tabs,
     record.managed_tabs,
     record.managed_tab_reservations,
     record.managed_tab_capacity,
@@ -199,6 +201,7 @@ function parseExtensionResourceUsage(
     cancellationStopBarriers: Number(record.cancellation_stop_barriers),
     observedTabs: Number(record.observed_tabs),
     observationCapacity: Number(record.observation_capacity),
+    profileTabs: Number(record.profile_tabs),
     managedTabs: Number(record.managed_tabs),
     managedTabReservations: Number(record.managed_tab_reservations),
     managedTabCapacity: Number(record.managed_tab_capacity),
@@ -220,6 +223,7 @@ function parseExtensionResourceUsage(
     usage.cancellationStopBarriers === usage.cancellationRequests &&
     usage.observationCapacity === 64 &&
     usage.observedTabs <= usage.observationCapacity &&
+    usage.profileTabs <= 1024 &&
     usage.managedTabCapacity === 8 &&
     usage.managedTabs + usage.managedTabReservations <=
       usage.managedTabCapacity &&

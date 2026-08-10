@@ -249,7 +249,8 @@ Schema 降级描述成可恢复旧二进制，也不得复制登录态。
    采集器与分析结果。本代码候选也用 Node 原生直方图按采样窗口记录 event-loop
    min/max/mean/p50/p95/p99，并统计 Browser outbox、queued/in-flight command 与待回灌终态
    的 Gateway 队列深度；计数守恒或分位数漂移会使阶段 0 门禁 fail-closed。其余进程角色、
-   Profile 全部标签页和 quiescence 仍未完成。
+   Profile 全部标签页数也由 Extension 的无条件 `tabs.query({})` 进入同一快照，查询失败或
+   超过 1024 时不伪造 0。其余进程角色和 quiescence 仍未完成。
 9. **入口清退**：旧 source/tsx launchd、Inventory Scheduler 模式与签名闭包 Core 不能并存。
    灰度前选定签名闭包为唯一 Core；legacy recovery 仍会按步骤启动短命 Node 子进程，只有
    正式库存 Workflow 接管后，per-step Node spawn 才能归零。

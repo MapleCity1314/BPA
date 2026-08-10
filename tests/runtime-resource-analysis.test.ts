@@ -109,6 +109,7 @@ function sample(
                 cancellationStopBarriers: 0,
                 observedTabs: 1,
                 observationCapacity: 64,
+                profileTabs: 3,
                 managedTabs: 0,
                 managedTabReservations: 0,
                 managedTabCapacity: 8,
@@ -276,6 +277,7 @@ describe("runtime resource analysis", () => {
         pageProbeCapacity: [32],
         pageProbeTtlMs: [10_000],
         extension: {
+          profileTabs: { start: 3, end: 3 },
           observationCapacity: [64],
           managedTabCapacity: [8],
           pacingCapacity: [64],

@@ -284,6 +284,9 @@ describe("timing and risk schemas", () => {
     heartbeat.payload.resource_usage.probes.active = 33;
     expect(validateBrowserProtocolMessage(heartbeat)).toBe(false);
     heartbeat.payload.resource_usage.probes.active = 1;
+    heartbeat.payload.resource_usage.profile_tabs = 1025;
+    expect(validateBrowserProtocolMessage(heartbeat)).toBe(false);
+    heartbeat.payload.resource_usage.profile_tabs = 3;
     heartbeat.payload.resource_usage.managed_tab_capacity = 9;
     expect(validateBrowserProtocolMessage(heartbeat)).toBe(false);
   });

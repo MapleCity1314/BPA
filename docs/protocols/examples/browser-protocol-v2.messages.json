@@ -255,6 +255,7 @@
         "cancellation_stop_barriers": 0,
         "observed_tabs": 2,
         "observation_capacity": 64,
+        "profile_tabs": 3,
         "managed_tabs": 0,
         "managed_tab_reservations": 0,
         "managed_tab_capacity": 8,

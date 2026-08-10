@@ -47,8 +47,9 @@ generation 限制为 32 项/30 秒 TTL；取消请求、停止屏障和 Alliance
 8；无 reservation 的归属页会被关闭并停止所属命令。`heartbeat.pong` 的白名单资源占用经
 Core 校验后进入 24 小时采集与分析结果。本代码候选进一步按采样窗口记录 Core event-loop
 min/max/mean/p50/p95/p99，并记录 Browser outbox、queued/in-flight command 和待回灌终态的
-Gateway 队列深度；任一新指标缺失或守恒失败都会阻断阶段 0 结论。Native Host/Team Worker/
-短命进程、全部 Chrome 标签页数和 quiescence 仍是工程缺口。本机当前没有 BPA
+Gateway 队列深度；Extension 还以无条件 `tabs.query({})` 记录当前 Profile 全部标签页数，
+查询失败或超过 1024 时不伪造 0。任一新指标缺失或守恒失败都会阻断阶段 0 结论。
+Native Host/Team Worker/短命进程和 quiescence 仍是工程缺口。本机当前没有 BPA
 launchd/进程，因此这只是仓库形态审计，不能当作公司 Mac 当前进程事实。灰度候选、预算与
 停止线见阶段 1 计划。
 

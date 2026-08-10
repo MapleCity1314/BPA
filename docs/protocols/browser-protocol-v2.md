@@ -63,8 +63,10 @@ revision、page epoch 和过期时间。平台身份由 Adapter Node 读取，�
 
 Gateway 每 20 秒向 READY Session 发送 `heartbeat.ping`。Bridge 的
 `heartbeat.pong` 必须回显当前 nonce，并携带严格白名单的 `resource_usage`：活跃命令、
-标签页命令、Alliance stage、取消请求与停止屏障、观察标签页、受管标签页及其预留槽位/容量，
-以及 pacing reservation 和 probe generation 的数量、容量与 TTL。受控开页 stage 必须先取得
+标签页命令、Alliance stage、取消请求与停止屏障、观察标签页、当前 Profile 全部标签页数、
+受管标签页及其预留槽位/容量，以及 pacing reservation 和 probe generation 的数量、容量与
+TTL。Profile 标签页计数必须来自一次无条件 `tabs.query({})`，上限为 1024；查询失败或超限时
+不得伪造 0。受控开页 stage 必须先取得
 受管页 reservation；保留页与 reservation 合计上限为 8。无 reservation 的归属页会被关闭并
 停止所属命令。Core 只接受当前 pending nonce，校验固定容量和计数守恒后才把资源快照交给
 采集器；到下一心跳周期仍未确认时清除旧快照。迟到、畸形或超界的 pong 不得覆盖新一代状态。

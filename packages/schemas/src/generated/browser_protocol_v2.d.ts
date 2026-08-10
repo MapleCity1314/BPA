@@ -435,6 +435,7 @@ export interface ExtensionResourceUsage {
   cancellation_stop_barriers: number;
   observed_tabs: number;
   observation_capacity: 64;
+  profile_tabs: number;
   managed_tabs: number;
   managed_tab_reservations: number;
   managed_tab_capacity: 8;

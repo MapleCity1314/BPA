@@ -53,6 +53,7 @@ const browserGateway = {
     cancellationStopBarriers: 0,
     observedTabs: 2,
     observationCapacity: 64,
+    profileTabs: 3,
     managedTabs: 0,
     managedTabReservations: 0,
     managedTabCapacity: 8,
