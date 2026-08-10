@@ -9,10 +9,8 @@ import {
   writeFileSync
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import type {
-  RuntimeActivityMetrics,
-  SqliteResourceMetrics
-} from "@bpa/persistence-sqlite";
+import type { RuntimeActivityMetrics } from "@bpa/persistence";
+import type { SqliteResourceMetrics } from "@bpa/persistence-sqlite";
 import type { BrowserGatewayStatus } from "./browser-gateway.js";
 import type { EventLoopLagSnapshot } from "./runtime-event-loop-monitor.js";
 import type { TeamWorkerClientStatus } from "@bpa/team-runtime";

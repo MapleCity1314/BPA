@@ -144,7 +144,7 @@ const gatewayTimer = setInterval(() => {
     if (triggerTick >= 2) {
       triggerTick = 0;
       service.recoverySessions.sweepExpired();
-      service.triggers.tick();
+      service.tickTriggers();
     }
     if (!drainingIr2) {
       drainingIr2 = true;
@@ -175,7 +175,11 @@ gatewayTimer.unref();
 
 let deliveringAttention = false;
 const drainAttentionDelivery = (): void => {
-  if (!notificationDispatcher || deliveringAttention) return;
+  if (
+    !notificationDispatcher ||
+    deliveringAttention ||
+    service.runtimeMaintenanceActive()
+  ) return;
   deliveringAttention = true;
   void notificationDispatcher
     .dispatchNext()

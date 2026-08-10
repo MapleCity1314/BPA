@@ -1850,7 +1850,8 @@ export interface Persistence
     GatewayCommandStore,
     TriggerStore,
     ExternalDomainLeaseStore,
-    InventoryEffectReconciliationStore {
+    InventoryEffectReconciliationStore,
+    RuntimeActivityStore {
   health(): {
     adapter: string;
     schemaVersion: number;
@@ -1924,6 +1925,24 @@ export interface Persistence
   listBrowserCapabilities(sessionId: string): BrowserCapabilityRecord[];
   listAudit(target?: string): AuditRecord[];
   close(): void;
+}
+
+export interface RuntimeActivityMetrics {
+  activeRunCount: number;
+  activeTriggerOccurrenceCount: number;
+  activeTriggerAttemptCount: number;
+  pendingEngineOutboxCount: number;
+  activeControlLeaseCount: number;
+  activeExternalDomainLeaseCount: number;
+  activeStagingLeaseCount: number;
+  activeRecoverySessionCount: number;
+  activeAttentionDeliveryCount: number;
+  terminalRunCount: number;
+  latestTerminalRunAt: string | null;
+}
+
+export interface RuntimeActivityStore {
+  readRuntimeActivityMetrics(observedAt: string): RuntimeActivityMetrics;
 }
 
 export class RevisionConflictError extends Error {}

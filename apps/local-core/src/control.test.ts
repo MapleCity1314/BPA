@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { resolveLocalIpcEndpoint } from "@bpa/platform-runtime";
 import { RuntimeProviderRegistry } from "@bpa/node-runtime";
+import type { Persistence, RuntimeActivityMetrics } from "@bpa/persistence";
 import { createTerminalAttentionDelivery } from "./attention-delivery.js";
 import {
   attachFrameDecoder,
@@ -365,6 +366,301 @@ describe("local control socket", () => {
     ).toMatchObject({
       ok: false,
       error: { message: "BPA_RUNTIME_MAINTENANCE" }
+    });
+    expect(service.handle({
+      id: "maintenance-read-blocked",
+      method: "catalog.list",
+      params: {}
+    })).toMatchObject({
+      ok: false,
+      error: {
+        code: "BPA_RUNTIME_MAINTENANCE",
+        message: "BPA_RUNTIME_MAINTENANCE"
+      }
+    });
+    await expect(service.handleAsync({
+      id: "maintenance-async-blocked",
+      method: "assistance.task.list",
+      params: {}
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: "BPA_RUNTIME_MAINTENANCE" }
+    });
+    expect(service.handle({
+      id: "maintenance-doctor",
+      method: "doctor",
+      params: {}
+    })).toMatchObject({ ok: true, result: { status: "ok" } });
+
+    const triggerTick = vi.spyOn(service.triggers, "tick");
+    expect(service.runtimeMaintenanceActive()).toBe(true);
+    expect(service.tickTriggers()).toBe(false);
+    expect(triggerTick).not.toHaveBeenCalled();
+    expect(
+      service.handle({
+        id: "maintenance-ready",
+        method: "runtime.maintenance.status",
+        params: {}
+      })
+    ).toMatchObject({
+      ok: true,
+      result: {
+        schema: "bpa.runtime-maintenance-readiness/1",
+        maintenanceActive: true,
+        ready: true,
+        blockers: [],
+        browser: {
+          pendingQueueCount: 0,
+          activeExtensionCommandCount: 0
+        },
+        teamWorker: {
+          state: "stopped",
+          pendingInvocationCount: 0
+        }
+      }
+    });
+    expect(
+      service.handle({
+        id: "maintenance-extra-params",
+        method: "runtime.maintenance.status",
+        params: { force: true }
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { message: "RUNTIME_MAINTENANCE_PARAMS_NOT_ALLOWED" }
+    });
+
+    await rm(maintenancePath, { force: true });
+    expect(service.runtimeMaintenanceActive()).toBe(false);
+    expect(service.runtimeMaintenanceReadiness(
+      "2026-08-10T01:00:00.000Z"
+    )).toMatchObject({
+      maintenanceActive: false,
+      ready: false,
+      blockers: ["MAINTENANCE_LOCK_NOT_HELD"]
+    });
+    expect(service.tickTriggers()).toBe(true);
+    expect(triggerTick).toHaveBeenCalledOnce();
+  });
+
+  it("fails maintenance readiness closed for persisted and browser activity", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "bpa-maintenance-busy-"));
+    const maintenancePath = join(directory, "runtime-maintenance.lock");
+    await writeFile(maintenancePath, "installer\n");
+    const base = new SqlitePersistence({ path: ":memory:" });
+    const activity: RuntimeActivityMetrics = {
+      activeRunCount: 1,
+      activeTriggerOccurrenceCount: 2,
+      activeTriggerAttemptCount: 1,
+      pendingEngineOutboxCount: 1,
+      activeControlLeaseCount: 1,
+      activeExternalDomainLeaseCount: 1,
+      activeStagingLeaseCount: 1,
+      activeRecoverySessionCount: 1,
+      activeAttentionDeliveryCount: 1,
+      terminalRunCount: 0,
+      latestTerminalRunAt: null
+    };
+    let deliveryInFlight = true;
+    const persistence = new Proxy(base as Persistence, {
+      get(target, property, receiver) {
+        if (property === "readRuntimeActivityMetrics") {
+          return () => activity;
+        }
+        if (property === "listAttentionDeliveries") {
+          return () => deliveryInFlight ? [{}] : [];
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+    });
+    const browserGateway = {
+      id: "browser",
+      supports: () => false,
+      invoke: async () => ({
+        status: "rejected" as const,
+        error: {
+          code: "TEST_ONLY",
+          message: "not dispatched",
+          retryable: false
+        },
+        evidence: [],
+        riskSignals: []
+      }),
+      status: () => ({
+        connected: true,
+        ready: true,
+        extensionId: "extension-test",
+        capabilityCount: 1,
+        resourceUsage: {
+          connectionCount: 1,
+          readySessionCount: 1,
+          pendingCancelRequestCount: 1,
+          nativeHostPids: [101],
+          queue: {
+            pendingBrowserOutbox: 1,
+            queuedCommands: 0,
+            inFlightCommands: 0,
+            terminalResultsPendingApplication: 0,
+            totalPending: 1
+          },
+          pageProbes: { active: 1, capacity: 32, ttlMs: 10_000 },
+          extension: {
+            activeCommands: 1,
+            activeTabCommands: 1,
+            activeAllianceStages: 1,
+            cancellationRequests: 1,
+            cancellationStopBarriers: 1,
+            observedTabs: 1,
+            observationCapacity: 64,
+            profileTabs: 1,
+            managedTabs: 1,
+            managedTabReservations: 1,
+            managedTabCapacity: 8,
+            pacingReservations: {
+              active: 1,
+              capacity: 64,
+              ttlMs: 120_000
+            },
+            probes: { active: 1, capacity: 32, ttlMs: 30_000 }
+          }
+        }
+      })
+    } as unknown as LocalBrowserGateway;
+    const service = new LocalCoreService(
+      persistence,
+      browserGateway,
+      undefined,
+      undefined,
+      undefined,
+      maintenancePath
+    );
+    cleanups.push(async () => {
+      base.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    expect(service.runtimeMaintenanceReadiness(
+      "2026-08-10T01:00:00.000Z"
+    )).toMatchObject({
+      maintenanceActive: true,
+      ready: false,
+      blockers: [
+        "ACTIVE_RUNS",
+        "ACTIVE_TRIGGER_ATTEMPTS",
+        "PENDING_ENGINE_OUTBOX",
+        "ACTIVE_CONTROL_LEASES",
+        "ACTIVE_EXTERNAL_DOMAIN_LEASES",
+        "ACTIVE_STAGING_LEASES",
+        "ACTIVE_RECOVERY_SESSIONS",
+        "BROWSER_COMMANDS_ACTIVE",
+        "ACTIVE_ATTENTION_DELIVERIES"
+      ],
+      activity,
+      browser: {
+        pendingCancelRequestCount: 1,
+        pendingQueueCount: 1,
+        activePageProbeCount: 1,
+        activeExtensionCommandCount: 1,
+        activeExtensionStageCount: 1,
+        activeExtensionCancellationCount: 2,
+        activeManagedTabReservationCount: 1,
+        activePacingReservationCount: 1,
+        activeExtensionProbeCount: 1
+      },
+      delivery: { inFlight: true }
+    });
+
+    Object.assign(activity, {
+      activeRunCount: 0,
+      activeTriggerAttemptCount: 0,
+      pendingEngineOutboxCount: 0,
+      activeControlLeaseCount: 0,
+      activeExternalDomainLeaseCount: 0,
+      activeStagingLeaseCount: 0,
+      activeRecoverySessionCount: 0
+    });
+    deliveryInFlight = false;
+    const pendingDeliveryOnly = new LocalCoreService(
+      persistence,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      maintenancePath
+    );
+    expect(pendingDeliveryOnly.runtimeMaintenanceReadiness(
+      "2026-08-10T01:00:01.000Z"
+    )).toMatchObject({
+      maintenanceActive: true,
+      ready: true,
+      blockers: [],
+      activity: {
+        activeTriggerOccurrenceCount: 2,
+        activeAttentionDeliveryCount: 1
+      },
+      delivery: { inFlight: false }
+    });
+  });
+
+  it("tracks an async Control mutation that crossed the maintenance boundary", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "bpa-maintenance-async-"));
+    const maintenancePath = join(directory, "runtime-maintenance.lock");
+    const persistence = new SqlitePersistence({ path: ":memory:" });
+    const service = new LocalCoreService(
+      persistence,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      maintenancePath
+    );
+    cleanups.push(async () => {
+      persistence.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let releaseImport: (() => void) | undefined;
+    const importGate = new Promise<void>((resolve) => {
+      releaseImport = resolve;
+    });
+    vi.spyOn(service.datasets, "import").mockImplementation(async () => {
+      markStarted?.();
+      await importGate;
+      return {} as never;
+    });
+
+    const request = service.handleAsync({
+      id: "dataset-import-crossing-maintenance",
+      method: "dataset.import",
+      params: {
+        path: "/tmp/not-read-by-test.xlsx",
+        id: "dataset-test",
+        version: "1.0.0"
+      }
+    });
+    await started;
+    await writeFile(maintenancePath, "installer\n");
+
+    expect(service.runtimeMaintenanceReadiness(
+      "2026-08-10T01:00:00.000Z"
+    )).toMatchObject({
+      ready: false,
+      blockers: ["CONTROL_MUTATIONS_ACTIVE"],
+      control: { inFlightMutationCount: 1 }
+    });
+
+    releaseImport?.();
+    await expect(request).resolves.toMatchObject({ ok: true });
+    expect(service.runtimeMaintenanceReadiness(
+      "2026-08-10T01:00:01.000Z"
+    )).toMatchObject({
+      ready: true,
+      blockers: [],
+      control: { inFlightMutationCount: 0 }
     });
   });
 
