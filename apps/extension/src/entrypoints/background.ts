@@ -20,6 +20,7 @@ import {
   listPendingCommandStarts,
   listPendingResults,
   normalizePendingResultForReplay,
+  pendingResultReplayPlan,
   recoverInterruptedCommands,
   removePendingCommandStart,
   removePendingEvidence,
@@ -589,7 +590,15 @@ export default defineBackground(() => {
     const pendingEvidenceIds = new Set(
       (await listPendingEvidenceUploads()).map((upload) => upload.evidenceId)
     );
-    for (const pending of await listPendingResults()) {
+    const stored = await browser.storage.local.get("lastAckedCommandSeq");
+    const plan = pendingResultReplayPlan(
+      await listPendingResults(),
+      Number(stored.lastAckedCommandSeq ?? 0)
+    );
+    for (const acknowledged of plan.acknowledged) {
+      await removePendingResult(acknowledged.commandId);
+    }
+    for (const pending of plan.replay) {
       const evidenceRefs = Array.isArray(pending.payload.evidence_refs)
         ? pending.payload.evidence_refs.filter(
             (value): value is string => typeof value === "string"
