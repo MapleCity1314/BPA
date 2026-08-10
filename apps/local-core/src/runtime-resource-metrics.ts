@@ -9,12 +9,15 @@ import {
   writeFileSync
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import type { SqliteResourceMetrics } from "@bpa/persistence-sqlite";
+import type {
+  RuntimeActivityMetrics,
+  SqliteResourceMetrics
+} from "@bpa/persistence-sqlite";
 import type { BrowserGatewayStatus } from "./browser-gateway.js";
 import type { EventLoopLagSnapshot } from "./runtime-event-loop-monitor.js";
 
 export const RUNTIME_RESOURCE_METRICS_SCHEMA =
-  "bpa.core-runtime-metrics/2";
+  "bpa.core-runtime-metrics/3";
 
 export interface RuntimeResourceMetricsSnapshot {
   schema: typeof RUNTIME_RESOURCE_METRICS_SCHEMA;
@@ -29,6 +32,7 @@ export interface RuntimeResourceMetricsSnapshot {
     arrayBuffersBytes: number;
   };
   eventLoop: EventLoopLagSnapshot;
+  activity: RuntimeActivityMetrics;
   browserGateway: BrowserGatewayStatus["resourceUsage"];
   sqlite: SqliteResourceMetrics & {
     measurement: "same_connection_db_status64";
@@ -44,6 +48,7 @@ export function writeRuntimeResourceMetrics(
     runtimeIdentity?: string | null;
     processMemoryUsage?: () => NodeJS.MemoryUsage;
     eventLoop: EventLoopLagSnapshot;
+    activity: RuntimeActivityMetrics;
     browserGateway: BrowserGatewayStatus["resourceUsage"];
     temporaryIdFactory?: () => string;
   }
@@ -62,6 +67,7 @@ export function writeRuntimeResourceMetrics(
       arrayBuffersBytes: memory.arrayBuffers
     },
     eventLoop: options.eventLoop,
+    activity: options.activity,
     browserGateway: options.browserGateway,
     sqlite: {
       measurement: "same_connection_db_status64",

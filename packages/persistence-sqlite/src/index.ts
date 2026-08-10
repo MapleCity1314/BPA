@@ -416,6 +416,20 @@ export interface SqliteResourceMetrics {
   statementUsedBytes: number;
 }
 
+export interface RuntimeActivityMetrics {
+  activeRunCount: number;
+  activeTriggerOccurrenceCount: number;
+  activeTriggerAttemptCount: number;
+  pendingEngineOutboxCount: number;
+  activeControlLeaseCount: number;
+  activeExternalDomainLeaseCount: number;
+  activeStagingLeaseCount: number;
+  activeRecoverySessionCount: number;
+  activeAttentionDeliveryCount: number;
+  terminalRunCount: number;
+  latestTerminalRunAt: string | null;
+}
+
 export class SqlitePersistence implements Persistence {
   readonly #db: Database.Database;
   readonly #failureInjector: ((point: string) => void) | undefined;
@@ -485,6 +499,89 @@ export class SqlitePersistence implements Persistence {
       ) {
         throw new Error(`SQLite resource metric ${name} is invalid`);
       }
+    }
+    return metrics;
+  }
+
+  readRuntimeActivityMetrics(observedAt: string): RuntimeActivityMetrics {
+    assertTimestamp(observedAt, "observedAt");
+    const row = this.#db
+      .prepare(`
+        SELECT
+          (SELECT COUNT(*) FROM workflow_runs
+           WHERE status NOT IN (
+             'succeeded', 'rejected', 'failed', 'cancelled', 'uncertain'
+           )) AS active_run_count,
+          (SELECT COUNT(*) FROM trigger_occurrences
+           WHERE status != 'terminal') AS active_trigger_occurrence_count,
+          (SELECT COUNT(*) FROM trigger_attempts
+           WHERE status != 'terminal') AS active_trigger_attempt_count,
+          (SELECT COUNT(*) FROM engine_outbox
+           WHERE acknowledged_at IS NULL) AS pending_engine_outbox_count,
+          ((SELECT COUNT(*) FROM leases WHERE expires_at > ?)
+            + (SELECT COUNT(*) FROM trigger_leases WHERE expires_at > ?)
+            + (SELECT COUNT(*) FROM browser_control_leases
+               WHERE expires_at > ?)) AS active_control_lease_count,
+          (SELECT COUNT(*) FROM external_domain_leases
+           WHERE state != 'released') AS active_external_domain_lease_count,
+          (SELECT COUNT(*) FROM staging_leases
+           WHERE state = 'active') AS active_staging_lease_count,
+          (SELECT COUNT(*) FROM recovery_sessions
+           WHERE state IN ('issued', 'active')) AS active_recovery_session_count,
+          (SELECT COUNT(*) FROM attention_deliveries
+           WHERE state IN ('pending', 'delivering'))
+            AS active_attention_delivery_count,
+          (SELECT COUNT(*) FROM workflow_runs
+           WHERE status IN (
+             'succeeded', 'rejected', 'failed', 'cancelled', 'uncertain'
+           )) AS terminal_run_count,
+          (SELECT MAX(updated_at) FROM workflow_runs
+           WHERE status IN (
+             'succeeded', 'rejected', 'failed', 'cancelled', 'uncertain'
+           )) AS latest_terminal_run_at
+      `)
+      .get(observedAt, observedAt, observedAt) as Record<string, unknown>;
+    const metrics: RuntimeActivityMetrics = {
+      activeRunCount: Number(row.active_run_count),
+      activeTriggerOccurrenceCount: Number(
+        row.active_trigger_occurrence_count
+      ),
+      activeTriggerAttemptCount: Number(row.active_trigger_attempt_count),
+      pendingEngineOutboxCount: Number(row.pending_engine_outbox_count),
+      activeControlLeaseCount: Number(row.active_control_lease_count),
+      activeExternalDomainLeaseCount: Number(
+        row.active_external_domain_lease_count
+      ),
+      activeStagingLeaseCount: Number(row.active_staging_lease_count),
+      activeRecoverySessionCount: Number(row.active_recovery_session_count),
+      activeAttentionDeliveryCount: Number(
+        row.active_attention_delivery_count
+      ),
+      terminalRunCount: Number(row.terminal_run_count),
+      latestTerminalRunAt:
+        row.latest_terminal_run_at === null
+          ? null
+          : String(row.latest_terminal_run_at)
+    };
+    for (const [name, value] of Object.entries(metrics)) {
+      if (
+        name !== "latestTerminalRunAt" &&
+        (!Number.isSafeInteger(value) || Number(value) < 0)
+      ) {
+        throw new Error(`Runtime activity metric ${name} is invalid`);
+      }
+    }
+    if (
+      metrics.latestTerminalRunAt !== null &&
+      !Number.isFinite(Date.parse(metrics.latestTerminalRunAt))
+    ) {
+      throw new Error("Latest terminal Run timestamp is invalid");
+    }
+    if (
+      (metrics.terminalRunCount === 0) !==
+      (metrics.latestTerminalRunAt === null)
+    ) {
+      throw new Error("Terminal Run activity metrics are inconsistent");
     }
     return metrics;
   }
