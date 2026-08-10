@@ -642,7 +642,7 @@ describe("local browser gateway", () => {
       ok: true
     });
     const outgoing: Array<Record<string, any>> = [];
-    gateway.attach(
+    const connectionId = gateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
       1001,
       (message) => outgoing.push(message)
@@ -987,6 +987,127 @@ describe("local browser gateway", () => {
     ).toHaveLength(1);
     service.triggers.tick();
 
+    const replacementOutgoing: Array<Record<string, any>> = [];
+    const replacementConnectionId = gateway.attach(
+      `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      (message) => replacementOutgoing.push(message)
+    );
+    gateway.handle(
+      {
+        protocol: "bpa.browser/2",
+        version: "2.0.0",
+        message_id: "replacement-hello",
+        session_id: "new",
+        seq: 0,
+        sent_at: new Date().toISOString(),
+        type: "session.hello",
+        trace_id: "trace-replacement",
+        payload: {
+          browser_instance_id: "browser-replacement",
+          extension_id: DEFAULT_BPA_EXTENSION_ID,
+          extension_version: "0.3.0",
+          bridge_build_id: "v0.3.0-test.node24.18.0",
+          supported_protocols: ["bpa.browser/2"],
+          features: [
+            "page_observation_v2",
+            "exact_tab_binding_v2",
+            "active_page_probe_v1"
+          ],
+          last_acked_command_seq: 0
+        }
+      },
+      replacementConnectionId
+    );
+    const replacementWelcome = replacementOutgoing.at(-1)!;
+    const replacementSessionId = String(replacementWelcome.session_id);
+    gateway.handle(
+      {
+        protocol: "bpa.browser/2",
+        version: "2.0.0",
+        message_id: "replacement-capabilities",
+        session_id: replacementSessionId,
+        seq: 1,
+        sent_at: new Date().toISOString(),
+        type: "capability.report",
+        trace_id: "trace-replacement",
+        payload: {
+          capabilities: [
+            {
+              node_id: "doudian.shop.context.read",
+              versions: ["1.3.0"],
+              risk_level: "R0",
+              permissions: ["browser.dom.read", "browser.tabs.read"],
+              routes: [
+                {
+                  origin: "https://fxg.jinritemai.com",
+                  pathname_prefixes: ["/ffa/g/list"],
+                  observer_capability_id: "doudian.page"
+                }
+              ],
+              adapter_id: "doudian",
+              adapter_version: "1.1.0"
+            }
+          ],
+          features: [
+            "page_observation_v2",
+            "exact_tab_binding_v2",
+            "active_page_probe_v1"
+          ],
+          manifest_digest:
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      replacementConnectionId
+    );
+    gateway.handle(
+      {
+        protocol: "bpa.browser/2",
+        version: "2.0.0",
+        message_id: "replacement-terminal-ack",
+        session_id: replacementSessionId,
+        seq: 2,
+        sent_at: new Date().toISOString(),
+        type: "command.ack",
+        trace_id: command.trace_id,
+        payload: {
+          command_seq: command.payload.command_seq,
+          command_id: command.payload.command_id,
+          node_execution_id: command.payload.node_execution_id,
+          accepted: true,
+          fencing_token: 1
+        }
+      },
+      replacementConnectionId
+    );
+    expect(
+      persistence.getGatewayCommand(String(command.payload.command_id))?.state
+    ).toBe("terminal");
+    gateway.handle(
+      {
+        ...result,
+        message_id: "replacement-terminal-result",
+        session_id: replacementSessionId,
+        seq: 3
+      },
+      replacementConnectionId
+    );
+    expect(replacementOutgoing.at(-1)).toMatchObject({
+      type: "result.ack",
+      payload: {
+        command_id: command.payload.command_id,
+        accepted: true
+      }
+    });
+    expect(
+      persistence.getBrowserSession(replacementSessionId)?.lastAckedCommandSeq
+    ).toBe(command.payload.command_seq);
+    expect(
+      persistence
+        .listEvents(runId)
+        .filter((event) => event.type === "RUNTIME_RESULT_APPLIED")
+    ).toHaveLength(1);
+    expect(gateway.status().lastError).toBeUndefined();
+
     const riskRun = service.handle({
       id: "risk-trigger-fire",
       method: "trigger.fire",
@@ -1001,6 +1122,47 @@ describe("local browser gateway", () => {
     const riskCommand = outgoing
       .filter((message) => message.type === "command.dispatch")
       .at(-1)!;
+    gateway.handle(
+      {
+        protocol: "bpa.browser/2",
+        version: "2.0.0",
+        message_id: "replacement-active-result",
+        session_id: replacementSessionId,
+        seq: 4,
+        sent_at: new Date().toISOString(),
+        type: "command.result",
+        trace_id: riskCommand.trace_id,
+        payload: {
+          command_seq: riskCommand.payload.command_seq,
+          command_id: riskCommand.payload.command_id,
+          node_execution_id: riskCommand.payload.node_execution_id,
+          idempotency_key: riskCommand.payload.idempotency_key,
+          fencing_token: 1,
+          status: "succeeded",
+          output: {
+            supported: true,
+            shop: {
+              id: "shop-1",
+              name: "测试店铺",
+              identity_confirmed: true
+            },
+            tab_ref: {
+              browser_instance_id: "browser-replacement",
+              tab_id: 1,
+              window_id: 1,
+              origin: "https://fxg.jinritemai.com"
+            },
+            page_epoch: "replacement-epoch"
+          },
+          evidence_refs: []
+        }
+      },
+      replacementConnectionId
+    );
+    expect(gateway.status().lastError).toBe(
+      "Browser message does not match the command's frozen Session"
+    );
+    expect(persistence.getRun(riskRunId)?.status).toBe("waiting_browser");
     gateway.handle({
       protocol: "bpa.browser/2",
       version: "2.0.0",
@@ -1017,7 +1179,7 @@ describe("local browser gateway", () => {
         accepted: true,
         fencing_token: 1
       }
-    });
+    }, connectionId);
     gateway.handle({
       protocol: "bpa.browser/2",
       version: "2.0.0",
@@ -1055,7 +1217,7 @@ describe("local browser gateway", () => {
         },
         evidence_refs: []
       }
-    });
+    }, connectionId);
     await riskDrain;
     expect(persistence.getRun(riskRunId)?.status).toBe("rejected");
     expect(
