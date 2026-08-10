@@ -215,6 +215,16 @@ Schema 降级描述成可恢复旧二进制，也不得复制登录态。
 
 1. **安装维护门**：installer 在停止 Core 前必须证明没有 active Run、Trigger Attempt、
    Browser/Recovery Lease 或正在写入的业务任务；只取得 maintenance lock 不等于业务已 drain。
+   当前 Core 候选在 maintenance lock 存在时停止新的 Trigger tick、拒绝除 `doctor` 与
+   maintenance status 外的新 Control 请求，也不再领取 pending Attention Delivery；既有
+   Run、租约协调、Engine outbox 和已经 `delivering` 的 Delivery 仍继续收口。固定无参数
+   `runtime.maintenance.status` 从同一 SQLite 连接核对 Run、Attempt、Engine outbox、控制/
+   外部/暂存租约、Recovery Session 与正在投递的 Attention Delivery，同时核对 Browser 命令、取消、
+   probe、Extension 活动、Team Worker 未完成调用，以及在锁建立前已经进入异步阶段的 Control
+   mutation。任一计数非零即 `ready=false`。该能力仍需
+   先进入已部署 Core；下一层 installer 才能在停止旧 Core 前消费它，不能用旧 metrics 文件
+   或未知方法 fallback 代替。尚未领取的 pending Delivery 是可恢复持久队列，不会单独阻断升级；
+   已进入 `delivering` 且外部效果未决的 Delivery 必须先收口。
 2. **Chrome source-to-closure**：当前 `com.bpa.inventory-chrome.plist` 仍是库存仓库资产，
    不在 Runtime Closure/installer 所有权内，且包含硬编码 Profile、Extension 路径、CDP 与
    反后台节流参数。正式唯一控制面必须把受管 Chrome launch agent 配置、精确 Extension

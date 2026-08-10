@@ -220,6 +220,16 @@ Docs PR 验证不再与 Pages deploy 共用全局并发锁。当前后续候选�
 样本完整，并按权威路线中的首尾 24 小时中位数、7 天斜率外推与单调增长比例判定。
 实现与 fixture 反例不等于生产 7 天通过；生产窗口仍未启动，本轮也不部署。
 
+灰度安装门的 Core 侧候选已进一步收口：maintenance lock 出现后不再执行新的 Trigger tick、
+新 Control mutation 或 pending Attention Delivery 领取，但继续让既有 Run、外部租约协调、
+Engine outbox 与已经 `delivering` 的 Delivery 收敛；固定无参数
+`runtime.maintenance.status` 只从同一 SQLite 连接和当前 Browser/Team Worker 状态生成脱敏
+blocker 列表。active Run、Trigger Attempt、未确认 outbox、控制/外部/暂存租约、Recovery、
+正在投递的 Delivery、跨越锁边界的异步 Control mutation、Browser 命令或 Team Worker 调用
+任一未归零都不会报告 ready；尚未领取的
+pending Delivery 保持可恢复持久队列，不会把升级永久锁死。该代码候选尚未部署，
+installer 也尚未消费此协议，因此不能据此宣称公司 Mac 已具备安全升级窗口。
+
 ## 4. Codex 过渡状态
 
 阶段 0–2 允许 Codex：

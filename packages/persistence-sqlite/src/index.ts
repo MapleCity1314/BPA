@@ -92,6 +92,7 @@ import {
   type RecoverySessionRecord,
   type RecoverySessionState,
   type IssueRecoverySessionInput,
+  type RuntimeActivityMetrics,
   type RunRecord,
   type RunPlanSnapshotRecord,
   type RunStatus,
@@ -414,20 +415,6 @@ export interface SqliteResourceMetrics {
   cacheUsedBytes: number;
   schemaUsedBytes: number;
   statementUsedBytes: number;
-}
-
-export interface RuntimeActivityMetrics {
-  activeRunCount: number;
-  activeTriggerOccurrenceCount: number;
-  activeTriggerAttemptCount: number;
-  pendingEngineOutboxCount: number;
-  activeControlLeaseCount: number;
-  activeExternalDomainLeaseCount: number;
-  activeStagingLeaseCount: number;
-  activeRecoverySessionCount: number;
-  activeAttentionDeliveryCount: number;
-  terminalRunCount: number;
-  latestTerminalRunAt: string | null;
 }
 
 export class SqlitePersistence implements Persistence {

@@ -91,6 +91,24 @@ describe("operator Console CLI", () => {
   });
 });
 
+describe("Runtime maintenance CLI", () => {
+  it("requests the exact read-only drain status without parameters", async () => {
+    const { client, output, program } = fixture();
+
+    await program.parseAsync([
+      "node",
+      "bpa",
+      "runtime",
+      "maintenance-status"
+    ]);
+
+    expect(client.calls).toEqual([
+      { method: "runtime.maintenance.status", params: {} }
+    ]);
+    expect(output).toEqual([{ ok: true }]);
+  });
+});
+
 describe("dataset CLI control mapping", () => {
   it("maps confirmed imports to dataset.import with an absolute local path", async () => {
     const { client, output, program } = fixture();

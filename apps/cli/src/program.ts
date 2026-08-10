@@ -96,6 +96,17 @@ export function createCliProgram(options: CliProgramOptions): Command {
     .description("check Local Core and persistence")
     .action(async () => output(await client.request("doctor")));
 
+  const runtime = program
+    .command("runtime")
+    .description("inspect the resident BPA Runtime");
+
+  runtime
+    .command("maintenance-status")
+    .description("verify that maintenance is held and business effects are drained")
+    .action(async () => output(
+      await client.request("runtime.maintenance.status", {})
+    ));
+
   program
     .command("console")
     .description("open the local BPA business workspace")

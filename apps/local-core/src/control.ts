@@ -36,6 +36,7 @@ import { LocalWorkflowEngine } from "./compatibility/local-workflow-engine.js";
 import type {
   ArtifactType,
   Persistence,
+  RuntimeActivityMetrics,
   RunRecord,
   TriggerSpecDefinition
 } from "@bpa/persistence";
@@ -176,6 +177,63 @@ export interface ControlResponse {
   error?: { code: string; message: string };
 }
 
+export const RUNTIME_MAINTENANCE_READINESS_SCHEMA =
+  "bpa.runtime-maintenance-readiness/1";
+
+export type RuntimeMaintenanceBlocker =
+  | "MAINTENANCE_LOCK_NOT_HELD"
+  | "ACTIVE_RUNS"
+  | "ACTIVE_TRIGGER_ATTEMPTS"
+  | "PENDING_ENGINE_OUTBOX"
+  | "ACTIVE_CONTROL_LEASES"
+  | "ACTIVE_EXTERNAL_DOMAIN_LEASES"
+  | "ACTIVE_STAGING_LEASES"
+  | "ACTIVE_RECOVERY_SESSIONS"
+  | "ACTIVE_ATTENTION_DELIVERIES"
+  | "CONTROL_MUTATIONS_ACTIVE"
+  | "BROWSER_COMMANDS_ACTIVE"
+  | "TEAM_INVOCATIONS_ACTIVE";
+
+export interface RuntimeMaintenanceReadiness {
+  schema: typeof RUNTIME_MAINTENANCE_READINESS_SCHEMA;
+  observedAt: string;
+  maintenanceActive: boolean;
+  ready: boolean;
+  blockers: RuntimeMaintenanceBlocker[];
+  activity: RuntimeActivityMetrics;
+  browser: {
+    pendingCancelRequestCount: number;
+    pendingQueueCount: number;
+    activePageProbeCount: number;
+    activeExtensionCommandCount: number;
+    activeExtensionStageCount: number;
+    activeExtensionCancellationCount: number;
+    activeManagedTabReservationCount: number;
+    activePacingReservationCount: number;
+    activeExtensionProbeCount: number;
+  };
+  delivery: {
+    inFlight: boolean;
+  };
+  control: {
+    inFlightMutationCount: number;
+  };
+  teamWorker: {
+    state: TeamWorkerClientStatus["state"] | "unavailable";
+    pendingInvocationCount: number;
+  };
+}
+
+const RUNTIME_MAINTENANCE_SAFE_METHODS = new Set([
+  "doctor",
+  "runtime.maintenance.status"
+]);
+
+const ASYNC_READ_ONLY_CONTROL_METHODS = new Set([
+  "assistance.task.list",
+  "inventory.reconciliation.inspect"
+]);
+
 export class LocalCoreService {
   readonly engine: LocalWorkflowEngine;
   readonly ir2Runtime: Ir2WorkflowRuntime;
@@ -191,6 +249,7 @@ export class LocalCoreService {
   readonly #trustedEvidence: TrustedEvidenceQueryService;
   readonly #runtimeProviders: RuntimeProviderRegistry;
   readonly #teamRuntimeProvider: TeamRuntimeProvider | undefined;
+  #activeAsyncControlMutations = 0;
 
   constructor(
     readonly persistence: Persistence,
@@ -435,6 +494,12 @@ export class LocalCoreService {
   }
 
   handle(request: ControlRequest): ControlResponse {
+    if (
+      this.runtimeMaintenanceActive() &&
+      !RUNTIME_MAINTENANCE_SAFE_METHODS.has(request.method)
+    ) {
+      return this.#runtimeMaintenanceRejection(request.id);
+    }
     try {
       const result = this.#dispatch(request.method, request.params ?? {});
       return { id: request.id, ok: true, result };
@@ -455,6 +520,12 @@ export class LocalCoreService {
 
   async handleAsync(request: ControlRequest): Promise<ControlResponse> {
     if (
+      this.runtimeMaintenanceActive() &&
+      !RUNTIME_MAINTENANCE_SAFE_METHODS.has(request.method)
+    ) {
+      return this.#runtimeMaintenanceRejection(request.id);
+    }
+    if (
       !request.method.startsWith("assistance.task.") &&
       request.method !== "dataset.import" &&
       request.method !== "dataset.import.staged" &&
@@ -462,6 +533,10 @@ export class LocalCoreService {
     ) {
       return this.handle(request);
     }
+    const tracksMutation = !ASYNC_READ_ONLY_CONTROL_METHODS.has(
+      request.method
+    );
+    if (tracksMutation) this.#activeAsyncControlMutations += 1;
     try {
       const params = request.params ?? {};
       const result = request.method === "inventory.reconciliation.inspect"
@@ -494,6 +569,8 @@ export class LocalCoreService {
           message: error instanceof Error ? error.message : String(error)
         }
       };
+    } finally {
+      if (tracksMutation) this.#activeAsyncControlMutations -= 1;
     }
   }
 
@@ -555,6 +632,103 @@ export class LocalCoreService {
   runtimeProcessUsage(): { teamWorker: TeamWorkerClientStatus | null } {
     return {
       teamWorker: this.#teamRuntimeProvider?.status() ?? null
+    };
+  }
+
+  runtimeMaintenanceActive(): boolean {
+    return Boolean(
+      this.runtimeMaintenancePath && existsSync(this.runtimeMaintenancePath)
+    );
+  }
+
+  tickTriggers(): boolean {
+    if (this.runtimeMaintenanceActive()) return false;
+    this.triggers.tick();
+    return true;
+  }
+
+  runtimeMaintenanceReadiness(
+    observedAt = new Date().toISOString()
+  ): RuntimeMaintenanceReadiness {
+    const maintenanceActive = this.runtimeMaintenanceActive();
+    const activity = this.persistence.readRuntimeActivityMetrics(observedAt);
+    const resourceUsage = this.browserGateway?.status().resourceUsage;
+    const extension = resourceUsage?.extension;
+    const browser = {
+      pendingCancelRequestCount:
+        resourceUsage?.pendingCancelRequestCount ?? 0,
+      pendingQueueCount: resourceUsage?.queue.totalPending ?? 0,
+      activePageProbeCount: resourceUsage?.pageProbes.active ?? 0,
+      activeExtensionCommandCount: extension?.activeCommands ?? 0,
+      activeExtensionStageCount: extension?.activeAllianceStages ?? 0,
+      activeExtensionCancellationCount:
+        (extension?.cancellationRequests ?? 0) +
+        (extension?.cancellationStopBarriers ?? 0),
+      activeManagedTabReservationCount:
+        extension?.managedTabReservations ?? 0,
+      activePacingReservationCount:
+        extension?.pacingReservations.active ?? 0,
+      activeExtensionProbeCount: extension?.probes.active ?? 0
+    };
+    const teamWorker = this.#teamRuntimeProvider?.status();
+    const team: RuntimeMaintenanceReadiness["teamWorker"] = {
+      state: teamWorker?.state ?? "unavailable",
+      pendingInvocationCount: teamWorker?.pendingInvocationCount ?? 0
+    };
+    const delivery = {
+      inFlight:
+        this.persistence.listAttentionDeliveries({
+          states: ["delivering"],
+          limit: 1
+        }).length > 0
+    };
+    const control = {
+      inFlightMutationCount: this.#activeAsyncControlMutations
+    };
+    const blockers: RuntimeMaintenanceBlocker[] = [];
+    if (!maintenanceActive) {
+      blockers.push("MAINTENANCE_LOCK_NOT_HELD");
+    }
+    const activityBlockers: ReadonlyArray<
+      readonly [number, RuntimeMaintenanceBlocker]
+    > = [
+      [activity.activeRunCount, "ACTIVE_RUNS"],
+      [activity.activeTriggerAttemptCount, "ACTIVE_TRIGGER_ATTEMPTS"],
+      [activity.pendingEngineOutboxCount, "PENDING_ENGINE_OUTBOX"],
+      [activity.activeControlLeaseCount, "ACTIVE_CONTROL_LEASES"],
+      [
+        activity.activeExternalDomainLeaseCount,
+        "ACTIVE_EXTERNAL_DOMAIN_LEASES"
+      ],
+      [activity.activeStagingLeaseCount, "ACTIVE_STAGING_LEASES"],
+      [activity.activeRecoverySessionCount, "ACTIVE_RECOVERY_SESSIONS"]
+    ];
+    for (const [count, blocker] of activityBlockers) {
+      if (count > 0) blockers.push(blocker);
+    }
+    if (Object.values(browser).some((count) => count > 0)) {
+      blockers.push("BROWSER_COMMANDS_ACTIVE");
+    }
+    if (delivery.inFlight) {
+      blockers.push("ACTIVE_ATTENTION_DELIVERIES");
+    }
+    if (control.inFlightMutationCount > 0) {
+      blockers.push("CONTROL_MUTATIONS_ACTIVE");
+    }
+    if (team.pendingInvocationCount > 0) {
+      blockers.push("TEAM_INVOCATIONS_ACTIVE");
+    }
+    return {
+      schema: RUNTIME_MAINTENANCE_READINESS_SCHEMA,
+      observedAt,
+      maintenanceActive,
+      ready: blockers.length === 0,
+      blockers,
+      activity,
+      browser,
+      delivery,
+      control,
+      teamWorker: team
     };
   }
 
@@ -679,6 +853,11 @@ export class LocalCoreService {
           },
           pid: process.pid
         };
+      case "runtime.maintenance.status":
+        if (Object.keys(params).length !== 0) {
+          throw new Error("RUNTIME_MAINTENANCE_PARAMS_NOT_ALLOWED");
+        }
+        return this.runtimeMaintenanceReadiness();
       case "catalog.list":
         return this.persistence.listPublished(
           params.assetType as ArtifactType | undefined
@@ -1802,6 +1981,17 @@ export class LocalCoreService {
     ) {
       throw new Error("BPA_RUNTIME_MAINTENANCE");
     }
+  }
+
+  #runtimeMaintenanceRejection(id: string): ControlResponse {
+    return {
+      id,
+      ok: false,
+      error: {
+        code: "BPA_RUNTIME_MAINTENANCE",
+        message: "BPA_RUNTIME_MAINTENANCE"
+      }
+    };
   }
 
   #assertBrowserControlContext(
