@@ -6,6 +6,10 @@ import {
   sensitiveContentFindings,
   validateReleaseMetadata
 } from "./release-gates.mjs";
+import {
+  assertManagedChromeManifest,
+  renderManagedChromeLauncher
+} from "./macos-runtime-install-contract.mjs";
 
 const root = resolve(process.argv[2] ?? "");
 const staticHostVerification = process.argv.includes("--static-host");
@@ -43,6 +47,18 @@ const sqliteObservabilityIdentityValid =
         "node_modules/@bpa/sqlite-observability/dist/bpa_sqlite_observability.dylib"
     : manifest.sqliteObservability?.status === "unsupported_platform" &&
       manifest.sqliteObservability?.target === expectedSqliteObservabilityTarget;
+const managedChromeIdentityValid =
+  release.platform === "darwin" && release.architecture === "arm64"
+    ? (() => {
+        try {
+          assertManagedChromeManifest(manifest.managedChrome);
+          return true;
+        } catch {
+          return false;
+        }
+      })()
+    : manifest.managedChrome?.status === "unsupported_platform" &&
+      manifest.managedChrome?.target === expectedSqliteObservabilityTarget;
 if (
   manifest.schemaVersion !== 2 ||
   manifest.browserProtocol !== "bpa.browser/2" ||
@@ -58,6 +74,7 @@ if (
   manifest.platform !== release.platform ||
   manifest.architecture !== release.architecture ||
   !sqliteObservabilityIdentityValid ||
+  !managedChromeIdentityValid ||
   (!staticHostVerification && process.versions.node !== release.nodeVersion) ||
   (!staticHostVerification && process.platform !== release.platform) ||
   (!staticHostVerification && process.arch !== release.architecture) ||
@@ -107,6 +124,12 @@ const requiredFiles = [
   "extension/manifest.json",
   "console/index.html"
 ];
+if (release.platform === "darwin") {
+  requiredFiles.push(
+    "bin/bpa-managed-chrome",
+    "bin/bpa-managed-chrome-agent.js"
+  );
+}
 requiredFiles.push(...manifestWrapperFiles);
 if (manifest.sqliteObservability.status === "available") {
   requiredFiles.push(manifest.sqliteObservability.path);
@@ -186,6 +209,13 @@ if (release.platform === "darwin") {
     ) {
       throw new Error(`Runtime wrapper identity is invalid: ${wrapper}`);
     }
+  }
+  const managedChromeLauncher = await readFile(
+    join(root, "bin/bpa-managed-chrome"),
+    "utf8"
+  );
+  if (managedChromeLauncher !== renderManagedChromeLauncher(release.identity)) {
+    throw new Error("Managed Chrome launcher differs from the Runtime manifest");
   }
 }
 if (sensitiveFindings.length > 0) {

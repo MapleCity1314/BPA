@@ -20,6 +20,10 @@ import {
   formatSensitiveFindings,
   sensitiveContentFindings
 } from "./release-gates.mjs";
+import {
+  MACOS_MANAGED_CHROME_CONTRACT,
+  renderManagedChromeLauncher
+} from "./macos-runtime-install-contract.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const pinnedNodeVersion = (
@@ -141,6 +145,12 @@ const entryPoints = {
     "scripts/windows-sqlite-tool.mjs"
   )
 };
+if (targetPlatform === "darwin") {
+  entryPoints["bpa-managed-chrome-agent"] = join(
+    repositoryRoot,
+    "scripts/macos-runtime-install-gates.mjs"
+  );
+}
 
 async function copyDirectory(source, target) {
   await mkdir(dirname(target), { recursive: true });
@@ -434,6 +444,12 @@ exec "\$VERSION_ROOT/node/bin/node" "\$VERSION_ROOT/bin/${target}" "\$@"
     );
     await chmod(wrapperPath, 0o755);
   }
+  const managedChromeLauncher = join(outputRoot, "bin/bpa-managed-chrome");
+  await writeFile(
+    managedChromeLauncher,
+    renderManagedChromeLauncher(release.identity)
+  );
+  await chmod(managedChromeLauncher, 0o755);
 }
 const migrationSource = await readFile(
   join(repositoryRoot, "packages/persistence-sqlite/src/migrations.ts"),
@@ -444,6 +460,13 @@ const databaseSchemaVersion = Math.max(
     Number(match[1])
   )
 );
+const managedChrome =
+  targetPlatform === "darwin" && targetArchitecture === "arm64"
+    ? MACOS_MANAGED_CHROME_CONTRACT
+    : {
+        status: "unsupported_platform",
+        target: `${targetPlatform}-${targetArchitecture}`
+      };
 if (!Number.isSafeInteger(databaseSchemaVersion) || databaseSchemaVersion < 1) {
   throw new Error("Could not derive the packaged SQLite Schema version");
 }
@@ -565,6 +588,7 @@ await writeFile(
       },
       databaseSchemaVersion,
       sqliteObservability,
+      managedChrome,
       source: {
         gitCommit: release.gitCommit,
         dirty: false
