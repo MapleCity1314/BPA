@@ -161,8 +161,6 @@ test("binds the managed Chrome launcher and live command to one contract", () =>
     "--user-data-dir=$PROFILE",
     "--remote-debugging-port=17660",
     "--remote-debugging-address=127.0.0.1",
-    "--disable-extensions-except=$EXTENSION",
-    "--load-extension=$EXTENSION",
     `export BPA_RUNTIME_ID=\"${releaseIdentity}\"`
   ]) {
     assert.ok(launcher.includes(expected), `launcher is missing ${expected}`);
@@ -172,9 +170,7 @@ test("binds the managed Chrome launcher and live command to one contract", () =>
     `--user-data-dir=${bpaHome}/chrome-inventory-profile`,
     "--remote-debugging-port=17660",
     "--remote-debugging-address=127.0.0.1",
-    ...MACOS_MANAGED_CHROME_CONTRACT.flags,
-    `--disable-extensions-except=${bpaHome}/extension`,
-    `--load-extension=${bpaHome}/extension`
+    ...MACOS_MANAGED_CHROME_CONTRACT.flags
   ].join(" ");
   assert.doesNotThrow(() =>
     assertManagedChromeProcessCommand(command, bpaHome)

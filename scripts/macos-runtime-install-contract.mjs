@@ -239,7 +239,11 @@ export function renderManagedChromeLauncher(releaseIdentity) {
     throw new Error("Managed Chrome launcher requires a release identity");
   }
   const contract = MACOS_MANAGED_CHROME_CONTRACT;
-  const staticArguments = contract.flags.map((flag) => `  "${flag}" \\`).join("\n");
+  const staticArguments = contract.flags
+    .map((flag, index) =>
+      index === contract.flags.length - 1 ? `  "${flag}"` : `  "${flag}" \\`
+    )
+    .join("\n");
   return `#!/bin/zsh
 set -euo pipefail
 if [[ -z "\${BPA_HOME:-}" ]]; then
@@ -294,8 +298,6 @@ if [[ -z "$MANAGED_PID" ]]; then
   "--remote-debugging-port=${contract.remoteDebuggingPort}" \\
   "--remote-debugging-address=${contract.remoteDebuggingAddress}" \\
 ${staticArguments}
-  "--disable-extensions-except=$EXTENSION" \\
-  "--load-extension=$EXTENSION"
   for _attempt in {1..150}; do
     MANAGED_PID="$(find_managed_chrome_pid)"
     [[ -n "$MANAGED_PID" ]] && break
@@ -349,9 +351,7 @@ export function assertManagedChromeProcessCommand(command, bpaHome) {
     `--user-data-dir=${root}/${contract.profileRelativePath}`,
     `--remote-debugging-port=${contract.remoteDebuggingPort}`,
     `--remote-debugging-address=${contract.remoteDebuggingAddress}`,
-    ...contract.flags,
-    `--disable-extensions-except=${root}/${contract.extensionRelativePath}`,
-    `--load-extension=${root}/${contract.extensionRelativePath}`
+    ...contract.flags
   ];
   const containsArgument = (part) => {
     let offset = command.indexOf(part);

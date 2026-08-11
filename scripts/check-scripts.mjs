@@ -251,8 +251,6 @@ for (const required of [
   "assertRuntimeMaintenanceReadiness",
   "renderManagedChromeLaunchAgent",
   "assertManagedChromeProcessCommand",
-  "--disable-extensions-except=$EXTENSION",
-  "--load-extension=$EXTENSION",
   "chrome-inventory-profile",
   "127.0.0.1",
   "17660"
