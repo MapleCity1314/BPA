@@ -283,9 +283,15 @@ function aggregateOverviews(entries: readonly {
   };
 }
 
-function loopback(request: IncomingMessage): boolean {
-  const address = request.socket.remoteAddress ?? "";
-  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+export function trustedEmployeeNetwork(address: string | undefined): boolean {
+  const normalized = address?.startsWith("::ffff:")
+    ? address.slice("::ffff:".length)
+    : address ?? "";
+  if (normalized === "127.0.0.1" || normalized === "::1") return true;
+  const octets = normalized.split(".").map(Number);
+  return octets.length === 4 &&
+    octets.every((value) => Number.isInteger(value) && value >= 0 && value <= 255) &&
+    octets[0] === 192 && octets[1] === 168 && octets[2] === 3;
 }
 
 const HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BPA 库存风险指挥台</title><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/app-v2.css"></head><body><header><div class="brand"><span class="brand-mark">B</span><div><p>BPA INVENTORY CONTROL</p><h1>抖店库存风险指挥台</h1></div></div><div class="header-actions"><span class="status-chip" id="status"><i></i>正在连接</span><button class="secondary" id="enableNotify">开启桌面提醒</button><button id="reload">刷新数据</button></div></header><main><section class="metrics" id="metrics"></section><section class="priority-grid"><article class="panel incidents-panel"><div class="section-title"><div><p class="eyebrow">RISK WORKBENCH</p><h2>当前风险事件</h2></div><span class="count-badge" id="incidentCount">0</span></div><div id="incidents"></div></article><article class="panel reminders-panel"><div class="section-title"><div><p class="eyebrow">ACTION REQUIRED</p><h2>运营提醒</h2></div><span class="count-badge" id="reminderCount">0</span></div><div id="reminders"></div></article></section><section class="panel readiness-panel compact-panel"><div class="section-title"><div><p class="eyebrow">SYSTEM READINESS</p><h2>数据与冷启动</h2></div><span class="live-dot">在线</span></div><div id="readiness"></div></section><section class="panel backtest-panel"><div class="section-title"><div><p class="eyebrow">QUANTITATIVE BACKTEST</p><h2>需求预测滚动回测</h2></div><div class="legend"><span class="actual">实际销量</span><span class="p50">P50</span><span class="p90">P90</span></div></div><div id="backtest"></div></section><section class="panel inventory-panel"><div class="section-title"><div><p class="eyebrow">INVENTORY & FORECAST</p><h2>商品、SKU 与渠道风险</h2></div><span class="muted" id="inventoryUpdated"></span></div><div id="products"></div></section><section class="details-grid"><article class="panel"><h2>生产规则</h2><div id="rules"></div></article><article class="panel"><div class="section-title"><h2>正式库存周期</h2><span class="muted">BPA Trigger · 13 店</span></div><div id="schedules"></div></article></section></main><dialog id="review"><form method="dialog"><h3>记录运营判断</h3><input id="incidentId" type="hidden"><label>结论<select id="decision"><option value="valid">有效风险</option><option value="false_positive">误报</option><option value="needs_context">信息不足</option></select></label><label>备注<textarea id="note" maxlength="4000" placeholder="记录处置动作或补充信息"></textarea></label><menu><button class="secondary" value="cancel">取消</button><button id="submit" value="default">保存判断</button></menu></form></dialog><script src="/app.js"></script></body></html>`;
@@ -413,7 +419,12 @@ export async function startInventoryWebServer(input: {
         return json(response,200,{ csrf: session.csrf });
       }
       let auth = authenticate(request);
-      if (!auth && url.pathname === "/api/session" && request.method === "GET" && loopback(request)) {
+      if (
+        !auth &&
+        url.pathname === "/api/session" &&
+        request.method === "GET" &&
+        trustedEmployeeNetwork(request.socket.remoteAddress)
+      ) {
         const session: Session = { id:token(),csrf:token(),lastSeenAt:now() };
         const cookie = encodeSession(session,sessionSecret);
         response.setHeader("Set-Cookie",sessionCookie(cookie));
