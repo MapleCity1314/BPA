@@ -279,6 +279,14 @@ for (const source of [macosInstall, macosRollback, macosUninstall]) {
     );
   }
 }
+for (const required of [
+  'HOST_ROOT="$MANAGED_CHROME_PROFILE/NativeMessagingHosts"',
+  'LEGACY_HOST_MANIFEST="$USER_HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.bpa.browser.json"'
+]) {
+  if (!macosInstall.includes(required)) {
+    throw new Error(`Managed Chrome Native Host isolation is missing ${required}`);
+  }
+}
 const installLockIndex = macosInstall.indexOf("INSTALL_LOCK_ACQUIRED=true");
 const firstChromeTouchIndex = macosInstall.indexOf(
   "CHROME_LAUNCHD_TOUCHED=true"

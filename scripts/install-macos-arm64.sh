@@ -17,11 +17,13 @@ DATA_ROOT="$BPA_ROOT/data"
 DATA_DB="$DATA_ROOT/bpa.sqlite"
 BACKUP_ROOT="$BPA_ROOT/backups"
 EXTENSION_ROOT="$BPA_ROOT/extension"
+MANAGED_CHROME_PROFILE="$BPA_ROOT/chrome-inventory-profile"
 LOG_ROOT="$USER_HOME/Library/Logs/BPA"
 LAUNCH_AGENT="$USER_HOME/Library/LaunchAgents/com.bpa.core.plist"
 CHROME_LAUNCH_AGENT="$USER_HOME/Library/LaunchAgents/com.bpa.inventory-chrome.plist"
-HOST_ROOT="$USER_HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
+HOST_ROOT="$MANAGED_CHROME_PROFILE/NativeMessagingHosts"
 HOST_MANIFEST="$HOST_ROOT/com.bpa.browser.json"
+LEGACY_HOST_MANIFEST="$USER_HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.bpa.browser.json"
 INSTALL_LOCK="$BPA_ROOT/run/runtime-install.lock"
 MAINTENANCE_LOCK="$BPA_ROOT/run/runtime-maintenance.lock"
 EXTENSION_ID="hoobbnlkcdhbemedpfhhoicklplggmbc"
@@ -73,14 +75,17 @@ fi
 
 mkdir -p \
   "$RUNTIME_ROOT" "$DATA_ROOT" "$BPA_ROOT/run" "$BACKUP_ROOT" "$LOG_ROOT" \
-  "${LAUNCH_AGENT:h}" "$HOST_ROOT"
-chmod 700 "$BPA_ROOT" "$DATA_ROOT" "$BACKUP_ROOT" "$LOG_ROOT"
+  "${LAUNCH_AGENT:h}" "$MANAGED_CHROME_PROFILE" "$HOST_ROOT"
+chmod 700 \
+  "$BPA_ROOT" "$DATA_ROOT" "$BACKUP_ROOT" "$LOG_ROOT" \
+  "$MANAGED_CHROME_PROFILE" "$HOST_ROOT"
 STAGING_ROOT="$(mktemp -d "$BPA_ROOT/.install.XXXXXX")"
 MIGRATION_TEST_ROOT="$(mktemp -d "$BPA_ROOT/.migration-test.XXXXXX")"
 EXTENSION_STAGE="$(mktemp -d "$BPA_ROOT/.extension.install.XXXXXX")"
 EXTENSION_BACKUP="$BPA_ROOT/.extension.rollback.$VERSION.$$"
 AGENT_BACKUP="$BPA_ROOT/.agent.rollback.$VERSION.$$.plist"
 HOST_MANIFEST_BACKUP="$BPA_ROOT/.host-manifest.rollback.$VERSION.$$.json"
+LEGACY_HOST_MANIFEST_BACKUP="$BPA_ROOT/.legacy-host-manifest.rollback.$VERSION.$$.json"
 CHROME_AGENT_BACKUP="$BPA_ROOT/.chrome-agent.rollback.$VERSION.$$.plist"
 MAINTENANCE_RESULT="$BPA_ROOT/.maintenance-readiness.$VERSION.$$.json"
 DATABASE_BACKUP=""
@@ -101,6 +106,7 @@ INSTALL_LOCK_ACQUIRED=false
 MAINTENANCE_LOCK_ACQUIRED=false
 ORIGINAL_AGENT_EXISTED=false
 ORIGINAL_HOST_MANIFEST_EXISTED=false
+ORIGINAL_LEGACY_HOST_MANIFEST_EXISTED=false
 ORIGINAL_CHROME_AGENT_EXISTED=false
 OLD_CURRENT=""
 
@@ -113,6 +119,11 @@ if [[ -f "$HOST_MANIFEST" ]]; then
   cp "$HOST_MANIFEST" "$HOST_MANIFEST_BACKUP"
   chmod 600 "$HOST_MANIFEST_BACKUP"
   ORIGINAL_HOST_MANIFEST_EXISTED=true
+fi
+if [[ -f "$LEGACY_HOST_MANIFEST" ]]; then
+  cp "$LEGACY_HOST_MANIFEST" "$LEGACY_HOST_MANIFEST_BACKUP"
+  chmod 600 "$LEGACY_HOST_MANIFEST_BACKUP"
+  ORIGINAL_LEGACY_HOST_MANIFEST_EXISTED=true
 fi
 if [[ -f "$CHROME_LAUNCH_AGENT" ]]; then
   cp "$CHROME_LAUNCH_AGENT" "$CHROME_AGENT_BACKUP"
@@ -178,6 +189,13 @@ rollback_install() {
     else
       [[ -f "$HOST_MANIFEST" ]] && rm "$HOST_MANIFEST"
     fi
+    if $ORIGINAL_LEGACY_HOST_MANIFEST_EXISTED; then
+      mkdir -p "${LEGACY_HOST_MANIFEST:h}"
+      cp "$LEGACY_HOST_MANIFEST_BACKUP" "$LEGACY_HOST_MANIFEST"
+      chmod 600 "$LEGACY_HOST_MANIFEST"
+    else
+      [[ -f "$LEGACY_HOST_MANIFEST" ]] && rm "$LEGACY_HOST_MANIFEST"
+    fi
   fi
   if $CHROME_AGENT_SWITCHED; then
     if $ORIGINAL_CHROME_AGENT_EXISTED; then
@@ -204,6 +222,7 @@ rollback_install() {
   [[ -d "$EXTENSION_STAGE" ]] && rm -rf "$EXTENSION_STAGE"
   [[ -f "$AGENT_BACKUP" ]] && rm "$AGENT_BACKUP"
   [[ -f "$HOST_MANIFEST_BACKUP" ]] && rm "$HOST_MANIFEST_BACKUP"
+  [[ -f "$LEGACY_HOST_MANIFEST_BACKUP" ]] && rm "$LEGACY_HOST_MANIFEST_BACKUP"
   [[ -f "$CHROME_AGENT_BACKUP" ]] && rm "$CHROME_AGENT_BACKUP"
   [[ -f "$MAINTENANCE_RESULT" ]] && rm "$MAINTENANCE_RESULT"
   $MAINTENANCE_LOCK_ACQUIRED && rmdir "$MAINTENANCE_LOCK"
@@ -416,6 +435,7 @@ cat > "$HOST_MANIFEST" <<EOF
 }
 EOF
 chmod 600 "$HOST_MANIFEST"
+[[ -f "$LEGACY_HOST_MANIFEST" ]] && rm "$LEGACY_HOST_MANIFEST"
 HOST_MANIFEST_SWITCHED=true
 
 CHROME_AGENT_SWITCHED=true
@@ -504,6 +524,7 @@ rm "$MAINTENANCE_RESULT" 2>/dev/null || true
 [[ -d "$EXTENSION_BACKUP" ]] && rm -rf "$EXTENSION_BACKUP"
 [[ -f "$AGENT_BACKUP" ]] && rm "$AGENT_BACKUP"
 [[ -f "$HOST_MANIFEST_BACKUP" ]] && rm "$HOST_MANIFEST_BACKUP"
+[[ -f "$LEGACY_HOST_MANIFEST_BACKUP" ]] && rm "$LEGACY_HOST_MANIFEST_BACKUP"
 [[ -f "$CHROME_AGENT_BACKUP" ]] && rm "$CHROME_AGENT_BACKUP"
 $MAINTENANCE_LOCK_ACQUIRED && rmdir "$MAINTENANCE_LOCK"
 $INSTALL_LOCK_ACQUIRED && rmdir "$INSTALL_LOCK"
