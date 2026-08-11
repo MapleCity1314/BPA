@@ -73,6 +73,11 @@ serialized recovery worker is the supported alternative:
 - `com.bpa.inventory-multishop-recovery` runs every 30 minutes and invokes the
   deterministic `production-cycle.ts` runner. It reuses one
   dedicated Chrome-for-Testing profile on loopback CDP port `17660`.
+- The `com.bpa.inventory-chrome` Launch Agent is no longer an inventory-service
+  deployment asset. The signed BPA Runtime closure owns its exact launcher,
+  persistent `chrome-inventory-profile`, installed Extension path, loopback CDP
+  settings, launchd readback, and rollback lifecycle. Do not recreate a local
+  plist or point Chrome at a source-tree Extension build.
 - `production-cycle.ts` takes PostgreSQL and Core Browser Control leases, switches
   only to exact shop names in `BPA_INVENTORY_SHOPS_JSON`, verifies the resulting
   shop header, and persists each product before proceeding.

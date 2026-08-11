@@ -227,8 +227,13 @@ Engine outbox 与已经 `delivering` 的 Delivery 收敛；固定无参数
 blocker 列表。active Run、Trigger Attempt、未确认 outbox、控制/外部/暂存租约、Recovery、
 正在投递的 Delivery、跨越锁边界的异步 Control mutation、Browser 命令或 Team Worker 调用
 任一未归零都不会报告 ready；尚未领取的
-pending Delivery 保持可恢复持久队列，不会把升级永久锁死。该代码候选尚未部署，
-installer 也尚未消费此协议，因此不能据此宣称公司 Mac 已具备安全升级窗口。
+pending Delivery 保持可恢复持久队列，不会把升级永久锁死。installer、rollback 与
+uninstall 候选已改为只消费此精确协议；旧 Core 不支持、畸形响应、超时或既有安装的 Core
+未运行都会停止，不读取旧 metrics 文件猜测。库存仓库中的硬编码 Chrome plist 同时删除，
+Chrome 可执行文件、持久 Profile、Extension、loopback CDP 与节流参数进入哈希 Runtime
+Closure；installer 安装并回读 mode `0600` Launch Agent，再核对 live PID command，失败
+恢复旧 Chrome/Core/Extension/Native Host。以上代码候选尚未部署或经过真实登录 Chrome
+安装/回退 E2E，因此不能据此宣称公司 Mac 已具备安全升级窗口。
 
 ## 4. Codex 过渡状态
 

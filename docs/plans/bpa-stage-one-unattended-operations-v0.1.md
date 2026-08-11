@@ -221,14 +221,19 @@ Schema 降级描述成可恢复旧二进制，也不得复制登录态。
    `runtime.maintenance.status` 从同一 SQLite 连接核对 Run、Attempt、Engine outbox、控制/
    外部/暂存租约、Recovery Session 与正在投递的 Attention Delivery，同时核对 Browser 命令、取消、
    probe、Extension 活动、Team Worker 未完成调用，以及在锁建立前已经进入异步阶段的 Control
-   mutation。任一计数非零即 `ready=false`。该能力仍需
-   先进入已部署 Core；下一层 installer 才能在停止旧 Core 前消费它，不能用旧 metrics 文件
-   或未知方法 fallback 代替。尚未领取的 pending Delivery 是可恢复持久队列，不会单独阻断升级；
-   已进入 `delivering` 且外部效果未决的 Delivery 必须先收口。
-2. **Chrome source-to-closure**：当前 `com.bpa.inventory-chrome.plist` 仍是库存仓库资产，
-   不在 Runtime Closure/installer 所有权内，且包含硬编码 Profile、Extension 路径、CDP 与
-   反后台节流参数。正式唯一控制面必须把受管 Chrome launch agent 配置、精确 Extension
-   路径、Profile 身份和回读校验纳入签名闭包。
+   mutation。任一计数非零即 `ready=false`。installer/rollback/uninstall 候选现已在停止旧
+   Core 前通过旧闭包 CLI 读取该协议，并用新闭包中的严格 parser 验证；旧 Core 不支持、
+   状态畸形、超时或已有安装但 Core 未运行均 fail-closed，不用旧 metrics 文件或未知方法
+   fallback。尚未领取的 pending Delivery 是可恢复持久队列，不会单独阻断升级；已进入
+   `delivering` 且外部效果未决的 Delivery 必须先收口。该协议必须先随前一层 Core 部署，
+   才能在后续维护窗口消费；本代码验证不等于生产已完成两段式升级。
+2. **Chrome source-to-closure**：库存仓库中的硬编码
+   `com.bpa.inventory-chrome.plist` 已从候选源码删除。签名 Runtime manifest 现固定 Chrome
+   for Testing 可执行文件、持久 Profile、loopback CDP、Extension 与反后台节流参数；哈希
+   launcher 才执行这些参数。installer 从同一闭包原子生成 mode `0600` 的 Launch Agent，
+   回读完整 plist，并核对 launchd PID 的 live command；Extension/Core/Native Host/Chrome
+   任一切换失败会恢复旧 agent 与运行态。rollback 与 uninstall 也使用同一 maintenance
+   门和 Chrome 身份门。尚未在公司 Mac 执行安装、回退或真实登录 Chrome E2E。
 3. **标签页硬上限**：本代码候选要求每个受控开页 stage 在 DOM effect 前取得 reservation，
    受管页与预留槽位合计上限为 8；无 reservation 的归属页会被立即关闭并停止所属命令。
    active/reserved/capacity 均进入脱敏心跳、Core 校验、采集器与分析结果。尚未完成真实 Chrome

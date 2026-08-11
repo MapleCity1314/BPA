@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 
@@ -27,6 +27,17 @@ if (process.platform !== "win32") {
   if (checked.status !== 0) {
     process.stderr.write(checked.stderr || checked.stdout);
     process.exit(checked.status ?? 1);
+  }
+  const macosRuntimeGates = spawnSync(
+    process.execPath,
+    ["--test", join(scriptsRoot, "macos-runtime-install-gates.test.mjs")],
+    { cwd: root, encoding: "utf8" }
+  );
+  if (macosRuntimeGates.status !== 0) {
+    process.stderr.write(
+      macosRuntimeGates.stderr || macosRuntimeGates.stdout
+    );
+    process.exit(macosRuntimeGates.status ?? 1);
   }
 } else {
   for (const path of powerShellScripts) {
@@ -163,18 +174,23 @@ for (const required of [
   }
 }
 
-const [macosInstall, closureBuilder, closureVerifier, inventoryChromeAgent] =
+const [
+  macosInstall,
+  macosRollback,
+  macosUninstall,
+  closureBuilder,
+  closureVerifier,
+  macosGates,
+  macosContract
+] =
   await Promise.all([
     readFile(join(scriptsRoot, "install-macos-arm64.sh"), "utf8"),
+    readFile(join(scriptsRoot, "rollback-macos.sh"), "utf8"),
+    readFile(join(scriptsRoot, "uninstall-macos.sh"), "utf8"),
     readFile(join(scriptsRoot, "build-runtime-closure.mjs"), "utf8"),
     readFile(join(scriptsRoot, "verify-runtime-closure.mjs"), "utf8"),
-    readFile(
-      join(
-        root,
-        "apps/inventory-monitor/deploy/com.bpa.inventory-chrome.plist"
-      ),
-      "utf8"
-    )
+    readFile(join(scriptsRoot, "macos-runtime-install-gates.mjs"), "utf8"),
+    readFile(join(scriptsRoot, "macos-runtime-install-contract.mjs"), "utf8")
   ]);
 if (macosInstall.includes('cat > "$STAGING_ROOT/bin/bpa-core"')) {
   throw new Error("macOS installer must not generate unverified runtime wrappers");
@@ -192,10 +208,16 @@ for (const required of [
 for (const required of [
   "AGENT_BACKUP=",
   "HOST_MANIFEST_BACKUP=",
+  "CHROME_AGENT_BACKUP=",
   "runtime-install.lock",
   "runtime-maintenance.lock",
+  "runtime maintenance-status",
+  "bpa-managed-chrome-agent.js",
+  "chrome-write",
+  "chrome-verify",
   'cp "$AGENT_BACKUP" "$LAUNCH_AGENT"',
-  'cp "$HOST_MANIFEST_BACKUP" "$HOST_MANIFEST"'
+  'cp "$HOST_MANIFEST_BACKUP" "$HOST_MANIFEST"',
+  'cp "$CHROME_AGENT_BACKUP" "$CHROME_LAUNCH_AGENT"'
 ]) {
   if (!macosInstall.includes(required)) {
     throw new Error(`macOS first-cutover rollback is missing ${required}`);
@@ -206,6 +228,8 @@ for (const required of [
   'VERSION_ROOT="\\${SCRIPT_ROOT:h}"',
   'CORE_ENV="\\$BPA_HOME/core.env"',
   "BPA Core configuration owner or permissions are invalid.",
+  "renderManagedChromeLauncher(release.identity)",
+  "MACOS_MANAGED_CHROME_CONTRACT",
   "await chmod(wrapperPath, 0o755)"
 ]) {
   if (!closureBuilder.includes(required)) {
@@ -214,23 +238,102 @@ for (const required of [
 }
 for (const required of [
   "requiredFiles.push(...manifestWrapperFiles)",
-  "Runtime wrapper identity is invalid"
+  "Runtime wrapper identity is invalid",
+  "Managed Chrome launcher differs from the Runtime manifest"
 ]) {
   if (!closureVerifier.includes(required)) {
     throw new Error(`macOS wrapper verification is missing ${required}`);
   }
 }
-const installedExtensionPath =
-  "/Users/yyerybz/Library/Application Support/BPA/extension";
-for (const flag of ["--disable-extensions-except=", "--load-extension="]) {
-  if (!inventoryChromeAgent.includes(`${flag}${installedExtensionPath}`)) {
+for (const required of [
+  "assertRuntimeMaintenanceReadiness",
+  "renderManagedChromeLaunchAgent",
+  "assertManagedChromeProcessCommand",
+  "--disable-extensions-except=$EXTENSION",
+  "--load-extension=$EXTENSION",
+  "chrome-inventory-profile",
+  "127.0.0.1",
+  "17660"
+]) {
+  if (!`${macosGates}\n${macosContract}`.includes(required)) {
+    throw new Error(`Managed Chrome closure gate is missing ${required}`);
+  }
+}
+for (const source of [macosInstall, macosRollback, macosUninstall]) {
+  for (const required of [
+    "runtime maintenance-status",
+    "com.bpa.inventory-chrome",
+    "bpa-managed-chrome-agent.js",
+    "chrome-verify"
+  ]) {
+    if (!source.includes(required)) {
+      throw new Error(`macOS lifecycle gate is missing ${required}`);
+    }
+  }
+  if (
+    source.includes("runtime-metrics") ||
+    source.includes("runtime-resource-metrics")
+  ) {
     throw new Error(
-      `Inventory Chrome must load the installed Browser Bridge with ${flag}`
+      "macOS lifecycle must not infer maintenance readiness from metrics files"
     );
   }
 }
-if (inventoryChromeAgent.includes("apps/extension/.output")) {
-  throw new Error("Inventory Chrome must not load a Browser Bridge from source");
+const installLockIndex = macosInstall.indexOf("INSTALL_LOCK_ACQUIRED=true");
+const firstChromeTouchIndex = macosInstall.indexOf(
+  "CHROME_LAUNCHD_TOUCHED=true"
+);
+const firstCoreTouchIndex = macosInstall.indexOf("CORE_LAUNCHD_TOUCHED=true");
+if (
+  installLockIndex < 0 ||
+  firstChromeTouchIndex < installLockIndex ||
+  firstCoreTouchIndex < installLockIndex
+) {
+  throw new Error("macOS installer must acquire its locks before launchd mutation");
+}
+const chromeSwitchIndex = macosInstall.indexOf("CHROME_AGENT_SWITCHED=true");
+const chromeWriteIndex = macosInstall.indexOf("\n  chrome-write \\");
+if (
+  chromeSwitchIndex < 0 ||
+  chromeWriteIndex < 0 ||
+  chromeSwitchIndex > chromeWriteIndex
+) {
+  throw new Error(
+    "macOS installer must arm Chrome rollback before replacing its Launch Agent"
+  );
+}
+for (const required of [
+  "CORE_LAUNCHD_TOUCHED=false",
+  "CHROME_LAUNCHD_TOUCHED=false",
+  "if $CHROME_LAUNCHD_TOUCHED",
+  "if $CORE_LAUNCHD_TOUCHED"
+]) {
+  if (!macosInstall.includes(required)) {
+    throw new Error(`macOS pre-lock launchd rollback guard is missing ${required}`);
+  }
+}
+for (const required of [
+  "REMOVAL_STARTED=false",
+  "if ! $REMOVAL_STARTED",
+  "if $CORE_STOPPED",
+  "if $CHROME_STOPPED",
+  "REMOVAL_STARTED=true"
+]) {
+  if (!macosUninstall.includes(required)) {
+    throw new Error(`macOS uninstall pre-removal recovery is missing ${required}`);
+  }
+}
+const obsoleteInventoryChromeAgent = join(
+  root,
+  "apps/inventory-monitor/deploy/com.bpa.inventory-chrome.plist"
+);
+try {
+  await access(obsoleteInventoryChromeAgent);
+  throw new Error(
+    "Inventory Chrome Launch Agent must be owned by the Runtime closure"
+  );
+} catch (error) {
+  if (error?.code !== "ENOENT") throw error;
 }
 
 process.stdout.write(

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import { afterEach,beforeEach,describe,expect,it,vi } from "vitest";
 import { contentDigest } from "@bpa/compiler";
+import { FeishuOperatorNotificationChannel } from "@bpa/adapter-feishu-notification";
 import {
   RuntimeProviderRegistry,
   type RuntimeInvocation,
@@ -16,6 +17,7 @@ import type {
 } from "@bpa/persistence";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { LocalCoreService } from "./control.js";
+import { AttentionDeliveryDispatcher } from "./attention-delivery-dispatcher.js";
 import type { TriggerFireResult } from "./trigger-runtime.js";
 import {
   InventoryDataRuntimeProvider,
@@ -806,6 +808,41 @@ describe("local Doudian business Workflow acceptance",() => {
     expect(
       store.getAttentionDeliveryForAttention(retiredAttentionId)
     ).toMatchObject({ state:"pending",attentionId:retiredAttentionId });
+    const notificationFetch = vi.fn(async (
+      _input:string | URL | Request,
+      init?:RequestInit
+    ) => {
+      const body = String(init?.body);
+      expect(body).toContain("工作流发现待处理事项");
+      expect(body).toContain("doudian.alliance-retired-products-monitor@3.0.0");
+      expect(body).toContain("查看本次运行结果与证据，并按业务流程处理。");
+      expect(body).not.toContain("session=");
+      expect(body).not.toContain("PRIVATE_DIAGNOSTIC");
+      expect(body).not.toContain("buyin.jinritemai.com");
+      return new Response(JSON.stringify({ code:0,msg:"success" }),{
+        status:200
+      });
+    });
+    const notificationDispatcher = new AttentionDeliveryDispatcher({
+      persistence:store,
+      channel:new FeishuOperatorNotificationChannel({
+        webhookUrl:"https://open.feishu.cn/open-apis/bot/v2/hook/test",
+        fetchImpl:notificationFetch as typeof fetch
+      }),
+      workerId:"mac-clearance-notification-fixture",
+      now:() => Date.parse(observedAt),
+      id:() => "delivery-lease-retired-products"
+    });
+    await expect(notificationDispatcher.dispatchNext()).resolves.toMatchObject({
+      status:"delivered",
+      delivery:{
+        attentionId:retiredAttentionId,state:"delivered",attempt:1
+      }
+    });
+    expect(notificationFetch).toHaveBeenCalledOnce();
+    expect(
+      store.getAttentionDeliveryForAttention(retiredAttentionId)
+    ).toMatchObject({ state:"delivered",attempt:1 });
 
     const experience = await runTrigger(service,store,{
       id:"doudian-experience-local",appId:"experience-score-monitor",
