@@ -215,6 +215,8 @@ for (const required of [
   "bpa-managed-chrome-agent.js",
   "chrome-write",
   "chrome-verify",
+  "MANAGED_CHROME_READY=false",
+  "Installed managed Chrome did not become ready in time.",
   'cp "$AGENT_BACKUP" "$LAUNCH_AGENT"',
   'cp "$HOST_MANIFEST_BACKUP" "$HOST_MANIFEST"',
   'cp "$CHROME_AGENT_BACKUP" "$CHROME_LAUNCH_AGENT"'

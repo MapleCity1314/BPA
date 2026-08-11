@@ -468,27 +468,31 @@ fi
   --executable "$VERSION_ROOT/node/bin/node" \
   --entrypoint "$VERSION_ROOT/bin/bpa-core.js" >/dev/null
 NEW_CHROME_PID=""
-for _attempt in {1..50}; do
+MANAGED_CHROME_READY=false
+for _attempt in {1..150}; do
   NEW_CHROME_PID="$(
     launchctl print "gui/$(id -u)/com.bpa.inventory-chrome" 2>/dev/null |
       awk '/pid =/{print $3; exit}'
   )"
-  [[ -n "$NEW_CHROME_PID" ]] && break
+  if [[ -n "$NEW_CHROME_PID" ]] && \
+    "$VERSION_ROOT/node/bin/node" \
+      "$VERSION_ROOT/bin/bpa-managed-chrome-agent.js" \
+      chrome-verify \
+      --manifest "$VERSION_ROOT/runtime-manifest.json" \
+      --path "$CHROME_LAUNCH_AGENT" \
+      --bpa-home "$BPA_ROOT" \
+      --runtime-root "$RUNTIME_ROOT" \
+      --log-root "$LOG_ROOT" \
+      --pid "$NEW_CHROME_PID" >/dev/null 2>&1; then
+    MANAGED_CHROME_READY=true
+    break
+  fi
   sleep 0.2
 done
-if [[ -z "$NEW_CHROME_PID" ]]; then
-  print -u2 "launchd did not report the installed managed Chrome PID."
+if ! $MANAGED_CHROME_READY; then
+  print -u2 "Installed managed Chrome did not become ready in time."
   exit 1
 fi
-"$VERSION_ROOT/node/bin/node" \
-  "$VERSION_ROOT/bin/bpa-managed-chrome-agent.js" \
-  chrome-verify \
-  --manifest "$VERSION_ROOT/runtime-manifest.json" \
-  --path "$CHROME_LAUNCH_AGENT" \
-  --bpa-home "$BPA_ROOT" \
-  --runtime-root "$RUNTIME_ROOT" \
-  --log-root "$LOG_ROOT" \
-  --pid "$NEW_CHROME_PID" >/dev/null
 if [[ ! -f "$EXTENSION_ROOT/manifest.json" || ! -f "$HOST_MANIFEST" || \
   ! -f "$CHROME_LAUNCH_AGENT" ]]; then
   print -u2 "Extension, Native Host, or managed Chrome installation is incomplete."
