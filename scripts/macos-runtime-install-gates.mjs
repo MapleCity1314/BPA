@@ -10,6 +10,7 @@ import { resolve } from "node:path";
 import {
   assertManagedChromeManifest,
   assertManagedChromeProcessCommand,
+  assertManagedChromeSupervisorCommand,
   assertRuntimeMaintenanceReadiness,
   MACOS_MANAGED_CHROME_CONTRACT,
   renderManagedChromeLaunchAgent
@@ -115,14 +116,35 @@ function main(argv) {
     throw new Error("Managed Chrome PID is invalid");
   }
   process.kill(pid, 0);
-  const commandLine = execFileSync(
+  const supervisorCommand = execFileSync(
     "ps",
     ["-p", String(pid), "-o", "command="],
     { encoding: "utf8" }
   ).trim();
-  assertManagedChromeProcessCommand(commandLine, options["bpa-home"]);
+  assertManagedChromeSupervisorCommand(
+    supervisorCommand,
+    options["runtime-root"]
+  );
+  const processes = execFileSync("ps", ["-axo", "pid=,command="], {
+    encoding: "utf8"
+  });
+  const managed = [];
+  for (const line of processes.split("\n")) {
+    const match = line.match(/^\s*(\d+)\s+(.+)$/u);
+    if (!match) continue;
+    try {
+      assertManagedChromeProcessCommand(match[2], options["bpa-home"]);
+      managed.push(Number(match[1]));
+    } catch {
+      // Ignore unrelated processes; exactly one closure-owned Chrome is required.
+    }
+  }
+  if (managed.length !== 1) {
+    throw new Error("Managed Chrome process ownership is invalid");
+  }
+  process.kill(managed[0], 0);
   process.stdout.write(
-    `${JSON.stringify({ status: "verified", pid, label: MACOS_MANAGED_CHROME_CONTRACT.launchAgentLabel })}\n`
+    `${JSON.stringify({ status: "verified", supervisorPid: pid, chromePid: managed[0], label: MACOS_MANAGED_CHROME_CONTRACT.launchAgentLabel })}\n`
   );
 }
 

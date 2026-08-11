@@ -1,10 +1,15 @@
 import { resolve } from "node:path";
 
 export const MACOS_MANAGED_CHROME_CONTRACT = Object.freeze({
-  schema: "bpa.managed-chrome/1",
+  schema: "bpa.managed-chrome/2",
   launchAgentLabel: "com.bpa.inventory-chrome",
+  interactionMode: "background-extension-only",
+  windowMode: "launchservices-hidden",
+  applicationPath: "/Applications/Google Chrome.app",
+  bundleIdentifier: "com.google.Chrome",
+  teamIdentifier: "EQHXZ8M8AV",
   executablePath:
-    "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   profileRelativePath: "chrome-inventory-profile",
   extensionRelativePath: "extension",
   remoteDebuggingAddress: "127.0.0.1",
@@ -241,6 +246,7 @@ if [[ -z "\${BPA_HOME:-}" ]]; then
   print -u2 "BPA_HOME is required to start managed Chrome."
   exit 1
 fi
+APP=${JSON.stringify(contract.applicationPath)}
 CHROME=${JSON.stringify(contract.executablePath)}
 PROFILE="$BPA_HOME/${contract.profileRelativePath}"
 EXTENSION="$BPA_HOME/${contract.extensionRelativePath}"
@@ -252,16 +258,57 @@ if [[ ! -f "$EXTENSION/manifest.json" ]]; then
   print -u2 "Managed Chrome Browser Bridge is unavailable."
   exit 1
 fi
+/usr/bin/codesign --verify --deep --strict "$APP"
+SIGNATURE="$(/usr/bin/codesign -dv --verbose=4 "$APP" 2>&1)"
+if [[ "$SIGNATURE" != *"Identifier=${contract.bundleIdentifier}"* || \
+  "$SIGNATURE" != *"TeamIdentifier=${contract.teamIdentifier}"* ]]; then
+  print -u2 "Managed Chrome application identity is invalid."
+  exit 1
+fi
+/usr/sbin/spctl --assess --type execute "$APP"
 mkdir -p "$PROFILE"
 chmod 700 "$PROFILE"
 export BPA_RUNTIME_ID=${JSON.stringify(releaseIdentity)}
-exec "$CHROME" \\
+find_managed_chrome_pid() {
+  /bin/ps -axo pid=,command= | /usr/bin/awk \
+    -v executable="$CHROME" \
+    -v profile="--user-data-dir=$PROFILE" '
+      !found && index($0, executable " ") && index($0, profile) && !index($0, " --type=") {
+        print $1
+        found = 1
+      }
+    '
+}
+stop_managed_chrome() {
+  local managed_pid="$(find_managed_chrome_pid)"
+  if [[ -n "$managed_pid" ]]; then
+    /bin/kill -TERM "$managed_pid" 2>/dev/null || true
+  fi
+  exit 0
+}
+trap stop_managed_chrome TERM INT HUP
+MANAGED_PID="$(find_managed_chrome_pid)"
+if [[ -z "$MANAGED_PID" ]]; then
+  /usr/bin/open -gj -n "$APP" --args \\
   "--user-data-dir=$PROFILE" \\
   "--remote-debugging-port=${contract.remoteDebuggingPort}" \\
   "--remote-debugging-address=${contract.remoteDebuggingAddress}" \\
 ${staticArguments}
   "--disable-extensions-except=$EXTENSION" \\
   "--load-extension=$EXTENSION"
+  for _attempt in {1..150}; do
+    MANAGED_PID="$(find_managed_chrome_pid)"
+    [[ -n "$MANAGED_PID" ]] && break
+    /bin/sleep 0.2
+  done
+fi
+if [[ -z "$MANAGED_PID" ]]; then
+  print -u2 "Managed Chrome did not start in the background."
+  exit 1
+fi
+while /bin/kill -0 "$MANAGED_PID" 2>/dev/null; do
+  /bin/sleep 5
+done
 `;
 }
 
@@ -271,6 +318,11 @@ export function assertManagedChromeManifest(manifest) {
     [
       "schema",
       "launchAgentLabel",
+      "interactionMode",
+      "windowMode",
+      "applicationPath",
+      "bundleIdentifier",
+      "teamIdentifier",
       "executablePath",
       "profileRelativePath",
       "extensionRelativePath",
@@ -321,4 +373,22 @@ export function assertManagedChromeProcessCommand(command, bpaHome) {
   ) {
     throw new Error("Live managed Chrome command differs from the Runtime closure");
   }
+}
+
+export function assertManagedChromeSupervisorCommand(command, runtimeRoot) {
+  const root = absolutePath(runtimeRoot, "Runtime root");
+  const launcher = `${root}/current/bin/bpa-managed-chrome`;
+  const offset = typeof command === "string" ? command.indexOf(launcher) : -1;
+  const before = offset <= 0 ? "" : command[offset - 1];
+  const after = offset < 0 ? "" : command[offset + launcher.length] ?? "";
+  if (
+    offset < 0 ||
+    (before !== "" && !/[\s"']/u.test(before)) ||
+    (after !== "" && !/[\s"']/u.test(after))
+  ) {
+    throw new Error(
+      "Live managed Chrome supervisor differs from the Runtime closure"
+    );
+  }
+  return command;
 }
