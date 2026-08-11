@@ -115,6 +115,11 @@ DevTools、文件选择和剪贴板导出继续禁止。
 
 - 每个业务平台和隔离要求对应一个长期存活的受管 Profile；现有抖店工作流优先共享一个
   Chrome 实例、Profile 和 `browserInstanceId`。
+- Mac 受管 Chrome 必须是系统验签通过的 Google Chrome，并通过 LaunchServices
+  `-gj` 隐藏且不激活地启动。库存、清退商品和体验分
+  默认只通过 Extension DOM/Tab API 在后台执行；Runtime 不调用系统鼠标、键盘或前台窗口自动化。
+  登录失效、验证码、风控或需要人工确认时停止 Workflow 并交给受审计的 Recovery
+  Session，禁止为了无人值守而抢占用户前台。
 - 同一账号上下文的浏览器阶段通过账号级 concurrency key 串行；HTTP、文件、SQLite、
   聚合和外部 Delivery 在释放浏览器租约后并行。
 - Workflow 复用少量受管标签页；结束后回到受管起始页并关闭业务详情页。不得无界新建
@@ -228,8 +233,9 @@ Schema 降级描述成可恢复旧二进制，也不得复制登录态。
    `delivering` 且外部效果未决的 Delivery 必须先收口。该协议必须先随前一层 Core 部署，
    才能在后续维护窗口消费；本代码验证不等于生产已完成两段式升级。
 2. **Chrome source-to-closure**：库存仓库中的硬编码
-   `com.bpa.inventory-chrome.plist` 已从候选源码删除。签名 Runtime manifest 现固定 Chrome
-   for Testing 可执行文件、持久 Profile、loopback CDP、Extension 与反后台节流参数；哈希
+   `com.bpa.inventory-chrome.plist` 已从候选源码删除。签名 Runtime manifest 现固定系统
+   验签通过的 Google Chrome、持久 Profile、loopback CDP、Extension、LaunchServices
+   隐藏启动与反后台节流参数；哈希
    launcher 才执行这些参数。installer 从同一闭包原子生成 mode `0600` 的 Launch Agent，
    回读完整 plist，并核对 launchd PID 的 live command；Extension/Core/Native Host/Chrome
    任一切换失败会恢复旧 agent 与运行态。rollback 与 uninstall 也使用同一 maintenance

@@ -286,6 +286,13 @@ Branch Protection 的 10 项检查继续保留，直到公司 Mac 登录态真�
 当前仍未部署该 Mac 版本；停止旧 WorkBuddy 任务及删除旧交付必须是 canary 后独立 PR 与
 另行授权的生产窗口，不能由本代码候选提前完成。
 
+Mac Runtime closure 现进一步把后台运行写入受签名的 Chrome 合同：受管实例必须使用
+通过 `codesign` 与 Gatekeeper 校验的 Google Chrome，并由 LaunchServices 以 `-gj` 隐藏、
+不激活地启动独立 Profile。库存、清退商品与体验分只
+允许通过 Extension 的 DOM/Tab 通道操作专用 Profile，不使用系统鼠标、键盘或前台窗口
+自动化。登录、验证码、风控和人工确认仍会暂停，由 Recovery Session 显式接管；该合同
+尚待公司 Mac 真实登录 Chrome canary，不能把本机焦点实验当作生产证明。
+
 剩余验收：真实登录页逐店完整扫描、分页、店铺恢复、失败语义、证据链和告警回归。
 
 本阶段反思：消除的真实风险是浏览器汇总假持久化、Windows 日记录单点和成功发现无平台

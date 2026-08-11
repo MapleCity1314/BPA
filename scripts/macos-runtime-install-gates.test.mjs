@@ -7,6 +7,7 @@ import { join } from "node:path";
 import {
   assertManagedChromeManifest,
   assertManagedChromeProcessCommand,
+  assertManagedChromeSupervisorCommand,
   assertRuntimeMaintenanceReadiness,
   MACOS_MANAGED_CHROME_CONTRACT,
   renderManagedChromeLaunchAgent,
@@ -125,7 +126,15 @@ test("binds the managed Chrome launcher and live command to one contract", () =>
       ...MACOS_MANAGED_CHROME_CONTRACT,
       flags: [...MACOS_MANAGED_CHROME_CONTRACT.flags]
     }).schema,
-    "bpa.managed-chrome/1"
+    "bpa.managed-chrome/2"
+  );
+  assert.equal(
+    MACOS_MANAGED_CHROME_CONTRACT.interactionMode,
+    "background-extension-only"
+  );
+  assert.equal(
+    MACOS_MANAGED_CHROME_CONTRACT.windowMode,
+    "launchservices-hidden"
   );
   assert.throws(
     () =>
@@ -137,9 +146,18 @@ test("binds the managed Chrome launcher and live command to one contract", () =>
   );
   const releaseIdentity = "v0.6.2-rc.123456789abc.node24.18.0";
   const launcher = renderManagedChromeLauncher(releaseIdentity);
+  const syntax = spawnSync("/bin/zsh", ["-n"], {
+    input: launcher,
+    encoding: "utf8"
+  });
+  assert.equal(syntax.status, 0, syntax.stderr);
   const bpaHome = "/Users/test/Library/Application Support/BPA";
   for (const expected of [
     MACOS_MANAGED_CHROME_CONTRACT.executablePath,
+    '/usr/bin/open -gj -n "$APP" --args',
+    "/usr/bin/codesign --verify --deep --strict",
+    "Identifier=com.google.Chrome",
+    "TeamIdentifier=EQHXZ8M8AV",
     "--user-data-dir=$PROFILE",
     "--remote-debugging-port=17660",
     "--remote-debugging-address=127.0.0.1",
@@ -160,6 +178,21 @@ test("binds the managed Chrome launcher and live command to one contract", () =>
   ].join(" ");
   assert.doesNotThrow(() =>
     assertManagedChromeProcessCommand(command, bpaHome)
+  );
+  const runtimeRoot = `${bpaHome}/runtime`;
+  assert.doesNotThrow(() =>
+    assertManagedChromeSupervisorCommand(
+      `/bin/zsh ${runtimeRoot}/current/bin/bpa-managed-chrome`,
+      runtimeRoot
+    )
+  );
+  assert.throws(
+    () =>
+      assertManagedChromeSupervisorCommand(
+        `/bin/zsh ${runtimeRoot}/current/bin/bpa-managed-chrome-old`,
+        runtimeRoot
+      ),
+    /differs from the Runtime closure/u
   );
   assert.throws(
     () =>
