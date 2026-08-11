@@ -229,7 +229,7 @@ Codex、旧 scheduler 和内部刷新脚本都不是生产控制面。生产周�
 - 员工局域网入口：`http://192.168.3.135:17650/`。
 - Mac mini loopback：`http://127.0.0.1:17650/`。
 - 服务当前监听 `*:17650`，局域网地址返回 HTTP 200。
-- 页面使用启动令牌/共享访问令牌换取 HttpOnly、SameSite=Strict Cookie，带 CSRF、防缓存和 30 分钟空闲失效。
+- loopback 与固定公司局域网 `192.168.3.0/24` 会自动换取 HttpOnly、SameSite=Strict Cookie；其他来源仍需启动令牌或共享访问令牌。会话继续带 CSRF、防缓存和 30 分钟空闲失效，局域网员工在失效后可自动重建，不再要求重新打开带令牌地址。
 - 一次性访问地址保存在 Mac mini 的 `~/Library/Application Support/BPA/run/inventory-review-url`，文件权限为 `0600`；不得把完整 URL 写入文档或聊天。
 
 页面应分别展示四类状态，不能互相代替：

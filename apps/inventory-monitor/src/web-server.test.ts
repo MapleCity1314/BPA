@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startInventoryWebServer } from "./web-server.js";
+import {
+  startInventoryWebServer,
+  trustedEmployeeNetwork
+} from "./web-server.js";
 
 const healthyControl = () => ({
   activeCollectionCount:0,
@@ -12,6 +15,30 @@ const healthyControl = () => ({
 });
 
 describe("inventory review server", () => {
+  it("automatically restores sessions only for loopback and the company LAN", () => {
+    for (const address of [
+      "127.0.0.1",
+      "::1",
+      "::ffff:127.0.0.1",
+      "192.168.3.1",
+      "192.168.3.220",
+      "::ffff:192.168.3.135"
+    ]) {
+      expect(trustedEmployeeNetwork(address)).toBe(true);
+    }
+    for (const address of [
+      undefined,
+      "",
+      "192.168.2.220",
+      "192.168.30.220",
+      "100.99.61.3",
+      "10.0.0.1",
+      "192.168.3.999"
+    ]) {
+      expect(trustedEmployeeNetwork(address)).toBe(false);
+    }
+  });
+
   it("exposes a bounded recovery status without trusting arbitrary fields", async () => {
     const directory = await mkdtemp(join(tmpdir(),"bpa-inventory-recovery-"));
     const recoveryStatusPath = join(directory,"status.json");
