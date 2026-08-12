@@ -202,11 +202,17 @@ async function readCurrentShopIdentity(
     ) {
       throw error;
     }
+    try {
+      closeDoudianShopSwitcher(doc);
+      await waitForChange(250, doc);
+    } catch {
+      // No switcher was open; continue through the authenticated header.
+    }
     openDoudianShopSwitcher(doc);
   }
   return waitUntil(
     () => readDoudianHeaderShopIdentity(doc),
-    4_000,
+    15_000,
     "SHOP_IDENTITY_UNCERTAIN",
     doc,
     isCancelled

@@ -166,6 +166,58 @@ describe("alliance retired-products content stages", () => {
     });
   });
 
+  it("reopens the account popover when a stale id-less switcher is already visible", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div id="popover-host"></div>
+      <div id="drawer-host">
+        <div class="auxo-modal-wrap">
+          <button aria-label="Close"></button>
+          <div class="roleItem"><span class="introName">甲食品旗舰店</span>正常营业</div>
+        </div>
+      </div>
+    `);
+    document.querySelector<HTMLElement>("button")!.addEventListener(
+      "click",
+      () => {
+        document.querySelector("#drawer-host")!.innerHTML = "";
+      }
+    );
+    document.querySelector<HTMLElement>(".headerShopName")!.addEventListener(
+      "click",
+      () => {
+        document.querySelector("#popover-host")!.innerHTML = `
+          <div class="auxo-popover">
+            <div>甲食品旗舰店</div>
+            <div>店铺ID 10001</div>
+            <div class="switch-entry">切换组织/店铺</div>
+          </div>`;
+        document.querySelector<HTMLElement>(".switch-entry")!.addEventListener(
+          "click",
+          () => {
+            document.querySelector("#drawer-host")!.innerHTML = `
+              <div class="auxo-modal-wrap">
+                <button aria-label="Close"></button>
+                <div class="roleItem"><span class="introName">甲食品旗舰店</span>正常营业</div>
+              </div>`;
+          }
+        );
+      }
+    );
+
+    await expect(
+      executeAllianceRetiredStage(
+        { stage: "discover-shops" },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      currentShop: { id: "10001", name: "甲食品旗舰店" }
+    });
+  });
+
   it("continues discovery when the authenticated header classes change", async () => {
     const document = doc(`
       <div class="top-navigation">
