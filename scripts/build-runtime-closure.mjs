@@ -50,7 +50,7 @@ const chromeForTestingApp = process.env.BPA_CHROME_FOR_TESTING_APP
   : undefined;
 const maximumBytes = Number(
   process.env.BPA_RUNTIME_MAX_BYTES ??
-    (targetPlatform === "win32" ? 256 : 512) * 1024 * 1024
+    (targetPlatform === "win32" ? 256 : 1_536) * 1024 * 1024
 );
 
 if (
