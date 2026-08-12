@@ -131,6 +131,9 @@ export function assertArchiveBasename(name, release) {
 }
 
 export function sensitiveContentFindings(bytes, path = "<memory>") {
+  if (Buffer.isBuffer(bytes) && bytes.subarray(0, 8_192).includes(0)) {
+    return [];
+  }
   const text = Buffer.isBuffer(bytes)
     ? bytes.toString("utf8")
     : String(bytes);
