@@ -22,6 +22,7 @@ export type DoudianAllianceNodeErrorCode =
   | "CAPTCHA_REQUIRED"
   | "COMMAND_RESULT_TOO_LARGE"
   | "COMMAND_CANCELLED"
+  | "CURRENT_SHOP_NOT_IN_LIST"
   | "DEADLINE_EXCEEDED"
   | "DOUDIAN_ALLIANCE_DISCOVERY_FAILED"
   | "DOUDIAN_ALLIANCE_MAX_SHOPS_INVALID"
@@ -41,6 +42,7 @@ export type DoudianAllianceNodeErrorCode =
   | "RISK_CONTROL"
   | "SESSION_EXPIRED"
   | "SHOP_CONTEXT_RESTORE_FAILED"
+  | "SHOP_IDENTITY_DRIFT"
   | "SHOP_IDENTITY_AMBIGUOUS"
   | "SHOP_IDENTITY_MISMATCH"
   | "SHOP_IDENTITY_UNCERTAIN"
@@ -48,8 +50,17 @@ export type DoudianAllianceNodeErrorCode =
   | "SHOP_LIMIT_EXCEEDED"
   | "SHOP_LIST_EMPTY"
   | "SHOP_LIST_INCOMPLETE"
+  | "SHOP_LIST_DUPLICATED"
+  | "SHOP_NOT_ACTIVE"
+  | "SHOP_SWITCH_DIALOG_AMBIGUOUS"
+  | "SHOP_SWITCH_DIALOG_CLOSE_AMBIGUOUS"
+  | "SHOP_SWITCH_DIALOG_TIMEOUT"
   | "SHOP_SWITCH_NOT_CONFIRMED"
-  | "SHOP_TARGET_INVALID";
+  | "SHOP_SWITCH_SEARCH_AMBIGUOUS"
+  | "SHOP_SWITCH_TRIGGER_AMBIGUOUS"
+  | "SHOP_TARGET_AMBIGUOUS"
+  | "SHOP_TARGET_INVALID"
+  | "SHOP_TARGET_TIMEOUT";
 
 export const DOUDIAN_ALLIANCE_NODE_ERROR_CODES = new Set<DoudianAllianceNodeErrorCode>([
   "ALLIANCE_CONTENT_RESPONSE_TIMEOUT",
@@ -62,6 +73,7 @@ export const DOUDIAN_ALLIANCE_NODE_ERROR_CODES = new Set<DoudianAllianceNodeErro
   "CAPTCHA_REQUIRED",
   "COMMAND_RESULT_TOO_LARGE",
   "COMMAND_CANCELLED",
+  "CURRENT_SHOP_NOT_IN_LIST",
   "DEADLINE_EXCEEDED",
   "DOUDIAN_ALLIANCE_DISCOVERY_FAILED",
   "DOUDIAN_ALLIANCE_MAX_SHOPS_INVALID",
@@ -81,6 +93,7 @@ export const DOUDIAN_ALLIANCE_NODE_ERROR_CODES = new Set<DoudianAllianceNodeErro
   "RISK_CONTROL",
   "SESSION_EXPIRED",
   "SHOP_CONTEXT_RESTORE_FAILED",
+  "SHOP_IDENTITY_DRIFT",
   "SHOP_IDENTITY_AMBIGUOUS",
   "SHOP_IDENTITY_MISMATCH",
   "SHOP_IDENTITY_UNCERTAIN",
@@ -88,8 +101,17 @@ export const DOUDIAN_ALLIANCE_NODE_ERROR_CODES = new Set<DoudianAllianceNodeErro
   "SHOP_LIMIT_EXCEEDED",
   "SHOP_LIST_EMPTY",
   "SHOP_LIST_INCOMPLETE",
+  "SHOP_LIST_DUPLICATED",
+  "SHOP_NOT_ACTIVE",
+  "SHOP_SWITCH_DIALOG_AMBIGUOUS",
+  "SHOP_SWITCH_DIALOG_CLOSE_AMBIGUOUS",
+  "SHOP_SWITCH_DIALOG_TIMEOUT",
   "SHOP_SWITCH_NOT_CONFIRMED",
-  "SHOP_TARGET_INVALID"
+  "SHOP_SWITCH_SEARCH_AMBIGUOUS",
+  "SHOP_SWITCH_TRIGGER_AMBIGUOUS",
+  "SHOP_TARGET_AMBIGUOUS",
+  "SHOP_TARGET_INVALID",
+  "SHOP_TARGET_TIMEOUT"
 ]);
 
 export class DoudianAllianceError extends Error {
@@ -101,6 +123,7 @@ export class DoudianAllianceError extends Error {
 
 export interface AllianceShop {
   readonly id?: string;
+  readonly switcherOrdinal?: number;
   readonly name: string;
   readonly status: "active" | "blocked";
   readonly statusText: string;
@@ -532,27 +555,28 @@ export function discoverDoudianAllianceShops(
       }
     ];
   });
-  const identities = new Set<string>();
+  const nameCounts = new Map<string, number>();
   for (const shop of shops) {
-    const identity = shop.id ? `id:${shop.id}` : `name:${shop.name}`;
+    nameCounts.set(shop.name, (nameCounts.get(shop.name) ?? 0) + 1);
+  }
+  const nameOrdinals = new Map<string, number>();
+  const distinguishable = shops.map((shop) => {
+    if ((nameCounts.get(shop.name) ?? 0) < 2 || shop.id) return shop;
+    const switcherOrdinal = nameOrdinals.get(shop.name) ?? 0;
+    nameOrdinals.set(shop.name, switcherOrdinal + 1);
+    return { ...shop, switcherOrdinal };
+  });
+  const identities = new Set<string>();
+  for (const shop of distinguishable) {
+    const identity = shop.id
+      ? `id:${shop.id}`
+      : `name:${shop.name}:${shop.switcherOrdinal ?? 0}`;
     if (identities.has(identity)) {
       throw new DoudianAllianceError("SHOP_LIST_DUPLICATED");
     }
     identities.add(identity);
   }
-  for (const shop of shops) {
-    if (
-      shops.some(
-        (candidate) =>
-          candidate !== shop &&
-          candidate.name === shop.name &&
-          (!candidate.id || !shop.id)
-      )
-    ) {
-      throw new DoudianAllianceError("SHOP_IDENTITY_AMBIGUOUS");
-    }
-  }
-  return shops;
+  return distinguishable;
 }
 
 export function closeDoudianShopSwitcher(doc: Document): void {
@@ -657,7 +681,11 @@ export function selectDoudianAllianceShop(
     const cardId = shopIdFromText(normalizeText(card.textContent));
     return shop.id && cardId ? cardId === shop.id : true;
   });
-  const card = requireUnique(matches, "SHOP_TARGET_AMBIGUOUS");
+  const card =
+    shop.switcherOrdinal === undefined
+      ? requireUnique(matches, "SHOP_TARGET_AMBIGUOUS")
+      : matches[shop.switcherOrdinal];
+  if (!card) throw new DoudianAllianceError("SHOP_TARGET_AMBIGUOUS");
   const blocked = blockedShopStatus(normalizeText(card.textContent));
   if (blocked) throw new DoudianAllianceError("SHOP_NOT_ACTIVE");
   activateElement(card);

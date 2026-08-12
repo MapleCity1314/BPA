@@ -216,7 +216,7 @@ async function discoverAllShops(
     for (const shop of discoverDoudianAllianceShops(doc)) {
       const key = shop.id
         ? `id:${shop.id}`
-        : `name:${normalize(shop.name)}`;
+        : `name:${normalize(shop.name)}:${shop.switcherOrdinal ?? 0}`;
       const existing = shops.get(key);
       if (
         existing &&
@@ -240,9 +240,6 @@ async function discoverAllShops(
   );
   if (sourceMatches.length === 0) {
     throw new DoudianAllianceError("CURRENT_SHOP_NOT_IN_LIST");
-  }
-  if (sourceMatches.length > 1) {
-    throw new DoudianAllianceError("SHOP_IDENTITY_AMBIGUOUS");
   }
   return [...shops.values()];
 }
@@ -285,6 +282,7 @@ async function resolveDiscoveredShopIds(
 ): Promise<readonly AllianceShop[]> {
   const resolved: AllianceShop[] = [];
   let currentShop = sourceShop;
+  let sourceSwitcherOrdinal: number | undefined;
   let mayNeedRestore = false;
   let primaryError: unknown;
   try {
@@ -296,7 +294,13 @@ async function resolveDiscoveredShopIds(
       }
       if (
         normalize(shop.name) === normalize(sourceShop.name) &&
-        (shop.id === undefined || shop.id === sourceShop.id)
+        (shop.id === sourceShop.id ||
+          (shop.id === undefined &&
+            shops.filter(
+              (candidate) =>
+                candidate.status === "active" &&
+                normalize(candidate.name) === normalize(sourceShop.name)
+            ).length === 1))
       ) {
         resolved.push({ ...shop, id: sourceShop.id });
         continue;
@@ -308,6 +312,12 @@ async function resolveDiscoveredShopIds(
       mayNeedRestore = true;
       const identity = await switchAndConfirmShop(doc, shop, isCancelled);
       currentShop = identity;
+      if (
+        identity.id === sourceShop.id &&
+        normalize(identity.name) === normalize(sourceShop.name)
+      ) {
+        sourceSwitcherOrdinal = shop.switcherOrdinal;
+      }
       resolved.push({ ...shop, id: identity.id });
     }
   } catch (error) {
@@ -323,6 +333,9 @@ async function resolveDiscoveredShopIds(
         doc,
         {
           id: sourceShop.id,
+          ...(sourceSwitcherOrdinal === undefined
+            ? {}
+            : { switcherOrdinal: sourceSwitcherOrdinal }),
           name: sourceShop.name,
           status: "active",
           statusText: "正常营业"

@@ -204,6 +204,32 @@ describe("Doudian alliance retired-products runtime", () => {
     expect(clicks[1]).toHaveBeenCalledOnce();
   });
 
+  it("assigns stable switcher ordinals to same-name cards without visible IDs", () => {
+    const doc = documentOf(`
+      <div role="dialog">切换组织/店铺
+        <div class="roleItem"><span class="introName">同名食品店</span>正常营业</div>
+        <div class="roleItem"><span class="introName">同名食品店</span>正常营业</div>
+      </div>
+    `);
+    expect(discoverDoudianAllianceShops(doc)).toEqual([
+      expect.objectContaining({ name: "同名食品店", switcherOrdinal: 0 }),
+      expect.objectContaining({ name: "同名食品店", switcherOrdinal: 1 })
+    ]);
+    const cards = Array.from(doc.querySelectorAll<HTMLElement>(".roleItem"));
+    const clicks = cards.map(() => vi.fn());
+    cards.forEach((card, index) =>
+      card.addEventListener("click", clicks[index]!)
+    );
+    selectDoudianAllianceShop(doc, {
+      name: "同名食品店",
+      switcherOrdinal: 1,
+      status: "active",
+      statusText: "正常营业"
+    });
+    expect(clicks[0]).not.toHaveBeenCalled();
+    expect(clicks[1]).toHaveBeenCalledOnce();
+  });
+
   it("uses exact semantic entries for the Doudian-to-Buyin path", () => {
     const doc = documentOf(`
       <div id="fxg-pc-header">

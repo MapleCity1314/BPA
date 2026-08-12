@@ -207,7 +207,7 @@ $RequiredAssets = @(
   @{
     type = "node"
     file = "doudian.alliance.shops.discover.node.yaml"
-    sha256 = "4472107fd5b58207abc44c7813c180c8b410f11d6ec62b0174e5badd0867f583"
+    sha256 = "de3e160ada864906f371c4ffc7c2bc660797f22a1e4e3857cd58edf4405c8977"
   },
   @{
     type = "node"
@@ -232,7 +232,7 @@ $RequiredAssets = @(
   @{
     type = "adapter"
     file = "doudian-alliance.adapter.yaml"
-    sha256 = "c9da09919604823c96e308ac709ff6cda15c0c27e9437318a91ba2eb5200d625"
+    sha256 = "69e049d8d79a17cac5f69d7a681f6d9bffa2e449fca767b36b3b29246f065170"
   },
   @{
     type = "workflow"

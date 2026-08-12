@@ -268,6 +268,45 @@ describe("alliance retired-products content stages", () => {
     expect(name.textContent).toBe("甲食品旗舰店");
   });
 
+  it("resolves same-name id-less cards by ordinal and restores the matching source", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName" data-shop-id="10002"><span class="userName">同名食品店</span></div>
+      </div>
+      <div class="auxo-modal-wrap">
+        <div class="roleItem first"><span class="introName">同名食品店</span>正常营业</div>
+        <div class="roleItem second"><span class="introName">同名食品店</span>正常营业</div>
+      </div>
+    `);
+    const header = document.querySelector<HTMLElement>(".headerShopName")!;
+    const name = document.querySelector<HTMLElement>(".userName")!;
+    document.querySelector<HTMLElement>(".first")!.addEventListener(
+      "click",
+      () => {
+        header.dataset.shopId = "10001";
+        name.textContent = "同名食品店";
+      }
+    );
+    document.querySelector<HTMLElement>(".second")!.addEventListener(
+      "click",
+      () => {
+        header.dataset.shopId = "10002";
+        name.textContent = "同名食品店";
+      }
+    );
+    await expect(
+      executeAllianceRetiredStage(
+        { stage: "discover-shops" },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      currentShop: { id: "10002", name: "同名食品店" },
+      shops: [{ id: "10001" }, { id: "10002" }]
+    });
+    expect(header.dataset.shopId).toBe("10002");
+  });
+
   it("does not silently stop after eight virtualized shop pages", async () => {
     const document = doc(`
       <div id="fxg-pc-header">
