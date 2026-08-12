@@ -23,6 +23,23 @@ export interface PendingCommandStart {
   startedAt: string;
 }
 
+export function pendingResultReplayPlan(
+  pending: readonly PendingResult[],
+  lastAckedCommandSeq: number
+): {
+  readonly acknowledged: readonly PendingResult[];
+  readonly replay: readonly PendingResult[];
+} {
+  const watermark =
+    Number.isSafeInteger(lastAckedCommandSeq) && lastAckedCommandSeq >= 0
+      ? lastAckedCommandSeq
+      : 0;
+  return {
+    acknowledged: pending.filter((result) => result.commandSeq <= watermark),
+    replay: pending.filter((result) => result.commandSeq > watermark)
+  };
+}
+
 export function interruptedCommandResult(
   started: PendingCommandStart
 ): PendingResult {

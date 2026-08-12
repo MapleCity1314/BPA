@@ -215,6 +215,8 @@ for (const required of [
   "bpa-managed-chrome-agent.js",
   "chrome-write",
   "chrome-verify",
+  "MANAGED_CHROME_READY=false",
+  "Installed managed Chrome did not become ready in time.",
   'cp "$AGENT_BACKUP" "$LAUNCH_AGENT"',
   'cp "$HOST_MANIFEST_BACKUP" "$HOST_MANIFEST"',
   'cp "$CHROME_AGENT_BACKUP" "$CHROME_LAUNCH_AGENT"'
@@ -249,8 +251,6 @@ for (const required of [
   "assertRuntimeMaintenanceReadiness",
   "renderManagedChromeLaunchAgent",
   "assertManagedChromeProcessCommand",
-  "--disable-extensions-except=$EXTENSION",
-  "--load-extension=$EXTENSION",
   "chrome-inventory-profile",
   "127.0.0.1",
   "17660"
@@ -277,6 +277,14 @@ for (const source of [macosInstall, macosRollback, macosUninstall]) {
     throw new Error(
       "macOS lifecycle must not infer maintenance readiness from metrics files"
     );
+  }
+}
+for (const required of [
+  'HOST_ROOT="$MANAGED_CHROME_PROFILE/NativeMessagingHosts"',
+  'LEGACY_HOST_MANIFEST="$USER_HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.bpa.browser.json"'
+]) {
+  if (!macosInstall.includes(required)) {
+    throw new Error(`Managed Chrome Native Host isolation is missing ${required}`);
   }
 }
 const installLockIndex = macosInstall.indexOf("INSTALL_LOCK_ACQUIRED=true");

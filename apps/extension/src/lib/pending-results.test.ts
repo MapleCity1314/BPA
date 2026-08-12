@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   interruptedCommandResult,
   normalizePendingResultForReplay,
+  pendingResultReplayPlan,
   type PendingResult
 } from "./pending-results.js";
 
@@ -51,5 +52,29 @@ describe("pending result replay migration", () => {
         retryable: false
       }
     });
+  });
+
+  it("prunes locally pending results already covered by the Core ACK watermark", () => {
+    const plan = pendingResultReplayPlan(
+      [
+        { ...pending, commandId: "command-6", commandSeq: 6 },
+        { ...pending, commandId: "command-7", commandSeq: 7 },
+        { ...pending, commandId: "command-8", commandSeq: 8 }
+      ],
+      7
+    );
+    expect(plan.acknowledged.map((result) => result.commandId)).toEqual([
+      "command-6",
+      "command-7"
+    ]);
+    expect(plan.replay.map((result) => result.commandId)).toEqual([
+      "command-8"
+    ]);
+  });
+
+  it("does not trust an invalid local ACK watermark", () => {
+    expect(pendingResultReplayPlan([pending], Number.NaN).replay).toEqual([
+      pending
+    ]);
   });
 });

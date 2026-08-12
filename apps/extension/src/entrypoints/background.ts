@@ -20,6 +20,7 @@ import {
   listPendingCommandStarts,
   listPendingResults,
   normalizePendingResultForReplay,
+  pendingResultReplayPlan,
   recoverInterruptedCommands,
   removePendingCommandStart,
   removePendingEvidence,
@@ -585,23 +586,39 @@ export default defineBackground(() => {
     send(message);
   };
 
-  const sendReadyPendingResults = async (): Promise<void> => {
-    const pendingEvidenceIds = new Set(
-      (await listPendingEvidenceUploads()).map((upload) => upload.evidenceId)
-    );
-    for (const pending of await listPendingResults()) {
-      const evidenceRefs = Array.isArray(pending.payload.evidence_refs)
-        ? pending.payload.evidence_refs.filter(
-            (value): value is string => typeof value === "string"
-          )
-        : [];
-      if (
-        evidenceRefs.some((evidenceId) => pendingEvidenceIds.has(evidenceId))
-      ) {
-        continue;
+  let pendingResultReplay: Promise<void> | undefined;
+  const sendReadyPendingResults = (): Promise<void> => {
+    if (pendingResultReplay) return pendingResultReplay;
+    const replay = (async () => {
+      const pendingEvidenceIds = new Set(
+        (await listPendingEvidenceUploads()).map((upload) => upload.evidenceId)
+      );
+      const stored = await browser.storage.local.get("lastAckedCommandSeq");
+      const plan = pendingResultReplayPlan(
+        await listPendingResults(),
+        Number(stored.lastAckedCommandSeq ?? 0)
+      );
+      for (const acknowledged of plan.acknowledged) {
+        await removePendingResult(acknowledged.commandId);
       }
-      await sendStoredResult(pending);
-    }
+      for (const pending of plan.replay) {
+        const evidenceRefs = Array.isArray(pending.payload.evidence_refs)
+          ? pending.payload.evidence_refs.filter(
+              (value): value is string => typeof value === "string"
+            )
+          : [];
+        if (
+          evidenceRefs.some((evidenceId) => pendingEvidenceIds.has(evidenceId))
+        ) {
+          continue;
+        }
+        await sendStoredResult(pending);
+      }
+    })();
+    pendingResultReplay = replay.finally(() => {
+      pendingResultReplay = undefined;
+    });
+    return pendingResultReplay;
   };
 
   const sendEvidenceUpload = async (
@@ -617,12 +634,20 @@ export default defineBackground(() => {
     }
   };
 
-  const sendPending = async (): Promise<void> => {
-    const uploads = await listPendingEvidenceUploads();
-    for (const upload of uploads) {
-      await sendEvidenceUpload(upload);
-    }
-    await sendReadyPendingResults();
+  let pendingReplay: Promise<void> | undefined;
+  const sendPending = (): Promise<void> => {
+    if (pendingReplay) return pendingReplay;
+    const replay = (async () => {
+      const uploads = await listPendingEvidenceUploads();
+      for (const upload of uploads) {
+        await sendEvidenceUpload(upload);
+      }
+      await sendReadyPendingResults();
+    })();
+    pendingReplay = replay.finally(() => {
+      pendingReplay = undefined;
+    });
+    return pendingReplay;
   };
 
   const recordAssistanceAttention = async (input: {

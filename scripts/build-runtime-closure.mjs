@@ -45,9 +45,12 @@ const targetNativeHostExecutable =
   process.env.BPA_TARGET_NATIVE_HOST_EXECUTABLE
     ? resolve(process.env.BPA_TARGET_NATIVE_HOST_EXECUTABLE)
     : undefined;
+const chromeForTestingApp = process.env.BPA_CHROME_FOR_TESTING_APP
+  ? resolve(process.env.BPA_CHROME_FOR_TESTING_APP)
+  : undefined;
 const maximumBytes = Number(
   process.env.BPA_RUNTIME_MAX_BYTES ??
-    (targetPlatform === "win32" ? 256 : 160) * 1024 * 1024
+    (targetPlatform === "win32" ? 256 : 1_536) * 1024 * 1024
 );
 
 if (
@@ -70,6 +73,13 @@ if (!supportedTarget) {
   throw new Error(
     `Runtime closure target is unsupported: ${targetPlatform}-${targetArchitecture}`
   );
+}
+if (
+  targetPlatform === "darwin" &&
+  targetArchitecture === "arm64" &&
+  chromeForTestingApp === undefined
+) {
+  throw new Error("BPA_CHROME_FOR_TESTING_APP is required for macOS Runtime closure");
 }
 if (!/^24\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u.test(targetNodeVersion)) {
   throw new Error(`Target Node.js version is invalid: ${targetNodeVersion}`);
@@ -245,6 +255,13 @@ function digest(bytes) {
 
 await rm(outputRoot, { recursive: true, force: true });
 await mkdir(join(outputRoot, "bin"), { recursive: true });
+if (chromeForTestingApp !== undefined) {
+  await cp(
+    chromeForTestingApp,
+    join(outputRoot, MACOS_MANAGED_CHROME_CONTRACT.applicationRelativePath),
+    { recursive: true, dereference: true }
+  );
+}
 await build({
   entryPoints,
   outdir: join(outputRoot, "bin"),

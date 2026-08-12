@@ -153,28 +153,23 @@ test("binds the managed Chrome launcher and live command to one contract", () =>
   assert.equal(syntax.status, 0, syntax.stderr);
   const bpaHome = "/Users/test/Library/Application Support/BPA";
   for (const expected of [
-    MACOS_MANAGED_CHROME_CONTRACT.executablePath,
-    '/usr/bin/open -gj -n "$APP" --args',
-    "/usr/bin/codesign --verify --deep --strict",
-    "Identifier=com.google.Chrome",
-    "TeamIdentifier=EQHXZ8M8AV",
+    `CHROME="$BPA_HOME/${MACOS_MANAGED_CHROME_CONTRACT.executablePath}"`,
+    '"$CHROME" \\',
+    "/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier'",
+    "com.google.chrome.for.testing",
     "--user-data-dir=$PROFILE",
     "--remote-debugging-port=17660",
     "--remote-debugging-address=127.0.0.1",
-    "--disable-extensions-except=$EXTENSION",
-    "--load-extension=$EXTENSION",
     `export BPA_RUNTIME_ID=\"${releaseIdentity}\"`
   ]) {
     assert.ok(launcher.includes(expected), `launcher is missing ${expected}`);
   }
   const command = [
-    MACOS_MANAGED_CHROME_CONTRACT.executablePath,
+    `${bpaHome}/${MACOS_MANAGED_CHROME_CONTRACT.executablePath}`,
     `--user-data-dir=${bpaHome}/chrome-inventory-profile`,
     "--remote-debugging-port=17660",
     "--remote-debugging-address=127.0.0.1",
-    ...MACOS_MANAGED_CHROME_CONTRACT.flags,
-    `--disable-extensions-except=${bpaHome}/extension`,
-    `--load-extension=${bpaHome}/extension`
+    ...MACOS_MANAGED_CHROME_CONTRACT.flags
   ].join(" ");
   assert.doesNotThrow(() =>
     assertManagedChromeProcessCommand(command, bpaHome)
