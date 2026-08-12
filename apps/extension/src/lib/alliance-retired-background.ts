@@ -116,8 +116,11 @@ function safeContentCode(
   value: unknown,
   expectedStage: AllianceRetiredStageResult["stage"]
 ): DoudianAllianceNodeErrorCode {
+  const discoveryStage =
+    expectedStage === "discover-shops" ||
+    expectedStage === "read-shop-context";
   const fallback =
-    expectedStage === "discover-shops"
+    discoveryStage
       ? "DOUDIAN_ALLIANCE_DISCOVERY_FAILED"
       : "ALLIANCE_STAGE_FAILED";
   if (typeof value !== "string" || !DOUDIAN_ALLIANCE_NODE_ERROR_CODES.has(
@@ -126,7 +129,7 @@ function safeContentCode(
     return fallback;
   }
   const allowed =
-    expectedStage === "discover-shops"
+    discoveryStage
       ? DISCOVERY_ERROR_CODES
       : SCAN_ERROR_CODES;
   return allowed.has(value as DoudianAllianceNodeErrorCode)
@@ -163,6 +166,10 @@ function tabMatches(
   } catch {
     return false;
   }
+}
+
+function normalizeShopName(value: string): string {
+  return value.normalize("NFKC").replace(/\s+/gu, "");
 }
 
 export function createAllianceRetiredBrowserDriver(input: {
@@ -391,6 +398,163 @@ export function createAllianceRetiredBrowserDriver(input: {
     throw new AllianceRetiredDriverError("ALLIANCE_TAB_TIMEOUT");
   };
 
+  const readShopContextAfterNavigation = async () => {
+    if (!sourceUrl) {
+      throw new AllianceRetiredDriverError("ALLIANCE_SOURCE_TAB_MISSING");
+    }
+    const source = new URL(sourceUrl);
+    const current = await browser.tabs
+      .get(input.sourceTabId)
+      .catch(() => undefined);
+    if (!current) {
+      throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+    }
+    if (!tabMatches(current, source.origin, source.pathname)) {
+      await browser.tabs
+        .update(input.sourceTabId, { url: sourceUrl })
+        .catch(() => {
+          throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+        });
+    }
+    await waitForComplete(input.sourceTabId);
+    const retryUntil = Math.min(
+      Date.parse(input.deadline),
+      Date.now() + 20_000
+    );
+    let lastError: unknown;
+    while (Date.now() < retryUntil) {
+      assertNotCancelled();
+      try {
+        return await stage<Extract<
+          AllianceRetiredStageResult,
+          { stage: "read-shop-context" }
+        >>(
+          input.sourceTabId,
+          { stage: "read-shop-context" },
+          "read-shop-context"
+        );
+      } catch (error) {
+        lastError = error;
+        if (
+          !(error instanceof AllianceRetiredDriverError) ||
+          !["BROWSER_DISCONNECTED", "PAGE_LOADING"].includes(error.code)
+        ) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+    throw lastError instanceof AllianceRetiredDriverError
+      ? lastError
+      : new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+  };
+
+  const switchAndConfirmShop = async (shop: AllianceShop) => {
+    let switchResult:
+      | Extract<AllianceRetiredStageResult, { stage: "switch-shop" }>
+      | undefined;
+    try {
+      switchResult = await stage<Extract<
+        AllianceRetiredStageResult,
+        { stage: "switch-shop" }
+      >>(
+        input.sourceTabId,
+        { stage: "switch-shop", shop },
+        "switch-shop"
+      );
+    } catch (error) {
+      if (
+        !(error instanceof AllianceRetiredDriverError) ||
+        error.code !== "BROWSER_DISCONNECTED"
+      ) {
+        throw error;
+      }
+    }
+    const observed = switchResult?.currentShop ??
+      (await readShopContextAfterNavigation()).currentShop;
+    if (
+      normalizeShopName(observed.name) !== normalizeShopName(shop.name) ||
+      (shop.id !== undefined && observed.id !== shop.id)
+    ) {
+      throw new AllianceRetiredDriverError("SHOP_IDENTITY_MISMATCH");
+    }
+    return observed;
+  };
+
+  const resolveDiscoveredShopIds = async (
+    shops: readonly AllianceShop[],
+    sourceShop: { readonly id: string; readonly name: string }
+  ): Promise<readonly AllianceShop[]> => {
+    const resolved: AllianceShop[] = [];
+    let sourceSwitcherOrdinal: number | undefined;
+    let mayNeedRestore = false;
+    let primaryError: unknown;
+    try {
+      for (const shop of shops) {
+        assertNotCancelled();
+        if (shop.status === "blocked") {
+          resolved.push(shop);
+          continue;
+        }
+        if (
+          normalizeShopName(shop.name) === normalizeShopName(sourceShop.name) &&
+          (shop.id === sourceShop.id ||
+            (shop.id === undefined &&
+              shops.filter(
+                (candidate) =>
+                  candidate.status === "active" &&
+                  normalizeShopName(candidate.name) ===
+                    normalizeShopName(sourceShop.name)
+              ).length === 1))
+        ) {
+          resolved.push({ ...shop, id: sourceShop.id });
+          if (shop.id === undefined) {
+            sourceSwitcherOrdinal = shop.switcherOrdinal;
+          }
+          continue;
+        }
+        if (shop.id !== undefined) {
+          resolved.push(shop);
+          continue;
+        }
+        mayNeedRestore = true;
+        const identity = await switchAndConfirmShop(shop);
+        if (
+          identity.id === sourceShop.id &&
+          normalizeShopName(identity.name) === normalizeShopName(sourceShop.name)
+        ) {
+          sourceSwitcherOrdinal = shop.switcherOrdinal;
+        }
+        resolved.push({ ...shop, id: identity.id });
+      }
+    } catch (error) {
+      primaryError = error;
+    }
+    if (mayNeedRestore) {
+      try {
+        await switchAndConfirmShop({
+          id: sourceShop.id,
+          ...(sourceSwitcherOrdinal === undefined
+            ? {}
+            : { switcherOrdinal: sourceSwitcherOrdinal }),
+          name: sourceShop.name,
+          status: "active",
+          statusText: "正常营业"
+        });
+      } catch {
+        throw new AllianceRetiredDriverError("SHOP_CONTEXT_RESTORE_FAILED");
+      }
+    }
+    if (primaryError) throw primaryError;
+    const ids = resolved
+      .filter((shop) => shop.status === "active")
+      .map((shop) => shop.id);
+    if (ids.some((id) => id === undefined) || new Set(ids).size !== ids.length) {
+      throw new AllianceRetiredDriverError("SHOP_IDENTITY_AMBIGUOUS");
+    }
+    return resolved;
+  };
+
   const discoverShopContext = async () => {
     sourceUrl ??= (
       await browser.tabs.get(input.sourceTabId).catch(() => {
@@ -406,7 +570,7 @@ export function createAllianceRetiredBrowserDriver(input: {
       "discover-shops"
     );
     return {
-      shops: result.shops,
+      shops: await resolveDiscoveredShopIds(result.shops, result.currentShop),
       currentShop: result.currentShop
     };
   };
@@ -417,11 +581,7 @@ export function createAllianceRetiredBrowserDriver(input: {
       return (await discoverShopContext()).shops;
     },
     async switchShop(shop) {
-      await stage(
-        input.sourceTabId,
-        { stage: "switch-shop", shop },
-        "switch-shop"
-      );
+      await switchAndConfirmShop(shop);
     },
     async openPromotion(_shop) {
       const landingTabId = await withManagedTabReservation(async () => {

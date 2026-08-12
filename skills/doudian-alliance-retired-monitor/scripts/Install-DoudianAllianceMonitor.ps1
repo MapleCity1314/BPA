@@ -232,7 +232,7 @@ $RequiredAssets = @(
   @{
     type = "adapter"
     file = "doudian-alliance.adapter.yaml"
-    sha256 = "69e049d8d79a17cac5f69d7a681f6d9bffa2e449fca767b36b3b29246f065170"
+    sha256 = "76dd5e9b02a4d05b64d73ac52e20a8fa238ae687c2cda9605c6eca85833f9262"
   },
   @{
     type = "workflow"

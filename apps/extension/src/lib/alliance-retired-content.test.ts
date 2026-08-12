@@ -225,7 +225,7 @@ describe("alliance retired-products content stages", () => {
     });
   });
 
-  it("resolves id-less active cards by switching and restores the source shop", async () => {
+  it("returns id-less active cards for navigation-safe background resolution", async () => {
     const document = doc(`
       <div id="fxg-pc-header">
         <div class="headerShopName" data-shop-id="10001"><span class="userName">甲食品旗舰店</span></div>
@@ -260,15 +260,15 @@ describe("alliance retired-products content stages", () => {
     ).resolves.toMatchObject({
       currentShop: { id: "10001", name: "甲食品旗舰店" },
       shops: [
-        { id: "10001", name: "甲食品旗舰店" },
-        { id: "10002", name: "乙食品专营店" }
+        { name: "甲食品旗舰店" },
+        { name: "乙食品专营店" }
       ]
     });
     expect(header.dataset.shopId).toBe("10001");
     expect(name.textContent).toBe("甲食品旗舰店");
   });
 
-  it("resolves same-name id-less cards by ordinal and restores the matching source", async () => {
+  it("preserves ordinal identity for same-name id-less cards", async () => {
     const document = doc(`
       <div id="fxg-pc-header">
         <div class="headerShopName" data-shop-id="10002"><span class="userName">同名食品店</span></div>
@@ -302,7 +302,7 @@ describe("alliance retired-products content stages", () => {
       )
     ).resolves.toMatchObject({
       currentShop: { id: "10002", name: "同名食品店" },
-      shops: [{ id: "10001" }, { id: "10002" }]
+      shops: [{ switcherOrdinal: 0 }, { switcherOrdinal: 1 }]
     });
     expect(header.dataset.shopId).toBe("10002");
   });
@@ -401,7 +401,8 @@ describe("alliance retired-products content stages", () => {
       )
     ).resolves.toEqual({
       stage: "switch-shop",
-      shopName: "乙食品专营店"
+      shopName: "乙食品专营店",
+      currentShop: { id: "10002", name: "乙食品专营店" }
     });
   });
 

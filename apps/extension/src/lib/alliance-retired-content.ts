@@ -28,6 +28,7 @@ import {
 
 export type AllianceRetiredStageRequest =
   | { readonly stage: "discover-shops" }
+  | { readonly stage: "read-shop-context" }
   | {
       readonly stage: "switch-shop";
       readonly shop: AllianceShop;
@@ -50,8 +51,19 @@ export type AllianceRetiredStageResult =
       };
     }
   | {
+      readonly stage: "read-shop-context";
+      readonly currentShop: {
+        readonly id: string;
+        readonly name: string;
+      };
+    }
+  | {
       readonly stage: "switch-shop";
       readonly shopName: string;
+      readonly currentShop: {
+        readonly id: string;
+        readonly name: string;
+      };
     }
   | { readonly stage: "open-promotion" }
   | { readonly stage: "open-product-promotion" }
@@ -244,118 +256,6 @@ async function discoverAllShops(
   return [...shops.values()];
 }
 
-async function switchAndConfirmShop(
-  doc: Document,
-  shop: AllianceShop,
-  isCancelled: () => boolean
-): Promise<{ readonly id: string; readonly name: string }> {
-  await ensureShopDialog(doc, isCancelled);
-  await selectShopAcrossVirtualList(doc, shop, isCancelled);
-  await waitUntil(
-    () => {
-      const observed = readDoudianHeaderShopName(doc);
-      if (normalize(observed) !== normalize(shop.name)) {
-        throw new DoudianAllianceError("SHOP_SWITCH_NOT_CONFIRMED");
-      }
-      return observed;
-    },
-    15_000,
-    "SHOP_SWITCH_NOT_CONFIRMED",
-    doc,
-    isCancelled
-  );
-  const identity = await readCurrentShopIdentity(doc, isCancelled);
-  if (
-    normalize(identity.name) !== normalize(shop.name) ||
-    (shop.id !== undefined && identity.id !== shop.id)
-  ) {
-    throw new DoudianAllianceError("SHOP_IDENTITY_MISMATCH");
-  }
-  return identity;
-}
-
-async function resolveDiscoveredShopIds(
-  doc: Document,
-  shops: readonly AllianceShop[],
-  sourceShop: { readonly id: string; readonly name: string },
-  isCancelled: () => boolean
-): Promise<readonly AllianceShop[]> {
-  const resolved: AllianceShop[] = [];
-  let currentShop = sourceShop;
-  let sourceSwitcherOrdinal: number | undefined;
-  let mayNeedRestore = false;
-  let primaryError: unknown;
-  try {
-    for (const shop of shops) {
-      assertNotCancelled(isCancelled);
-      if (shop.status === "blocked") {
-        resolved.push(shop);
-        continue;
-      }
-      if (
-        normalize(shop.name) === normalize(sourceShop.name) &&
-        (shop.id === sourceShop.id ||
-          (shop.id === undefined &&
-            shops.filter(
-              (candidate) =>
-                candidate.status === "active" &&
-                normalize(candidate.name) === normalize(sourceShop.name)
-            ).length === 1))
-      ) {
-        resolved.push({ ...shop, id: sourceShop.id });
-        continue;
-      }
-      if (shop.id !== undefined) {
-        resolved.push(shop);
-        continue;
-      }
-      mayNeedRestore = true;
-      const identity = await switchAndConfirmShop(doc, shop, isCancelled);
-      currentShop = identity;
-      if (
-        identity.id === sourceShop.id &&
-        normalize(identity.name) === normalize(sourceShop.name)
-      ) {
-        sourceSwitcherOrdinal = shop.switcherOrdinal;
-      }
-      resolved.push({ ...shop, id: identity.id });
-    }
-  } catch (error) {
-    primaryError = error;
-  }
-  if (
-    mayNeedRestore ||
-    currentShop.id !== sourceShop.id ||
-    normalize(currentShop.name) !== normalize(sourceShop.name)
-  ) {
-    try {
-      await switchAndConfirmShop(
-        doc,
-        {
-          id: sourceShop.id,
-          ...(sourceSwitcherOrdinal === undefined
-            ? {}
-            : { switcherOrdinal: sourceSwitcherOrdinal }),
-          name: sourceShop.name,
-          status: "active",
-          statusText: "正常营业"
-        },
-        isCancelled
-      );
-    } catch {
-      throw new DoudianAllianceError("SHOP_CONTEXT_RESTORE_FAILED");
-    }
-  }
-  if (primaryError) throw primaryError;
-  const ids = resolved
-    .filter((shop) => shop.status === "active")
-    .map((shop) => shop.id);
-  if (ids.some((id) => id === undefined) || new Set(ids).size !== ids.length) {
-    throw new DoudianAllianceError("SHOP_IDENTITY_AMBIGUOUS");
-  }
-  return resolved;
-}
-
 async function selectShopAcrossVirtualList(
   doc: Document,
   shop: AllianceShop,
@@ -406,15 +306,14 @@ export async function executeAllianceRetiredStage(
     const currentShop = await readCurrentShopIdentity(doc, isCancelled);
     await ensureShopDialog(doc, isCancelled);
     const discovered = await discoverAllShops(doc, currentShop, isCancelled);
-    const shops = await resolveDiscoveredShopIds(
-      doc,
-      discovered,
-      currentShop,
-      isCancelled
-    );
     assertNotCancelled(isCancelled);
     closeDoudianShopSwitcher(doc);
-    return { stage: request.stage, shops, currentShop };
+    return { stage: request.stage, shops: discovered, currentShop };
+  }
+  if (request.stage === "read-shop-context") {
+    assertDoudianProductListPage(pageUrl);
+    const currentShop = await readCurrentShopIdentity(doc, isCancelled);
+    return { stage: request.stage, currentShop };
   }
   if (request.stage === "switch-shop") {
     assertDoudianProductListPage(pageUrl);
@@ -428,7 +327,8 @@ export async function executeAllianceRetiredStage(
       } catch {
         // The switcher is already closed.
       }
-      return { stage: request.stage, shopName: current };
+      const currentShop = await readCurrentShopIdentity(doc, isCancelled);
+      return { stage: request.stage, shopName: current, currentShop };
     }
     await ensureShopDialog(doc, isCancelled);
     await selectShopAcrossVirtualList(doc, request.shop, isCancelled);
@@ -450,7 +350,7 @@ export async function executeAllianceRetiredStage(
     if (!request.shop.id || identity.id !== request.shop.id) {
       throw new DoudianAllianceError("SHOP_IDENTITY_MISMATCH");
     }
-    return { stage: request.stage, shopName };
+    return { stage: request.stage, shopName, currentShop: identity };
   }
   if (request.stage === "open-promotion") {
     assertDoudianProductListPage(pageUrl);
