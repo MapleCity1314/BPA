@@ -393,11 +393,14 @@ function visibleShopSwitcher(
   const roots = new Set<HTMLElement>();
   for (const element of Array.from(
     doc.querySelectorAll<HTMLElement>(
-      "[role='dialog'],.auxo-drawer-open,.auxo-drawer-content-wrapper"
+      "[role='dialog'],.auxo-modal-wrap,.auxo-drawer-open," +
+        ".auxo-drawer-content-wrapper"
     )
   )) {
     const root =
-      element.closest<HTMLElement>(".auxo-drawer-open,[role='dialog']") ??
+      element.closest<HTMLElement>(
+        ".auxo-modal-wrap,.auxo-drawer-open,[role='dialog']"
+      ) ??
       element;
     if (!visibleElement(root) || roots.has(root)) continue;
     const text = normalizeText(root.textContent);

@@ -148,6 +148,24 @@ describe("Doudian alliance retired-products runtime", () => {
     expect(click).toHaveBeenCalledOnce();
   });
 
+  it("discovers shops from the current Auxo modal switcher", () => {
+    const doc = documentOf(`
+      <div class="auxo-modal-wrap auxo-modal-centered">
+        <div class="auxo-modal">
+          <div class="roleItem"><span class="introName">甲食品旗舰店</span>店铺ID 10001 正常营业</div>
+        </div>
+      </div>
+    `);
+    expect(discoverDoudianAllianceShops(doc)).toEqual([
+      {
+        id: "10001",
+        name: "甲食品旗舰店",
+        status: "active",
+        statusText: "正常营业"
+      }
+    ]);
+  });
+
   it("fails closed when a shop list mixes valid and malformed cards", () => {
     const doc = documentOf(`
       <div role="dialog">切换组织/店铺
