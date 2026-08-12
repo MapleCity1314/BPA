@@ -207,7 +207,7 @@ $RequiredAssets = @(
   @{
     type = "node"
     file = "doudian.alliance.shops.discover.node.yaml"
-    sha256 = "32c528191ff91a4c7710d5d5e21353f757f9ffd5a20d829dfd07a6b68cb695d7"
+    sha256 = "4472107fd5b58207abc44c7813c180c8b410f11d6ec62b0174e5badd0867f583"
   },
   @{
     type = "node"
@@ -232,12 +232,12 @@ $RequiredAssets = @(
   @{
     type = "adapter"
     file = "doudian-alliance.adapter.yaml"
-    sha256 = "9e80b0ff085d64d7662dce3e761c91ece7f254417dd14edf17fc492aa1daf3ca"
+    sha256 = "c9da09919604823c96e308ac709ff6cda15c0c27e9437318a91ba2eb5200d625"
   },
   @{
     type = "workflow"
     file = "doudian.alliance-retired-products-monitor.workflow.yaml"
-    sha256 = "f785df76afaca27e9b5acc28c8914f63623f628690ed73c7b6ae3e5033dc2c8e"
+    sha256 = "d430368219a90e086a3b8af4c6bf3ded3342b5ffe85a104b6db8e67d0300ec47"
   }
 )
 foreach ($Asset in $RequiredAssets) {

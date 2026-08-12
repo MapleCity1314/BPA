@@ -67,10 +67,10 @@ describe("alliance retired-products content stages", () => {
         <div class="roleItem"><span class="introName">甲食品旗舰店</span>店铺ID 10001 正常营业</div>
       </div>
     `);
-    const close = vi.spyOn(
-      document.querySelector<HTMLElement>("button")!,
-      "click"
-    );
+    const close = vi.fn();
+    document
+      .querySelector<HTMLElement>("button")!
+      .addEventListener("click", close);
     await expect(
       executeAllianceRetiredStage(
         { stage: "discover-shops" },
@@ -223,6 +223,49 @@ describe("alliance retired-products content stages", () => {
         { id: "10002", name: "乙食品专营店" }
       ]
     });
+  });
+
+  it("resolves id-less active cards by switching and restores the source shop", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName" data-shop-id="10001"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div class="auxo-modal-wrap">
+        <div class="roleItem source"><span class="introName">甲食品旗舰店</span>正常营业</div>
+        <div class="roleItem target"><span class="introName">乙食品专营店</span>正常营业</div>
+      </div>
+    `);
+    const header = document.querySelector<HTMLElement>(".headerShopName")!;
+    const name = document.querySelector<HTMLElement>(".userName")!;
+    document.querySelector<HTMLElement>(".source")!.addEventListener(
+      "click",
+      () => {
+        header.dataset.shopId = "10001";
+        name.textContent = "甲食品旗舰店";
+      }
+    );
+    document.querySelector<HTMLElement>(".target")!.addEventListener(
+      "click",
+      () => {
+        header.dataset.shopId = "10002";
+        name.textContent = "乙食品专营店";
+      }
+    );
+    await expect(
+      executeAllianceRetiredStage(
+        { stage: "discover-shops" },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      currentShop: { id: "10001", name: "甲食品旗舰店" },
+      shops: [
+        { id: "10001", name: "甲食品旗舰店" },
+        { id: "10002", name: "乙食品专营店" }
+      ]
+    });
+    expect(header.dataset.shopId).toBe("10001");
+    expect(name.textContent).toBe("甲食品旗舰店");
   });
 
   it("does not silently stop after eight virtualized shop pages", async () => {

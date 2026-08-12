@@ -139,7 +139,8 @@ describe("Doudian alliance retired-products runtime", () => {
     const target = doc.querySelector<HTMLElement>(
       ".index_shopOption__two"
     )!;
-    const click = vi.spyOn(target, "click");
+    const click = vi.fn();
+    target.addEventListener("click", click);
     selectDoudianAllianceShop(doc, {
       id: "10002",
       name: "乙食品专营店",
@@ -189,7 +190,10 @@ describe("Doudian alliance retired-products runtime", () => {
     `);
     expect(discoverDoudianAllianceShops(doc)).toHaveLength(2);
     const cards = Array.from(doc.querySelectorAll<HTMLElement>(".roleItem"));
-    const clicks = cards.map((card) => vi.spyOn(card, "click"));
+    const clicks = cards.map(() => vi.fn());
+    cards.forEach((card, index) =>
+      card.addEventListener("click", clicks[index]!)
+    );
     selectDoudianAllianceShop(doc, {
       id: "10002",
       name: "同名食品店",

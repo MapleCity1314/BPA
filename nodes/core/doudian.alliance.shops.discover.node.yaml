@@ -62,7 +62,7 @@ resources:
     authentication: authenticated
     purpose: 从已认证抖店页面完整枚举当前账号可切换店铺
 execution:
-  timeoutDefault: 2m
+  timeoutDefault: 5m
   idempotency: repeatable_read
   retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED]
   cancellable: true
@@ -81,6 +81,7 @@ errors:
   - PAGE_URL_INVALID
   - RISK_CONTROL
   - SESSION_EXPIRED
+  - SHOP_CONTEXT_RESTORE_FAILED
   - SHOP_IDENTITY_AMBIGUOUS
   - SHOP_IDENTITY_UNCERTAIN
   - SHOP_IDENTITY_UNCONFIRMED

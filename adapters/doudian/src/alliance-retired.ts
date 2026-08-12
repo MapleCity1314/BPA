@@ -556,7 +556,8 @@ export function discoverDoudianAllianceShops(
 }
 
 export function closeDoudianShopSwitcher(doc: Document): void {
-  const dialog = visibleShopDialog(doc);
+  const dialog = visibleShopSwitcher(doc, false);
+  if (!dialog) return;
   const closeButtons = Array.from(
     dialog.querySelectorAll<HTMLElement>(
       "button[aria-label='Close'],button[aria-label='close']," +
@@ -564,10 +565,10 @@ export function closeDoudianShopSwitcher(doc: Document): void {
     )
   );
   if (closeButtons.length === 0) return;
-  requireUnique(
+  activateElement(requireUnique(
     closeButtons,
     "SHOP_SWITCH_DIALOG_CLOSE_AMBIGUOUS"
-  ).click();
+  ));
 }
 
 function shopSwitcherScrollTarget(doc: Document): HTMLElement | undefined {
@@ -653,14 +654,13 @@ export function selectDoudianAllianceShop(
       card.querySelector<HTMLElement>("[class*='introName']")?.textContent
     );
     if (name !== expected) return false;
-    return shop.id
-      ? shopIdFromText(normalizeText(card.textContent)) === shop.id
-      : true;
+    const cardId = shopIdFromText(normalizeText(card.textContent));
+    return shop.id && cardId ? cardId === shop.id : true;
   });
   const card = requireUnique(matches, "SHOP_TARGET_AMBIGUOUS");
   const blocked = blockedShopStatus(normalizeText(card.textContent));
   if (blocked) throw new DoudianAllianceError("SHOP_NOT_ACTIVE");
-  card.click();
+  activateElement(card);
 }
 
 export function openDoudianAllianceMenu(doc: Document): void {

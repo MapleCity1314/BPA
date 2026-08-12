@@ -235,8 +235,8 @@ async function discoverAllShops(
   }
   const sourceMatches = [...shops.values()].filter(
     (shop) =>
-      shop.id === currentShop.id &&
-      normalize(shop.name) === normalize(currentShop.name)
+      normalize(shop.name) === normalize(currentShop.name) &&
+      (shop.id === undefined || shop.id === currentShop.id)
   );
   if (sourceMatches.length === 0) {
     throw new DoudianAllianceError("CURRENT_SHOP_NOT_IN_LIST");
@@ -245,6 +245,102 @@ async function discoverAllShops(
     throw new DoudianAllianceError("SHOP_IDENTITY_AMBIGUOUS");
   }
   return [...shops.values()];
+}
+
+async function switchAndConfirmShop(
+  doc: Document,
+  shop: AllianceShop,
+  isCancelled: () => boolean
+): Promise<{ readonly id: string; readonly name: string }> {
+  await ensureShopDialog(doc, isCancelled);
+  await selectShopAcrossVirtualList(doc, shop, isCancelled);
+  await waitUntil(
+    () => {
+      const observed = readDoudianHeaderShopName(doc);
+      if (normalize(observed) !== normalize(shop.name)) {
+        throw new DoudianAllianceError("SHOP_SWITCH_NOT_CONFIRMED");
+      }
+      return observed;
+    },
+    15_000,
+    "SHOP_SWITCH_NOT_CONFIRMED",
+    doc,
+    isCancelled
+  );
+  const identity = await readCurrentShopIdentity(doc, isCancelled);
+  if (
+    normalize(identity.name) !== normalize(shop.name) ||
+    (shop.id !== undefined && identity.id !== shop.id)
+  ) {
+    throw new DoudianAllianceError("SHOP_IDENTITY_MISMATCH");
+  }
+  return identity;
+}
+
+async function resolveDiscoveredShopIds(
+  doc: Document,
+  shops: readonly AllianceShop[],
+  sourceShop: { readonly id: string; readonly name: string },
+  isCancelled: () => boolean
+): Promise<readonly AllianceShop[]> {
+  const resolved: AllianceShop[] = [];
+  let currentShop = sourceShop;
+  let mayNeedRestore = false;
+  let primaryError: unknown;
+  try {
+    for (const shop of shops) {
+      assertNotCancelled(isCancelled);
+      if (shop.status === "blocked") {
+        resolved.push(shop);
+        continue;
+      }
+      if (
+        normalize(shop.name) === normalize(sourceShop.name) &&
+        (shop.id === undefined || shop.id === sourceShop.id)
+      ) {
+        resolved.push({ ...shop, id: sourceShop.id });
+        continue;
+      }
+      if (shop.id !== undefined) {
+        resolved.push(shop);
+        continue;
+      }
+      mayNeedRestore = true;
+      const identity = await switchAndConfirmShop(doc, shop, isCancelled);
+      currentShop = identity;
+      resolved.push({ ...shop, id: identity.id });
+    }
+  } catch (error) {
+    primaryError = error;
+  }
+  if (
+    mayNeedRestore ||
+    currentShop.id !== sourceShop.id ||
+    normalize(currentShop.name) !== normalize(sourceShop.name)
+  ) {
+    try {
+      await switchAndConfirmShop(
+        doc,
+        {
+          id: sourceShop.id,
+          name: sourceShop.name,
+          status: "active",
+          statusText: "正常营业"
+        },
+        isCancelled
+      );
+    } catch {
+      throw new DoudianAllianceError("SHOP_CONTEXT_RESTORE_FAILED");
+    }
+  }
+  if (primaryError) throw primaryError;
+  const ids = resolved
+    .filter((shop) => shop.status === "active")
+    .map((shop) => shop.id);
+  if (ids.some((id) => id === undefined) || new Set(ids).size !== ids.length) {
+    throw new DoudianAllianceError("SHOP_IDENTITY_AMBIGUOUS");
+  }
+  return resolved;
 }
 
 async function selectShopAcrossVirtualList(
@@ -296,7 +392,13 @@ export async function executeAllianceRetiredStage(
     assertDoudianProductListPage(pageUrl);
     const currentShop = await readCurrentShopIdentity(doc, isCancelled);
     await ensureShopDialog(doc, isCancelled);
-    const shops = await discoverAllShops(doc, currentShop, isCancelled);
+    const discovered = await discoverAllShops(doc, currentShop, isCancelled);
+    const shops = await resolveDiscoveredShopIds(
+      doc,
+      discovered,
+      currentShop,
+      isCancelled
+    );
     assertNotCancelled(isCancelled);
     closeDoudianShopSwitcher(doc);
     return { stage: request.stage, shops, currentShop };
