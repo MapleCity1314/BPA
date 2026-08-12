@@ -1149,6 +1149,11 @@ export class LocalBrowserGateway implements RuntimeProvider {
     ) {
       throw new Error("Command ACK does not match an active command");
     }
+    // A replacement Extension process can replay an ACK that the previous
+    // Browser Session sent immediately before disconnecting. Once the command
+    // is terminal, the ACK is only historical delivery evidence: it must not
+    // regress the command to accepted or fail the replacement Session.
+    if (command.state === "terminal") return;
     this.#assertCommandSession(connection, command);
     if (payload.accepted === true) {
       this.persistence.markGatewayCommandState(
@@ -1181,7 +1186,12 @@ export class LocalBrowserGateway implements RuntimeProvider {
     const command = this.persistence.getGatewayCommand(
       String(message.payload.command_id)
     );
-    if (command) this.#assertCommandSession(connection, command);
+    // Terminal results are idempotently deduplicated by persistence. Allow a
+    // replacement Session to replay them so it can advance its ACK watermark,
+    // while preserving strict frozen-Session matching for active commands.
+    if (command?.state !== "terminal" && command) {
+      this.#assertCommandSession(connection, command);
+    }
     let outcome:
       | "accepted"
       | "duplicate"
@@ -1255,8 +1265,10 @@ export class LocalBrowserGateway implements RuntimeProvider {
     ) {
       throw new Error("Cancel Effective does not match an active command");
     }
-    this.#assertCommandSession(connection, command);
-    this.#commitResult(message.message_id, {
+    if (command.state !== "terminal") {
+      this.#assertCommandSession(connection, command);
+    }
+    const outcome = this.#commitResult(message.message_id, {
       command_seq: command.commandSeq,
       command_id: command.id,
       node_execution_id: command.nodeExecutionId,
@@ -1264,6 +1276,9 @@ export class LocalBrowserGateway implements RuntimeProvider {
       fencing_token: command.fencingToken,
       status: message.payload.status
     });
+    if (outcome === "accepted" || outcome === "duplicate") {
+      delete connection.lastError;
+    }
     connection.cancelRequests.delete(command.id);
   }
 

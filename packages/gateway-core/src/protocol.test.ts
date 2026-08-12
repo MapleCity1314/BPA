@@ -3,6 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   BROWSER_PROTOCOL_MAX_MESSAGE_BYTES,
+  BROWSER_PROTOCOL_RECENT_MESSAGE_ID_LIMIT,
   ProtocolSessionGuard,
   ProtocolViolationError,
   assertNativeHostOrigin,
@@ -89,6 +90,39 @@ describe("browser protocol v1", () => {
       guard.accept({
         ...examples[2],
         message_id: "different-message",
+        seq: 1
+      })
+    ).toThrow(/not greater/);
+  });
+
+  it("bounds duplicate tracking for a long-lived browser session", () => {
+    const guard = new ProtocolSessionGuard();
+    guard.establish("session-01", 0);
+    const template = examples[1]!;
+    for (
+      let sequence = 1;
+      sequence <= BROWSER_PROTOCOL_RECENT_MESSAGE_ID_LIMIT + 1;
+      sequence += 1
+    ) {
+      expect(
+        guard.accept({
+          ...template,
+          message_id: `message-${sequence}`,
+          seq: sequence
+        }).status
+      ).toBe("accepted");
+    }
+    expect(
+      guard.accept({
+        ...template,
+        message_id: `message-${BROWSER_PROTOCOL_RECENT_MESSAGE_ID_LIMIT + 1}`,
+        seq: BROWSER_PROTOCOL_RECENT_MESSAGE_ID_LIMIT + 1
+      }).status
+    ).toBe("duplicate");
+    expect(() =>
+      guard.accept({
+        ...template,
+        message_id: "message-1",
         seq: 1
       })
     ).toThrow(/not greater/);

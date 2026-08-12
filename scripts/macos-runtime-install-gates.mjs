@@ -132,6 +132,13 @@ function main(argv) {
   for (const line of processes.split("\n")) {
     const match = line.match(/^\s*(\d+)\s+(.+)$/u);
     if (!match) continue;
+    if (
+      !match[2].startsWith(
+        `${options["bpa-home"]}/${MACOS_MANAGED_CHROME_CONTRACT.executablePath} `
+      )
+    ) {
+      continue;
+    }
     try {
       assertManagedChromeProcessCommand(match[2], options["bpa-home"]);
       managed.push(Number(match[1]));

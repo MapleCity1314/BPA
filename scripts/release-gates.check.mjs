@@ -342,6 +342,16 @@ test("detects sensitive values from file content without logging values", () => 
     ),
     []
   );
+  assert.deepEqual(
+    sensitiveContentFindings(
+      Buffer.concat([
+        Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0]),
+        Buffer.from("https://embedded:binary-placeholder@example.com")
+      ]),
+      "browser/chrome-binary"
+    ),
+    []
+  );
 });
 
 test("recursively scans release files and rejects symlinks", async () => {
