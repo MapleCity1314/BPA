@@ -119,10 +119,12 @@ function extractStableShopId(element: Element | undefined): string | undefined {
         // Ignore malformed attributes from untrusted page content.
       }
     }
-    const textId = normalizeText(current.textContent).match(
-      /店铺\s*ID[：:\s]*(\d{5,30})/iu
-    )?.[1];
-    if (textId) return textId;
+    if (current === element) {
+      const textId = normalizeText(current.textContent).match(
+        /店铺\s*ID[：:\s]*(\d{5,30})/iu
+      )?.[1];
+      if (textId) return textId;
+    }
     current = current.parentElement ?? undefined;
   }
   return undefined;

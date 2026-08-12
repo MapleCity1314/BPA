@@ -48,7 +48,8 @@ describe("Doudian alliance retired-products runtime", () => {
           "apps/extension/src/lib/extension-runtime-resources.ts",
           "apps/extension/src/lib/managed-tab-lifecycle.ts",
           "apps/extension/src/lib/native-connection-supervisor.ts",
-          "adapters/doudian/src/alliance-retired.ts"
+          "adapters/doudian/src/alliance-retired.ts",
+          "adapters/doudian/src/shop-context.ts"
         ]
           .map((path) =>
             readFileSync(new URL(`../../../${path}`, import.meta.url))

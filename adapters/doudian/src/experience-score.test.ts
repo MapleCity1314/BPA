@@ -69,7 +69,8 @@ describe("Doudian experience-score adapter", () => {
         "apps/extension/src/lib/adapter-node-registry.ts",
         "apps/extension/src/lib/experience-score-background.ts",
         "apps/extension/src/lib/experience-score-content.ts",
-        "adapters/doudian/src/experience-score.ts"
+        "adapters/doudian/src/experience-score.ts",
+        "adapters/doudian/src/shop-context.ts"
       ].map((path) => readFileSync(new URL(`../../../${path}`,import.meta.url)))
         .join("\n"))
       .digest("hex")}`;
