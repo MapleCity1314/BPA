@@ -44,7 +44,10 @@ export type AllianceRetiredStageResult =
   | {
       readonly stage: "discover-shops";
       readonly shops: readonly AllianceShop[];
-      readonly currentShopName: string;
+      readonly currentShop: {
+        readonly id: string;
+        readonly name: string;
+      };
     }
   | {
       readonly stage: "switch-shop";
@@ -167,7 +170,7 @@ async function ensureShopDialog(
 
 async function discoverAllShops(
   doc: Document,
-  currentShopName: string,
+  currentShop: { readonly id: string; readonly name: string },
   isCancelled: () => boolean
 ): Promise<readonly AllianceShop[]> {
   assertNotCancelled(isCancelled);
@@ -197,13 +200,15 @@ async function discoverAllShops(
     await waitForChange(450, doc);
     assertNotCancelled(isCancelled);
   }
-  const sameName = [...shops.values()].filter(
-    (shop) => normalize(shop.name) === normalize(currentShopName)
+  const sourceMatches = [...shops.values()].filter(
+    (shop) =>
+      shop.id === currentShop.id &&
+      normalize(shop.name) === normalize(currentShop.name)
   );
-  if (sameName.length === 0) {
+  if (sourceMatches.length === 0) {
     throw new DoudianAllianceError("CURRENT_SHOP_NOT_IN_LIST");
   }
-  if (sameName.length > 1) {
+  if (sourceMatches.length > 1) {
     throw new DoudianAllianceError("SHOP_IDENTITY_AMBIGUOUS");
   }
   return [...shops.values()];
@@ -256,12 +261,12 @@ export async function executeAllianceRetiredStage(
   assertNotCancelled(isCancelled);
   if (request.stage === "discover-shops") {
     assertDoudianProductListPage(pageUrl);
-    const currentShopName = readDoudianHeaderShopName(doc);
+    const currentShop = readDoudianHeaderShopIdentity(doc);
     await ensureShopDialog(doc, isCancelled);
-    const shops = await discoverAllShops(doc, currentShopName, isCancelled);
+    const shops = await discoverAllShops(doc, currentShop, isCancelled);
     assertNotCancelled(isCancelled);
     closeDoudianShopSwitcher(doc);
-    return { stage: request.stage, shops, currentShopName };
+    return { stage: request.stage, shops, currentShop };
   }
   if (request.stage === "switch-shop") {
     assertDoudianProductListPage(pageUrl);

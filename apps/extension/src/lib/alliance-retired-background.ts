@@ -129,7 +129,10 @@ export interface AllianceRetiredBrowserDriver
   cleanupShopTabs(): Promise<void>;
   discoverShopContext(): Promise<{
     readonly shops: readonly AllianceShop[];
-    readonly currentShopName: string;
+    readonly currentShop: {
+      readonly id: string;
+      readonly name: string;
+    };
   }>;
 }
 
@@ -389,7 +392,7 @@ export function createAllianceRetiredBrowserDriver(input: {
     );
     return {
       shops: result.shops,
-      currentShopName: result.currentShopName
+      currentShop: result.currentShop
     };
   };
 

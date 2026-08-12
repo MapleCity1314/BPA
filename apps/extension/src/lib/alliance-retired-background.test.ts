@@ -68,7 +68,7 @@ function installBrowser(
             result: {
               stage,
               shops: [shop],
-              currentShopName: shop.name
+              currentShop: { id: shop.id!, name: shop.name }
             }
           };
         }

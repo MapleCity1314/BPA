@@ -15,7 +15,7 @@ capabilities:
     nodeVersions: [1.0.0]
     handlerId: doudian.inventory.shop.activate
     handlerVersion: 1.0.0
-    implementationDigest: sha256:313427d43ed3fa0d11a2a7a4719dd17be218da1b50645817b2e72fe7fc81259c
+    implementationDigest: sha256:a02ce1ef4b57dae0526291c8d282fae71fcb9f101d00d0d2cebe1e47a248a147
     permissions:
       - browser.dom.read
       - browser.dom.write
@@ -26,7 +26,7 @@ capabilities:
       - 2.0.0
     handlerId: doudian.inventory.product.snapshot.read
     handlerVersion: 2.0.0
-    implementationDigest: sha256:313427d43ed3fa0d11a2a7a4719dd17be218da1b50645817b2e72fe7fc81259c
+    implementationDigest: sha256:a02ce1ef4b57dae0526291c8d282fae71fcb9f101d00d0d2cebe1e47a248a147
     permissions:
       - browser.dom.read
       - browser.dom.write

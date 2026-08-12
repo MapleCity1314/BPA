@@ -304,7 +304,11 @@ export function createExperienceScoreBrowserDriver(input: {
   return {
     async discoverShopContext() {
       try {
-        return await shopDriver.discoverShopContext();
+        const discovery = await shopDriver.discoverShopContext();
+        return {
+          shops: discovery.shops,
+          currentShopName: discovery.currentShop.name
+        };
       } catch (error) {
         throw mapShopDriverError(
           error,

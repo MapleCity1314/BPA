@@ -103,6 +103,49 @@ describe("Doudian alliance retired-products runtime", () => {
     ).toThrow("SHOP_NOT_ACTIVE");
   });
 
+  it("discovers and selects shops from the current Auxo drawer", () => {
+    const doc = documentOf(`
+      <div class="auxo-drawer auxo-drawer-open">
+        <div class="auxo-drawer-content-wrapper">
+          <div class="index_descriptions__current">切换组织/店铺</div>
+          <div class="index_shopOption__one">
+            <span class="index_introName__new">甲食品旗舰店</span>
+            <span>店铺ID 10001 正常营业</span>
+          </div>
+          <div class="index_shopOption__two">
+            <span class="index_introName__new">乙食品专营店</span>
+            <span>店铺ID 10002 正常营业</span>
+          </div>
+        </div>
+      </div>
+    `);
+    expect(discoverDoudianAllianceShops(doc)).toEqual([
+      {
+        id: "10001",
+        name: "甲食品旗舰店",
+        status: "active",
+        statusText: "正常营业"
+      },
+      {
+        id: "10002",
+        name: "乙食品专营店",
+        status: "active",
+        statusText: "正常营业"
+      }
+    ]);
+    const target = doc.querySelector<HTMLElement>(
+      ".index_shopOption__two"
+    )!;
+    const click = vi.spyOn(target, "click");
+    selectDoudianAllianceShop(doc, {
+      id: "10002",
+      name: "乙食品专营店",
+      status: "active",
+      statusText: "正常营业"
+    });
+    expect(click).toHaveBeenCalledOnce();
+  });
+
   it("fails closed when a shop list mixes valid and malformed cards", () => {
     const doc = documentOf(`
       <div role="dialog">切换组织/店铺

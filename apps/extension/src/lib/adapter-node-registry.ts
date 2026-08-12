@@ -379,7 +379,9 @@ const discoverAllianceShops: AdapterNodeHandler = async (input, context) => {
       throw new AllianceRetiredDriverError("SHOP_IDENTITY_UNCERTAIN");
     }
     const sourceMatches = active.filter(
-      (shop) => normalize(shop.name) === normalize(discovery.currentShopName)
+      (shop) =>
+        shop.id === discovery.currentShop.id &&
+        normalize(shop.name) === normalize(discovery.currentShop.name)
     );
     if (sourceMatches.length !== 1) {
       throw new AllianceRetiredDriverError(

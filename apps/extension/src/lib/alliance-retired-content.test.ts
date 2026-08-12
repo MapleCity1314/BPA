@@ -79,17 +79,51 @@ describe("alliance retired-products content stages", () => {
       )
     ).resolves.toMatchObject({
       stage: "discover-shops",
-      currentShopName: "甲食品旗舰店",
+      currentShop: { id: "10001", name: "甲食品旗舰店" },
       shops: [{ id: "10001", name: "甲食品旗舰店" }]
     });
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("opens and discovers the current drawer switcher after the header menu", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName" data-shop-id="10001"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div id="drawer-host"></div>
+    `);
+    const trigger = document.querySelector<HTMLElement>(".userName")!;
+    trigger.addEventListener("click", () => {
+      document.querySelector("#drawer-host")!.innerHTML = `
+        <div class="auxo-drawer auxo-drawer-open">
+          <div class="auxo-drawer-content-wrapper">
+            <button class="auxo-drawer-close" aria-label="Close"></button>
+            <div class="index_descriptions__current">切换组织/店铺</div>
+            <div class="index_shopOption__one">
+              <span class="index_introName__new">甲食品旗舰店</span>
+              <span>店铺ID 10001 正常营业</span>
+            </div>
+          </div>
+        </div>`;
+    });
+    await expect(
+      executeAllianceRetiredStage(
+        { stage: "discover-shops" },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      stage: "discover-shops",
+      currentShop: { id: "10001", name: "甲食品旗舰店" },
+      shops: [{ id: "10001", name: "甲食品旗舰店" }]
+    });
   });
 
   it("continues discovery when the authenticated header classes change", async () => {
     const document = doc(`
       <div class="top-navigation">
         <span>精选联盟</span>
-        <div class="account-entry"><span>榆园儿食品专营店</span></div>
+        <div class="account-entry" data-shop-id="10001"><span>榆园儿食品专营店</span></div>
       </div>
       <a href="/ffa/w/login/account">账号管理</a>
       <div role="dialog">切换组织/店铺
@@ -105,7 +139,7 @@ describe("alliance retired-products content stages", () => {
       )
     ).resolves.toMatchObject({
       stage: "discover-shops",
-      currentShopName: "榆园儿食品专营店",
+      currentShop: { id: "10001", name: "榆园儿食品专营店" },
       shops: [{ id: "10001", name: "榆园儿食品专营店" }]
     });
   });
@@ -113,7 +147,7 @@ describe("alliance retired-products content stages", () => {
   it("discovers shops across a virtualized switcher", async () => {
     const document = doc(`
       <div id="fxg-pc-header">
-        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+        <div class="headerShopName" data-shop-id="10001"><span class="userName">甲食品旗舰店</span></div>
       </div>
       <div role="dialog">切换组织/店铺
         <div class="roleItem"><span class="introName">甲食品旗舰店</span>店铺ID 10001 正常营业</div>
@@ -147,7 +181,7 @@ describe("alliance retired-products content stages", () => {
   it("does not silently stop after eight virtualized shop pages", async () => {
     const document = doc(`
       <div id="fxg-pc-header">
-        <div class="headerShopName"><span class="userName">店铺0食品店</span></div>
+        <div class="headerShopName" data-shop-id="10000"><span class="userName">店铺0食品店</span></div>
       </div>
       <div role="dialog">切换组织/店铺
         <div class="roleItem"><span class="introName">店铺0食品店</span>店铺ID 10000 正常营业</div>
@@ -178,10 +212,10 @@ describe("alliance retired-products content stages", () => {
     });
   });
 
-  it("rejects two distinct shop IDs with the same visible name", async () => {
+  it("uses the numeric header identity when two shops share a name", async () => {
     const document = doc(`
       <div id="fxg-pc-header">
-        <div class="headerShopName"><span class="userName">同名食品店</span></div>
+        <div class="headerShopName" data-shop-id="10001"><span class="userName">同名食品店</span></div>
       </div>
       <div role="dialog">切换组织/店铺
         <div class="roleItem"><span class="introName">同名食品店</span>店铺ID 10001 正常营业</div>
@@ -194,7 +228,10 @@ describe("alliance retired-products content stages", () => {
         document,
         "https://fxg.jinritemai.com/ffa/g/list"
       )
-    ).rejects.toThrow("SHOP_IDENTITY_AMBIGUOUS");
+    ).resolves.toMatchObject({
+      currentShop: { id: "10001", name: "同名食品店" },
+      shops: [{ id: "10001" }, { id: "10002" }]
+    });
   });
 
   it("filters the switcher and confirms the selected shop", async () => {

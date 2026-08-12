@@ -214,27 +214,85 @@ export function readDoudianHeaderShopIdentity(doc: Document): {
 }
 
 export function openDoudianShopSwitcher(doc: Document): void {
+  if (visibleShopSwitcher(doc, false)) return;
+  const switchEntries = Array.from(
+    doc.querySelectorAll<HTMLElement>("body *")
+  ).filter(
+    (element) =>
+      normalizeText(element.textContent) === "切换组织/店铺" &&
+      visibleElement(element)
+  );
+  if (switchEntries.length > 0) {
+    switchEntries.sort(
+      (left, right) => left.children.length - right.children.length
+    );
+    const mostSpecific = switchEntries.filter(
+      (element) => element.children.length === switchEntries[0]!.children.length
+    );
+    requireUnique(
+      mostSpecific,
+      "SHOP_SWITCH_TRIGGER_AMBIGUOUS"
+    ).click();
+    return;
+  }
   const candidates = Array.from(
     doc.querySelectorAll<HTMLElement>(
-      "#fxg-pc-header [class*='headerShopName']"
+      "#fxg-pc-header [class*='userName']," +
+        "#fxg-pc-header [class*='headerShopName']"
     )
-  ).filter((element) => normalizeText(element.textContent));
-  const target = requireUnique(candidates, "SHOP_SWITCH_TRIGGER_AMBIGUOUS");
+  ).filter(
+    (element) => normalizeText(element.textContent) && visibleElement(element)
+  );
+  const leafCandidates = candidates.filter(
+    (element) =>
+      !candidates.some(
+        (candidate) => candidate !== element && element.contains(candidate)
+      )
+  );
+  const target = requireUnique(
+    leafCandidates,
+    "SHOP_SWITCH_TRIGGER_AMBIGUOUS"
+  );
   target.click();
 }
 
-function visibleShopDialog(doc: Document): HTMLElement {
-  const dialogs = Array.from(
-    doc.querySelectorAll<HTMLElement>("[role='dialog']")
-  ).filter((dialog) => {
-    const text = normalizeText(dialog.textContent);
-    return (
+function visibleElement(element: HTMLElement): boolean {
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+function visibleShopSwitcher(
+  doc: Document,
+  required = true
+): HTMLElement | undefined {
+  const roots = new Set<HTMLElement>();
+  for (const element of Array.from(
+    doc.querySelectorAll<HTMLElement>(
+      "[role='dialog'],.auxo-drawer-open,.auxo-drawer-content-wrapper"
+    )
+  )) {
+    const root =
+      element.closest<HTMLElement>(".auxo-drawer-open,[role='dialog']") ??
+      element;
+    if (!visibleElement(root) || roots.has(root)) continue;
+    const text = normalizeText(root.textContent);
+    if (
       text.includes("切换组织/店铺") ||
       text.includes("切换店铺") ||
-      dialog.querySelector("[class*='roleItem']") !== null
-    );
-  });
-  return requireUnique(dialogs, "SHOP_SWITCH_DIALOG_AMBIGUOUS");
+      root.querySelector("[class*='roleItem'],[class*='introName']") !== null
+    ) {
+      roots.add(root);
+    }
+  }
+  if (!required && roots.size === 0) return undefined;
+  return requireUnique(
+    [...roots],
+    "SHOP_SWITCH_DIALOG_AMBIGUOUS"
+  );
+}
+
+function visibleShopDialog(doc: Document): HTMLElement {
+  return visibleShopSwitcher(doc)!;
 }
 
 function shopIdFromText(value: string): string | undefined {
@@ -263,18 +321,43 @@ function blockedShopStatus(value: string): string | undefined {
   ].find((status) => compact.includes(status));
 }
 
+function shopSwitcherCards(dialog: HTMLElement): HTMLElement[] {
+  const legacyCards = Array.from(
+    dialog.querySelectorAll<HTMLElement>("[class*='roleItem']")
+  );
+  if (legacyCards.length > 0) return legacyCards;
+  const cards: HTMLElement[] = [];
+  for (const nameElement of Array.from(
+    dialog.querySelectorAll<HTMLElement>("[class*='introName']")
+  )) {
+    let candidate: HTMLElement = nameElement;
+    while (candidate.parentElement && candidate.parentElement !== dialog) {
+      const parent = candidate.parentElement;
+      if (
+        parent.querySelectorAll("[class*='introName']").length === 1 &&
+        (shopIdFromText(normalizeText(parent.textContent)) !== undefined ||
+          blockedShopStatus(normalizeText(parent.textContent)) !== undefined)
+      ) {
+        candidate = parent;
+        break;
+      }
+      candidate = parent;
+    }
+    if (!cards.includes(candidate)) cards.push(candidate);
+  }
+  return cards;
+}
+
 export function discoverDoudianAllianceShops(
   doc: Document
 ): readonly AllianceShop[] {
   const dialog = visibleShopDialog(doc);
-  const cards = Array.from(
-    dialog.querySelectorAll<HTMLElement>("[class*='roleItem']")
-  );
+  const cards = shopSwitcherCards(dialog);
   if (cards.length === 0) throw new DoudianAllianceError("SHOP_LIST_EMPTY");
   const shops = cards.flatMap((card): AllianceShop[] => {
     const nameElement = card.querySelector<HTMLElement>(
       "[class*='introName']"
-    );
+    ) ?? (card.matches("[class*='introName']") ? card : null);
     const name = normalizeText(nameElement?.textContent);
     if (!name || name.length > 80) {
       throw new DoudianAllianceError("SHOP_LIST_INCOMPLETE");
@@ -407,9 +490,7 @@ export function selectDoudianAllianceShop(
     throw new DoudianAllianceError("SHOP_TARGET_INVALID");
   }
   const dialog = visibleShopDialog(doc);
-  const matches = Array.from(
-    dialog.querySelectorAll<HTMLElement>("[class*='roleItem']")
-  ).filter((card) => {
+  const matches = shopSwitcherCards(dialog).filter((card) => {
     const name = normalizeText(
       card.querySelector<HTMLElement>("[class*='introName']")?.textContent
     );
