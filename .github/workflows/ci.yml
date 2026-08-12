@@ -77,6 +77,23 @@ jobs:
             ) process.exit(1);
           '
       - run: pnpm install --frozen-lockfile
+      - name: Download pinned Chrome for Testing
+        env:
+          CHROME_FOR_TESTING_VERSION: 151.0.7922.138
+        run: |
+          archive="$RUNNER_TEMP/chrome-for-testing.zip"
+          root="$RUNNER_TEMP/chrome-for-testing"
+          curl --fail --location --show-error --retry 3 \
+            --output "$archive" \
+            "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_FOR_TESTING_VERSION}/mac-arm64/chrome-mac-arm64.zip"
+          ditto -x -k "$archive" "$root"
+          app="$root/chrome-mac-arm64/Google Chrome for Testing.app"
+          test -x "$app/Contents/MacOS/Google Chrome for Testing"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = \
+            "com.google.chrome.for.testing"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = \
+            "$CHROME_FOR_TESTING_VERSION"
+          echo "BPA_CHROME_FOR_TESTING_APP=$app" >> "$GITHUB_ENV"
       - name: Build and verify immutable RC archive
         run: |
           commit="$(git rev-parse HEAD)"
