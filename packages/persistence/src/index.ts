@@ -700,6 +700,223 @@ export interface OperationalFactStore {
   ): OperationalDatasetPublicationLineage | undefined;
 }
 
+export type BinanceCollectionStatus =
+  | "success"
+  | "authenticated_but_no_data"
+  | "page_not_updated_yet"
+  | "login_required"
+  | "captcha_or_risk_control"
+  | "structure_changed"
+  | "required_field_missing"
+  | "pagination_failed"
+  | "partial_collection"
+  | "network_failure";
+
+export interface BinanceSourceCaptureInput {
+  captureId: string;
+  sourceKind: "management" | "project_tab";
+  projectId?: string;
+  sourceTab?: string;
+  page?: number;
+  sourceUrl: string;
+  captureAt: string;
+  recordCount: number;
+  payloadDigest: string;
+  payload: JsonValue;
+}
+
+export interface BinanceProjectSnapshotInput {
+  projectId: string;
+  projectStatus: "ongoing" | "ended";
+  sourceUrl: string;
+  capturedAt: string;
+  summary: JsonValue;
+}
+
+export interface BinancePositionSnapshotInput {
+  snapshotId: string;
+  projectId: string;
+  symbol: string;
+  positionSide: string;
+  ordinal: number;
+  capturedAt: string;
+  fields: JsonValue;
+}
+
+export interface BinanceRawRecordInput {
+  rawRecordId: string;
+  currentRecordKey: string;
+  projectId: string;
+  sourceTab: string;
+  page: number;
+  rowOrdinal: number;
+  captureAt: string;
+  originalEventTime?: string;
+  eventTimeUtc?: string;
+  pageTimeZoneAssumption?: string;
+  fields: JsonValue;
+  fieldsDigest: string;
+}
+
+export interface PersistBinanceCopyTradingCaptureInput {
+  collectionRunId: string;
+  workflowRunId: string;
+  sourceUrl: string;
+  attemptAt: string;
+  captureAt: string;
+  status: Extract<
+    BinanceCollectionStatus,
+    "success" | "authenticated_but_no_data" | "page_not_updated_yet"
+  >;
+  contentDigest: string;
+  projectCount: number;
+  pageCount: number;
+  recordCount: number;
+  oldestEventTimeUtc?: string;
+  newestEventTimeUtc?: string;
+  executionContext: OperationalExecutionContext;
+  sourceCaptures: readonly BinanceSourceCaptureInput[];
+  projects: readonly BinanceProjectSnapshotInput[];
+  positions: readonly BinancePositionSnapshotInput[];
+  rawRecords: readonly BinanceRawRecordInput[];
+}
+
+export interface BinanceCollectionRunRecord {
+  collectionRunId: string;
+  workflowRunId: string;
+  sourceUrl: string;
+  attemptAt: string;
+  captureAt: string;
+  status: BinanceCollectionStatus;
+  contentDigest: string;
+  projectCount: number;
+  pageCount: number;
+  recordCount: number;
+  oldestEventTimeUtc?: string;
+  newestEventTimeUtc?: string;
+  lastSuccessAt?: string;
+  createdAt: string;
+}
+
+export interface BinanceRawRecord extends BinanceRawRecordInput {
+  collectionRunId: string;
+}
+
+export interface BinanceCurrentRecord {
+  currentRecordKey: string;
+  projectId: string;
+  sourceTab: string;
+  originalEventTime?: string;
+  eventTimeUtc?: string;
+  pageTimeZoneAssumption?: string;
+  fields: JsonValue;
+  fieldsDigest: string;
+  firstCollectionRunId: string;
+  lastCollectionRunId: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+export interface BinanceCopyTradingStore {
+  persistBinanceCopyTradingCapture(
+    input: PersistBinanceCopyTradingCaptureInput
+  ): {
+    status: "accepted" | "duplicate";
+    run: BinanceCollectionRunRecord;
+    newCurrentRecordCount: number;
+  };
+  getBinanceCollectionRun(
+    collectionRunId: string
+  ): BinanceCollectionRunRecord | undefined;
+  getLatestSuccessfulBinanceCollectionRun():
+    | BinanceCollectionRunRecord
+    | undefined;
+  listBinanceRawRecords(collectionRunId: string): BinanceRawRecord[];
+  listBinanceCurrentRecords(projectId?: string): BinanceCurrentRecord[];
+}
+
+export interface BinanceMarketCandleInput {
+  symbol: string;
+  openTimeUtc: string;
+  closeTimeUtc: string;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+  quoteVolume: string;
+  tradeCount: number;
+}
+
+export interface BinanceMarketFundingInput {
+  symbol: string;
+  fundingTimeUtc: string;
+  fundingRate: string;
+  markPrice?: string;
+}
+
+export interface BinanceMarketReferenceInput {
+  symbol: string;
+  markPrice: string;
+  indexPrice: string;
+  lastFundingRate: string;
+  nextFundingTimeUtc?: string;
+  openInterest?: string;
+  observedAt: string;
+}
+
+export interface PersistBinanceMarketCaptureInput {
+  marketCaptureId: string;
+  workflowRunId: string;
+  captureAt: string;
+  sourceUrl: string;
+  symbolsPayload: JsonValue;
+  symbolsDigest: string;
+  candlesPayload: JsonValue;
+  candlesDigest: string;
+  referencesPayload: JsonValue;
+  referencesDigest: string;
+  symbols: readonly {
+    symbol: string;
+    pair: string;
+    contractType: string;
+    status: string;
+    onboardDateUtc?: string;
+    deliveryDateUtc?: string;
+    baseAsset: string;
+    quoteAsset: string;
+    marginAsset: string;
+  }[];
+  candles: readonly BinanceMarketCandleInput[];
+  funding: readonly BinanceMarketFundingInput[];
+  references: readonly BinanceMarketReferenceInput[];
+  executionContext: OperationalExecutionContext;
+}
+
+export interface BinanceMarketCaptureRecord {
+  marketCaptureId: string;
+  workflowRunId: string;
+  captureAt: string;
+  sourceUrl: string;
+  symbolCount: number;
+  candleCount: number;
+  fundingCount: number;
+  referenceCount: number;
+  createdAt: string;
+}
+
+export interface BinanceMarketStore {
+  persistBinanceMarketCapture(input: PersistBinanceMarketCaptureInput): {
+    status: "accepted" | "duplicate";
+    capture: BinanceMarketCaptureRecord;
+    insertedCandleCount: number;
+    insertedFundingCount: number;
+  };
+  getBinanceMarketCapture(
+    marketCaptureId: string
+  ): BinanceMarketCaptureRecord | undefined;
+}
+
 export interface DecisionRecordStore {
   putDecision(record: DecisionRecordDefinition): DecisionRecordDefinition;
   getActiveDecision(
@@ -1834,6 +2051,8 @@ export interface Persistence
     AssistanceUnitOfWork,
     DatasetPublicationUnitOfWork,
     OperationalFactStore,
+    BinanceCopyTradingStore,
+    BinanceMarketStore,
     DecisionRecordStore,
     GatewayDeliveryUnitOfWork,
     ExecutionStore,

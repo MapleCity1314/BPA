@@ -1,0 +1,44 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: binance.futures.market-reference.collect
+  version: 1.0.0
+  title: 采集 Binance USDⓈ-M 合约市场参考数据
+  description: 从官方公开只读 REST API 采集交易对元数据、成交前后窗口 1 分钟 K 线、资金费率、标记价、指数价和未平仓量，并原子落库；不使用账户凭证。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [projects, pageTimeZone]
+  properties:
+    projects: { type: object }
+    pageTimeZone: { const: Asia/Shanghai }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [status, marketCaptureId, captureAt, referencedSymbolCount, symbolMetadataCount, candleCount, insertedCandleCount, fundingCount, insertedFundingCount, referenceCount, requestCount, windowStartUtc, windowEndUtc, duplicate]
+  properties:
+    status: { const: success }
+    marketCaptureId: { type: string, minLength: 1, maxLength: 200 }
+    captureAt: { type: string, format: date-time }
+    referencedSymbolCount: { type: integer, minimum: 0, maximum: 1000 }
+    symbolMetadataCount: { type: integer, minimum: 0, maximum: 10000 }
+    candleCount: { type: integer, minimum: 0, maximum: 5000000 }
+    insertedCandleCount: { type: integer, minimum: 0, maximum: 5000000 }
+    fundingCount: { type: integer, minimum: 0, maximum: 1000000 }
+    insertedFundingCount: { type: integer, minimum: 0, maximum: 1000000 }
+    referenceCount: { type: integer, minimum: 0, maximum: 1000 }
+    requestCount: { type: integer, minimum: 1, maximum: 20000 }
+    windowStartUtc: { type: string, format: date-time }
+    windowEndUtc: { type: string, format: date-time }
+    duplicate: { type: boolean }
+risk:
+  level: R1
+  permissions: [binance.futures.market.read, binance.futures.market.write]
+  domains: [https://fapi.binance.com]
+execution:
+  timeoutDefault: 30m
+  idempotency: verified_write
+  cancellable: true
+  retryableErrors: [BINANCE_MARKET_NETWORK_FAILURE, BINANCE_MARKET_HTTP_FAILURE, BINANCE_MARKET_RATE_LIMITED]
+errors: [BINANCE_MARKET_NODE_UNSUPPORTED, BINANCE_MARKET_PERMISSION_MISMATCH, BINANCE_MARKET_NETWORK_FAILURE, BINANCE_MARKET_HTTP_FAILURE, BINANCE_MARKET_RATE_LIMITED, BINANCE_MARKET_STRUCTURE_CHANGED, BINANCE_MARKET_SYMBOL_MISSING, BINANCE_MARKET_REQUEST_LIMIT_EXCEEDED, BINANCE_MARKET_COLLECTION_FAILED, CANCELLED]

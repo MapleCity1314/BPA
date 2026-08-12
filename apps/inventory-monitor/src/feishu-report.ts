@@ -70,6 +70,35 @@ function localTime(value: unknown): string {
   }).format(at);
 }
 
+function localDateTime(value: unknown): string {
+  if (typeof value !== "string" || !value) return "无数据";
+  const at = new Date(value);
+  if (!Number.isFinite(at.getTime())) return "无数据";
+  return new Intl.DateTimeFormat("sv-SE",{
+    timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit",
+    hour:"2-digit",minute:"2-digit",hour12:false
+  }).format(at);
+}
+
+function oldestInventoryUpdate(items: readonly ShopInventoryReport[]): string {
+  const timestamps = items
+    .map((item) => Date.parse(item.overview.freshness?.latestInventoryAt ?? ""))
+    .filter((value) => Number.isFinite(value));
+  if (!timestamps.length) return "无数据";
+  return localDateTime(new Date(Math.min(...timestamps)).toISOString());
+}
+
+function dashboardUrl(value: string): string {
+  const parsed = new URL(value);
+  if (
+    !new Set(["http:","https:"]).has(parsed.protocol) ||
+    parsed.username || parsed.password || parsed.hash || parsed.search
+  ) {
+    throw new Error("INVENTORY_DASHBOARD_URL_INVALID");
+  }
+  return parsed.toString();
+}
+
 function severityName(value: unknown): string {
   return ({ critical:"严重",warning:"预警",unknown:"待确认",normal:"正常" } as Record<string,string>)[String(value)] ?? "待确认";
 }
@@ -127,41 +156,70 @@ function digestPayload(payload: Record<string, unknown>): string {
 
 export function buildConsolidatedInventoryFeishuReport(input: {
   readonly shops: readonly ShopInventoryReport[];
+  readonly dashboardUrl: string;
   readonly now?: Date;
 }): InventoryFeishuReport {
   const now = input.now ?? new Date();
   const counts = reportCounts(input.shops);
   const template = counts.critical > 0 ? "red" : counts.warning > 0 ? "orange" : "green";
-  const shopLines = input.shops.map((item) => {
-    const incidents = openIncidents(item);
-    const critical = incidents.filter((candidate) => candidate.severity === "critical").length;
-    const warning = incidents.filter((candidate) => candidate.severity === "warning").length;
-    const unknown = incidents.filter((candidate) => candidate.severity === "unknown").length;
-    const marker = critical ? "🔴" : warning ? "🟠" : unknown ? "⚪" : "🟢";
-    return `${marker} **${text(item.shop.name,80)}**｜严重 ${critical} · 预警 ${warning} · 待确认 ${unknown}｜库存 ${localTime(item.overview.freshness?.latestInventoryAt)}`;
+  const actionable = input.shops.flatMap((item) => {
+    const lines = openIncidents(item)
+      .filter((incident) => incident.severity === "critical" || incident.severity === "warning")
+      .flatMap((incident) => {
+        const findings = Array.isArray(incident.findings) && incident.findings.length
+          ? incident.findings
+          : [{}];
+        return findings.map((candidate) => {
+          const finding = record(candidate);
+          const scope = record(finding.scope);
+          const marker = incident.severity === "critical" ? "🔴" : "🟠";
+          const productId = text(scope.productId ?? incident.product_id,80);
+          const skuId = text(scope.platformSkuId ?? incident.platform_sku_id,80) || "待确认";
+          const title = productTitle(incident.product_title,`商品 ${productId || "待确认"}`);
+          return `${marker} ${title}｜SKU_ID：${skuId}｜${riskReason(finding.reason)} 请前往库存看板查看并处理`;
+        });
+      });
+    return lines.length ? [{ shopName:text(item.shop.name,80),lines }] : [];
   });
-  const riskLines = input.shops.flatMap((item) => openIncidents(item)
-    .filter((incident) => incident.severity === "critical" || incident.severity === "warning")
-    .map((incident) => riskLine(item,incident))).slice(0,12);
+  const visibleLineLimit = 20;
+  let visibleLines = 0;
+  const riskSections: string[] = [];
+  for (const item of actionable) {
+    if (visibleLines >= visibleLineLimit) break;
+    const lines = item.lines.slice(0,visibleLineLimit - visibleLines);
+    visibleLines += lines.length;
+    riskSections.push(`## ${item.shopName}\n${lines.join("\n")}`);
+  }
+  const totalRiskLines = actionable.reduce((sum,item) => sum + item.lines.length,0);
+  if (totalRiskLines > visibleLines) {
+    riskSections.push(`另有 ${totalRiskLines - visibleLines} 条风险，请前往库存看板查看并处理`);
+  }
+  const riskContent = riskSections.length ? riskSections.join("\n\n") : "✅ 暂无风险";
+  const cardElements: Record<string,unknown>[] = [
+    {
+      tag:"div",
+      text:{
+        tag:"lark_md",
+        content:`📅 ${dateInShanghai(now)} ｜ 数据：${oldestInventoryUpdate(input.shops)} 更新\n\n# 确定性风险\n\n${riskContent}`
+      }
+    }
+  ];
+  if (riskSections.length) {
+    cardElements.push({
+      tag:"action",
+      actions:[{
+        tag:"button",type:"primary",
+        text:{ tag:"plain_text",content:"打开库存看板" },
+        url:dashboardUrl(input.dashboardUrl)
+      }]
+    });
+  }
   const payload = {
     msg_type:"interactive",
     card:{
       config:{ wide_screen_mode:true },
-      header:{ template,title:{ tag:"plain_text",content:`库存风险报告｜全店日报 · ${input.shops.length} 家店铺` } },
-      elements:[
-        { tag:"div",fields:[
-          { is_short:true,text:{ tag:"lark_md",content:`**确定性风险**\n🔴 严重 ${counts.critical}｜🟠 预警 ${counts.warning}` } },
-          { is_short:true,text:{ tag:"lark_md",content:`**监测范围**\n${counts.products} 个商品｜${counts.skus} 个 SKU` } },
-          { is_short:true,text:{ tag:"lark_md",content:`**数据待确认**\n${counts.unknown} 个事件` } },
-          { is_short:true,text:{ tag:"lark_md",content:`**生成时间**\n${localTime(now.toISOString())}` } }
-        ] },
-        { tag:"hr" },
-        { tag:"div",text:{ tag:"lark_md",content:`**店铺概览**\n${shopLines.join("\n") || "暂无店铺数据"}` } },
-        { tag:"hr" },
-        { tag:"div",text:{ tag:"lark_md",content:`**优先处置**\n${riskLines.join("\n\n") || "🟢 当前没有开放的严重或预警风险。"}` } },
-        { tag:"hr" },
-        { tag:"note",elements:[{ tag:"plain_text",content:"库存均衡策略 v1.0｜待确认事件仅用于数据补全，不等同于缺货风险" }] }
-      ]
+      header:{ template,title:{ tag:"plain_text",content:`🟢 库存风险报告｜${input.shops.length} 家店铺` } },
+      elements:cardElements
     }
   };
   const digest = digestPayload(payload);
@@ -211,10 +269,11 @@ export function buildInventoryFeishuAlert(input: {
 export function buildInventoryFeishuReport(input: {
   readonly shop: { readonly id: string; readonly name: string };
   readonly overview: InventoryReportOverview;
+  readonly dashboardUrl: string;
   readonly now?: Date;
 }): InventoryFeishuReport {
   return buildConsolidatedInventoryFeishuReport({
-    shops:[{ shop:input.shop,overview:input.overview }],
+    shops:[{ shop:input.shop,overview:input.overview }],dashboardUrl:input.dashboardUrl,
     ...(input.now ? { now:input.now } : {})
   });
 }

@@ -64,22 +64,6 @@ try {
 }
 if (sessionSecret.length < 32) throw new Error("WEB_SESSION_SECRET_TOO_SHORT");
 await chmod(sessionSecretFile,0o600);
-const accessTokenFile = process.env.BPA_INVENTORY_WEB_ACCESS_TOKEN_FILE?.trim() || (
-  isWindowsNamedPipe(socketPath)
-    ? join(resolveDefaultBpaHome(), "run", "inventory-web-access.key")
-    : `${socketPath}.web-access.key`
-);
-await mkdir(dirname(accessTokenFile),{ recursive:true,mode:0o700 });
-let accessToken: string;
-try {
-  accessToken = (await readFile(accessTokenFile,"utf8")).trim();
-} catch (error) {
-  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  accessToken = randomBytes(32).toString("base64url");
-  await writeFile(accessTokenFile,`${accessToken}\n`,{ encoding:"utf8",mode:0o600,flag:"wx" });
-}
-if (accessToken.length < 32) throw new Error("WEB_ACCESS_TOKEN_TOO_SHORT");
-await chmod(accessTokenFile,0o600);
 const recoveryStatusPath = process.env.BPA_INVENTORY_RECOVERY_STATUS_FILE?.trim() ||
   join(resolveDefaultBpaHome(),"run","inventory-multishop-recovery.status.json");
 const attentionControl = new ControlClient(
@@ -90,7 +74,7 @@ const attentionControl = new ControlClient(
   { timeoutMs:2_000 }
 );
 const web = await startInventoryWebServer({
-  repository,shops,port,sessionSecret,listenHost,publicHost,accessToken,recoveryStatusPath,
+  repository,shops,port,sessionSecret,listenHost,publicHost,recoveryStatusPath,
   runtimeAttentionReminders:createRuntimeAttentionReminderProvider(attentionControl),
   runtimeProductionCycleSummary:createRuntimeProductionCycleSummaryProvider(
     attentionControl
@@ -102,7 +86,7 @@ const launchUrlFile = process.env.BPA_INVENTORY_LAUNCH_URL_FILE?.trim() || (
     : `${socketPath}.review-url`
 );
 await mkdir(dirname(launchUrlFile),{ recursive:true,mode:0o700 });
-await writeFile(launchUrlFile,`${web.accessUrl ?? web.launchUrl}\n`,{ encoding:"utf8",mode:0o600 });
+await writeFile(launchUrlFile,`${web.launchUrl}\n`,{ encoding:"utf8",mode:0o600 });
 await chmod(launchUrlFile,0o600);
 
 process.stdout.write(`${JSON.stringify({

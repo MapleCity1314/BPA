@@ -49,12 +49,12 @@ The serialized recovery path deliberately degrades when either the frozen produc
 The inventory report is a separate one-shot launchd job. It does not import the experience-score project, open a browser, share a process, or write to inventory facts. It only reads the BPA application database and posts one interactive card through its own `0600` environment file.
 
 - Label: `com.bpa.inventory-feishu-report`
-- Schedule: daily at 09:30 Asia/Shanghai
+- Schedule: daily at 08:30 Asia/Shanghai
 - Environment: `~/Library/Application Support/BPA/inventory-feishu-report.env`
 - Logs: `inventory-feishu-report.out.log` and `inventory-feishu-report.err.log`
 - Idempotency: `audit.change_event` target `inventory-daily:<shopId>:<date>`
 
-Set `BPA_FEISHU_INVENTORY_MODE=preview` to render the complete card to stdout without a network request. Production uses `send`. An accepted provider response is recorded only after the webhook returns success; uncertain external writes are not automatically retried.
+Set `BPA_FEISHU_INVENTORY_MODE=preview` to render the operator-only card to stdout without a network request. Production uses `send`. The daily card lists only deterministic critical or warning risks, includes the exact SKU ID, and links to the inventory dashboard through `BPA_FEISHU_INVENTORY_DASHBOARD_URL`. An accepted provider response is recorded only after the webhook returns success; uncertain external writes are not automatically retried.
 
 ## Multi-shop configuration
 

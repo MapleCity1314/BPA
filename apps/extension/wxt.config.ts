@@ -16,6 +16,7 @@ export default defineConfig({
       "webNavigation"
     ],
     host_permissions: [
+      "https://www.binance.com/*",
       "https://fxg.jinritemai.com/*",
       "https://buyin.jinritemai.com/*",
       "https://www.chanmama.com/*",

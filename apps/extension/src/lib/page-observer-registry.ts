@@ -1,4 +1,10 @@
 import {
+  BINANCE_MANAGEMENT_PATH,
+  BINANCE_ORIGIN,
+  detectBinanceRiskSignals,
+  readBinanceManagementSnapshot
+} from "@bpa/adapter-binance";
+import {
   detectDoudianRiskSignals,
   readDoudianShopContext,
   readDoudianVisibleShopIdentity
@@ -117,6 +123,44 @@ function hasInteractivePageShell(document: Document): boolean {
 }
 
 const observers: readonly PageObserver[] = [
+  {
+    capabilityId: "binance.copy-trading.page",
+    supports: (url) =>
+      url.origin === BINANCE_ORIGIN &&
+      url.pathname.startsWith(BINANCE_MANAGEMENT_PATH),
+    async probe(document, url) {
+      const blocking = firstBlockingRiskSignal(
+        detectBinanceRiskSignals(document, url.href)
+      );
+      if (blocking) {
+        return {
+          observerCapabilityId: this.capabilityId,
+          authentication: {
+            state: blocking.code === "SESSION_EXPIRED" ? "anonymous" : "unknown"
+          },
+          observationState:
+            blocking.code === "SESSION_EXPIRED" ? "auth_required" : "challenge",
+          reasonCode: blocking.code
+        };
+      }
+      try {
+        readBinanceManagementSnapshot(document, url.href);
+        return {
+          observerCapabilityId: this.capabilityId,
+          authentication: { state: "authenticated" },
+          observationState: "ready"
+        };
+      } catch (error) {
+        const code = error instanceof Error ? error.message : String(error);
+        return {
+          observerCapabilityId: this.capabilityId,
+          authentication: { state: "unknown" },
+          observationState: code === "BINANCE_STRUCTURE_UNCONFIRMED" ? "probing" : "stale",
+          reasonCode: code
+        };
+      }
+    }
+  },
   marketplaceObserver("douyin.marketplace-search.page", "https://www.douyin.com"),
   marketplaceObserver("taobao.marketplace-search.page", "https://s.taobao.com"),
   marketplaceObserver("jd.marketplace-search.page", "https://search.jd.com"),

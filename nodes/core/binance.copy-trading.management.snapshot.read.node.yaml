@@ -1,0 +1,42 @@
+apiVersion: bpa/v1alpha2
+kind: Node
+metadata:
+  id: binance.copy-trading.management.snapshot.read
+  version: 1.0.0
+  title: 读取 Binance 合约跟单管理快照
+  description: 只读提取当前管理页的账户汇总、真实跟单项目摘要和当前可见仓位；不点击详情、交易或设置控件。
+runtime: browser
+inputSchema: { type: object, additionalProperties: false }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [schemaVersion, status, observedAt, pageUrl, accountSummary, activeTab, projects, warnings, formMutations]
+  properties:
+    schemaVersion: { const: binance-copy-trading/v0.1 }
+    status: { enum: [complete, empty_confirmed] }
+    observedAt: { type: string, format: date-time }
+    pageUrl: { type: string, format: uri }
+    accountSummary: { type: object, additionalProperties: { type: string } }
+    activeTab: { enum: [ongoing, ended] }
+    projects: { type: array, maxItems: 500, items: { type: object } }
+    warnings: { type: array, maxItems: 50, items: { type: string } }
+    formMutations: { const: 0 }
+risk:
+  level: R1
+  permissions: [browser.dom.read, browser.dom.write, browser.tabs.read]
+  domains: [https://www.binance.com]
+resources:
+  browser:
+    kind: browser
+    capabilities: [browser.dom.read, browser.dom.write, browser.tabs.read]
+    allowedOrigins: [https://www.binance.com]
+    authentication: authenticated
+    purpose: 绑定用户已登录的 Binance 合约跟单管理页并执行只读快照
+execution:
+  timeoutDefault: 30s
+  idempotency: repeatable_read
+  retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED, CONTENT_SCRIPT_UNAVAILABLE]
+  cancellable: true
+errors: [PAGE_MISMATCH, PAGE_CONTEXT_CHANGED, SESSION_EXPIRED, CAPTCHA_REQUIRED, RATE_LIMITED, RISK_CONTROL, BINANCE_STRUCTURE_UNCONFIRMED, BINANCE_MANAGEMENT_TAB_AMBIGUOUS, BINANCE_MANAGEMENT_TAB_TIMEOUT, BINANCE_PROJECT_DUPLICATED_ACROSS_TABS, BROWSER_DISCONNECTED, CONTENT_SCRIPT_UNAVAILABLE, DEADLINE_EXCEEDED]
+evidence: { required: [result, error] }
+adapter: { id: binance-copy-trading, versions: [1.0.0] }

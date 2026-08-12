@@ -309,7 +309,7 @@ describe("Adapter Node registry", () => {
 
   it("fails alliance discovery when an active shop lacks a stable numeric id", async () => {
     driver.discoverShopContext.mockResolvedValue({
-      currentShopName: "无ID店铺",
+      currentShop: { id: "10001", name: "无ID店铺" },
       shops: [
         { name: "无ID店铺", status: "active", statusText: "正常营业" }
       ]
@@ -329,7 +329,7 @@ describe("Adapter Node registry", () => {
 
   it("keeps an id-less blocked alliance shop and skips its scan", async () => {
     driver.discoverShopContext.mockResolvedValue({
-      currentShopName: sourceShop.name,
+      currentShop: { id: sourceShop.id!, name: sourceShop.name },
       shops: [
         sourceShop,
         { name: "已停业店铺", status: "blocked", statusText: "已停业" }
