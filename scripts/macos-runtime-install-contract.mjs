@@ -5,11 +5,11 @@ export const MACOS_MANAGED_CHROME_CONTRACT = Object.freeze({
   launchAgentLabel: "com.bpa.inventory-chrome",
   interactionMode: "background-extension-only",
   windowMode: "launchservices-hidden",
-  applicationPath: "/Applications/Google Chrome.app",
-  bundleIdentifier: "com.google.Chrome",
-  teamIdentifier: "EQHXZ8M8AV",
+  applicationRelativePath: "browser/Google Chrome for Testing.app",
+  browserSourceEnvironment: "BPA_CHROME_FOR_TESTING_APP",
+  bundleIdentifier: "com.google.chrome.for.testing",
   executablePath:
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "browser/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
   profileRelativePath: "chrome-inventory-profile",
   extensionRelativePath: "extension",
   remoteDebuggingAddress: "127.0.0.1",
@@ -250,8 +250,8 @@ if [[ -z "\${BPA_HOME:-}" ]]; then
   print -u2 "BPA_HOME is required to start managed Chrome."
   exit 1
 fi
-APP=${JSON.stringify(contract.applicationPath)}
-CHROME=${JSON.stringify(contract.executablePath)}
+APP="$BPA_HOME/${contract.applicationRelativePath}"
+CHROME="$BPA_HOME/${contract.executablePath}"
 PROFILE="$BPA_HOME/${contract.profileRelativePath}"
 EXTENSION="$BPA_HOME/${contract.extensionRelativePath}"
 if [[ ! -x "$CHROME" ]]; then
@@ -264,12 +264,10 @@ if [[ ! -f "$EXTENSION/manifest.json" ]]; then
 fi
 /usr/bin/codesign --verify --deep --strict "$APP"
 SIGNATURE="$(/usr/bin/codesign -dv --verbose=4 "$APP" 2>&1)"
-if [[ "$SIGNATURE" != *"Identifier=${contract.bundleIdentifier}"* || \
-  "$SIGNATURE" != *"TeamIdentifier=${contract.teamIdentifier}"* ]]; then
+if [[ "$SIGNATURE" != *"Identifier=${contract.bundleIdentifier}"* ]]; then
   print -u2 "Managed Chrome application identity is invalid."
   exit 1
 fi
-/usr/sbin/spctl --assess --type execute "$APP"
 mkdir -p "$PROFILE"
 chmod 700 "$PROFILE"
 export BPA_RUNTIME_ID=${JSON.stringify(releaseIdentity)}
@@ -293,11 +291,13 @@ stop_managed_chrome() {
 trap stop_managed_chrome TERM INT HUP
 MANAGED_PID="$(find_managed_chrome_pid)"
 if [[ -z "$MANAGED_PID" ]]; then
-  /usr/bin/open -gj -n "$APP" --args \\
+  "$CHROME" \\
   "--user-data-dir=$PROFILE" \\
   "--remote-debugging-port=${contract.remoteDebuggingPort}" \\
   "--remote-debugging-address=${contract.remoteDebuggingAddress}" \\
 ${staticArguments}
+  "--disable-extensions-except=$EXTENSION" \\
+  "--load-extension=$EXTENSION" >/dev/null 2>&1 &
   for _attempt in {1..150}; do
     MANAGED_PID="$(find_managed_chrome_pid)"
     [[ -n "$MANAGED_PID" ]] && break
@@ -322,9 +322,9 @@ export function assertManagedChromeManifest(manifest) {
       "launchAgentLabel",
       "interactionMode",
       "windowMode",
-      "applicationPath",
+      "applicationRelativePath",
+      "browserSourceEnvironment",
       "bundleIdentifier",
-      "teamIdentifier",
       "executablePath",
       "profileRelativePath",
       "extensionRelativePath",
@@ -347,7 +347,7 @@ export function assertManagedChromeProcessCommand(command, bpaHome) {
     throw new Error("Live managed Chrome command differs from the Runtime closure");
   }
   const required = [
-    contract.executablePath,
+    `${root}/${contract.executablePath}`,
     `--user-data-dir=${root}/${contract.profileRelativePath}`,
     `--remote-debugging-port=${contract.remoteDebuggingPort}`,
     `--remote-debugging-address=${contract.remoteDebuggingAddress}`,

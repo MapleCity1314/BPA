@@ -18,6 +18,7 @@ DATA_DB="$DATA_ROOT/bpa.sqlite"
 BACKUP_ROOT="$BPA_ROOT/backups"
 EXTENSION_ROOT="$BPA_ROOT/extension"
 MANAGED_CHROME_PROFILE="$BPA_ROOT/chrome-inventory-profile"
+BROWSER_ROOT="$BPA_ROOT/browser"
 LOG_ROOT="$USER_HOME/Library/Logs/BPA"
 LAUNCH_AGENT="$USER_HOME/Library/LaunchAgents/com.bpa.core.plist"
 CHROME_LAUNCH_AGENT="$USER_HOME/Library/LaunchAgents/com.bpa.inventory-chrome.plist"
@@ -75,10 +76,10 @@ fi
 
 mkdir -p \
   "$RUNTIME_ROOT" "$DATA_ROOT" "$BPA_ROOT/run" "$BACKUP_ROOT" "$LOG_ROOT" \
-  "${LAUNCH_AGENT:h}" "$MANAGED_CHROME_PROFILE" "$HOST_ROOT"
+  "${LAUNCH_AGENT:h}" "$MANAGED_CHROME_PROFILE" "$HOST_ROOT" "$BROWSER_ROOT"
 chmod 700 \
   "$BPA_ROOT" "$DATA_ROOT" "$BACKUP_ROOT" "$LOG_ROOT" \
-  "$MANAGED_CHROME_PROFILE" "$HOST_ROOT"
+  "$MANAGED_CHROME_PROFILE" "$HOST_ROOT" "$BROWSER_ROOT"
 STAGING_ROOT="$(mktemp -d "$BPA_ROOT/.install.XXXXXX")"
 MIGRATION_TEST_ROOT="$(mktemp -d "$BPA_ROOT/.migration-test.XXXXXX")"
 EXTENSION_STAGE="$(mktemp -d "$BPA_ROOT/.extension.install.XXXXXX")"
@@ -256,6 +257,10 @@ rsync -a "$PACKAGED_RUNTIME/" "$STAGING_ROOT/"
   "$STAGING_ROOT/bin/bpa-runtime-verify.js" \
   "$STAGING_ROOT"
 rsync -a "$STAGING_ROOT/extension/" "$EXTENSION_STAGE/"
+if [[ ! -x "$STAGING_ROOT/browser/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" ]]; then
+  print -u2 "Packaged managed Chrome is missing."
+  exit 1
+fi
 
 (
   cd "$STAGING_ROOT"
@@ -387,6 +392,7 @@ POST_MIGRATION_DIGEST="$(shasum -a 256 "$DATA_DB" | awk '{print $1}')"
 
 mv "$STAGING_ROOT" "$VERSION_ROOT"
 INSTALL_MOVED=true
+rsync -a --delete "$VERSION_ROOT/browser/" "$BROWSER_ROOT/"
 
 if [[ -L "$RUNTIME_ROOT/current" ]]; then
   [[ -n "$OLD_CURRENT" ]] || OLD_CURRENT="$(readlink "$RUNTIME_ROOT/current")"
