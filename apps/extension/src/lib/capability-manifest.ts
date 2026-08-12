@@ -1,6 +1,8 @@
 import type { BridgeCapability } from "@bpa/browser-bridge";
 
 export const BROWSER_PROTOCOL = "bpa.browser/2";
+export const BINANCE_ADAPTER_VERSION = "1.0.0";
+export const BINANCE_ORIGIN = "https://www.binance.com";
 export const DOUDIAN_ADAPTER_VERSION = "1.2.0";
 export const DOUDIAN_INVENTORY_ADAPTER_VERSION = "2.0.0";
 export const DOUDIAN_ALLIANCE_ADAPTER_VERSION = "2.0.0";
@@ -19,6 +21,8 @@ export const BROWSER_FEATURES = [
 
 export type ExtensionNodeId =
   | "browser.design.snapshot.capture"
+  | "binance.copy-trading.management.snapshot.read"
+  | "binance.copy-trading.project.detail.collect"
   | "doudian.shop.context.read"
   | "doudian.product.scope.collect"
   | "doudian.product.scope.restore"
@@ -43,7 +47,7 @@ export interface ExtensionCapability {
     readonly observerCapabilityId: string;
   }[];
   readonly adapter?: {
-    readonly id: "doudian" | "doudian-inventory" | "doudian-alliance" | "doudian-experience" | "marketplace-search";
+    readonly id: "binance-copy-trading" | "doudian" | "doudian-inventory" | "doudian-alliance" | "doudian-experience" | "marketplace-search";
     readonly version: string;
   };
   readonly executionTarget?: "background";
@@ -56,6 +60,43 @@ const READ_ONLY_PERMISSIONS = [
 ] as const;
 
 export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
+  {
+    nodeId: "binance.copy-trading.management.snapshot.read",
+    versions: ["1.0.0"],
+    riskLevel: "R1",
+    permissions: [
+      "browser.dom.read",
+      "browser.dom.write",
+      "browser.tabs.read"
+    ],
+    routes: [
+      {
+        origin: BINANCE_ORIGIN,
+        pathnamePrefixes: ["/zh-CN/copy-trading/copy-management"],
+        observerCapabilityId: "binance.copy-trading.page"
+      }
+    ],
+    adapter: { id: "binance-copy-trading", version: BINANCE_ADAPTER_VERSION }
+  },
+  {
+    nodeId: "binance.copy-trading.project.detail.collect",
+    versions: ["1.0.0"],
+    riskLevel: "R1",
+    permissions: [
+      "browser.dom.read",
+      "browser.dom.write",
+      "browser.tabs.read"
+    ],
+    routes: [
+      {
+        origin: BINANCE_ORIGIN,
+        pathnamePrefixes: ["/zh-CN/copy-trading/copy-management"],
+        observerCapabilityId: "binance.copy-trading.page"
+      }
+    ],
+    adapter: { id: "binance-copy-trading", version: BINANCE_ADAPTER_VERSION },
+    executionTarget: "background"
+  },
   {
     nodeId: "ecommerce.marketplace.search-results.read",
     versions: ["1.0.0"],
@@ -331,7 +372,7 @@ export interface ExtensionCapabilityReport {
       pathname_prefixes: string[];
       observer_capability_id: string;
     }>;
-    adapter_id?: "doudian" | "doudian-inventory" | "doudian-alliance" | "doudian-experience" | "marketplace-search";
+    adapter_id?: "binance-copy-trading" | "doudian" | "doudian-inventory" | "doudian-alliance" | "doudian-experience" | "marketplace-search";
     adapter_version?: string;
   }>;
   manifest_digest: `sha256:${string}`;

@@ -27,6 +27,24 @@ const t3 = "2026-08-09T00:03:00.000Z";
 const t4 = "2026-08-09T00:04:00.000Z";
 const expiry = "2026-08-09T00:10:00.000Z";
 
+function dropMigration26(database: Database.Database): void {
+  const tables = [
+    "binance_market_reference_snapshots",
+    "binance_market_funding_rates",
+    "binance_market_candles_1m",
+    "binance_market_symbol_snapshots",
+    "binance_market_captures",
+    "binance_copy_record_current",
+    "binance_copy_raw_records",
+    "binance_position_snapshots",
+    "binance_copy_project_snapshots",
+    "binance_source_captures",
+    "binance_collection_runs"
+  ];
+  database.exec(tables.map((table) => `DROP TABLE ${table};`).join("\n"));
+  database.prepare("DELETE FROM schema_migrations WHERE version=26").run();
+}
+
 function event(runId: string, sequence = 1): ExecutionEventRecord {
   return {
     id: `event:${runId}:${sequence}`,
@@ -511,6 +529,7 @@ describe("migration v24", () => {
       const seeded = new SqlitePersistence({ path: databasePath });
       seeded.close();
       const v23 = new Database(databasePath);
+      dropMigration26(v23);
       v23.exec(`
         DROP TABLE external_domain_lease_reconciliations;
         DROP TABLE external_domain_leases;
@@ -519,7 +538,7 @@ describe("migration v24", () => {
       v23.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(25);
+      expect(upgraded.health().schemaVersion).toBe(26);
       upgraded.close();
       const inspected = new Database(databasePath, { readonly: true });
       expect(
@@ -543,6 +562,7 @@ describe("migration v24", () => {
       const seeded = new SqlitePersistence({ path: databasePath });
       seeded.close();
       const v23 = new Database(databasePath);
+      dropMigration26(v23);
       v23.exec(`
         DROP TABLE external_domain_lease_reconciliations;
         DROP TABLE external_domain_leases;
@@ -576,7 +596,7 @@ describe("migration v24", () => {
       inspected.close();
 
       const recovered = new SqlitePersistence({ path: databasePath });
-      expect(recovered.health().schemaVersion).toBe(25);
+      expect(recovered.health().schemaVersion).toBe(26);
       recovered.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -790,6 +810,7 @@ describe("inventory effect reconciliation persistence v25", () => {
       const seeded = new SqlitePersistence({ path:databasePath });
       seeded.close();
       const v24 = new Database(databasePath);
+      dropMigration26(v24);
       v24.exec(`
         DROP TABLE external_domain_lease_reconciliations;
         DELETE FROM schema_migrations WHERE version=25;
@@ -811,7 +832,7 @@ describe("inventory effect reconciliation persistence v25", () => {
       ).get()).toBeUndefined();
       inspected.close();
       const recovered = new SqlitePersistence({ path:databasePath });
-      expect(recovered.health().schemaVersion).toBe(25);
+      expect(recovered.health().schemaVersion).toBe(26);
       recovered.close();
     } finally {
       rmSync(directory,{ recursive:true,force:true });

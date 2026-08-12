@@ -33,6 +33,14 @@ export interface ContentActionResult {
 }
 
 export interface ContentActionHandlers {
+  readonly "binance.copy-trading.management.snapshot.read": (
+    input: Readonly<Record<string, unknown>>,
+    request: ContentActionRequest
+  ) => Promise<ContentActionResult>;
+  readonly "binance.copy-trading.project.detail.collect": (
+    input: Readonly<Record<string, unknown>>,
+    request: ContentActionRequest
+  ) => Promise<ContentActionResult>;
   readonly "ecommerce.marketplace.search-results.read": (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest

@@ -1,0 +1,174 @@
+apiVersion: bpa/v1alpha3
+kind: Workflow
+metadata:
+  id: binance.copy-trading.management.snapshot
+  version: 3.0.0
+  title: Binance 合约跟单全量只读采集
+  description: 绑定已登录管理页，采集进行中和已结束项目，逐项目遍历八个详情页签及全部分页，并在完整覆盖后单事务追加落库。
+spec:
+  riskLevel: R1
+  inputSchema: { type: object, additionalProperties: false }
+  outputSchema:
+    type: object
+    additionalProperties: false
+    required: [status, collection, market]
+    properties:
+      status: { enum: [success, authenticated_but_no_data, page_not_updated_yet] }
+      collection: { type: object }
+      market: { type: object }
+  limits: { maxDepth: 3, maxStepExecutions: 1100 }
+  resourceSlots:
+    binance_page:
+      kind: browser
+      capabilities: [browser.dom.read, browser.dom.write, browser.tabs.read]
+      allowedOrigins: [https://www.binance.com]
+      authentication: authenticated
+      purpose: 绑定已登录管理页，仅切换项目、详情页签和分页并恢复管理页
+  root:
+    kind: sequence
+    steps:
+      - key: read_management
+        kind: call
+        use: binance.copy-trading.management.snapshot.read@1.0.0
+        with: {}
+        timeout: 2m
+        resourceMappings: { browser: binance_page }
+        handlers:
+          failure:
+            kind: sequence
+            steps:
+              - key: collection_failed
+                kind: terminal
+                status: failed
+                error: { code: BINANCE_MANAGEMENT_COLLECTION_FAILED, message: Binance 管理页没有形成可信快照；上一次成功结果不得被空数据覆盖。 }
+          rejected:
+            kind: sequence
+            steps:
+              - key: collection_blocked
+                kind: terminal
+                status: rejected
+                error: { code: BINANCE_MANAGEMENT_COLLECTION_BLOCKED, message: 登录、验证码、风控或页面上下文变化阻断了只读采集。 }
+          timeout:
+            kind: sequence
+            steps:
+              - key: collection_timeout
+                kind: terminal
+                status: failed
+                error: { code: BINANCE_MANAGEMENT_COLLECTION_TIMEOUT, message: Binance 页面读取超过硬 Deadline，禁止将超时解释为真实空数据。 }
+      - key: collect_projects
+        kind: foreach
+        items: ${steps.read_management.output.projects}
+        itemName: project
+        indexName: project_index
+        itemKey: ${item.projectId}
+        maxItems: 500
+        maxDuration: 8h
+        onItemError: stop
+        body:
+          kind: sequence
+          steps:
+            - key: collect_project
+              kind: call
+              use: binance.copy-trading.project.detail.collect@1.0.0
+              with:
+                projectId: ${item.projectId}
+                projectStatus: ${item.status}
+                managementUrl: https://www.binance.com/zh-CN/copy-trading/copy-management
+              timeout: 10m
+              resourceMappings: { browser: binance_page }
+              retry:
+                maxAttempts: 2
+                backoff: 2s
+                retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED, BINANCE_CONTENT_RESPONSE_TIMEOUT, BINANCE_DETAIL_TAB_TIMEOUT, BINANCE_PAGINATION_TIMEOUT]
+              handlers:
+                failure:
+                  kind: sequence
+                  steps:
+                    - key: project_failed
+                      kind: terminal
+                      status: failed
+                      error: { code: BINANCE_PROJECT_COLLECTION_FAILED, message: 当前项目详情未形成完整快照，禁止把部分分页解释为全量数据。 }
+                rejected:
+                  kind: sequence
+                  steps:
+                    - key: project_blocked
+                      kind: terminal
+                      status: rejected
+                      error: { code: BINANCE_PROJECT_COLLECTION_BLOCKED, message: 登录、风控、页面上下文或管理页恢复失败阻断了剩余项目。 }
+                timeout:
+                  kind: sequence
+                  steps:
+                    - key: project_timeout
+                      kind: terminal
+                      status: uncertain
+                      error: { code: BINANCE_PROJECT_COLLECTION_TIMEOUT, message: 项目详情采集超时且完整性未知。 }
+      - key: persist_capture
+        kind: call
+        use: binance.copy-trading.capture.persist@1.0.0
+        with:
+          management: ${steps.read_management.output}
+          projects: ${steps.collect_projects.output}
+          pageTimeZone: Asia/Shanghai
+        timeout: 2m
+        handlers:
+          failure:
+            kind: sequence
+            steps:
+              - key: persistence_failed
+                kind: terminal
+                status: failed
+                error: { code: BINANCE_CAPTURE_PERSIST_FAILED, message: 完整采集未能原子落库；上一次成功状态和数据保持不变。 }
+          rejected:
+            kind: sequence
+            steps:
+              - key: persistence_rejected
+                kind: terminal
+                status: rejected
+                error: { code: BINANCE_CAPTURE_PERSIST_REJECTED, message: 持久化权限或运行身份不匹配，本轮没有提交金融数据。 }
+          timeout:
+            kind: sequence
+            steps:
+              - key: persistence_timeout
+                kind: terminal
+                status: uncertain
+                error: { code: BINANCE_CAPTURE_PERSIST_TIMEOUT, message: 持久化超时且提交状态不确定，禁止自动重试写入。 }
+      - key: collect_market_reference
+        kind: call
+        use: binance.futures.market-reference.collect@1.0.0
+        with:
+          projects: ${steps.collect_projects.output}
+          pageTimeZone: Asia/Shanghai
+        timeout: 30m
+        retry:
+          maxAttempts: 2
+          backoff: 30s
+          retryableErrors: [BINANCE_MARKET_NETWORK_FAILURE, BINANCE_MARKET_HTTP_FAILURE, BINANCE_MARKET_RATE_LIMITED]
+        handlers:
+          failure:
+            kind: sequence
+            steps:
+              - key: market_failed
+                kind: terminal
+                status: failed
+                error: { code: BINANCE_MARKET_COLLECTION_FAILED, message: 官方市场参考数据未形成完整窗口；跟单原始数据已保存，但本轮整体不得宣称完整。 }
+          rejected:
+            kind: sequence
+            steps:
+              - key: market_rejected
+                kind: terminal
+                status: rejected
+                error: { code: BINANCE_MARKET_COLLECTION_REJECTED, message: 市场数据只读权限或固定 Origin 不匹配。 }
+          timeout:
+            kind: sequence
+            steps:
+              - key: market_timeout
+                kind: terminal
+                status: failed
+                error: { code: BINANCE_MARKET_COLLECTION_TIMEOUT, message: 官方市场数据窗口采集超时，禁止发布不完整参考数据。 }
+      - key: complete
+        kind: terminal
+        status: succeeded
+        output:
+          status: ${steps.persist_capture.output.status}
+          collection: ${steps.persist_capture.output}
+          market: ${steps.collect_market_reference.output}

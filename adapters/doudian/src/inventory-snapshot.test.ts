@@ -71,7 +71,8 @@ describe("doudian inventory snapshot", () => {
         "apps/extension/src/lib/native-connection-supervisor.ts",
         "adapters/doudian/src/alliance-retired.ts",
         "adapters/doudian/src/inventory-snapshot.ts",
-        "adapters/doudian/src/product-list-guard.ts"
+        "adapters/doudian/src/product-list-guard.ts",
+        "adapters/doudian/src/shop-context.ts"
       ].map((path) => readFileSync(new URL(`../../../${path}`, import.meta.url)))
         .join("\n"))
       .digest("hex")}`;

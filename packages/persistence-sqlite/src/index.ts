@@ -40,6 +40,10 @@ import {
   type AttentionDeliveryState,
   type AttentionRecord,
   type AuditRecord,
+  type BinanceCollectionRunRecord,
+  type BinanceCurrentRecord,
+  type BinanceMarketCaptureRecord,
+  type BinanceRawRecord,
   type BrowserCapabilityRecord,
   type BrowserControlLeaseRecord,
   type BrowserPageObservationRecord,
@@ -88,6 +92,8 @@ import {
   type Persistence,
   type PublishArtifactInput,
   type PreparedOperationalDatasetPublication,
+  type PersistBinanceCopyTradingCaptureInput,
+  type PersistBinanceMarketCaptureInput,
   type RetentionJobRecord,
   type RecoverySessionRecord,
   type RecoverySessionState,
@@ -3113,6 +3119,532 @@ export class SqlitePersistence implements Persistence {
         )
         .all(runId) as SqlRow[]
     ).map((row) => this.#readOperationalFact(row));
+  }
+
+  persistBinanceCopyTradingCapture(
+    input: PersistBinanceCopyTradingCaptureInput
+  ): {
+    status: "accepted" | "duplicate";
+    run: BinanceCollectionRunRecord;
+    newCurrentRecordCount: number;
+  } {
+    assertAuthoringId(input.collectionRunId, "Binance collectionRunId");
+    if (input.workflowRunId !== input.executionContext.identity.runId) {
+      throw new Error("Binance workflowRunId must match execution context");
+    }
+    for (const [label, value] of [
+      ["attemptAt", input.attemptAt],
+      ["captureAt", input.captureAt],
+      ["oldestEventTimeUtc", input.oldestEventTimeUtc],
+      ["newestEventTimeUtc", input.newestEventTimeUtc]
+    ] as const) {
+      if (value !== undefined) assertTimestamp(value, `Binance ${label}`);
+    }
+    if (!/^sha256:[a-f0-9]{64}$/u.test(input.contentDigest)) {
+      throw new Error("Binance contentDigest is invalid");
+    }
+    for (const [label, value] of [
+      ["projectCount", input.projectCount],
+      ["pageCount", input.pageCount],
+      ["recordCount", input.recordCount]
+    ] as const) {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        throw new Error(`Binance ${label} is invalid`);
+      }
+    }
+    if (
+      input.projects.length !== input.projectCount ||
+      input.rawRecords.length !== input.recordCount
+    ) {
+      throw new Error("Binance capture counts do not conserve");
+    }
+    if (
+      input.sourceCaptures.filter((capture) => capture.sourceKind === "management")
+        .length !== 1 ||
+      input.sourceCaptures.length !== input.pageCount
+    ) {
+      throw new Error("Binance source capture coverage is invalid");
+    }
+    return this.#db.transaction(() => {
+      this.#assertActiveOperationalExecutionContext(
+        input.workflowRunId,
+        input.executionContext
+      );
+      this.#assertActiveTriggerOwnership(input.workflowRunId);
+      const existing = this.getBinanceCollectionRun(input.collectionRunId);
+      if (existing) {
+        if (
+          existing.workflowRunId !== input.workflowRunId ||
+          existing.contentDigest !== input.contentDigest ||
+          existing.status !== input.status
+        ) {
+          throw new OperationalFactConflictError(
+            `Binance collection ${input.collectionRunId} already has different content`
+          );
+        }
+        return {
+          status: "duplicate" as const,
+          run: existing,
+          newCurrentRecordCount: 0
+        };
+      }
+      const previous = this.getLatestSuccessfulBinanceCollectionRun();
+      const status = input.status;
+      const lastSuccessAt =
+        status === "success" || status === "authenticated_but_no_data"
+          ? input.captureAt
+          : previous?.lastSuccessAt;
+      this.#db.prepare(
+        `INSERT INTO binance_collection_runs(
+          collection_run_id,workflow_run_id,source_url,attempt_at,capture_at,
+          status,content_digest,project_count,page_count,record_count,
+          oldest_event_time_utc,newest_event_time_utc,last_success_at,created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).run(
+        input.collectionRunId,
+        input.workflowRunId,
+        input.sourceUrl,
+        input.attemptAt,
+        input.captureAt,
+        status,
+        input.contentDigest,
+        input.projectCount,
+        input.pageCount,
+        input.recordCount,
+        input.oldestEventTimeUtc ?? null,
+        input.newestEventTimeUtc ?? null,
+        lastSuccessAt ?? null,
+        this.#clock().toISOString()
+      );
+      const captureStatement = this.#db.prepare(
+        `INSERT INTO binance_source_captures(
+          capture_id,collection_run_id,source_kind,project_id,source_tab,page,
+          source_url,capture_at,record_count,payload_digest,payload_json
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+      );
+      for (const capture of input.sourceCaptures) {
+        assertJsonCompatible(capture.payload, "Binance source capture payload");
+        captureStatement.run(
+          capture.captureId,
+          input.collectionRunId,
+          capture.sourceKind,
+          capture.projectId ?? null,
+          capture.sourceTab ?? null,
+          capture.page ?? null,
+          capture.sourceUrl,
+          capture.captureAt,
+          capture.recordCount,
+          capture.payloadDigest,
+          json(capture.payload)
+        );
+      }
+      const projectStatement = this.#db.prepare(
+        `INSERT INTO binance_copy_project_snapshots(
+          collection_run_id,project_id,project_status,source_url,captured_at,
+          summary_json
+        ) VALUES (?,?,?,?,?,?)`
+      );
+      for (const project of input.projects) {
+        assertJsonCompatible(project.summary, "Binance project summary");
+        projectStatement.run(
+          input.collectionRunId,
+          project.projectId,
+          project.projectStatus,
+          project.sourceUrl,
+          project.capturedAt,
+          json(project.summary)
+        );
+      }
+      const positionStatement = this.#db.prepare(
+        `INSERT INTO binance_position_snapshots(
+          snapshot_id,collection_run_id,project_id,symbol,position_side,
+          ordinal,captured_at,fields_json
+        ) VALUES (?,?,?,?,?,?,?,?)`
+      );
+      for (const position of input.positions) {
+        assertJsonCompatible(position.fields, "Binance position fields");
+        positionStatement.run(
+          position.snapshotId,
+          input.collectionRunId,
+          position.projectId,
+          position.symbol,
+          position.positionSide,
+          position.ordinal,
+          position.capturedAt,
+          json(position.fields)
+        );
+      }
+      const rawStatement = this.#db.prepare(
+        `INSERT INTO binance_copy_raw_records(
+          raw_record_id,collection_run_id,current_record_key,project_id,
+          source_tab,page,row_ordinal,capture_at,original_event_time,
+          event_time_utc,page_time_zone_assumption,fields_json,fields_digest
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      );
+      const currentStatement = this.#db.prepare(
+        `INSERT INTO binance_copy_record_current(
+          current_record_key,project_id,source_tab,original_event_time,
+          event_time_utc,page_time_zone_assumption,fields_json,fields_digest,
+          first_collection_run_id,last_collection_run_id,first_seen_at,last_seen_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(current_record_key) DO UPDATE SET
+          original_event_time=excluded.original_event_time,
+          event_time_utc=excluded.event_time_utc,
+          page_time_zone_assumption=excluded.page_time_zone_assumption,
+          fields_json=excluded.fields_json,
+          fields_digest=excluded.fields_digest,
+          last_collection_run_id=excluded.last_collection_run_id,
+          last_seen_at=excluded.last_seen_at`
+      );
+      const currentExistsStatement = this.#db.prepare(
+        `SELECT 1 FROM binance_copy_record_current
+         WHERE current_record_key=?`
+      );
+      let newCurrentRecordCount = 0;
+      for (const record of input.rawRecords) {
+        assertJsonCompatible(record.fields, "Binance raw record fields");
+        rawStatement.run(
+          record.rawRecordId,
+          input.collectionRunId,
+          record.currentRecordKey,
+          record.projectId,
+          record.sourceTab,
+          record.page,
+          record.rowOrdinal,
+          record.captureAt,
+          record.originalEventTime ?? null,
+          record.eventTimeUtc ?? null,
+          record.pageTimeZoneAssumption ?? null,
+          json(record.fields),
+          record.fieldsDigest
+        );
+        if (!currentExistsStatement.get(record.currentRecordKey)) {
+          newCurrentRecordCount += 1;
+        }
+        currentStatement.run(
+          record.currentRecordKey,
+          record.projectId,
+          record.sourceTab,
+          record.originalEventTime ?? null,
+          record.eventTimeUtc ?? null,
+          record.pageTimeZoneAssumption ?? null,
+          json(record.fields),
+          record.fieldsDigest,
+          input.collectionRunId,
+          input.collectionRunId,
+          input.captureAt,
+          input.captureAt
+        );
+      }
+      return {
+        status: "accepted" as const,
+        run: this.getBinanceCollectionRun(input.collectionRunId)!,
+        newCurrentRecordCount
+      };
+    })();
+  }
+
+  getBinanceCollectionRun(
+    collectionRunId: string
+  ): BinanceCollectionRunRecord | undefined {
+    const row = this.#db.prepare(
+      "SELECT * FROM binance_collection_runs WHERE collection_run_id=?"
+    ).get(collectionRunId) as SqlRow | undefined;
+    return row ? this.#readBinanceCollectionRun(row) : undefined;
+  }
+
+  getLatestSuccessfulBinanceCollectionRun():
+    | BinanceCollectionRunRecord
+    | undefined {
+    const row = this.#db.prepare(
+      `SELECT * FROM binance_collection_runs
+       WHERE status IN ('success','authenticated_but_no_data')
+       ORDER BY capture_at DESC,collection_run_id DESC LIMIT 1`
+    ).get() as SqlRow | undefined;
+    return row ? this.#readBinanceCollectionRun(row) : undefined;
+  }
+
+  listBinanceRawRecords(collectionRunId: string): BinanceRawRecord[] {
+    return (this.#db.prepare(
+      `SELECT * FROM binance_copy_raw_records WHERE collection_run_id=?
+       ORDER BY project_id,source_tab,page,row_ordinal`
+    ).all(collectionRunId) as SqlRow[]).map((row) => ({
+      rawRecordId: String(row.raw_record_id),
+      collectionRunId: String(row.collection_run_id),
+      currentRecordKey: String(row.current_record_key),
+      projectId: String(row.project_id),
+      sourceTab: String(row.source_tab),
+      page: Number(row.page),
+      rowOrdinal: Number(row.row_ordinal),
+      captureAt: String(row.capture_at),
+      ...(row.original_event_time == null ? {} : {
+        originalEventTime: String(row.original_event_time)
+      }),
+      ...(row.event_time_utc == null ? {} : {
+        eventTimeUtc: String(row.event_time_utc)
+      }),
+      ...(row.page_time_zone_assumption == null ? {} : {
+        pageTimeZoneAssumption: String(row.page_time_zone_assumption)
+      }),
+      fields: parseJson(row.fields_json) as JsonValue,
+      fieldsDigest: String(row.fields_digest)
+    }));
+  }
+
+  listBinanceCurrentRecords(projectId?: string): BinanceCurrentRecord[] {
+    const rows = (projectId
+      ? this.#db.prepare(
+          `SELECT * FROM binance_copy_record_current WHERE project_id=?
+           ORDER BY source_tab,event_time_utc,current_record_key`
+        ).all(projectId)
+      : this.#db.prepare(
+          `SELECT * FROM binance_copy_record_current
+           ORDER BY project_id,source_tab,event_time_utc,current_record_key`
+        ).all()) as SqlRow[];
+    return rows.map((row) => ({
+      currentRecordKey: String(row.current_record_key),
+      projectId: String(row.project_id),
+      sourceTab: String(row.source_tab),
+      ...(row.original_event_time == null ? {} : {
+        originalEventTime: String(row.original_event_time)
+      }),
+      ...(row.event_time_utc == null ? {} : {
+        eventTimeUtc: String(row.event_time_utc)
+      }),
+      ...(row.page_time_zone_assumption == null ? {} : {
+        pageTimeZoneAssumption: String(row.page_time_zone_assumption)
+      }),
+      fields: parseJson(row.fields_json) as JsonValue,
+      fieldsDigest: String(row.fields_digest),
+      firstCollectionRunId: String(row.first_collection_run_id),
+      lastCollectionRunId: String(row.last_collection_run_id),
+      firstSeenAt: String(row.first_seen_at),
+      lastSeenAt: String(row.last_seen_at)
+    }));
+  }
+
+  #readBinanceCollectionRun(row: SqlRow): BinanceCollectionRunRecord {
+    return {
+      collectionRunId: String(row.collection_run_id),
+      workflowRunId: String(row.workflow_run_id),
+      sourceUrl: String(row.source_url),
+      attemptAt: String(row.attempt_at),
+      captureAt: String(row.capture_at),
+      status: String(row.status) as BinanceCollectionRunRecord["status"],
+      contentDigest: String(row.content_digest),
+      projectCount: Number(row.project_count),
+      pageCount: Number(row.page_count),
+      recordCount: Number(row.record_count),
+      ...(row.oldest_event_time_utc == null ? {} : {
+        oldestEventTimeUtc: String(row.oldest_event_time_utc)
+      }),
+      ...(row.newest_event_time_utc == null ? {} : {
+        newestEventTimeUtc: String(row.newest_event_time_utc)
+      }),
+      ...(row.last_success_at == null ? {} : {
+        lastSuccessAt: String(row.last_success_at)
+      }),
+      createdAt: String(row.created_at)
+    };
+  }
+
+  persistBinanceMarketCapture(input: PersistBinanceMarketCaptureInput): {
+    status: "accepted" | "duplicate";
+    capture: BinanceMarketCaptureRecord;
+    insertedCandleCount: number;
+    insertedFundingCount: number;
+  } {
+    assertAuthoringId(input.marketCaptureId, "Binance marketCaptureId");
+    if (input.workflowRunId !== input.executionContext.identity.runId) {
+      throw new Error("Binance market workflowRunId must match execution context");
+    }
+    assertTimestamp(input.captureAt, "Binance market captureAt");
+    for (const [label, value] of [
+      ["symbolsDigest", input.symbolsDigest],
+      ["candlesDigest", input.candlesDigest],
+      ["referencesDigest", input.referencesDigest]
+    ] as const) {
+      if (!/^sha256:[a-f0-9]{64}$/u.test(value)) {
+        throw new Error(`Binance market ${label} is invalid`);
+      }
+    }
+    assertJsonCompatible(input.symbolsPayload, "Binance symbols payload");
+    assertJsonCompatible(input.candlesPayload, "Binance candles payload");
+    assertJsonCompatible(input.referencesPayload, "Binance references payload");
+    return this.#db.transaction(() => {
+      this.#assertActiveOperationalExecutionContext(
+        input.workflowRunId,
+        input.executionContext
+      );
+      this.#assertActiveTriggerOwnership(input.workflowRunId);
+      const existing = this.getBinanceMarketCapture(input.marketCaptureId);
+      if (existing) {
+        return {
+          status: "duplicate" as const,
+          capture: existing,
+          insertedCandleCount: 0,
+          insertedFundingCount: 0
+        };
+      }
+      this.#db.prepare(
+        `INSERT INTO binance_market_captures(
+          market_capture_id,workflow_run_id,capture_at,source_url,
+          symbols_payload_json,symbols_digest,candles_payload_json,
+          candles_digest,references_payload_json,references_digest,
+          symbol_count,candle_count,funding_count,reference_count,created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).run(
+        input.marketCaptureId,
+        input.workflowRunId,
+        input.captureAt,
+        input.sourceUrl,
+        json(input.symbolsPayload),
+        input.symbolsDigest,
+        json(input.candlesPayload),
+        input.candlesDigest,
+        json(input.referencesPayload),
+        input.referencesDigest,
+        input.symbols.length,
+        input.candles.length,
+        input.funding.length,
+        input.references.length,
+        this.#clock().toISOString()
+      );
+      const symbolStatement = this.#db.prepare(
+        `INSERT INTO binance_market_symbol_snapshots(
+          market_capture_id,symbol,pair,contract_type,status,onboard_date_utc,
+          delivery_date_utc,base_asset,quote_asset,margin_asset
+        ) VALUES (?,?,?,?,?,?,?,?,?,?)`
+      );
+      for (const symbol of input.symbols) {
+        symbolStatement.run(
+          input.marketCaptureId,
+          symbol.symbol,
+          symbol.pair,
+          symbol.contractType,
+          symbol.status,
+          symbol.onboardDateUtc ?? null,
+          symbol.deliveryDateUtc ?? null,
+          symbol.baseAsset,
+          symbol.quoteAsset,
+          symbol.marginAsset
+        );
+      }
+      const candleExists = this.#db.prepare(
+        `SELECT 1 FROM binance_market_candles_1m
+         WHERE symbol=? AND open_time_utc=?`
+      );
+      const candleStatement = this.#db.prepare(
+        `INSERT INTO binance_market_candles_1m(
+          symbol,open_time_utc,close_time_utc,open,high,low,close,volume,
+          quote_volume,trade_count,first_market_capture_id,
+          last_market_capture_id,first_seen_at,last_seen_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(symbol,open_time_utc) DO UPDATE SET
+          close_time_utc=excluded.close_time_utc,open=excluded.open,
+          high=excluded.high,low=excluded.low,close=excluded.close,
+          volume=excluded.volume,quote_volume=excluded.quote_volume,
+          trade_count=excluded.trade_count,
+          last_market_capture_id=excluded.last_market_capture_id,
+          last_seen_at=excluded.last_seen_at`
+      );
+      let insertedCandleCount = 0;
+      for (const candle of input.candles) {
+        if (!candleExists.get(candle.symbol, candle.openTimeUtc)) {
+          insertedCandleCount += 1;
+        }
+        candleStatement.run(
+          candle.symbol,
+          candle.openTimeUtc,
+          candle.closeTimeUtc,
+          candle.open,
+          candle.high,
+          candle.low,
+          candle.close,
+          candle.volume,
+          candle.quoteVolume,
+          candle.tradeCount,
+          input.marketCaptureId,
+          input.marketCaptureId,
+          input.captureAt,
+          input.captureAt
+        );
+      }
+      const fundingExists = this.#db.prepare(
+        `SELECT 1 FROM binance_market_funding_rates
+         WHERE symbol=? AND funding_time_utc=?`
+      );
+      const fundingStatement = this.#db.prepare(
+        `INSERT INTO binance_market_funding_rates(
+          symbol,funding_time_utc,funding_rate,mark_price,
+          first_market_capture_id,last_market_capture_id,first_seen_at,last_seen_at
+        ) VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(symbol,funding_time_utc) DO UPDATE SET
+          funding_rate=excluded.funding_rate,mark_price=excluded.mark_price,
+          last_market_capture_id=excluded.last_market_capture_id,
+          last_seen_at=excluded.last_seen_at`
+      );
+      let insertedFundingCount = 0;
+      for (const funding of input.funding) {
+        if (!fundingExists.get(funding.symbol, funding.fundingTimeUtc)) {
+          insertedFundingCount += 1;
+        }
+        fundingStatement.run(
+          funding.symbol,
+          funding.fundingTimeUtc,
+          funding.fundingRate,
+          funding.markPrice ?? null,
+          input.marketCaptureId,
+          input.marketCaptureId,
+          input.captureAt,
+          input.captureAt
+        );
+      }
+      const referenceStatement = this.#db.prepare(
+        `INSERT INTO binance_market_reference_snapshots(
+          market_capture_id,symbol,mark_price,index_price,last_funding_rate,
+          next_funding_time_utc,open_interest,observed_at
+        ) VALUES (?,?,?,?,?,?,?,?)`
+      );
+      for (const reference of input.references) {
+        referenceStatement.run(
+          input.marketCaptureId,
+          reference.symbol,
+          reference.markPrice,
+          reference.indexPrice,
+          reference.lastFundingRate,
+          reference.nextFundingTimeUtc ?? null,
+          reference.openInterest ?? null,
+          reference.observedAt
+        );
+      }
+      return {
+        status: "accepted" as const,
+        capture: this.getBinanceMarketCapture(input.marketCaptureId)!,
+        insertedCandleCount,
+        insertedFundingCount
+      };
+    })();
+  }
+
+  getBinanceMarketCapture(
+    marketCaptureId: string
+  ): BinanceMarketCaptureRecord | undefined {
+    const row = this.#db.prepare(
+      "SELECT * FROM binance_market_captures WHERE market_capture_id=?"
+    ).get(marketCaptureId) as SqlRow | undefined;
+    if (!row) return undefined;
+    return {
+      marketCaptureId: String(row.market_capture_id),
+      workflowRunId: String(row.workflow_run_id),
+      captureAt: String(row.capture_at),
+      sourceUrl: String(row.source_url),
+      symbolCount: Number(row.symbol_count),
+      candleCount: Number(row.candle_count),
+      fundingCount: Number(row.funding_count),
+      referenceCount: Number(row.reference_count),
+      createdAt: String(row.created_at)
+    };
   }
 
   getOperationalBusinessContext(

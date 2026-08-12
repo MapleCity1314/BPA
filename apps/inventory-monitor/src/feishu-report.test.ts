@@ -5,6 +5,7 @@ describe("inventory Feishu report",() => {
   it("builds one restrained operational card with traceable ids",() => {
     const report = buildConsolidatedInventoryFeishuReport({
       now:new Date("2026-08-03T01:30:00.000Z"),
+      dashboardUrl:"http://192.168.3.135:17650/",
       shops:[{ shop:{ id:"10461048",name:"榆园儿食品专营店" },overview:{
         generatedAt:"2026-08-03T01:29:00.000Z",shopId:"10461048",
         counts:{ products:77,skus:168 },
@@ -18,12 +19,49 @@ describe("inventory Feishu report",() => {
     expect(report.reportKey).toBe("inventory-daily:all:2026-08-03");
     expect(report.counts).toEqual({ critical:1,warning:0,unknown:0,products:77,skus:168 });
     const body = JSON.stringify(report.payload);
-    expect(body).toContain("库存风险报告｜全店日报 · 1 家店铺");
-    expect(body).toContain("3720154950123258166");
-    expect(body).toContain("channel-1");
+    expect(body).toContain("🟢 库存风险报告｜1 家店铺");
+    expect(body).toContain("📅 2026-08-03 ｜ 数据：2026-08-03 09:20 更新");
+    expect(body).toContain("# 确定性风险");
+    expect(body).toContain("## 榆园儿食品专营店");
+    expect(body).toContain("SKU_ID：sku-1");
     expect(body).toContain("P90 需求预计将耗尽当前库存");
+    expect(body).toContain("请前往库存看板查看并处理");
+    expect(body).toContain("打开库存看板");
+    expect(body).toContain("http://192.168.3.135:17650/");
     expect(body).not.toContain("P90 demand exhausts stock");
+    expect(body).not.toContain("监测范围");
+    expect(body).not.toContain("店铺概览");
+    expect(body).not.toContain("优先处置");
     expect(body).not.toContain("webhook");
+  });
+
+  it("renders only a concise no-risk conclusion when no risk is actionable",() => {
+    const report = buildConsolidatedInventoryFeishuReport({
+      now:new Date("2026-08-03T00:30:00.000Z"),
+      dashboardUrl:"http://192.168.3.135:17650/",
+      shops:[{ shop:{ id:"shop-1",name:"测试店铺" },overview:{
+        generatedAt:"2026-08-03T00:29:00.000Z",shopId:"shop-1",
+        counts:{ products:12,skus:24 },
+        freshness:{ latestInventoryAt:"2026-08-03T00:20:00.000Z" },
+        incidents:[]
+      } }]
+    });
+    const body = JSON.stringify(report.payload);
+    expect(body).toContain("✅ 暂无风险");
+    expect(body).not.toContain("打开库存看板");
+    expect(body).not.toContain("12 个商品");
+    expect(body).not.toContain("24 个 SKU");
+  });
+
+  it("rejects dashboard links that contain a login fragment",() => {
+    expect(() => buildConsolidatedInventoryFeishuReport({
+      dashboardUrl:"http://192.168.3.135:17650/#token=secret",
+      shops:[{ shop:{ id:"shop-1",name:"测试店铺" },overview:{
+        generatedAt:"2026-08-03T00:29:00.000Z",shopId:"shop-1",
+        counts:{ products:1,skus:1 },
+        incidents:[{ state:"open",severity:"critical" }]
+      } }]
+    })).toThrow("INVENTORY_DASHBOARD_URL_INVALID");
   });
 
   it("builds an idempotent daytime alert only for actionable anomalies",() => {

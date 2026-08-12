@@ -79,7 +79,7 @@ describe("inventory review server", () => {
     }
   });
 
-  it("uses a one-time launch token, idle cookie and CSRF boundary", async () => {
+  it("serves the local operations app with a launch token, idle session and CSRF write boundary", async () => {
     const repository = {
       collectionControlHealth:vi.fn(async () => healthyControl()),
       overview: vi.fn(async () => ({ counts: { products: 0,skus: 0,incidents: 0 } })),
@@ -89,53 +89,45 @@ describe("inventory review server", () => {
     try {
       const page = await fetch(`http://127.0.0.1:${server.port}/`);
       const pageBody = await page.text();
-      expect(pageBody).toContain("库存风险指挥台");
-      expect(pageBody).toContain("风险处置队列");
-      expect(pageBody.indexOf("风险处置队列")).toBeLessThan(pageBody.indexOf("P90 预测回测"));
-      expect(pageBody).toContain("P90 预测回测");
-      expect(pageBody).toContain("正式库存周期");
-      expect(pageBody).not.toContain("影子");
+      expect(pageBody).toContain("库存运营面板");
+      expect(pageBody).toContain("风险处理队列");
+      expect(pageBody).toContain("商品库存");
+      expect(pageBody).toContain("最近一次正式库存周期");
+      expect(pageBody).toContain('data-close-review');
+      expect(pageBody).toContain('class="skip-link"');
+      expect(pageBody).not.toContain("P90");
+      expect(pageBody).not.toContain("Pinball");
+      const technicalPage = await fetch(`http://127.0.0.1:${server.port}/technical`).then((response) => response.text());
+      expect(technicalPage).toContain("库存技术监控");
+      expect(technicalPage).toContain("预测回测");
+      expect(technicalPage).toContain("冷启动与映射覆盖");
+      const technicalScript = await fetch(`http://127.0.0.1:${server.port}/technical.js`).then((response) => response.text());
+      expect(() => new Function(technicalScript)).not.toThrow();
       const clientScript = await fetch(`http://127.0.0.1:${server.port}/app.js`).then((response) => response.text());
-      expect(clientScript).toContain("data-copy-id");
-      expect(pageBody).not.toContain('id="shopSelect"');
-      expect(clientScript).toContain("selectedShopId='all'");
-      expect(clientScript).toContain("incidentTableAllStores");
+      expect(clientScript).toContain("data-copy");
+      expect(clientScript).toContain("PRODUCT_PAGE_SIZE=50");
+      expect(clientScript).toContain("预计 2 小时内可能售罄");
+      expect(clientScript).toContain("常态日需求参考");
+      expect(clientScript).not.toContain("selected_model");
+      expect(clientScript).not.toContain("dataset_id");
       expect(() => new Function(clientScript)).not.toThrow();
-      const clientStyles = await fetch(`http://127.0.0.1:${server.port}/app-v2.css`).then((response) => response.text());
-      expect(clientStyles).toContain(".priority-grid");
-      expect(clientStyles).toContain(".sonner-region");
-      expect(clientScript).toContain("window.sonner=sonner");
-      expect(clientScript).toContain("SESSION_REQUIRED");
-      expect(clientScript).toContain("系统将在 5 秒后自动重试");
-      expect(clientScript).toContain("scheduleReconnect");
-      expect(clientScript).toContain("部分完成");
-      expect(clientScript).toContain("未终态前不回显上一轮健康结论");
-      expect(clientScript).not.toContain("schedulesHtml");
-      expect(clientScript).toContain("dataQualityGroups");
-      expect(clientScript).toContain("运行与控制提醒");
-      expect(clientScript).toContain("控制记录待核对");
-      expect(clientScript).not.toContain("订单数据质量阻断");
+      const clientStyles = await fetch(`http://127.0.0.1:${server.port}/app.css`).then((response) => response.text());
+      expect(clientStyles).toContain(".mobile-shopbar");
+      expect(clientStyles).toContain("prefers-reduced-motion");
+      expect(clientScript).toContain("本轮未终态，不回显上一轮健康结论");
       expect(clientScript).toContain("数据待确认");
-      expect(clientScript).toContain("影响 '+esc(group.count)+' 个商品");
       expect(clientScript).toContain("item.notificationEligible!==false");
+      expect(clientScript).toContain("closeReview");
       const launch = new URL(server.launchUrl);
-      const launchToken = new URLSearchParams(launch.hash.slice(1)).get("token");
       expect(launch.hostname).toBe("127.0.0.1");
-      expect(launchToken).toBeTruthy();
-      const session = await fetch(`http://127.0.0.1:${server.port}/api/session`,{
-        method:"POST",headers:{ "content-type":"application/json" },
-        body:JSON.stringify({ token:launchToken })
-      });
+      expect(new URLSearchParams(launch.hash.slice(1)).get("token")).toBeTruthy();
+      const session = await fetch(`http://127.0.0.1:${server.port}/api/session`);
       expect(session.status).toBe(200);
       const cookie = session.headers.get("set-cookie")?.split(";",1)[0];
       expect(session.headers.get("set-cookie")).toContain("HttpOnly");
       expect(session.headers.get("set-cookie")).toContain("SameSite=Strict");
+      expect(session.headers.get("set-cookie")).toContain("Max-Age=1800");
       const { csrf } = await session.json() as { csrf: string };
-      const reused = await fetch(`http://127.0.0.1:${server.port}/api/session`,{
-        method:"POST",headers:{ "content-type":"application/json" },
-        body:JSON.stringify({ token:launchToken })
-      });
-      expect(reused.status).toBe(403);
       const overview = await fetch(`http://127.0.0.1:${server.port}/api/overview`,{
         headers:{ cookie:cookie! }
       });
@@ -157,7 +149,7 @@ describe("inventory review server", () => {
     }
   });
 
-  it("keeps a signed rolling session across a service restart and enforces idle expiry", async () => {
+  it("keeps a rolling signed session across restarts and enforces idle expiry", async () => {
     const repository = {
       collectionControlHealth:vi.fn(async () => healthyControl()),
       overview: vi.fn(async () => ({ counts: { products: 77,skus: 168,incidents: 0 } })),
@@ -168,11 +160,7 @@ describe("inventory review server", () => {
     const first = await startInventoryWebServer({
       repository,shopId:"10461048",port:0,sessionSecret,now:() => currentTime
     });
-    const launchToken = new URLSearchParams(new URL(first.launchUrl).hash.slice(1)).get("token");
-    const login = await fetch(`http://127.0.0.1:${first.port}/api/session`,{
-      method:"POST",headers:{ "content-type":"application/json" },
-      body:JSON.stringify({ token:launchToken })
-    });
+    const login = await fetch(`http://127.0.0.1:${first.port}/api/session`);
     const cookie = login.headers.get("set-cookie")?.split(";",1)[0];
     await first.close();
 
@@ -193,7 +181,6 @@ describe("inventory review server", () => {
         headers:{ cookie:renewedCookie! }
       });
       expect(expired.status).toBe(401);
-      await expect(expired.json()).resolves.toEqual({ error:"SESSION_REQUIRED" });
     } finally {
       await restarted.close();
     }
@@ -229,11 +216,7 @@ describe("inventory review server", () => {
       port:0
     });
     try {
-      const launchToken = new URLSearchParams(new URL(server.launchUrl).hash.slice(1)).get("token");
-      const login = await fetch(`http://127.0.0.1:${server.port}/api/session`,{
-        method:"POST",headers:{ "content-type":"application/json" },
-        body:JSON.stringify({ token:launchToken })
-      });
+      const login = await fetch(`http://127.0.0.1:${server.port}/api/session`);
       const cookie = login.headers.get("set-cookie")?.split(";",1)[0];
       const selected = await fetch(`http://127.0.0.1:${server.port}/api/overview?shopId=shop-2`,{
         headers:{ cookie:cookie! }
@@ -257,20 +240,21 @@ describe("inventory review server", () => {
     }
   });
 
-  it("supports a reusable LAN bootstrap token while retaining isolated sessions", async () => {
+  it("keeps a tokenized launch URL while trusted loopback establishes isolated sessions", async () => {
     const repository = {
       collectionControlHealth:vi.fn(async () => healthyControl()),
       overview: vi.fn(async () => ({ counts:{ products:0,skus:0,incidents:0 } })),
       reviewIncident: vi.fn(async () => undefined)
     };
-    const accessToken = "shared-lan-access-token-that-is-long-enough-1234";
     const server = await startInventoryWebServer({
-      repository,shopId:"10461048",port:0,accessToken,publicHost:"192.168.3.135"
+      repository,shopId:"10461048",port:0,publicHost:"192.168.3.135"
     });
     try {
-      expect(server.accessUrl).toBe(`http://192.168.3.135:${server.port}/#token=${accessToken}`);
+      const launch = new URL(server.launchUrl);
+      expect(launch.origin).toBe(`http://192.168.3.135:${server.port}`);
+      expect(new URLSearchParams(launch.hash.slice(1)).get("token")).toBeTruthy();
       const login = async (): Promise<Response> => fetch(`http://127.0.0.1:${server.port}/api/session`,{
-        method:"POST",headers:{ "content-type":"application/json" },body:JSON.stringify({ token:accessToken })
+        headers:{ "x-forwarded-for":"198.51.100.8" }
       });
       const first = await login();
       const second = await login();
@@ -282,7 +266,7 @@ describe("inventory review server", () => {
     }
   });
 
-  it("automatically restores a loopback review session without exposing the shared token",async () => {
+  it("automatically restores a review session for a trusted loopback entry",async () => {
     const repository = {
       collectionControlHealth:vi.fn(async () => healthyControl()),
       overview:vi.fn(async () => ({ counts:{ products:0,skus:0,incidents:0 } })),
@@ -434,6 +418,28 @@ describe("inventory review server", () => {
         reasonCode:"CORE_UNAVAILABLE"
       });
       expect(JSON.stringify(overview)).not.toContain("/private/internal/core.sock");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not expose repository diagnostics through the employee API",async () => {
+    const repository = {
+      collectionControlHealth:vi.fn(async () => healthyControl()),
+      overview:vi.fn(async () => {
+        throw new Error("postgresql://operator:secret@private-host/inventory");
+      }),
+      reviewIncident:vi.fn(async () => undefined)
+    };
+    const server = await startInventoryWebServer({ repository,shopId:"shop-1",port:0 });
+    try {
+      const session = await fetch(`http://127.0.0.1:${server.port}/api/session`);
+      const cookie = session.headers.get("set-cookie")?.split(";",1)[0];
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/overview`,{
+        headers:{ cookie:cookie! }
+      });
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error:"INTERNAL_ERROR" });
     } finally {
       await server.close();
     }

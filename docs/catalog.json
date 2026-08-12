@@ -292,6 +292,17 @@
       "public": false
     },
     {
+      "id": "repo.plan.binance-copy-trading-data-collection-requirements-0.1",
+      "source": "docs/plans/binance-copy-trading-data-collection-requirements-v0.1.md",
+      "title": "Binance 数据采集工作流需求基线 v0.1",
+      "summary": "登记攀升项目的 Binance 合约跟单只读浏览器采集范围、数据合同、安全停止线和待确认项。",
+      "authority": "plan",
+      "implementation": "planned",
+      "audience": ["operator", "developer", "integrator", "ai"],
+      "since": "0.7.0",
+      "public": false
+    },
+    {
       "id": "repo.research.priority-items",
       "source": "docs/research/重点项检查插件抽象复盘-v0.1.md",
       "title": "重点项检查插件抽象复盘 v0.1",

@@ -26,6 +26,12 @@ function request(
 
 function handlers(): ContentActionHandlers {
   return {
+    "binance.copy-trading.management.snapshot.read": vi.fn(async () => ({
+      output: { schemaVersion: "binance-copy-trading/v0.1", projects: [] }
+    })),
+    "binance.copy-trading.project.detail.collect": vi.fn(async () => ({
+      output: { schemaVersion: "binance-copy-trading/v0.1", tabs: [] }
+    })),
     "ecommerce.marketplace.search-results.read": vi.fn(async () => ({
       output: { schemaVersion: "marketplace-probe/v0.1", items: [] }
     })),

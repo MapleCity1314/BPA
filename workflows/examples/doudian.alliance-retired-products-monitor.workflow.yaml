@@ -50,7 +50,7 @@ spec:
         use: doudian.alliance.shops.discover@2.0.0
         with:
           maxShops: ${input.maxShops}
-        timeout: 2m
+        timeout: 5m
         resourceMappings: { browser: alliance_browser }
         retry:
           maxAttempts: 2

@@ -818,6 +818,7 @@ export class LocalBrowserGateway implements RuntimeProvider {
       }
     }
     for (const command of pending) {
+      if (command.state !== "queued") continue;
       if (this.#runIsCancelled(command)) continue;
       const tabKey = this.#commandTabKey(command);
       const occupyingCommand = tabKey

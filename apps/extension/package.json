@@ -10,6 +10,7 @@
     "typecheck": "wxt prepare && tsc --noEmit"
   },
   "dependencies": {
+    "@bpa/adapter-binance": "workspace:*",
     "@bpa/adapter-doudian": "workspace:*",
     "@bpa/adapter-marketplace": "workspace:*",
     "@bpa/browser-bridge": "workspace:*",

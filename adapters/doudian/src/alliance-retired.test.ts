@@ -6,7 +6,9 @@ import {
   dismissBuyinPromotionDialogs,
   openBuyinRetiredProducts,
   openDoudianAlliancePromotion,
+  openDoudianShopSwitcher,
   readBuyinRetiredProducts,
+  readDoudianHeaderShopIdentity,
   readDoudianHeaderShopName,
   selectDoudianAllianceShop
 } from "./alliance-retired.js";
@@ -46,7 +48,8 @@ describe("Doudian alliance retired-products runtime", () => {
           "apps/extension/src/lib/extension-runtime-resources.ts",
           "apps/extension/src/lib/managed-tab-lifecycle.ts",
           "apps/extension/src/lib/native-connection-supervisor.ts",
-          "adapters/doudian/src/alliance-retired.ts"
+          "adapters/doudian/src/alliance-retired.ts",
+          "adapters/doudian/src/shop-context.ts"
         ]
           .map((path) =>
             readFileSync(new URL(`../../../${path}`, import.meta.url))
@@ -103,6 +106,68 @@ describe("Doudian alliance retired-products runtime", () => {
     ).toThrow("SHOP_NOT_ACTIVE");
   });
 
+  it("discovers and selects shops from the current Auxo drawer", () => {
+    const doc = documentOf(`
+      <div class="auxo-drawer auxo-drawer-open">
+        <div class="auxo-drawer-content-wrapper">
+          <div class="index_descriptions__current">切换组织/店铺</div>
+          <div class="index_shopOption__one">
+            <span class="index_introName__new">甲食品旗舰店</span>
+            <span>店铺ID 10001 正常营业</span>
+          </div>
+          <div class="index_shopOption__two">
+            <span class="index_introName__new">乙食品专营店</span>
+            <span>店铺ID 10002 正常营业</span>
+          </div>
+        </div>
+      </div>
+    `);
+    expect(discoverDoudianAllianceShops(doc)).toEqual([
+      {
+        id: "10001",
+        name: "甲食品旗舰店",
+        status: "active",
+        statusText: "正常营业"
+      },
+      {
+        id: "10002",
+        name: "乙食品专营店",
+        status: "active",
+        statusText: "正常营业"
+      }
+    ]);
+    const target = doc.querySelector<HTMLElement>(
+      ".index_shopOption__two"
+    )!;
+    const click = vi.fn();
+    target.addEventListener("click", click);
+    selectDoudianAllianceShop(doc, {
+      id: "10002",
+      name: "乙食品专营店",
+      status: "active",
+      statusText: "正常营业"
+    });
+    expect(click).toHaveBeenCalledOnce();
+  });
+
+  it("discovers shops from the current Auxo modal switcher", () => {
+    const doc = documentOf(`
+      <div class="auxo-modal-wrap auxo-modal-centered">
+        <div class="auxo-modal">
+          <div class="roleItem"><span class="introName">甲食品旗舰店</span>店铺ID 10001 正常营业</div>
+        </div>
+      </div>
+    `);
+    expect(discoverDoudianAllianceShops(doc)).toEqual([
+      {
+        id: "10001",
+        name: "甲食品旗舰店",
+        status: "active",
+        statusText: "正常营业"
+      }
+    ]);
+  });
+
   it("fails closed when a shop list mixes valid and malformed cards", () => {
     const doc = documentOf(`
       <div role="dialog">切换组织/店铺
@@ -125,10 +190,39 @@ describe("Doudian alliance retired-products runtime", () => {
     `);
     expect(discoverDoudianAllianceShops(doc)).toHaveLength(2);
     const cards = Array.from(doc.querySelectorAll<HTMLElement>(".roleItem"));
-    const clicks = cards.map((card) => vi.spyOn(card, "click"));
+    const clicks = cards.map(() => vi.fn());
+    cards.forEach((card, index) =>
+      card.addEventListener("click", clicks[index]!)
+    );
     selectDoudianAllianceShop(doc, {
       id: "10002",
       name: "同名食品店",
+      status: "active",
+      statusText: "正常营业"
+    });
+    expect(clicks[0]).not.toHaveBeenCalled();
+    expect(clicks[1]).toHaveBeenCalledOnce();
+  });
+
+  it("assigns stable switcher ordinals to same-name cards without visible IDs", () => {
+    const doc = documentOf(`
+      <div role="dialog">切换组织/店铺
+        <div class="roleItem"><span class="introName">同名食品店</span>正常营业</div>
+        <div class="roleItem"><span class="introName">同名食品店</span>正常营业</div>
+      </div>
+    `);
+    expect(discoverDoudianAllianceShops(doc)).toEqual([
+      expect.objectContaining({ name: "同名食品店", switcherOrdinal: 0 }),
+      expect.objectContaining({ name: "同名食品店", switcherOrdinal: 1 })
+    ]);
+    const cards = Array.from(doc.querySelectorAll<HTMLElement>(".roleItem"));
+    const clicks = cards.map(() => vi.fn());
+    cards.forEach((card, index) =>
+      card.addEventListener("click", clicks[index]!)
+    );
+    selectDoudianAllianceShop(doc, {
+      name: "同名食品店",
+      switcherOrdinal: 1,
       status: "active",
       statusText: "正常营业"
     });
@@ -160,6 +254,77 @@ describe("Doudian alliance retired-products runtime", () => {
       <a href="/ffa/w/login/account">账号管理</a>
     `);
     expect(readDoudianHeaderShopName(doc)).toBe("榆园儿食品专营店");
+  });
+
+  it("binds a header shop name to the unique numeric ID in its account popover", () => {
+    const doc = documentOf(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div class="auxo-popover">
+        <div>甲食品旗舰店</div>
+        <div>店铺ID 10001</div>
+        <div>切换组织/店铺</div>
+      </div>
+    `);
+    expect(readDoudianHeaderShopIdentity(doc)).toEqual({
+      id: "10001",
+      name: "甲食品旗舰店"
+    });
+  });
+
+  it("dispatches the pointer and mouse sequence on semantic account and switch-row containers", () => {
+    const doc = documentOf(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+    `);
+    const account = doc.querySelector<HTMLElement>(".headerShopName")!;
+    const accountEvents: string[] = [];
+    for (const type of ["mouseover", "mousedown", "mouseup", "click"]) {
+      account.addEventListener(type, () => accountEvents.push(type));
+    }
+    openDoudianShopSwitcher(doc);
+    expect(accountEvents).toEqual([
+      "mouseover",
+      "mousedown",
+      "mouseup",
+      "click"
+    ]);
+
+    const popover = documentOf(`
+      <div class="auxo-popover">
+        <div class="descriptions"><div><span>切换组织/店铺</span></div></div>
+      </div>
+    `);
+    const switchRow = popover.querySelector<HTMLElement>(".descriptions")!;
+    const switchEvents: string[] = [];
+    for (const type of ["mouseover", "mousedown", "mouseup", "click"]) {
+      switchRow.addEventListener(type, () => switchEvents.push(type));
+    }
+    openDoudianShopSwitcher(popover);
+    expect(switchEvents).toEqual([
+      "mouseover",
+      "mousedown",
+      "mouseup",
+      "click"
+    ]);
+  });
+
+  it("rejects a numeric ID from an account popover for another shop", () => {
+    const doc = documentOf(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div class="auxo-popover">
+        <div>乙食品专营店</div>
+        <div>店铺ID 10002</div>
+        <div>切换组织/店铺</div>
+      </div>
+    `);
+    expect(() => readDoudianHeaderShopIdentity(doc)).toThrow(
+      "SHOP_IDENTITY_UNCERTAIN"
+    );
   });
 
   it("closes stacked promotion dialogs from the top and opens clear-out", () => {

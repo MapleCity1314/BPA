@@ -71,9 +71,21 @@ describe("extension capability manifest", () => {
       "exact_tab_binding_v2",
       "active_page_probe_v1"
     ]);
-    expect(report.capabilities).toHaveLength(13);
+    expect(report.capabilities).toHaveLength(15);
     expect(report.capabilities).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          node_id: "binance.copy-trading.management.snapshot.read",
+          risk_level: "R1",
+          adapter_id: "binance-copy-trading",
+          versions: ["1.0.0"]
+        }),
+        expect.objectContaining({
+          node_id: "binance.copy-trading.project.detail.collect",
+          risk_level: "R1",
+          adapter_id: "binance-copy-trading",
+          versions: ["1.0.0"]
+        }),
         expect.objectContaining({
           node_id: "ecommerce.marketplace.search-results.read",
           risk_level: "R1",
@@ -159,6 +171,18 @@ describe("extension capability manifest", () => {
   });
 
   it.each([
+    {
+      nodeId: "binance.copy-trading.management.snapshot.read",
+      nodeVersion: "1.0.0",
+      currentUrl: "https://www.binance.com/zh-CN/copy-trading/copy-management",
+      grantedPermissions: ["browser.dom.read", "browser.dom.write", "browser.tabs.read"]
+    },
+    {
+      nodeId: "binance.copy-trading.project.detail.collect",
+      nodeVersion: "1.0.0",
+      currentUrl: "https://www.binance.com/zh-CN/copy-trading/copy-management",
+      grantedPermissions: ["browser.dom.read", "browser.dom.write", "browser.tabs.read"]
+    },
     {
       nodeId: "browser.design.snapshot.capture",
       nodeVersion: "1.0.0",

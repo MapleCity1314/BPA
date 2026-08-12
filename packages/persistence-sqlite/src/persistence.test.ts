@@ -27,6 +27,24 @@ import { migrations } from "./migrations.js";
 
 const timestamp = "2026-07-27T00:00:00.000Z";
 
+function dropMigration26(database: Database.Database): void {
+  const tables = [
+    "binance_market_reference_snapshots",
+    "binance_market_funding_rates",
+    "binance_market_candles_1m",
+    "binance_market_symbol_snapshots",
+    "binance_market_captures",
+    "binance_copy_record_current",
+    "binance_copy_raw_records",
+    "binance_position_snapshots",
+    "binance_copy_project_snapshots",
+    "binance_source_captures",
+    "binance_collection_runs"
+  ];
+  database.exec(tables.map((table) => `DROP TABLE ${table};`).join("\n"));
+  database.prepare("DELETE FROM schema_migrations WHERE version=26").run();
+}
+
 function event(
   runId: string,
   sequence: number,
@@ -1812,6 +1830,7 @@ describe("append-only migrations", () => {
       const seeded = new SqlitePersistence({ path:databasePath });
       seeded.close();
       const v22 = new Database(databasePath);
+      dropMigration26(v22);
       v22.exec(`
         DROP TABLE external_domain_lease_reconciliations;
         DROP TABLE external_domain_leases;
@@ -1821,7 +1840,7 @@ describe("append-only migrations", () => {
       v22.close();
 
       const upgraded = new SqlitePersistence({ path:databasePath });
-      expect(upgraded.health().schemaVersion).toBe(25);
+      expect(upgraded.health().schemaVersion).toBe(26);
       upgraded.close();
       const inspected = new Database(databasePath,{ readonly:true });
       expect(inspected.prepare(
@@ -1881,6 +1900,7 @@ describe("append-only migrations", () => {
       store.close();
 
       const v22 = new Database(databasePath);
+      dropMigration26(v22);
       v22.exec(`
         DROP TABLE external_domain_lease_reconciliations;
         DROP TABLE external_domain_leases;
@@ -1988,7 +2008,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(25);
+      expect(store.health().schemaVersion).toBe(26);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -2018,6 +2038,7 @@ describe("append-only migrations", () => {
       seeded.close();
 
       const legacy = new Database(databasePath);
+      dropMigration26(legacy);
       legacy.exec(`
         DROP TABLE external_domain_lease_reconciliations;
         DROP TABLE external_domain_leases;
@@ -2115,7 +2136,7 @@ describe("append-only migrations", () => {
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(25);
+      expect(upgraded.health().schemaVersion).toBe(26);
       expect(upgraded.getAssistanceTask(task.task.taskId)).toEqual(task);
       expect(
         upgraded.getAssistanceRequestResult("not-recorded")
@@ -2140,7 +2161,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(25);
+      expect(store.health().schemaVersion).toBe(26);
       expect(store.getAssistanceRequestResult("not-recorded")).toBeUndefined();
       store.close();
     } finally {
@@ -2162,7 +2183,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(25);
+      expect(store.health().schemaVersion).toBe(26);
       store.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -2176,6 +2197,7 @@ describe("append-only migrations", () => {
       const seeded = new SqlitePersistence({ path: databasePath });
       seeded.close();
       const legacy = new Database(databasePath);
+      dropMigration26(legacy);
       legacy.exec(`
         DROP TABLE external_domain_lease_reconciliations;
         DROP TABLE external_domain_leases;
@@ -2268,7 +2290,7 @@ describe("append-only migrations", () => {
       legacy.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(25);
+      expect(upgraded.health().schemaVersion).toBe(26);
       expect(
         upgraded.createWorkflowDraft({
           draftId: "v5-upgraded-draft",
@@ -2309,7 +2331,7 @@ describe("append-only migrations", () => {
           })
       ).toThrow("crash");
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(25);
+      expect(store.health().schemaVersion).toBe(26);
       expect(store.getWorkflowDraft("not-created")).toBeUndefined();
       store.close();
     } finally {
@@ -2322,7 +2344,7 @@ describe("append-only migrations", () => {
     const databasePath = join(directory, "bpa.sqlite3");
     try {
       const store = new SqlitePersistence({ path: databasePath });
-      expect(store.health().schemaVersion).toBe(25);
+      expect(store.health().schemaVersion).toBe(26);
       store.close();
       const raw = new Database(databasePath);
       raw

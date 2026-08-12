@@ -3,7 +3,13 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { InventoryRepository } from "./repository.js";
 import type { InventoryShopConfig } from "./shop-config.js";
-import { DASHBOARD_CLIENT_CSS, DASHBOARD_CLIENT_JS } from "./dashboard-client.js";
+import {
+  DASHBOARD_CLIENT_CSS,
+  DASHBOARD_CLIENT_HTML,
+  DASHBOARD_CLIENT_JS,
+  DASHBOARD_TECHNICAL_HTML,
+  DASHBOARD_TECHNICAL_JS
+} from "./dashboard-client.js";
 import {
   buildSystemOperationalReminders,
   type CollectionControlHealth
@@ -18,6 +24,7 @@ import type {
 } from "./runtime-production-cycle-summary.js";
 
 const SESSION_COOKIE = "bpa_inventory_session";
+const SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 60;
 const SESSION_IDLE_MS = 30 * 60 * 1000;
 const BODY_LIMIT = 64 * 1024;
 
@@ -73,7 +80,7 @@ function decodeSession(value: string, secret: string): Session | undefined {
 }
 
 function sessionCookie(value: string): string {
-  return `${SESSION_COOKIE}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800`;
+  return `${SESSION_COOKIE}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_COOKIE_MAX_AGE_SECONDS}`;
 }
 
 function headers(response: ServerResponse, contentType: string): void {
@@ -403,20 +410,21 @@ export async function startInventoryWebServer(input: {
   const server: Server = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? "/", "http://inventory.local");
-      if (request.method === "GET" && url.pathname === "/") return send(response,200,MULTI_SHOP_HTML,"text/html; charset=utf-8");
-      if (request.method === "GET" && url.pathname === "/app.css") return send(response,200,MULTI_SHOP_CSS,"text/css; charset=utf-8");
-      if (request.method === "GET" && url.pathname === "/app-v2.css") return send(response,200,DASHBOARD_CLIENT_CSS,"text/css; charset=utf-8");
+      if (request.method === "GET" && url.pathname === "/") return send(response,200,DASHBOARD_CLIENT_HTML,"text/html; charset=utf-8");
+      if (request.method === "GET" && url.pathname === "/technical") return send(response,200,DASHBOARD_TECHNICAL_HTML,"text/html; charset=utf-8");
+      if (request.method === "GET" && url.pathname === "/app.css") return send(response,200,DASHBOARD_CLIENT_CSS,"text/css; charset=utf-8");
       if (request.method === "GET" && url.pathname === "/app.js") return send(response,200,DASHBOARD_CLIENT_JS,"text/javascript; charset=utf-8");
+      if (request.method === "GET" && url.pathname === "/technical.js") return send(response,200,DASHBOARD_TECHNICAL_JS,"text/javascript; charset=utf-8");
       if (url.pathname === "/api/session" && request.method === "POST") {
         const payload = await body(request);
         const supplied = typeof payload.token === "string" ? payload.token : "";
         const oneTimeMatch = Boolean(launchToken && supplied && safeEqual(supplied,launchToken));
         const sharedMatch = Boolean(input.accessToken && supplied && safeEqual(supplied,input.accessToken));
-        if (!oneTimeMatch && !sharedMatch) return json(response,403,{ error: "SESSION_TOKEN_INVALID" });
+        if (!oneTimeMatch && !sharedMatch) return json(response,403,{ error:"SESSION_TOKEN_INVALID" });
         if (oneTimeMatch) launchToken = "";
-        const session: Session = { id: token(), csrf: token(), lastSeenAt: now() };
+        const session: Session = { id:token(),csrf:token(),lastSeenAt:now() };
         response.setHeader("Set-Cookie",sessionCookie(encodeSession(session,sessionSecret)));
-        return json(response,200,{ csrf: session.csrf });
+        return json(response,200,{ csrf:session.csrf });
       }
       let auth = authenticate(request);
       if (
@@ -484,7 +492,7 @@ export async function startInventoryWebServer(input: {
         return json(response,200,{ saved: true });
       }
       return json(response,404,{ error: "NOT_FOUND" });
-    })().catch((error) => json(response,500,{ error: error instanceof Error ? error.message.slice(0,500) : "INTERNAL_ERROR" }));
+    })().catch(() => json(response,500,{ error:"INTERNAL_ERROR" }));
   });
   await new Promise<void>((resolve,reject) => {
     server.once("error",reject);

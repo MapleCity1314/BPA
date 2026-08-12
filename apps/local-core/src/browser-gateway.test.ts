@@ -787,6 +787,48 @@ describe("local browser gateway", () => {
         fencing_token: 1
       }
     });
+    const deliveredDispatchCount = outgoing.filter(
+      (message) => message.type === "command.dispatch"
+    ).length;
+    persistence.upsertBrowserPageObservation({
+      sessionId,
+      browserInstanceId: "browser-test",
+      tabId: 42,
+      windowId: 7,
+      origin: "https://fxg.jinritemai.com",
+      pathname: "/ffa/g/list",
+      contentScriptReady: true,
+      authentication: "authenticated",
+      authenticationContextRef: "auth-context-changed-during-command",
+      observationState: "ready",
+      pageEpoch: "tab-42:2:during-command",
+      observerCapabilityId: "doudian.page",
+      revision: 2,
+      observedAt: new Date().toISOString()
+    });
+    expect(gateway.dispatchPending()).toBe(0);
+    expect(
+      persistence.getGatewayCommand(String(command.payload.command_id))?.state
+    ).toBe("accepted");
+    expect(
+      outgoing.filter((message) => message.type === "command.dispatch")
+    ).toHaveLength(deliveredDispatchCount);
+    persistence.upsertBrowserPageObservation({
+      sessionId,
+      browserInstanceId: "browser-test",
+      tabId: 42,
+      windowId: 7,
+      origin: "https://fxg.jinritemai.com",
+      pathname: "/ffa/g/list",
+      contentScriptReady: true,
+      authentication: "authenticated",
+      authenticationContextRef: "auth-context-gateway-test",
+      observationState: "ready",
+      pageEpoch: "tab-42:1:gateway-test",
+      observerCapabilityId: "doudian.page",
+      revision: 3,
+      observedAt: new Date().toISOString()
+    });
     const evidenceBody = Buffer.from(
       JSON.stringify({
         schema: "bpa.browser-evidence/1",

@@ -1,0 +1,60 @@
+apiVersion: bpa/v1alpha2
+kind: Node
+metadata:
+  id: binance.copy-trading.project.detail.collect
+  version: 1.0.0
+  title: 采集单个 Binance 合约跟单项目全部详情
+  description: 在管理页按 project_id 精确展开一个项目，遍历八个只读详情页签及全部分页，完成后收起并恢复原列表页签。
+runtime: browser
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [projectId, projectStatus, managementUrl]
+  properties:
+    projectId: { type: string, pattern: "^[A-Za-z0-9_-]{4,120}$" }
+    projectStatus: { enum: [ongoing, ended] }
+    managementUrl: { const: "https://www.binance.com/zh-CN/copy-trading/copy-management" }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [schemaVersion, status, projectId, observedAt, pageUrl, tabs, formMutations]
+  properties:
+    schemaVersion: { const: binance-copy-trading/v0.1 }
+    status: { const: complete }
+    projectId: { type: string }
+    observedAt: { type: string, format: date-time }
+    pageUrl: { type: string, format: uri }
+    tabs:
+      type: array
+      minItems: 8
+      maxItems: 8
+      items:
+        type: object
+        required: [sourceTab, pageCount, summary, records]
+        properties:
+          sourceTab: { enum: [仓位, 仓位历史记录, 历史委托, 交易历史, 分润记录, 转账记录, 资金费用, 跟单失败订单] }
+          pageCount: { type: integer, minimum: 1, maximum: 100 }
+          summary: { type: object, additionalProperties: { type: string } }
+          records: { type: array, maxItems: 10000, items: { type: object } }
+    formMutations: { const: 0 }
+risk:
+  level: R1
+  permissions: [browser.dom.read, browser.dom.write, browser.tabs.read]
+  domains: [https://www.binance.com]
+resources:
+  browser:
+    kind: browser
+    capabilities: [browser.dom.read, browser.dom.write, browser.tabs.read]
+    allowedOrigins: [https://www.binance.com]
+    authentication: authenticated
+    purpose: 仅切换列表页签、展开或收起项目、切换详情页签和分页；禁止账户状态变更操作
+execution:
+  timeoutDefault: 10m
+  idempotency: repeatable_read
+  retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED, BINANCE_CONTENT_RESPONSE_TIMEOUT, BINANCE_DETAIL_TAB_TIMEOUT, BINANCE_PAGINATION_TIMEOUT]
+  cancellable: true
+  timingPolicy:
+    rateLimit: { scope: authentication_context, minIntervalMs: 1000, maxQueueMs: 10000 }
+errors: [BINANCE_CONTENT_RESPONSE_TIMEOUT, BINANCE_DETAIL_HEADERS_MISSING, BINANCE_DETAIL_ROW_CHANGED, BINANCE_DETAIL_ROW_LIMIT_EXCEEDED, BINANCE_DETAIL_STAGE_FAILED, BINANCE_DETAIL_STRUCTURE_UNCONFIRMED, BINANCE_DETAIL_TAB_AMBIGUOUS, BINANCE_DETAIL_TAB_NOT_ACTIVE, BINANCE_DETAIL_TAB_TIMEOUT, BINANCE_MANAGEMENT_RESTORE_FAILED, BINANCE_MANAGEMENT_TAB_AMBIGUOUS, BINANCE_MANAGEMENT_TAB_TIMEOUT, BINANCE_PAGE_LIMIT_EXCEEDED, BINANCE_PAGINATION_AMBIGUOUS, BINANCE_PAGINATION_CHANGED, BINANCE_PAGINATION_REPEATED, BINANCE_PAGINATION_TIMEOUT, BINANCE_PROJECT_CARD_AMBIGUOUS, BINANCE_PROJECT_CARD_MISSING, BINANCE_PROJECT_COLLAPSE_FAILED, BINANCE_PROJECT_EXPAND_AMBIGUOUS, BINANCE_PROJECT_EXPAND_TIMEOUT, BINANCE_PROJECT_IDENTITY_MISMATCH, BINANCE_PROJECT_TARGET_INVALID, BROWSER_DISCONNECTED, CAPTCHA_REQUIRED, COMMAND_CANCELLED, DEADLINE_EXCEEDED, PAGE_CONTEXT_CHANGED, PAGE_LOADING, RATE_LIMITED, RISK_CONTROL, SESSION_EXPIRED]
+evidence: { required: [result, error] }
+adapter: { id: binance-copy-trading, versions: [1.0.0] }

@@ -22,6 +22,7 @@ export type DoudianAllianceNodeErrorCode =
   | "CAPTCHA_REQUIRED"
   | "COMMAND_RESULT_TOO_LARGE"
   | "COMMAND_CANCELLED"
+  | "CURRENT_SHOP_NOT_IN_LIST"
   | "DEADLINE_EXCEEDED"
   | "DOUDIAN_ALLIANCE_DISCOVERY_FAILED"
   | "DOUDIAN_ALLIANCE_MAX_SHOPS_INVALID"
@@ -41,6 +42,7 @@ export type DoudianAllianceNodeErrorCode =
   | "RISK_CONTROL"
   | "SESSION_EXPIRED"
   | "SHOP_CONTEXT_RESTORE_FAILED"
+  | "SHOP_IDENTITY_DRIFT"
   | "SHOP_IDENTITY_AMBIGUOUS"
   | "SHOP_IDENTITY_MISMATCH"
   | "SHOP_IDENTITY_UNCERTAIN"
@@ -48,8 +50,17 @@ export type DoudianAllianceNodeErrorCode =
   | "SHOP_LIMIT_EXCEEDED"
   | "SHOP_LIST_EMPTY"
   | "SHOP_LIST_INCOMPLETE"
+  | "SHOP_LIST_DUPLICATED"
+  | "SHOP_NOT_ACTIVE"
+  | "SHOP_SWITCH_DIALOG_AMBIGUOUS"
+  | "SHOP_SWITCH_DIALOG_CLOSE_AMBIGUOUS"
+  | "SHOP_SWITCH_DIALOG_TIMEOUT"
   | "SHOP_SWITCH_NOT_CONFIRMED"
-  | "SHOP_TARGET_INVALID";
+  | "SHOP_SWITCH_SEARCH_AMBIGUOUS"
+  | "SHOP_SWITCH_TRIGGER_AMBIGUOUS"
+  | "SHOP_TARGET_AMBIGUOUS"
+  | "SHOP_TARGET_INVALID"
+  | "SHOP_TARGET_TIMEOUT";
 
 export const DOUDIAN_ALLIANCE_NODE_ERROR_CODES = new Set<DoudianAllianceNodeErrorCode>([
   "ALLIANCE_CONTENT_RESPONSE_TIMEOUT",
@@ -62,6 +73,7 @@ export const DOUDIAN_ALLIANCE_NODE_ERROR_CODES = new Set<DoudianAllianceNodeErro
   "CAPTCHA_REQUIRED",
   "COMMAND_RESULT_TOO_LARGE",
   "COMMAND_CANCELLED",
+  "CURRENT_SHOP_NOT_IN_LIST",
   "DEADLINE_EXCEEDED",
   "DOUDIAN_ALLIANCE_DISCOVERY_FAILED",
   "DOUDIAN_ALLIANCE_MAX_SHOPS_INVALID",
@@ -81,6 +93,7 @@ export const DOUDIAN_ALLIANCE_NODE_ERROR_CODES = new Set<DoudianAllianceNodeErro
   "RISK_CONTROL",
   "SESSION_EXPIRED",
   "SHOP_CONTEXT_RESTORE_FAILED",
+  "SHOP_IDENTITY_DRIFT",
   "SHOP_IDENTITY_AMBIGUOUS",
   "SHOP_IDENTITY_MISMATCH",
   "SHOP_IDENTITY_UNCERTAIN",
@@ -88,8 +101,17 @@ export const DOUDIAN_ALLIANCE_NODE_ERROR_CODES = new Set<DoudianAllianceNodeErro
   "SHOP_LIMIT_EXCEEDED",
   "SHOP_LIST_EMPTY",
   "SHOP_LIST_INCOMPLETE",
+  "SHOP_LIST_DUPLICATED",
+  "SHOP_NOT_ACTIVE",
+  "SHOP_SWITCH_DIALOG_AMBIGUOUS",
+  "SHOP_SWITCH_DIALOG_CLOSE_AMBIGUOUS",
+  "SHOP_SWITCH_DIALOG_TIMEOUT",
   "SHOP_SWITCH_NOT_CONFIRMED",
-  "SHOP_TARGET_INVALID"
+  "SHOP_SWITCH_SEARCH_AMBIGUOUS",
+  "SHOP_SWITCH_TRIGGER_AMBIGUOUS",
+  "SHOP_TARGET_AMBIGUOUS",
+  "SHOP_TARGET_INVALID",
+  "SHOP_TARGET_TIMEOUT"
 ]);
 
 export class DoudianAllianceError extends Error {
@@ -101,6 +123,7 @@ export class DoudianAllianceError extends Error {
 
 export interface AllianceShop {
   readonly id?: string;
+  readonly switcherOrdinal?: number;
   readonly name: string;
   readonly status: "active" | "blocked";
   readonly statusText: string;
@@ -207,34 +230,220 @@ export function readDoudianHeaderShopIdentity(doc: Document): {
   readonly name: string;
 } {
   const identity = readDoudianVisibleShopIdentity(doc);
-  if (!identity.identityConfirmed || !/^\d{5,30}$/u.test(identity.id)) {
+  if (!identity.identityConfirmed) {
     throw new DoudianAllianceError("SHOP_IDENTITY_UNCERTAIN");
   }
-  return { id: identity.id, name: identity.name };
+  const stableId =
+    readNumericShopIdNearHeaderElement(identity.element) ??
+    readCurrentAccountPopoverShopId(doc, identity.name);
+  if (!stableId) {
+    throw new DoudianAllianceError("SHOP_IDENTITY_UNCERTAIN");
+  }
+  return { id: stableId, name: identity.name };
+}
+
+function readNumericShopIdNearHeaderElement(
+  element: Element | undefined
+): string | undefined {
+  let current = element;
+  while (
+    current &&
+    current !== current.ownerDocument.body &&
+    current !== current.ownerDocument.documentElement
+  ) {
+    for (const key of [
+      "data-shop-id",
+      "data-shopid",
+      "data-shop-key",
+      "data-value",
+      "value"
+    ]) {
+      const value = current.getAttribute(key);
+      if (value && /^\d{5,30}$/u.test(value)) return value;
+    }
+    const href = current.getAttribute("href");
+    if (href) {
+      try {
+        const url = new URL(href, DOUDIAN_ORIGIN);
+        for (const key of ["shop_id", "shopId", "shopid"]) {
+          const value = url.searchParams.get(key);
+          if (value && /^\d{5,30}$/u.test(value)) return value;
+        }
+      } catch {
+        // Ignore malformed attributes from untrusted page content.
+      }
+    }
+    const textId = shopIdFromText(normalizeText(current.textContent));
+    if (textId) return textId;
+    current = current.parentElement ?? undefined;
+  }
+  return undefined;
 }
 
 export function openDoudianShopSwitcher(doc: Document): void {
+  if (visibleShopSwitcher(doc, false)) return;
+  const switchEntries = Array.from(
+    doc.querySelectorAll<HTMLElement>("body *")
+  ).filter(
+    (element) =>
+      normalizeText(element.textContent) === "切换组织/店铺" &&
+      visibleElement(element) &&
+      !element.matches(".auxo-popover") &&
+      element !== doc.body
+  );
+  if (switchEntries.length > 0) {
+    const actionContainers = [
+      ...new Set(
+        switchEntries.map((element) => {
+          let action = element;
+          while (
+            action.parentElement &&
+            !action.parentElement.matches(".auxo-popover") &&
+            normalizeText(action.parentElement.textContent) ===
+              "切换组织/店铺" &&
+            visibleElement(action.parentElement)
+          ) {
+            action = action.parentElement;
+          }
+          return action;
+        })
+      )
+    ];
+    activateElement(
+      requireUnique(
+        actionContainers,
+        "SHOP_SWITCH_TRIGGER_AMBIGUOUS"
+      )
+    );
+    return;
+  }
   const candidates = Array.from(
     doc.querySelectorAll<HTMLElement>(
-      "#fxg-pc-header [class*='headerShopName']"
+      "#fxg-pc-header [class*='userName']," +
+        "#fxg-pc-header [class*='headerShopName']"
     )
-  ).filter((element) => normalizeText(element.textContent));
-  const target = requireUnique(candidates, "SHOP_SWITCH_TRIGGER_AMBIGUOUS");
-  target.click();
+  ).filter(
+    (element) => normalizeText(element.textContent) && visibleElement(element)
+  );
+  const actionCandidates = [
+    ...new Set(
+      candidates.map(
+        (element) =>
+          element.closest<HTMLElement>("[class*='headerShopName']") ??
+          element
+      )
+    )
+  ];
+  const target = requireUnique(
+    actionCandidates,
+    "SHOP_SWITCH_TRIGGER_AMBIGUOUS"
+  );
+  activateElement(target);
+}
+
+function activateElement(element: HTMLElement): void {
+  const view = element.ownerDocument.defaultView;
+  if (!view) {
+    throw new DoudianAllianceError("SHOP_SWITCH_TRIGGER_AMBIGUOUS");
+  }
+  const rect = element.getBoundingClientRect();
+  const clientX = Number.isFinite(rect.left + rect.width / 2)
+    ? rect.left + rect.width / 2
+    : 0;
+  const clientY = Number.isFinite(rect.top + rect.height / 2)
+    ? rect.top + rect.height / 2
+    : 0;
+  const eventInit: MouseEventInit = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    clientX,
+    clientY,
+    button: 0,
+    buttons: 1
+  };
+  const PointerEventConstructor = view.PointerEvent;
+  if (PointerEventConstructor) {
+    element.dispatchEvent(
+      new PointerEventConstructor("pointerover", {
+        ...eventInit,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true
+      })
+    );
+  }
+  element.dispatchEvent(new view.MouseEvent("mouseover", eventInit));
+  if (PointerEventConstructor) {
+    element.dispatchEvent(
+      new PointerEventConstructor("pointerdown", {
+        ...eventInit,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true
+      })
+    );
+  }
+  element.dispatchEvent(new view.MouseEvent("mousedown", eventInit));
+  if (PointerEventConstructor) {
+    element.dispatchEvent(
+      new PointerEventConstructor("pointerup", {
+        ...eventInit,
+        buttons: 0,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true
+      })
+    );
+  }
+  element.dispatchEvent(
+    new view.MouseEvent("mouseup", { ...eventInit, buttons: 0 })
+  );
+  element.dispatchEvent(
+    new view.MouseEvent("click", { ...eventInit, buttons: 0 })
+  );
+}
+
+function visibleElement(element: HTMLElement): boolean {
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+function visibleShopSwitcher(
+  doc: Document,
+  required = true
+): HTMLElement | undefined {
+  const roots = new Set<HTMLElement>();
+  for (const element of Array.from(
+    doc.querySelectorAll<HTMLElement>(
+      "[role='dialog'],.auxo-modal-wrap,.auxo-drawer-open," +
+        ".auxo-drawer-content-wrapper"
+    )
+  )) {
+    const root =
+      element.closest<HTMLElement>(
+        ".auxo-modal-wrap,.auxo-drawer-open,[role='dialog']"
+      ) ??
+      element;
+    if (!visibleElement(root) || roots.has(root)) continue;
+    const text = normalizeText(root.textContent);
+    if (
+      text.includes("切换组织/店铺") ||
+      text.includes("切换店铺") ||
+      root.querySelector("[class*='roleItem'],[class*='introName']") !== null
+    ) {
+      roots.add(root);
+    }
+  }
+  if (!required && roots.size === 0) return undefined;
+  return requireUnique(
+    [...roots],
+    "SHOP_SWITCH_DIALOG_AMBIGUOUS"
+  );
 }
 
 function visibleShopDialog(doc: Document): HTMLElement {
-  const dialogs = Array.from(
-    doc.querySelectorAll<HTMLElement>("[role='dialog']")
-  ).filter((dialog) => {
-    const text = normalizeText(dialog.textContent);
-    return (
-      text.includes("切换组织/店铺") ||
-      text.includes("切换店铺") ||
-      dialog.querySelector("[class*='roleItem']") !== null
-    );
-  });
-  return requireUnique(dialogs, "SHOP_SWITCH_DIALOG_AMBIGUOUS");
+  return visibleShopSwitcher(doc)!;
 }
 
 function shopIdFromText(value: string): string | undefined {
@@ -242,6 +451,39 @@ function shopIdFromText(value: string): string | undefined {
     /(?:店铺\s*ID|店铺ID|ID)[：:\s]*(\d{5,30})/iu.exec(value)?.[1] ??
     undefined
   );
+}
+
+function readCurrentAccountPopoverShopId(
+  doc: Document,
+  currentShopName: string
+): string | undefined {
+  const accountPopovers = Array.from(
+    doc.querySelectorAll<HTMLElement>(".auxo-popover")
+  ).filter((popover) => {
+    if (!visibleElement(popover)) return false;
+    const text = normalizeText(popover.textContent);
+    return (
+      text.includes("切换组织/店铺") &&
+      text.includes(currentShopName)
+    );
+  });
+  if (accountPopovers.length === 0) return undefined;
+  if (accountPopovers.length !== 1) {
+    throw new DoudianAllianceError("SHOP_IDENTITY_AMBIGUOUS");
+  }
+  const ids = [
+    ...new Set(
+      Array.from(
+        normalizeText(accountPopovers[0]!.textContent).matchAll(
+          /店铺\s*ID[：:\s]*(\d{5,30})/giu
+        )
+      ).map((match) => match[1]!)
+    )
+  ];
+  if (ids.length !== 1) {
+    throw new DoudianAllianceError("SHOP_IDENTITY_UNCERTAIN");
+  }
+  return ids[0];
 }
 
 function blockedShopStatus(value: string): string | undefined {
@@ -263,18 +505,43 @@ function blockedShopStatus(value: string): string | undefined {
   ].find((status) => compact.includes(status));
 }
 
+function shopSwitcherCards(dialog: HTMLElement): HTMLElement[] {
+  const legacyCards = Array.from(
+    dialog.querySelectorAll<HTMLElement>("[class*='roleItem']")
+  );
+  if (legacyCards.length > 0) return legacyCards;
+  const cards: HTMLElement[] = [];
+  for (const nameElement of Array.from(
+    dialog.querySelectorAll<HTMLElement>("[class*='introName']")
+  )) {
+    let candidate: HTMLElement = nameElement;
+    while (candidate.parentElement && candidate.parentElement !== dialog) {
+      const parent = candidate.parentElement;
+      if (
+        parent.querySelectorAll("[class*='introName']").length === 1 &&
+        (shopIdFromText(normalizeText(parent.textContent)) !== undefined ||
+          blockedShopStatus(normalizeText(parent.textContent)) !== undefined)
+      ) {
+        candidate = parent;
+        break;
+      }
+      candidate = parent;
+    }
+    if (!cards.includes(candidate)) cards.push(candidate);
+  }
+  return cards;
+}
+
 export function discoverDoudianAllianceShops(
   doc: Document
 ): readonly AllianceShop[] {
   const dialog = visibleShopDialog(doc);
-  const cards = Array.from(
-    dialog.querySelectorAll<HTMLElement>("[class*='roleItem']")
-  );
+  const cards = shopSwitcherCards(dialog);
   if (cards.length === 0) throw new DoudianAllianceError("SHOP_LIST_EMPTY");
   const shops = cards.flatMap((card): AllianceShop[] => {
     const nameElement = card.querySelector<HTMLElement>(
       "[class*='introName']"
-    );
+    ) ?? (card.matches("[class*='introName']") ? card : null);
     const name = normalizeText(nameElement?.textContent);
     if (!name || name.length > 80) {
       throw new DoudianAllianceError("SHOP_LIST_INCOMPLETE");
@@ -291,31 +558,33 @@ export function discoverDoudianAllianceShops(
       }
     ];
   });
-  const identities = new Set<string>();
+  const nameCounts = new Map<string, number>();
   for (const shop of shops) {
-    const identity = shop.id ? `id:${shop.id}` : `name:${shop.name}`;
+    nameCounts.set(shop.name, (nameCounts.get(shop.name) ?? 0) + 1);
+  }
+  const nameOrdinals = new Map<string, number>();
+  const distinguishable = shops.map((shop) => {
+    if ((nameCounts.get(shop.name) ?? 0) < 2 || shop.id) return shop;
+    const switcherOrdinal = nameOrdinals.get(shop.name) ?? 0;
+    nameOrdinals.set(shop.name, switcherOrdinal + 1);
+    return { ...shop, switcherOrdinal };
+  });
+  const identities = new Set<string>();
+  for (const shop of distinguishable) {
+    const identity = shop.id
+      ? `id:${shop.id}`
+      : `name:${shop.name}:${shop.switcherOrdinal ?? 0}`;
     if (identities.has(identity)) {
       throw new DoudianAllianceError("SHOP_LIST_DUPLICATED");
     }
     identities.add(identity);
   }
-  for (const shop of shops) {
-    if (
-      shops.some(
-        (candidate) =>
-          candidate !== shop &&
-          candidate.name === shop.name &&
-          (!candidate.id || !shop.id)
-      )
-    ) {
-      throw new DoudianAllianceError("SHOP_IDENTITY_AMBIGUOUS");
-    }
-  }
-  return shops;
+  return distinguishable;
 }
 
 export function closeDoudianShopSwitcher(doc: Document): void {
-  const dialog = visibleShopDialog(doc);
+  const dialog = visibleShopSwitcher(doc, false);
+  if (!dialog) return;
   const closeButtons = Array.from(
     dialog.querySelectorAll<HTMLElement>(
       "button[aria-label='Close'],button[aria-label='close']," +
@@ -323,10 +592,10 @@ export function closeDoudianShopSwitcher(doc: Document): void {
     )
   );
   if (closeButtons.length === 0) return;
-  requireUnique(
+  activateElement(requireUnique(
     closeButtons,
     "SHOP_SWITCH_DIALOG_CLOSE_AMBIGUOUS"
-  ).click();
+  ));
 }
 
 function shopSwitcherScrollTarget(doc: Document): HTMLElement | undefined {
@@ -407,21 +676,22 @@ export function selectDoudianAllianceShop(
     throw new DoudianAllianceError("SHOP_TARGET_INVALID");
   }
   const dialog = visibleShopDialog(doc);
-  const matches = Array.from(
-    dialog.querySelectorAll<HTMLElement>("[class*='roleItem']")
-  ).filter((card) => {
+  const matches = shopSwitcherCards(dialog).filter((card) => {
     const name = normalizeText(
       card.querySelector<HTMLElement>("[class*='introName']")?.textContent
     );
     if (name !== expected) return false;
-    return shop.id
-      ? shopIdFromText(normalizeText(card.textContent)) === shop.id
-      : true;
+    const cardId = shopIdFromText(normalizeText(card.textContent));
+    return shop.id && cardId ? cardId === shop.id : true;
   });
-  const card = requireUnique(matches, "SHOP_TARGET_AMBIGUOUS");
+  const card =
+    shop.switcherOrdinal === undefined
+      ? requireUnique(matches, "SHOP_TARGET_AMBIGUOUS")
+      : matches[shop.switcherOrdinal];
+  if (!card) throw new DoudianAllianceError("SHOP_TARGET_AMBIGUOUS");
   const blocked = blockedShopStatus(normalizeText(card.textContent));
   if (blocked) throw new DoudianAllianceError("SHOP_NOT_ACTIVE");
-  card.click();
+  activateElement(card);
 }
 
 export function openDoudianAllianceMenu(doc: Document): void {
