@@ -990,6 +990,7 @@ describe("local browser gateway", () => {
     const replacementOutgoing: Array<Record<string, any>> = [];
     const replacementConnectionId = gateway.attach(
       `chrome-extension://${DEFAULT_BPA_EXTENSION_ID}/`,
+      10_002,
       (message) => replacementOutgoing.push(message)
     );
     gateway.handle(
