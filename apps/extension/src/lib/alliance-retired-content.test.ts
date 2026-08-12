@@ -92,7 +92,7 @@ describe("alliance retired-products content stages", () => {
       </div>
       <div id="drawer-host"></div>
     `);
-    const trigger = document.querySelector<HTMLElement>(".userName")!;
+    const trigger = document.querySelector<HTMLElement>(".headerShopName")!;
     trigger.addEventListener("click", () => {
       document.querySelector("#drawer-host")!.innerHTML = `
         <div class="auxo-drawer auxo-drawer-open">

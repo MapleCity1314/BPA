@@ -6,6 +6,7 @@ import {
   dismissBuyinPromotionDialogs,
   openBuyinRetiredProducts,
   openDoudianAlliancePromotion,
+  openDoudianShopSwitcher,
   readBuyinRetiredProducts,
   readDoudianHeaderShopIdentity,
   readDoudianHeaderShopName,
@@ -221,6 +222,28 @@ describe("Doudian alliance retired-products runtime", () => {
       id: "10001",
       name: "甲食品旗舰店"
     });
+  });
+
+  it("clicks the semantic account and switch-row containers instead of text leaves", () => {
+    const doc = documentOf(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+    `);
+    const account = doc.querySelector<HTMLElement>(".headerShopName")!;
+    const accountClick = vi.spyOn(account, "click");
+    openDoudianShopSwitcher(doc);
+    expect(accountClick).toHaveBeenCalledOnce();
+
+    const popover = documentOf(`
+      <div class="auxo-popover">
+        <div class="descriptions"><div><span>切换组织/店铺</span></div></div>
+      </div>
+    `);
+    const switchRow = popover.querySelector<HTMLElement>(".descriptions")!;
+    const switchClick = vi.spyOn(switchRow, "click");
+    openDoudianShopSwitcher(popover);
+    expect(switchClick).toHaveBeenCalledOnce();
   });
 
   it("rejects a numeric ID from an account popover for another shop", () => {

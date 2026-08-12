@@ -264,17 +264,30 @@ export function openDoudianShopSwitcher(doc: Document): void {
   ).filter(
     (element) =>
       normalizeText(element.textContent) === "切换组织/店铺" &&
-      visibleElement(element)
+      visibleElement(element) &&
+      !element.matches(".auxo-popover") &&
+      element !== doc.body
   );
   if (switchEntries.length > 0) {
-    switchEntries.sort(
-      (left, right) => left.children.length - right.children.length
-    );
-    const mostSpecific = switchEntries.filter(
-      (element) => element.children.length === switchEntries[0]!.children.length
-    );
+    const actionContainers = [
+      ...new Set(
+        switchEntries.map((element) => {
+          let action = element;
+          while (
+            action.parentElement &&
+            !action.parentElement.matches(".auxo-popover") &&
+            normalizeText(action.parentElement.textContent) ===
+              "切换组织/店铺" &&
+            visibleElement(action.parentElement)
+          ) {
+            action = action.parentElement;
+          }
+          return action;
+        })
+      )
+    ];
     requireUnique(
-      mostSpecific,
+      actionContainers,
       "SHOP_SWITCH_TRIGGER_AMBIGUOUS"
     ).click();
     return;
@@ -287,14 +300,17 @@ export function openDoudianShopSwitcher(doc: Document): void {
   ).filter(
     (element) => normalizeText(element.textContent) && visibleElement(element)
   );
-  const leafCandidates = candidates.filter(
-    (element) =>
-      !candidates.some(
-        (candidate) => candidate !== element && element.contains(candidate)
+  const actionCandidates = [
+    ...new Set(
+      candidates.map(
+        (element) =>
+          element.closest<HTMLElement>("[class*='headerShopName']") ??
+          element
       )
-  );
+    )
+  ];
   const target = requireUnique(
-    leafCandidates,
+    actionCandidates,
     "SHOP_SWITCH_TRIGGER_AMBIGUOUS"
   );
   target.click();
