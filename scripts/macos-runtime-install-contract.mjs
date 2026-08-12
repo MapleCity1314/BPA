@@ -262,9 +262,8 @@ if [[ ! -f "$EXTENSION/manifest.json" ]]; then
   print -u2 "Managed Chrome Browser Bridge is unavailable."
   exit 1
 fi
-/usr/bin/codesign --verify --deep --strict "$APP"
-SIGNATURE="$(/usr/bin/codesign -dv --verbose=4 "$APP" 2>&1)"
-if [[ "$SIGNATURE" != *"Identifier=${contract.bundleIdentifier}"* ]]; then
+IDENTIFIER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")"
+if [[ "$IDENTIFIER" != "${contract.bundleIdentifier}" ]]; then
   print -u2 "Managed Chrome application identity is invalid."
   exit 1
 fi

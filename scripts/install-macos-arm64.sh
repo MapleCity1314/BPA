@@ -135,8 +135,8 @@ fi
 checkpoint_and_check() {
   local database_path="$1"
   (
-    cd "$STAGING_ROOT"
-    "$STAGING_ROOT/node/bin/node" --input-type=module -e '
+    cd "$PACKAGED_RUNTIME"
+    "$PACKAGED_RUNTIME/node/bin/node" --input-type=module -e '
       import Database from "better-sqlite3";
       const database = new Database(process.argv[1]);
       database.pragma("wal_checkpoint(TRUNCATE)");

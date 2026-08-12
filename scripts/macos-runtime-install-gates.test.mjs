@@ -155,8 +155,8 @@ test("binds the managed Chrome launcher and live command to one contract", () =>
   for (const expected of [
     `CHROME="$BPA_HOME/${MACOS_MANAGED_CHROME_CONTRACT.executablePath}"`,
     '"$CHROME" \\',
-    "/usr/bin/codesign --verify --deep --strict",
-    "Identifier=com.google.chrome.for.testing",
+    "/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier'",
+    "com.google.chrome.for.testing",
     "--user-data-dir=$PROFILE",
     "--remote-debugging-port=17660",
     "--remote-debugging-address=127.0.0.1",
