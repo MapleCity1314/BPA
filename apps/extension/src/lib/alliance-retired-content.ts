@@ -160,7 +160,15 @@ async function ensureShopDialog(
     openDoudianShopSwitcher(doc);
   }
   await waitUntil(
-    () => discoverDoudianAllianceShops(doc),
+    () => {
+      try {
+        return discoverDoudianAllianceShops(doc);
+      } catch (error) {
+        assertNotCancelled(isCancelled);
+        openDoudianShopSwitcher(doc);
+        throw error;
+      }
+    },
     8_000,
     "SHOP_SWITCH_DIALOG_TIMEOUT",
     doc,
