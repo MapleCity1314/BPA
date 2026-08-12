@@ -286,10 +286,12 @@ export function openDoudianShopSwitcher(doc: Document): void {
         })
       )
     ];
-    requireUnique(
-      actionContainers,
-      "SHOP_SWITCH_TRIGGER_AMBIGUOUS"
-    ).click();
+    activateElement(
+      requireUnique(
+        actionContainers,
+        "SHOP_SWITCH_TRIGGER_AMBIGUOUS"
+      )
+    );
     return;
   }
   const candidates = Array.from(
@@ -313,7 +315,70 @@ export function openDoudianShopSwitcher(doc: Document): void {
     actionCandidates,
     "SHOP_SWITCH_TRIGGER_AMBIGUOUS"
   );
-  target.click();
+  activateElement(target);
+}
+
+function activateElement(element: HTMLElement): void {
+  const view = element.ownerDocument.defaultView;
+  if (!view) {
+    throw new DoudianAllianceError("SHOP_SWITCH_TRIGGER_AMBIGUOUS");
+  }
+  const rect = element.getBoundingClientRect();
+  const clientX = Number.isFinite(rect.left + rect.width / 2)
+    ? rect.left + rect.width / 2
+    : 0;
+  const clientY = Number.isFinite(rect.top + rect.height / 2)
+    ? rect.top + rect.height / 2
+    : 0;
+  const eventInit: MouseEventInit = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    clientX,
+    clientY,
+    button: 0,
+    buttons: 1
+  };
+  const PointerEventConstructor = view.PointerEvent;
+  if (PointerEventConstructor) {
+    element.dispatchEvent(
+      new PointerEventConstructor("pointerover", {
+        ...eventInit,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true
+      })
+    );
+  }
+  element.dispatchEvent(new view.MouseEvent("mouseover", eventInit));
+  if (PointerEventConstructor) {
+    element.dispatchEvent(
+      new PointerEventConstructor("pointerdown", {
+        ...eventInit,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true
+      })
+    );
+  }
+  element.dispatchEvent(new view.MouseEvent("mousedown", eventInit));
+  if (PointerEventConstructor) {
+    element.dispatchEvent(
+      new PointerEventConstructor("pointerup", {
+        ...eventInit,
+        buttons: 0,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true
+      })
+    );
+  }
+  element.dispatchEvent(
+    new view.MouseEvent("mouseup", { ...eventInit, buttons: 0 })
+  );
+  element.dispatchEvent(
+    new view.MouseEvent("click", { ...eventInit, buttons: 0 })
+  );
 }
 
 function visibleElement(element: HTMLElement): boolean {

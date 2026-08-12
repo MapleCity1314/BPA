@@ -224,16 +224,24 @@ describe("Doudian alliance retired-products runtime", () => {
     });
   });
 
-  it("clicks the semantic account and switch-row containers instead of text leaves", () => {
+  it("dispatches the pointer and mouse sequence on semantic account and switch-row containers", () => {
     const doc = documentOf(`
       <div id="fxg-pc-header">
         <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
       </div>
     `);
     const account = doc.querySelector<HTMLElement>(".headerShopName")!;
-    const accountClick = vi.spyOn(account, "click");
+    const accountEvents: string[] = [];
+    for (const type of ["mouseover", "mousedown", "mouseup", "click"]) {
+      account.addEventListener(type, () => accountEvents.push(type));
+    }
     openDoudianShopSwitcher(doc);
-    expect(accountClick).toHaveBeenCalledOnce();
+    expect(accountEvents).toEqual([
+      "mouseover",
+      "mousedown",
+      "mouseup",
+      "click"
+    ]);
 
     const popover = documentOf(`
       <div class="auxo-popover">
@@ -241,9 +249,17 @@ describe("Doudian alliance retired-products runtime", () => {
       </div>
     `);
     const switchRow = popover.querySelector<HTMLElement>(".descriptions")!;
-    const switchClick = vi.spyOn(switchRow, "click");
+    const switchEvents: string[] = [];
+    for (const type of ["mouseover", "mousedown", "mouseup", "click"]) {
+      switchRow.addEventListener(type, () => switchEvents.push(type));
+    }
     openDoudianShopSwitcher(popover);
-    expect(switchClick).toHaveBeenCalledOnce();
+    expect(switchEvents).toEqual([
+      "mouseover",
+      "mousedown",
+      "mouseup",
+      "click"
+    ]);
   });
 
   it("rejects a numeric ID from an account popover for another shop", () => {
