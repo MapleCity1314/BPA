@@ -352,7 +352,7 @@ export async function executeAllianceRetiredStage(
       isCancelled
     );
     assertNotCancelled(isCancelled);
-    const identity = readDoudianHeaderShopIdentity(doc);
+    const identity = await readCurrentShopIdentity(doc, isCancelled);
     if (!request.shop.id || identity.id !== request.shop.id) {
       throw new DoudianAllianceError("SHOP_IDENTITY_MISMATCH");
     }
