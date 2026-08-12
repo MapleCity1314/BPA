@@ -122,18 +122,23 @@ describe("alliance retired-products content stages", () => {
   it("discovers shops when the current numeric ID is exposed only by the account popover", async () => {
     const document = doc(`
       <div id="fxg-pc-header">
-        <div class="headerShopName auxo-popover-open"><span class="userName">甲食品旗舰店</span></div>
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
       </div>
-      <div class="auxo-popover">
-        <div>甲食品旗舰店</div>
-        <div>店铺ID 10001</div>
-        <div class="switch-entry">切换组织/店铺</div>
-      </div>
+      <div id="popover-host"></div>
       <div id="drawer-host"></div>
     `);
-    document.querySelector<HTMLElement>(".switch-entry")!.addEventListener(
+    document.querySelector<HTMLElement>(".headerShopName")!.addEventListener(
       "click",
       () => {
+        document.querySelector("#popover-host")!.innerHTML = `
+          <div class="auxo-popover">
+            <div>甲食品旗舰店</div>
+            <div>店铺ID 10001</div>
+            <div class="switch-entry">切换组织/店铺</div>
+          </div>`;
+        document.querySelector<HTMLElement>(".switch-entry")!.addEventListener(
+          "click",
+          () => {
         document.querySelector("#drawer-host")!.innerHTML = `
           <div class="auxo-drawer auxo-drawer-open">
             <div class="auxo-drawer-content-wrapper">
@@ -145,6 +150,8 @@ describe("alliance retired-products content stages", () => {
               </div>
             </div>
           </div>`;
+          }
+        );
       }
     );
     await expect(

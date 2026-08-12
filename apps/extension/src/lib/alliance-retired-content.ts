@@ -176,6 +176,31 @@ async function ensureShopDialog(
   );
 }
 
+async function readCurrentShopIdentity(
+  doc: Document,
+  isCancelled: () => boolean
+): Promise<{ readonly id: string; readonly name: string }> {
+  assertNotCancelled(isCancelled);
+  try {
+    return readDoudianHeaderShopIdentity(doc);
+  } catch (error) {
+    if (
+      !(error instanceof DoudianAllianceError) ||
+      error.code !== "SHOP_IDENTITY_UNCERTAIN"
+    ) {
+      throw error;
+    }
+    openDoudianShopSwitcher(doc);
+  }
+  return waitUntil(
+    () => readDoudianHeaderShopIdentity(doc),
+    4_000,
+    "SHOP_IDENTITY_UNCERTAIN",
+    doc,
+    isCancelled
+  );
+}
+
 async function discoverAllShops(
   doc: Document,
   currentShop: { readonly id: string; readonly name: string },
@@ -269,7 +294,7 @@ export async function executeAllianceRetiredStage(
   assertNotCancelled(isCancelled);
   if (request.stage === "discover-shops") {
     assertDoudianProductListPage(pageUrl);
-    const currentShop = readDoudianHeaderShopIdentity(doc);
+    const currentShop = await readCurrentShopIdentity(doc, isCancelled);
     await ensureShopDialog(doc, isCancelled);
     const shops = await discoverAllShops(doc, currentShop, isCancelled);
     assertNotCancelled(isCancelled);
