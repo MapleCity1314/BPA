@@ -18,6 +18,9 @@ if (!new Set(["preview","send"]).has(mode)) throw new Error("BPA_FEISHU_INVENTOR
 const reportKind = process.env.BPA_FEISHU_REPORT_KIND?.trim() || "daily";
 if (!new Set(["daily","alert"]).has(reportKind)) throw new Error("BPA_FEISHU_REPORT_KIND must be daily or alert");
 const webhookUrl = mode === "send" ? required("BPA_FEISHU_INVENTORY_WEBHOOK_URL") : "";
+const inventoryDashboardUrl = reportKind === "daily"
+  ? required("BPA_FEISHU_INVENTORY_DASHBOARD_URL")
+  : "";
 const pool = createAppPostgresPool({
   connectionString:required("BPA_APP_DATABASE_URL"),
   applicationName:`bpa-inventory-feishu-${reportKind}`,
@@ -32,7 +35,9 @@ try {
     reportShops.push({ shop,overview:await repository.overview(shop.id) as unknown as InventoryReportOverview });
   }
   const report = reportKind === "daily"
-    ? buildConsolidatedInventoryFeishuReport({ shops:reportShops })
+    ? buildConsolidatedInventoryFeishuReport({
+        shops:reportShops,dashboardUrl:inventoryDashboardUrl
+      })
     : buildInventoryFeishuAlert({ shops:reportShops });
   if (!report) {
     process.stdout.write(`${JSON.stringify({ status:"skipped",kind:reportKind,reason:"NO_ACTIONABLE_ANOMALY" })}\n`);

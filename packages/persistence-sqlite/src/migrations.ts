@@ -1966,5 +1966,227 @@ export const migrations: Migration[] = [
       CREATE INDEX external_domain_lease_reconciliations_state
         ON external_domain_lease_reconciliations(resolved_at, request_id);
     `
+  },
+  {
+    version: 26,
+    sql: `
+      CREATE TABLE binance_collection_runs (
+        collection_run_id TEXT PRIMARY KEY,
+        workflow_run_id TEXT NOT NULL
+          REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        source_url TEXT NOT NULL,
+        attempt_at TEXT NOT NULL,
+        capture_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (
+          'success', 'authenticated_but_no_data', 'page_not_updated_yet',
+          'login_required', 'captcha_or_risk_control', 'structure_changed',
+          'required_field_missing', 'pagination_failed',
+          'partial_collection', 'network_failure'
+        )),
+        content_digest TEXT NOT NULL,
+        project_count INTEGER NOT NULL CHECK (project_count >= 0),
+        page_count INTEGER NOT NULL CHECK (page_count >= 0),
+        record_count INTEGER NOT NULL CHECK (record_count >= 0),
+        oldest_event_time_utc TEXT,
+        newest_event_time_utc TEXT,
+        last_success_at TEXT,
+        created_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE INDEX binance_collection_runs_status_capture
+        ON binance_collection_runs(status, capture_at DESC);
+
+      CREATE TABLE binance_source_captures (
+        capture_id TEXT PRIMARY KEY,
+        collection_run_id TEXT NOT NULL
+          REFERENCES binance_collection_runs(collection_run_id)
+          ON DELETE RESTRICT,
+        source_kind TEXT NOT NULL CHECK (
+          source_kind IN ('management', 'project_tab')
+        ),
+        project_id TEXT,
+        source_tab TEXT,
+        page INTEGER CHECK (page IS NULL OR page >= 1),
+        source_url TEXT NOT NULL,
+        capture_at TEXT NOT NULL,
+        record_count INTEGER NOT NULL CHECK (record_count >= 0),
+        payload_digest TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        CHECK (
+          (source_kind = 'management'
+            AND project_id IS NULL AND source_tab IS NULL AND page IS NULL)
+          OR
+          (source_kind = 'project_tab'
+            AND project_id IS NOT NULL AND source_tab IS NOT NULL
+            AND page IS NOT NULL)
+        )
+      ) STRICT;
+
+      CREATE INDEX binance_source_captures_run
+        ON binance_source_captures(collection_run_id, source_kind, project_id,
+          source_tab, page);
+
+      CREATE TABLE binance_copy_project_snapshots (
+        collection_run_id TEXT NOT NULL
+          REFERENCES binance_collection_runs(collection_run_id)
+          ON DELETE RESTRICT,
+        project_id TEXT NOT NULL,
+        project_status TEXT NOT NULL CHECK (
+          project_status IN ('ongoing', 'ended')
+        ),
+        source_url TEXT NOT NULL,
+        captured_at TEXT NOT NULL,
+        summary_json TEXT NOT NULL,
+        PRIMARY KEY(collection_run_id, project_id)
+      ) STRICT;
+
+      CREATE TABLE binance_position_snapshots (
+        snapshot_id TEXT PRIMARY KEY,
+        collection_run_id TEXT NOT NULL
+          REFERENCES binance_collection_runs(collection_run_id)
+          ON DELETE RESTRICT,
+        project_id TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        position_side TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 1),
+        captured_at TEXT NOT NULL,
+        fields_json TEXT NOT NULL,
+        UNIQUE(collection_run_id, project_id, symbol, position_side, ordinal)
+      ) STRICT;
+
+      CREATE TABLE binance_copy_raw_records (
+        raw_record_id TEXT PRIMARY KEY,
+        collection_run_id TEXT NOT NULL
+          REFERENCES binance_collection_runs(collection_run_id)
+          ON DELETE RESTRICT,
+        current_record_key TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        source_tab TEXT NOT NULL,
+        page INTEGER NOT NULL CHECK (page >= 1),
+        row_ordinal INTEGER NOT NULL CHECK (row_ordinal >= 1),
+        capture_at TEXT NOT NULL,
+        original_event_time TEXT,
+        event_time_utc TEXT,
+        page_time_zone_assumption TEXT,
+        fields_json TEXT NOT NULL,
+        fields_digest TEXT NOT NULL,
+        UNIQUE(collection_run_id, project_id, source_tab, page, row_ordinal)
+      ) STRICT;
+
+      CREATE INDEX binance_copy_raw_records_project_event
+        ON binance_copy_raw_records(project_id, source_tab, event_time_utc);
+
+      CREATE TABLE binance_copy_record_current (
+        current_record_key TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        source_tab TEXT NOT NULL,
+        original_event_time TEXT,
+        event_time_utc TEXT,
+        page_time_zone_assumption TEXT,
+        fields_json TEXT NOT NULL,
+        fields_digest TEXT NOT NULL,
+        first_collection_run_id TEXT NOT NULL
+          REFERENCES binance_collection_runs(collection_run_id)
+          ON DELETE RESTRICT,
+        last_collection_run_id TEXT NOT NULL
+          REFERENCES binance_collection_runs(collection_run_id)
+          ON DELETE RESTRICT,
+        first_seen_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE INDEX binance_copy_record_current_project_event
+        ON binance_copy_record_current(project_id, source_tab, event_time_utc);
+
+      CREATE TABLE binance_market_captures (
+        market_capture_id TEXT PRIMARY KEY,
+        workflow_run_id TEXT NOT NULL
+          REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+        capture_at TEXT NOT NULL,
+        source_url TEXT NOT NULL,
+        symbols_payload_json TEXT NOT NULL,
+        symbols_digest TEXT NOT NULL,
+        candles_payload_json TEXT NOT NULL,
+        candles_digest TEXT NOT NULL,
+        references_payload_json TEXT NOT NULL,
+        references_digest TEXT NOT NULL,
+        symbol_count INTEGER NOT NULL CHECK (symbol_count >= 0),
+        candle_count INTEGER NOT NULL CHECK (candle_count >= 0),
+        funding_count INTEGER NOT NULL CHECK (funding_count >= 0),
+        reference_count INTEGER NOT NULL CHECK (reference_count >= 0),
+        created_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE binance_market_symbol_snapshots (
+        market_capture_id TEXT NOT NULL
+          REFERENCES binance_market_captures(market_capture_id)
+          ON DELETE RESTRICT,
+        symbol TEXT NOT NULL,
+        pair TEXT NOT NULL,
+        contract_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        onboard_date_utc TEXT,
+        delivery_date_utc TEXT,
+        base_asset TEXT NOT NULL,
+        quote_asset TEXT NOT NULL,
+        margin_asset TEXT NOT NULL,
+        PRIMARY KEY(market_capture_id, symbol)
+      ) STRICT;
+
+      CREATE TABLE binance_market_candles_1m (
+        symbol TEXT NOT NULL,
+        open_time_utc TEXT NOT NULL,
+        close_time_utc TEXT NOT NULL,
+        open TEXT NOT NULL,
+        high TEXT NOT NULL,
+        low TEXT NOT NULL,
+        close TEXT NOT NULL,
+        volume TEXT NOT NULL,
+        quote_volume TEXT NOT NULL,
+        trade_count INTEGER NOT NULL CHECK (trade_count >= 0),
+        first_market_capture_id TEXT NOT NULL
+          REFERENCES binance_market_captures(market_capture_id)
+          ON DELETE RESTRICT,
+        last_market_capture_id TEXT NOT NULL
+          REFERENCES binance_market_captures(market_capture_id)
+          ON DELETE RESTRICT,
+        first_seen_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        PRIMARY KEY(symbol, open_time_utc)
+      ) STRICT;
+
+      CREATE TABLE binance_market_funding_rates (
+        symbol TEXT NOT NULL,
+        funding_time_utc TEXT NOT NULL,
+        funding_rate TEXT NOT NULL,
+        mark_price TEXT,
+        first_market_capture_id TEXT NOT NULL
+          REFERENCES binance_market_captures(market_capture_id)
+          ON DELETE RESTRICT,
+        last_market_capture_id TEXT NOT NULL
+          REFERENCES binance_market_captures(market_capture_id)
+          ON DELETE RESTRICT,
+        first_seen_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        PRIMARY KEY(symbol, funding_time_utc)
+      ) STRICT;
+
+      CREATE TABLE binance_market_reference_snapshots (
+        market_capture_id TEXT NOT NULL
+          REFERENCES binance_market_captures(market_capture_id)
+          ON DELETE RESTRICT,
+        symbol TEXT NOT NULL,
+        mark_price TEXT NOT NULL,
+        index_price TEXT NOT NULL,
+        last_funding_rate TEXT NOT NULL,
+        next_funding_time_utc TEXT,
+        open_interest TEXT,
+        observed_at TEXT NOT NULL,
+        PRIMARY KEY(market_capture_id, symbol)
+      ) STRICT;
+
+      CREATE INDEX binance_market_reference_symbol_observed
+        ON binance_market_reference_snapshots(symbol, observed_at);
+    `
   }
 ];

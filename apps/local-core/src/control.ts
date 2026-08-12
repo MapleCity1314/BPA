@@ -98,6 +98,14 @@ import {
   isInventoryDataNode
 } from "./inventory-data-runtime-provider.js";
 import { AllianceRetiredDataRuntimeProvider } from "./alliance-retired-data-runtime-provider.js";
+import {
+  BinanceDataRuntimeProvider,
+  isBinanceDataNode
+} from "./binance-data-runtime-provider.js";
+import {
+  BinanceMarketRuntimeProvider,
+  isBinanceMarketNode
+} from "./binance-market-runtime-provider.js";
 import { PACKAGING_DATASET_PROFILE } from "@bpa/packaging-dataset";
 import {
   TEAM_WORKER_CODE_DIGEST,
@@ -354,6 +362,12 @@ export class LocalCoreService {
     }
     if (!providers.list().includes("alliance-retired-data")) {
       providers.register(new AllianceRetiredDataRuntimeProvider(persistence));
+    }
+    if (!providers.list().includes("binance-data")) {
+      providers.register(new BinanceDataRuntimeProvider(persistence));
+    }
+    if (!providers.list().includes("binance-market")) {
+      providers.register(new BinanceMarketRuntimeProvider(persistence));
     }
     if (
       inventoryServiceClient &&
@@ -2309,7 +2323,11 @@ export class LocalCoreService {
                 ? "experience-data"
                 : isAllianceRetiredDataNode(id, version)
                   ? "alliance-retired-data"
-                  : isEcommerceEvidenceNode(id, version)
+                  : isBinanceDataNode(id, version)
+                    ? "binance-data"
+                    : isBinanceMarketNode(id, version)
+                      ? "binance-market"
+                    : isEcommerceEvidenceNode(id, version)
                     ? "ecommerce-evidence"
                   : isInventoryDataNode(id, version)
                     ? "inventory-data"

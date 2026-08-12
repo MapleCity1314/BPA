@@ -16,7 +16,10 @@ idempotencyPolicy: occurrence
 retryPolicy: none
 missedRunPolicy: run_once
 # Deployment gate: keep disabled until real Mac browserInstanceId replacement
-# and measured experience-score plus retired-products p95 prove 15:00 is safe.
+# and measured inventory-cycle plus retired-products p95 prove 15:00 is safe.
+# Both workflows must bind the same browserInstanceId and concurrencyKey. The
+# Trigger Runtime then defers the later occurrence instead of allowing two
+# controllers to operate the same authenticated Chrome profile.
 schedule:
   type: daily
   timezone: Asia/Shanghai

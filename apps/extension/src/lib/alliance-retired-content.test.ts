@@ -67,10 +67,10 @@ describe("alliance retired-products content stages", () => {
         <div class="roleItem"><span class="introName">甲食品旗舰店</span>店铺ID 10001 正常营业</div>
       </div>
     `);
-    const close = vi.spyOn(
-      document.querySelector<HTMLElement>("button")!,
-      "click"
-    );
+    const close = vi.fn();
+    document
+      .querySelector<HTMLElement>("button")!
+      .addEventListener("click", close);
     await expect(
       executeAllianceRetiredStage(
         { stage: "discover-shops" },
@@ -79,17 +79,150 @@ describe("alliance retired-products content stages", () => {
       )
     ).resolves.toMatchObject({
       stage: "discover-shops",
-      currentShopName: "甲食品旗舰店",
+      currentShop: { id: "10001", name: "甲食品旗舰店" },
       shops: [{ id: "10001", name: "甲食品旗舰店" }]
     });
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("opens and discovers the current drawer switcher after the header menu", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName" data-shop-id="10001"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div id="drawer-host"></div>
+    `);
+    const trigger = document.querySelector<HTMLElement>(".headerShopName")!;
+    trigger.addEventListener("click", () => {
+      document.querySelector("#drawer-host")!.innerHTML = `
+        <div class="auxo-drawer auxo-drawer-open">
+          <div class="auxo-drawer-content-wrapper">
+            <button class="auxo-drawer-close" aria-label="Close"></button>
+            <div class="index_descriptions__current">切换组织/店铺</div>
+            <div class="index_shopOption__one">
+              <span class="index_introName__new">甲食品旗舰店</span>
+              <span>店铺ID 10001 正常营业</span>
+            </div>
+          </div>
+        </div>`;
+    });
+    await expect(
+      executeAllianceRetiredStage(
+        { stage: "discover-shops" },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      stage: "discover-shops",
+      currentShop: { id: "10001", name: "甲食品旗舰店" },
+      shops: [{ id: "10001", name: "甲食品旗舰店" }]
+    });
+  });
+
+  it("discovers shops when the current numeric ID is exposed only by the account popover", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div id="popover-host"></div>
+      <div id="drawer-host"></div>
+    `);
+    document.querySelector<HTMLElement>(".headerShopName")!.addEventListener(
+      "click",
+      () => {
+        document.querySelector("#popover-host")!.innerHTML = `
+          <div class="auxo-popover">
+            <div>甲食品旗舰店</div>
+            <div>店铺ID 10001</div>
+            <div class="switch-entry">切换组织/店铺</div>
+          </div>`;
+        document.querySelector<HTMLElement>(".switch-entry")!.addEventListener(
+          "click",
+          () => {
+        document.querySelector("#drawer-host")!.innerHTML = `
+          <div class="auxo-drawer auxo-drawer-open">
+            <div class="auxo-drawer-content-wrapper">
+              <button aria-label="Close"></button>
+              <div>切换组织/店铺</div>
+              <div class="roleItem">
+                <span class="introName">甲食品旗舰店</span>
+                店铺ID 10001 正常营业
+              </div>
+            </div>
+          </div>`;
+          }
+        );
+      }
+    );
+    await expect(
+      executeAllianceRetiredStage(
+        { stage: "discover-shops" },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      currentShop: { id: "10001", name: "甲食品旗舰店" },
+      shops: [{ id: "10001", name: "甲食品旗舰店" }]
+    });
+  });
+
+  it("reopens the account popover when a stale id-less switcher is already visible", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div id="popover-host"></div>
+      <div id="drawer-host">
+        <div class="auxo-modal-wrap">
+          <button aria-label="Close"></button>
+          <div class="roleItem"><span class="introName">甲食品旗舰店</span>正常营业</div>
+        </div>
+      </div>
+    `);
+    document.querySelector<HTMLElement>("button")!.addEventListener(
+      "click",
+      () => {
+        document.querySelector("#drawer-host")!.innerHTML = "";
+      }
+    );
+    document.querySelector<HTMLElement>(".headerShopName")!.addEventListener(
+      "click",
+      () => {
+        document.querySelector("#popover-host")!.innerHTML = `
+          <div class="auxo-popover">
+            <div>甲食品旗舰店</div>
+            <div>店铺ID 10001</div>
+            <div class="switch-entry">切换组织/店铺</div>
+          </div>`;
+        document.querySelector<HTMLElement>(".switch-entry")!.addEventListener(
+          "click",
+          () => {
+            document.querySelector("#drawer-host")!.innerHTML = `
+              <div class="auxo-modal-wrap">
+                <button aria-label="Close"></button>
+                <div class="roleItem"><span class="introName">甲食品旗舰店</span>正常营业</div>
+              </div>`;
+          }
+        );
+      }
+    );
+
+    await expect(
+      executeAllianceRetiredStage(
+        { stage: "discover-shops" },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      currentShop: { id: "10001", name: "甲食品旗舰店" }
+    });
   });
 
   it("continues discovery when the authenticated header classes change", async () => {
     const document = doc(`
       <div class="top-navigation">
         <span>精选联盟</span>
-        <div class="account-entry"><span>榆园儿食品专营店</span></div>
+        <div class="account-entry" data-shop-id="10001"><span>榆园儿食品专营店</span></div>
       </div>
       <a href="/ffa/w/login/account">账号管理</a>
       <div role="dialog">切换组织/店铺
@@ -105,7 +238,7 @@ describe("alliance retired-products content stages", () => {
       )
     ).resolves.toMatchObject({
       stage: "discover-shops",
-      currentShopName: "榆园儿食品专营店",
+      currentShop: { id: "10001", name: "榆园儿食品专营店" },
       shops: [{ id: "10001", name: "榆园儿食品专营店" }]
     });
   });
@@ -113,7 +246,7 @@ describe("alliance retired-products content stages", () => {
   it("discovers shops across a virtualized switcher", async () => {
     const document = doc(`
       <div id="fxg-pc-header">
-        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+        <div class="headerShopName" data-shop-id="10001"><span class="userName">甲食品旗舰店</span></div>
       </div>
       <div role="dialog">切换组织/店铺
         <div class="roleItem"><span class="introName">甲食品旗舰店</span>店铺ID 10001 正常营业</div>
@@ -144,10 +277,92 @@ describe("alliance retired-products content stages", () => {
     });
   });
 
+  it("returns id-less active cards for navigation-safe background resolution", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName" data-shop-id="10001"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div class="auxo-modal-wrap">
+        <div class="roleItem source"><span class="introName">甲食品旗舰店</span>正常营业</div>
+        <div class="roleItem target"><span class="introName">乙食品专营店</span>正常营业</div>
+      </div>
+    `);
+    const header = document.querySelector<HTMLElement>(".headerShopName")!;
+    const name = document.querySelector<HTMLElement>(".userName")!;
+    document.querySelector<HTMLElement>(".source")!.addEventListener(
+      "click",
+      () => {
+        header.dataset.shopId = "10001";
+        name.textContent = "甲食品旗舰店";
+      }
+    );
+    document.querySelector<HTMLElement>(".target")!.addEventListener(
+      "click",
+      () => {
+        header.dataset.shopId = "10002";
+        name.textContent = "乙食品专营店";
+      }
+    );
+    await expect(
+      executeAllianceRetiredStage(
+        { stage: "discover-shops" },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      currentShop: { id: "10001", name: "甲食品旗舰店" },
+      shops: [
+        { name: "甲食品旗舰店" },
+        { name: "乙食品专营店" }
+      ]
+    });
+    expect(header.dataset.shopId).toBe("10001");
+    expect(name.textContent).toBe("甲食品旗舰店");
+  });
+
+  it("preserves ordinal identity for same-name id-less cards", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName" data-shop-id="10002"><span class="userName">同名食品店</span></div>
+      </div>
+      <div class="auxo-modal-wrap">
+        <div class="roleItem first"><span class="introName">同名食品店</span>正常营业</div>
+        <div class="roleItem second"><span class="introName">同名食品店</span>正常营业</div>
+      </div>
+    `);
+    const header = document.querySelector<HTMLElement>(".headerShopName")!;
+    const name = document.querySelector<HTMLElement>(".userName")!;
+    document.querySelector<HTMLElement>(".first")!.addEventListener(
+      "click",
+      () => {
+        header.dataset.shopId = "10001";
+        name.textContent = "同名食品店";
+      }
+    );
+    document.querySelector<HTMLElement>(".second")!.addEventListener(
+      "click",
+      () => {
+        header.dataset.shopId = "10002";
+        name.textContent = "同名食品店";
+      }
+    );
+    await expect(
+      executeAllianceRetiredStage(
+        { stage: "discover-shops" },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      currentShop: { id: "10002", name: "同名食品店" },
+      shops: [{ switcherOrdinal: 0 }, { switcherOrdinal: 1 }]
+    });
+    expect(header.dataset.shopId).toBe("10002");
+  });
+
   it("does not silently stop after eight virtualized shop pages", async () => {
     const document = doc(`
       <div id="fxg-pc-header">
-        <div class="headerShopName"><span class="userName">店铺0食品店</span></div>
+        <div class="headerShopName" data-shop-id="10000"><span class="userName">店铺0食品店</span></div>
       </div>
       <div role="dialog">切换组织/店铺
         <div class="roleItem"><span class="introName">店铺0食品店</span>店铺ID 10000 正常营业</div>
@@ -178,10 +393,10 @@ describe("alliance retired-products content stages", () => {
     });
   });
 
-  it("rejects two distinct shop IDs with the same visible name", async () => {
+  it("uses the numeric header identity when two shops share a name", async () => {
     const document = doc(`
       <div id="fxg-pc-header">
-        <div class="headerShopName"><span class="userName">同名食品店</span></div>
+        <div class="headerShopName" data-shop-id="10001"><span class="userName">同名食品店</span></div>
       </div>
       <div role="dialog">切换组织/店铺
         <div class="roleItem"><span class="introName">同名食品店</span>店铺ID 10001 正常营业</div>
@@ -194,7 +409,10 @@ describe("alliance retired-products content stages", () => {
         document,
         "https://fxg.jinritemai.com/ffa/g/list"
       )
-    ).rejects.toThrow("SHOP_IDENTITY_AMBIGUOUS");
+    ).resolves.toMatchObject({
+      currentShop: { id: "10001", name: "同名食品店" },
+      shops: [{ id: "10001" }, { id: "10002" }]
+    });
   });
 
   it("filters the switcher and confirms the selected shop", async () => {
@@ -235,7 +453,8 @@ describe("alliance retired-products content stages", () => {
       )
     ).resolves.toEqual({
       stage: "switch-shop",
-      shopName: "乙食品专营店"
+      shopName: "乙食品专营店",
+      currentShop: { id: "10002", name: "乙食品专营店" }
     });
   });
 

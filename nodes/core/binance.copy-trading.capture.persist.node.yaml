@@ -1,0 +1,40 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: binance.copy-trading.capture.persist
+  version: 1.0.0
+  title: 持久化 Binance 合约跟单完整采集
+  description: 在全部项目详情完整返回后，以单事务追加保存原始采集、项目和仓位快照，并幂等更新规范化当前视图；任何校验失败均不提交。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [management, projects, pageTimeZone]
+  properties:
+    management: { type: object }
+    projects: { type: object }
+    pageTimeZone: { const: Asia/Shanghai }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [status, collectionRunId, captureAt, lastSuccessAt, collectedProjectCount, pageCount, recordCount, newRecordCount, oldestEventTimeUtc, newestEventTimeUtc, duplicate]
+  properties:
+    status: { enum: [success, authenticated_but_no_data, page_not_updated_yet] }
+    collectionRunId: { type: string, minLength: 1, maxLength: 200 }
+    captureAt: { type: string, format: date-time }
+    lastSuccessAt: { type: [string, "null"], format: date-time }
+    collectedProjectCount: { type: integer, minimum: 0, maximum: 500 }
+    pageCount: { type: integer, minimum: 1, maximum: 100000 }
+    recordCount: { type: integer, minimum: 0, maximum: 5000000 }
+    newRecordCount: { type: integer, minimum: 0, maximum: 5000000 }
+    oldestEventTimeUtc: { type: [string, "null"], format: date-time }
+    newestEventTimeUtc: { type: [string, "null"], format: date-time }
+    duplicate: { type: boolean }
+risk:
+  level: R1
+  permissions: [binance.copy-trading.capture.write]
+execution:
+  timeoutDefault: 2m
+  idempotency: verified_write
+  cancellable: true
+errors: [BINANCE_DATA_NODE_UNSUPPORTED, BINANCE_DATA_PERMISSION_MISMATCH, BINANCE_CAPTURE_PERSIST_FAILED, CANCELLED]

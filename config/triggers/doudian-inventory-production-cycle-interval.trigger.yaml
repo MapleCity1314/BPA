@@ -1,0 +1,43 @@
+apiVersion: bpa.trigger/v1alpha2
+id: doudian-inventory-production-cycle-interval
+version: 1.0.0
+appId: inventory-monitor
+kind: schedule
+workflow:
+  id: doudian.inventory.production-cycle
+  version: 1.0.0
+enabled: false
+inputSchemaVersion: doudian-inventory-production-cycle-interval/1
+input:
+  expectedShopCount: 13
+  shops:
+    - { id: "10001", name: deployment-placeholder-shop-01 }
+    - { id: "10002", name: deployment-placeholder-shop-02 }
+    - { id: "10003", name: deployment-placeholder-shop-03 }
+    - { id: "10004", name: deployment-placeholder-shop-04 }
+    - { id: "10005", name: deployment-placeholder-shop-05 }
+    - { id: "10006", name: deployment-placeholder-shop-06 }
+    - { id: "10007", name: deployment-placeholder-shop-07 }
+    - { id: "10008", name: deployment-placeholder-shop-08 }
+    - { id: "10009", name: deployment-placeholder-shop-09 }
+    - { id: "10010", name: deployment-placeholder-shop-10 }
+    - { id: "10011", name: deployment-placeholder-shop-11 }
+    - { id: "10012", name: deployment-placeholder-shop-12 }
+    - { id: "10013", name: deployment-placeholder-shop-13 }
+concurrencyKey: doudian-account:company-main
+browserInstanceId: deployment-placeholder:replace-with-company-mac-browser-instance
+externalDomainLease:
+  providerId: inventory-postgres
+  resourceId: inventory-production-cycle
+  ttlSeconds: 300
+idempotencyPolicy: occurrence
+retryPolicy: none
+missedRunPolicy: skip
+# Phase-one background cadence. Keep disabled until the placeholders are
+# replaced from the private 13-shop runtime configuration and the legacy
+# production-cycle launchd entry is stopped in the same maintenance window.
+schedule:
+  type: interval
+  anchorAt: "2026-01-01T00:00:00Z"
+  intervalSeconds: 1800
+  onTimeWindowSeconds: 300

@@ -12,6 +12,10 @@ import {
   createExperienceScoreBrowserDriver,
   ExperienceScoreDriverError
 } from "./experience-score-background";
+import {
+  BinanceDetailDriverError,
+  createBinanceDetailBrowserDriver
+} from "./binance-detail-background";
 
 export interface AdapterNodeResponse {
   readonly ok: boolean;
@@ -203,6 +207,7 @@ const ALLIANCE_DISCOVERY_ERRORS = new Set<DoudianAllianceNodeErrorCode>([
   "CAPTCHA_REQUIRED",
   "COMMAND_RESULT_TOO_LARGE",
   "COMMAND_CANCELLED",
+  "CURRENT_SHOP_NOT_IN_LIST",
   "DEADLINE_EXCEEDED",
   "DOUDIAN_ALLIANCE_DISCOVERY_FAILED",
   "DOUDIAN_ALLIANCE_MAX_SHOPS_INVALID",
@@ -211,12 +216,25 @@ const ALLIANCE_DISCOVERY_ERRORS = new Set<DoudianAllianceNodeErrorCode>([
   "PAGE_URL_INVALID",
   "RISK_CONTROL",
   "SESSION_EXPIRED",
+  "SHOP_CONTEXT_RESTORE_FAILED",
+  "SHOP_IDENTITY_DRIFT",
   "SHOP_IDENTITY_AMBIGUOUS",
   "SHOP_IDENTITY_UNCERTAIN",
   "SHOP_IDENTITY_UNCONFIRMED",
   "SHOP_LIMIT_EXCEEDED",
   "SHOP_LIST_EMPTY",
-  "SHOP_LIST_INCOMPLETE"
+  "SHOP_LIST_INCOMPLETE",
+  "SHOP_LIST_DUPLICATED",
+  "SHOP_NOT_ACTIVE",
+  "SHOP_SWITCH_DIALOG_AMBIGUOUS",
+  "SHOP_SWITCH_DIALOG_CLOSE_AMBIGUOUS",
+  "SHOP_SWITCH_DIALOG_TIMEOUT",
+  "SHOP_SWITCH_NOT_CONFIRMED",
+  "SHOP_SWITCH_SEARCH_AMBIGUOUS",
+  "SHOP_SWITCH_TRIGGER_AMBIGUOUS",
+  "SHOP_TARGET_AMBIGUOUS",
+  "SHOP_TARGET_INVALID",
+  "SHOP_TARGET_TIMEOUT"
 ]);
 
 const ALLIANCE_SCAN_ERRORS = new Set<DoudianAllianceNodeErrorCode>([
@@ -335,6 +353,64 @@ function experienceErrorResponse(
   };
 }
 
+const BINANCE_RETRYABLE_ERRORS = new Set([
+  "BINANCE_CONTENT_RESPONSE_TIMEOUT",
+  "BINANCE_DETAIL_TAB_TIMEOUT",
+  "BINANCE_PAGINATION_TIMEOUT",
+  "BROWSER_DISCONNECTED",
+  "PAGE_LOADING"
+]);
+
+function binanceErrorResponse(error: unknown): AdapterNodeResponse {
+  const safe =
+    error instanceof BinanceDetailDriverError
+      ? error
+      : new BinanceDetailDriverError("BINANCE_DETAIL_STAGE_FAILED");
+  const blocking = [
+    "BINANCE_MANAGEMENT_RESTORE_FAILED",
+    "CAPTCHA_REQUIRED",
+    "PAGE_CONTEXT_CHANGED",
+    "RATE_LIMITED",
+    "RISK_CONTROL",
+    "SESSION_EXPIRED"
+  ].includes(safe.code);
+  const riskSignals = safe.riskSignals.length > 0
+    ? [...safe.riskSignals]
+    : blocking
+      ? [{
+          code: safe.code === "SESSION_EXPIRED"
+            ? "SESSION_EXPIRED" as const
+            : safe.code === "CAPTCHA_REQUIRED"
+              ? "CAPTCHA_REQUIRED" as const
+              : safe.code === "RATE_LIMITED"
+                ? "RATE_LIMITED" as const
+                : safe.code === "PAGE_CONTEXT_CHANGED" || safe.code === "BINANCE_MANAGEMENT_RESTORE_FAILED"
+                  ? "PAGE_CONTEXT_CHANGED" as const
+                  : "RISK_CONTROL" as const,
+          category: safe.code === "SESSION_EXPIRED"
+            ? "session" as const
+            : safe.code === "PAGE_CONTEXT_CHANGED" || safe.code === "BINANCE_MANAGEMENT_RESTORE_FAILED"
+              ? "page_context" as const
+              : safe.code === "RATE_LIMITED"
+                ? "throttle" as const
+                : "challenge" as const,
+          severity: "blocking" as const,
+          source: "adapter" as const,
+          detected_at: new Date().toISOString(),
+          detail: `Binance 详情采集已停止：${safe.code}`
+        }]
+      : [];
+  return {
+    ok: false,
+    error: {
+      code: safe.code,
+      message: safe.message,
+      retryable: BINANCE_RETRYABLE_ERRORS.has(safe.code)
+    },
+    ...(riskSignals.length > 0 ? { riskSignals } : {})
+  };
+}
+
 const discoverAllianceShops: AdapterNodeHandler = async (input, context) => {
   const startedAt = Date.now();
   const maxShops = Number(input.maxShops ?? 100);
@@ -379,7 +455,9 @@ const discoverAllianceShops: AdapterNodeHandler = async (input, context) => {
       throw new AllianceRetiredDriverError("SHOP_IDENTITY_UNCERTAIN");
     }
     const sourceMatches = active.filter(
-      (shop) => normalize(shop.name) === normalize(discovery.currentShopName)
+      (shop) =>
+        shop.id === discovery.currentShop.id &&
+        normalize(shop.name) === normalize(discovery.currentShop.name)
     );
     if (sourceMatches.length !== 1) {
       throw new AllianceRetiredDriverError(
@@ -733,7 +811,30 @@ const readExperienceShop: AdapterNodeHandler = async (input, context) => {
   }
 };
 
+const collectBinanceProject: AdapterNodeHandler = async (input, context) => {
+  const startedAt = Date.now();
+  const driver = createBinanceDetailBrowserDriver({
+    sourceTabId: context.sourceTabId,
+    deadline: context.deadline,
+    ...(context.isCancelled ? { isCancelled: context.isCancelled } : {})
+  });
+  try {
+    const snapshot = await driver.collectProject(input);
+    return {
+      ok: true,
+      output: { ...snapshot },
+      timingObservation: {
+        readiness_wait_ms: Date.now() - startedAt,
+        stable_for_ms: 300
+      }
+    };
+  } catch (error) {
+    return binanceErrorResponse(error);
+  }
+};
+
 const handlers = new Map<string, AdapterNodeHandler>([
+  ["binance.copy-trading.project.detail.collect", collectBinanceProject],
   ["doudian.inventory.shop.activate", activateInventoryShop],
   ["doudian.alliance.shops.discover", discoverAllianceShops],
   ["doudian.alliance.shop.retired-products.scan", scanAllianceShop],

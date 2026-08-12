@@ -77,6 +77,25 @@ describe("doudian adapter", () => {
       });
   });
 
+  it("keeps the observed header identity stable while the account popover is open", () => {
+    const doc = new JSDOM(`
+      <body>
+        <div id="fxg-pc-header">
+          <div class="headerShopName"><span class="userName">测试旗舰店</span>
+            <div class="auxo-popover">店铺ID 123456789 切换组织/店铺</div>
+          </div>
+        </div>
+      </body>
+    `, { url: "https://fxg.jinritemai.com/ffa/g/list" }).window.document;
+    doc.querySelector<HTMLElement>(".userName")!.getBoundingClientRect = () =>
+      ({ top: 72, bottom: 96, width: 150, height: 24 }) as DOMRect;
+    expect(readDoudianShopContext(doc).shop).toEqual({
+      id: "name:4cf24bd7",
+      name: "测试旗舰店",
+      identity_confirmed: true
+    });
+  });
+
   it("falls back to the first complete shop-name line in transformed layouts", () => {
     const doc = {
       defaultView: {
