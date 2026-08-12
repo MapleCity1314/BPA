@@ -7,6 +7,7 @@ import {
   openBuyinRetiredProducts,
   openDoudianAlliancePromotion,
   readBuyinRetiredProducts,
+  readDoudianHeaderShopIdentity,
   readDoudianHeaderShopName,
   selectDoudianAllianceShop
 } from "./alliance-retired.js";
@@ -203,6 +204,39 @@ describe("Doudian alliance retired-products runtime", () => {
       <a href="/ffa/w/login/account">账号管理</a>
     `);
     expect(readDoudianHeaderShopName(doc)).toBe("榆园儿食品专营店");
+  });
+
+  it("binds a header shop name to the unique numeric ID in its account popover", () => {
+    const doc = documentOf(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div class="auxo-popover">
+        <div>甲食品旗舰店</div>
+        <div>店铺ID 10001</div>
+        <div>切换组织/店铺</div>
+      </div>
+    `);
+    expect(readDoudianHeaderShopIdentity(doc)).toEqual({
+      id: "10001",
+      name: "甲食品旗舰店"
+    });
+  });
+
+  it("rejects a numeric ID from an account popover for another shop", () => {
+    const doc = documentOf(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div class="auxo-popover">
+        <div>乙食品专营店</div>
+        <div>店铺ID 10002</div>
+        <div>切换组织/店铺</div>
+      </div>
+    `);
+    expect(() => readDoudianHeaderShopIdentity(doc)).toThrow(
+      "SHOP_IDENTITY_UNCERTAIN"
+    );
   });
 
   it("closes stacked promotion dialogs from the top and opens clear-out", () => {

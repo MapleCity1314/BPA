@@ -207,10 +207,54 @@ export function readDoudianHeaderShopIdentity(doc: Document): {
   readonly name: string;
 } {
   const identity = readDoudianVisibleShopIdentity(doc);
-  if (!identity.identityConfirmed || !/^\d{5,30}$/u.test(identity.id)) {
+  if (!identity.identityConfirmed) {
     throw new DoudianAllianceError("SHOP_IDENTITY_UNCERTAIN");
   }
-  return { id: identity.id, name: identity.name };
+  const stableId =
+    readNumericShopIdNearHeaderElement(identity.element) ??
+    readCurrentAccountPopoverShopId(doc, identity.name);
+  if (!stableId) {
+    throw new DoudianAllianceError("SHOP_IDENTITY_UNCERTAIN");
+  }
+  return { id: stableId, name: identity.name };
+}
+
+function readNumericShopIdNearHeaderElement(
+  element: Element | undefined
+): string | undefined {
+  let current = element;
+  while (
+    current &&
+    current !== current.ownerDocument.body &&
+    current !== current.ownerDocument.documentElement
+  ) {
+    for (const key of [
+      "data-shop-id",
+      "data-shopid",
+      "data-shop-key",
+      "data-value",
+      "value"
+    ]) {
+      const value = current.getAttribute(key);
+      if (value && /^\d{5,30}$/u.test(value)) return value;
+    }
+    const href = current.getAttribute("href");
+    if (href) {
+      try {
+        const url = new URL(href, DOUDIAN_ORIGIN);
+        for (const key of ["shop_id", "shopId", "shopid"]) {
+          const value = url.searchParams.get(key);
+          if (value && /^\d{5,30}$/u.test(value)) return value;
+        }
+      } catch {
+        // Ignore malformed attributes from untrusted page content.
+      }
+    }
+    const textId = shopIdFromText(normalizeText(current.textContent));
+    if (textId) return textId;
+    current = current.parentElement ?? undefined;
+  }
+  return undefined;
 }
 
 export function openDoudianShopSwitcher(doc: Document): void {
@@ -300,6 +344,36 @@ function shopIdFromText(value: string): string | undefined {
     /(?:店铺\s*ID|店铺ID|ID)[：:\s]*(\d{5,30})/iu.exec(value)?.[1] ??
     undefined
   );
+}
+
+function readCurrentAccountPopoverShopId(
+  doc: Document,
+  currentShopName: string
+): string | undefined {
+  const accountPopovers = Array.from(
+    doc.querySelectorAll<HTMLElement>(".auxo-popover")
+  ).filter((popover) => {
+    if (!visibleElement(popover)) return false;
+    const text = normalizeText(popover.textContent);
+    return text.includes("切换组织/店铺") && text.includes(currentShopName);
+  });
+  if (accountPopovers.length === 0) return undefined;
+  if (accountPopovers.length !== 1) {
+    throw new DoudianAllianceError("SHOP_IDENTITY_AMBIGUOUS");
+  }
+  const ids = [
+    ...new Set(
+      Array.from(
+        normalizeText(accountPopovers[0]!.textContent).matchAll(
+          /店铺\s*ID[：:\s]*(\d{5,30})/giu
+        )
+      ).map((match) => match[1]!)
+    )
+  ];
+  if (ids.length !== 1) {
+    throw new DoudianAllianceError("SHOP_IDENTITY_UNCERTAIN");
+  }
+  return ids[0];
 }
 
 function blockedShopStatus(value: string): string | undefined {

@@ -119,6 +119,46 @@ describe("alliance retired-products content stages", () => {
     });
   });
 
+  it("discovers shops when the current numeric ID is exposed only by the account popover", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName auxo-popover-open"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div class="auxo-popover">
+        <div>甲食品旗舰店</div>
+        <div>店铺ID 10001</div>
+        <div class="switch-entry">切换组织/店铺</div>
+      </div>
+      <div id="drawer-host"></div>
+    `);
+    document.querySelector<HTMLElement>(".switch-entry")!.addEventListener(
+      "click",
+      () => {
+        document.querySelector("#drawer-host")!.innerHTML = `
+          <div class="auxo-drawer auxo-drawer-open">
+            <div class="auxo-drawer-content-wrapper">
+              <button aria-label="Close"></button>
+              <div>切换组织/店铺</div>
+              <div class="roleItem">
+                <span class="introName">甲食品旗舰店</span>
+                店铺ID 10001 正常营业
+              </div>
+            </div>
+          </div>`;
+      }
+    );
+    await expect(
+      executeAllianceRetiredStage(
+        { stage: "discover-shops" },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      currentShop: { id: "10001", name: "甲食品旗舰店" },
+      shops: [{ id: "10001", name: "甲食品旗舰店" }]
+    });
+  });
+
   it("continues discovery when the authenticated header classes change", async () => {
     const document = doc(`
       <div class="top-navigation">
