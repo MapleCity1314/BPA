@@ -63,11 +63,65 @@ export async function completeCoreCancellationAfterStageStop(input: {
 export class AllianceRetiredDriverError extends Error {
   constructor(
     readonly code: DoudianAllianceNodeErrorCode,
-    readonly riskSignals: readonly RiskSignal[] = []
+    readonly riskSignals: readonly RiskSignal[] = [],
+    readonly diagnostic?: AllianceRetiredStageDiagnostic
   ) {
-    super(`Doudian alliance browser error: ${code}`);
+    super(
+      `Doudian alliance browser error: ${code}${
+        diagnostic ? ` [${allianceStageDiagnosticText(diagnostic)}]` : ""
+      }`
+    );
     this.name = "AllianceRetiredDriverError";
   }
+}
+
+export interface AllianceRetiredStageDiagnostic {
+  readonly phase: "resolve-shop" | "restore-source";
+  readonly shopOrdinal?: number;
+  readonly switchResponse:
+    | "not-started"
+    | "confirmed"
+    | "mismatched"
+    | "recoverable-error"
+    | "failed";
+  readonly navigationIdentity:
+    | "not-required"
+    | "confirmed"
+    | "mismatched"
+    | "unavailable";
+  readonly restoreResult: "not-required" | "succeeded" | "failed";
+}
+
+function allianceStageDiagnosticText(
+  diagnostic: AllianceRetiredStageDiagnostic
+): string {
+  return [
+    `phase=${diagnostic.phase}`,
+    ...(diagnostic.shopOrdinal === undefined
+      ? []
+      : [`shop_ordinal=${diagnostic.shopOrdinal}`]),
+    `switch_response=${diagnostic.switchResponse}`,
+    `navigation_identity=${diagnostic.navigationIdentity}`,
+    `restore_result=${diagnostic.restoreResult}`
+  ].join(";");
+}
+
+function withAllianceDiagnostic(
+  error: unknown,
+  diagnostic: AllianceRetiredStageDiagnostic
+): AllianceRetiredDriverError {
+  if (error instanceof AllianceRetiredDriverError) {
+    return new AllianceRetiredDriverError(
+      error.code,
+      error.riskSignals,
+      diagnostic
+    );
+  }
+  return new AllianceRetiredDriverError(
+    "DOUDIAN_ALLIANCE_DISCOVERY_FAILED",
+    [],
+    diagnostic
+  );
 }
 
 const DISCOVERY_ERROR_CODES = new Set<DoudianAllianceNodeErrorCode>([
@@ -468,10 +522,18 @@ export function createAllianceRetiredBrowserDriver(input: {
       : new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
   };
 
-  const switchAndConfirmShop = async (shop: AllianceShop) => {
+  const switchAndConfirmShop = async (
+    shop: AllianceShop,
+    diagnosticBase: {
+      readonly phase: AllianceRetiredStageDiagnostic["phase"];
+      readonly shopOrdinal?: number;
+    }
+  ) => {
     let switchResult:
       | Extract<AllianceRetiredStageResult, { stage: "switch-shop" }>
       | undefined;
+    let switchResponse: AllianceRetiredStageDiagnostic["switchResponse"] =
+      "not-started";
     try {
       switchResult = await stage<Extract<
         AllianceRetiredStageResult,
@@ -481,6 +543,7 @@ export function createAllianceRetiredBrowserDriver(input: {
         { stage: "switch-shop", shop },
         "switch-shop"
       );
+      switchResponse = "mismatched";
     } catch (error) {
       if (
         !(error instanceof AllianceRetiredDriverError) ||
@@ -490,22 +553,52 @@ export function createAllianceRetiredBrowserDriver(input: {
           "SHOP_IDENTITY_UNCERTAIN"
         ].includes(error.code)
       ) {
-        throw error;
+        throw withAllianceDiagnostic(error, {
+          ...diagnosticBase,
+          switchResponse: "failed",
+          navigationIdentity: "not-required",
+          restoreResult: "not-required"
+        });
       }
+      switchResponse = "recoverable-error";
     }
     const immediate = switchResult?.currentShop;
     const immediateMatches =
       immediate !== undefined &&
       normalizeShopName(immediate.name) === normalizeShopName(shop.name) &&
       (shop.id === undefined || immediate.id === shop.id);
-    const observed = immediateMatches
-      ? immediate
-      : (await readShopContextAfterNavigation(shop)).currentShop;
+    if (immediateMatches) switchResponse = "confirmed";
+    let observed: { readonly id: string; readonly name: string };
+    try {
+      observed = immediateMatches
+        ? immediate
+        : (await readShopContextAfterNavigation(shop)).currentShop;
+    } catch (error) {
+      throw withAllianceDiagnostic(error, {
+        ...diagnosticBase,
+        switchResponse,
+        navigationIdentity:
+          error instanceof AllianceRetiredDriverError &&
+          error.code === "SHOP_IDENTITY_MISMATCH"
+            ? "mismatched"
+            : "unavailable",
+        restoreResult: "not-required"
+      });
+    }
     if (
       normalizeShopName(observed.name) !== normalizeShopName(shop.name) ||
       (shop.id !== undefined && observed.id !== shop.id)
     ) {
-      throw new AllianceRetiredDriverError("SHOP_IDENTITY_MISMATCH");
+      throw new AllianceRetiredDriverError(
+        "SHOP_IDENTITY_MISMATCH",
+        [],
+        {
+          ...diagnosticBase,
+          switchResponse,
+          navigationIdentity: "mismatched",
+          restoreResult: "not-required"
+        }
+      );
     }
     return observed;
   };
@@ -519,7 +612,7 @@ export function createAllianceRetiredBrowserDriver(input: {
     let mayNeedRestore = false;
     let primaryError: unknown;
     try {
-      for (const shop of shops) {
+      for (const [shopIndex, shop] of shops.entries()) {
         assertNotCancelled();
         if (shop.status === "blocked") {
           resolved.push(shop);
@@ -547,7 +640,10 @@ export function createAllianceRetiredBrowserDriver(input: {
           continue;
         }
         mayNeedRestore = true;
-        const identity = await switchAndConfirmShop(shop);
+        const identity = await switchAndConfirmShop(shop, {
+          phase: "resolve-shop",
+          shopOrdinal: shopIndex + 1
+        });
         if (
           identity.id === sourceShop.id &&
           normalizeShopName(identity.name) === normalizeShopName(sourceShop.name)
@@ -561,20 +657,53 @@ export function createAllianceRetiredBrowserDriver(input: {
     }
     if (mayNeedRestore) {
       try {
-        await switchAndConfirmShop({
-          id: sourceShop.id,
-          ...(sourceSwitcherOrdinal === undefined
-            ? {}
-            : { switcherOrdinal: sourceSwitcherOrdinal }),
-          name: sourceShop.name,
-          status: "active",
-          statusText: "正常营业"
-        });
-      } catch {
-        throw new AllianceRetiredDriverError("SHOP_CONTEXT_RESTORE_FAILED");
+        await switchAndConfirmShop(
+          {
+            id: sourceShop.id,
+            ...(sourceSwitcherOrdinal === undefined
+              ? {}
+              : { switcherOrdinal: sourceSwitcherOrdinal }),
+            name: sourceShop.name,
+            status: "active",
+            statusText: "正常营业"
+          },
+          { phase: "restore-source" }
+        );
+      } catch (restoreError) {
+        const diagnostic =
+          primaryError instanceof AllianceRetiredDriverError &&
+          primaryError.diagnostic
+            ? primaryError.diagnostic
+            : restoreError instanceof AllianceRetiredDriverError &&
+                restoreError.diagnostic
+              ? restoreError.diagnostic
+              : {
+                  phase: "restore-source" as const,
+                  switchResponse: "failed" as const,
+                  navigationIdentity: "unavailable" as const,
+                  restoreResult: "failed" as const
+                };
+        throw new AllianceRetiredDriverError(
+          "SHOP_CONTEXT_RESTORE_FAILED",
+          [],
+          { ...diagnostic, restoreResult: "failed" }
+        );
       }
     }
-    if (primaryError) throw primaryError;
+    if (primaryError) {
+      if (
+        mayNeedRestore &&
+        primaryError instanceof AllianceRetiredDriverError &&
+        primaryError.diagnostic
+      ) {
+        throw new AllianceRetiredDriverError(
+          primaryError.code,
+          primaryError.riskSignals,
+          { ...primaryError.diagnostic, restoreResult: "succeeded" }
+        );
+      }
+      throw primaryError;
+    }
     const ids = resolved
       .filter((shop) => shop.status === "active")
       .map((shop) => shop.id);
@@ -610,7 +739,7 @@ export function createAllianceRetiredBrowserDriver(input: {
       return (await discoverShopContext()).shops;
     },
     async switchShop(shop) {
-      await switchAndConfirmShop(shop);
+      await switchAndConfirmShop(shop, { phase: "resolve-shop" });
     },
     async openPromotion(_shop) {
       const landingTabId = await withManagedTabReservation(async () => {
