@@ -1,6 +1,7 @@
 import type {
   BinanceCollectionRunRecord,
   BinanceProjectReadRecord,
+  BinancePositionReadRecord,
   BinanceRecordReadRecord,
   BinanceValidationReadRecord,
   BinanceCandleReadRecord,
@@ -65,6 +66,7 @@ export type PublicBinanceRun = Omit<
   "workflowRunId" | "sourceUrl" | "contentDigest"
 >;
 export type PublicBinanceProject = BinanceProjectReadRecord;
+export type PublicBinancePosition = BinancePositionReadRecord;
 export type PublicBinanceRecord = BinanceRecordReadRecord;
 export type PublicBinanceValidation = BinanceValidationReadRecord;
 export type PublicBinanceCandle = BinanceCandleReadRecord;

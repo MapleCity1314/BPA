@@ -837,6 +837,14 @@ export interface BinanceRecordSeek {
   currentRecordKey: string;
 }
 
+export interface BinancePositionSeek {
+  projectAlias: string;
+  symbol: string;
+  positionSide: string;
+  ordinal: number;
+  snapshotId: string;
+}
+
 export interface BinanceValidationSeek {
   createdAt: string;
   validationId: string;
@@ -868,6 +876,15 @@ export interface BinanceRecordReadRecord {
   fields: JsonValue;
   firstSeenAt: string;
   lastSeenAt: string;
+}
+
+export interface BinancePositionReadRecord {
+  projectAlias: string;
+  symbol: string;
+  positionSide: string;
+  ordinal: number;
+  capturedAt: string;
+  fields: JsonValue;
 }
 
 export interface BinanceValidationReadRecord {
@@ -902,6 +919,7 @@ export interface BinanceOverviewRecord {
   ongoingProjectCount: number;
   endedProjectCount: number;
   currentRecordCount: number;
+  positionSnapshotCount: number;
 }
 
 export interface BinanceReadStore {
@@ -926,6 +944,10 @@ export interface BinanceReadStore {
     limit: number;
     after?: BinanceRecordSeek;
   }): BinanceReadPage<BinanceRecordReadRecord, BinanceRecordSeek>;
+  listBinancePositions(input: {
+    limit: number;
+    after?: BinancePositionSeek;
+  }): BinanceReadPage<BinancePositionReadRecord, BinancePositionSeek>;
   listBinanceValidations(input: {
     collectionRunId?: string;
     limit: number;

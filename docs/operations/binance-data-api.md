@@ -31,6 +31,7 @@ BPA_HOME="$HOME/Library/Application Support/BPA" pnpm binance-data-api
 - `/api/v1/binance/overview`
 - `/api/v1/binance/runs`
 - `/api/v1/binance/projects`
+- `/api/v1/binance/positions`（最近一次成功采集的结构化仓位快照；可能为空）
 - `/api/v1/binance/projects/{alias}`
 - `/api/v1/binance/projects/{alias}/records`
 - `/api/v1/binance/validations`

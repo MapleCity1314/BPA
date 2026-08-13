@@ -18,12 +18,14 @@ function store(readiness: BinanceReadinessRecord): BinanceReadStore {
       projectCount: 0,
       ongoingProjectCount: 0,
       endedProjectCount: 0,
-      currentRecordCount: 0
+      currentRecordCount: 0,
+      positionSnapshotCount: 0
     }),
     listBinanceCollectionRuns: () => ({ items: [], hasMore: false }),
     listBinanceProjects: () => ({ items: [], hasMore: false }),
     getBinanceProjectByAlias: () => undefined,
     listBinanceRecords: () => ({ items: [], hasMore: false }),
+    listBinancePositions: () => ({ items: [], hasMore: false }),
     listBinanceValidations: () => ({ items: [], hasMore: false }),
     listBinanceCandles: () => ({ items: [], hasMore: false }),
     listBinanceFunding: () => ({ items: [], hasMore: false }),
@@ -121,6 +123,41 @@ describe("Binance Data API transport", () => {
       "/api/v1/binance/projects/leader-01",
       "HEAD"
     )).resolves.toMatchObject({ status: 200, raw: "" });
+  });
+
+  it("serves the latest structured positions through a dedicated read-only route", async () => {
+    const readStore = store({ schemaVersion: 26 });
+    readStore.listBinancePositions = () => ({
+      items: [{
+        projectAlias: "leader-01",
+        symbol: "BTCUSDT",
+        positionSide: "做多",
+        ordinal: 1,
+        capturedAt: timestamp,
+        fields: { Symbol: "BTCUSDT 永续", 数量: "0.01000000" }
+      }],
+      hasMore: false
+    });
+    const server = createBinanceDataHttpServer({
+      queries: new BinanceQueries(readStore, () => new Date(timestamp)),
+      serviceReadiness: {
+        ready: true,
+        database_readable: true,
+        schema_ready: true,
+        schema_version: 26
+      },
+      port: 0
+    });
+    servers.push(server);
+    const address = await server.listen();
+    await expect(fetchJson(address.port, "/api/v1/binance/positions?limit=100"))
+      .resolves.toMatchObject({
+        status: 200,
+        body: {
+          data: [{ projectAlias: "leader-01", symbol: "BTCUSDT", ordinal: 1 }],
+          page: { has_more: false, limit: 100 }
+        }
+      });
   });
 
   it("does not turn a missing project into 500 with the real SQLite query", async () => {

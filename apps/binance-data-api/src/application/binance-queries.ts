@@ -3,6 +3,7 @@ import type {
   BinanceRecordSeek,
   BinanceRunSeek,
   BinanceProjectSeek,
+  BinancePositionSeek,
   BinanceValidationSeek,
   BinanceMarketSeek
 } from "@bpa/persistence";
@@ -210,6 +211,38 @@ export class BinanceQueries {
         limit
       }
     };
+  }
+
+  positions(requestId: string, params: URLSearchParams) {
+    const endpoint = "positions";
+    const limit = limitValue(params.get("limit"));
+    const filters = {};
+    const seek = decodeCursor(params.get("cursor") ?? undefined, endpoint, filters, [
+      "project_alias", "symbol", "position_side", "ordinal", "snapshot_id"
+    ]);
+    const ordinal = seek ? Number(seek.ordinal) : undefined;
+    if (ordinal !== undefined && (!Number.isSafeInteger(ordinal) || ordinal < 1)) {
+      throw new QueryInputError("INVALID_CURSOR", "position cursor ordinal is invalid");
+    }
+    const page = this.store.listBinancePositions({
+      limit,
+      ...(seek
+        ? { after: {
+            projectAlias: seek.project_alias!,
+            symbol: seek.symbol!,
+            positionSide: seek.position_side!,
+            ordinal: ordinal!,
+            snapshotId: seek.snapshot_id!
+          } satisfies BinancePositionSeek }
+        : {})
+    });
+    return listEnvelope(requestId, this.meta(requestId), endpoint, filters, limit, page, (next) => ({
+      project_alias: next.projectAlias,
+      symbol: next.symbol,
+      position_side: next.positionSide,
+      ordinal: String(next.ordinal),
+      snapshot_id: next.snapshotId
+    }));
   }
 
   validations(requestId: string, params: URLSearchParams) {

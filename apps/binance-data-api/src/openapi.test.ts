@@ -5,6 +5,7 @@ describe("Binance Data API OpenAPI contract", () => {
   it("is a static OpenAPI 3.1 GET/HEAD-only contract without sensitive fields", () => {
     expect(openApiDocument.openapi).toBe("3.1.0");
     expect(Object.keys(openApiDocument.paths)).toContain("/api/v1/binance/readiness");
+    expect(Object.keys(openApiDocument.paths)).toContain("/api/v1/binance/positions");
     for (const path of Object.values(openApiDocument.paths)) {
       expect(Object.keys(path).sort()).toEqual(["get", "head"]);
       expect(path.get.responses).toHaveProperty("200");

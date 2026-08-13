@@ -149,6 +149,10 @@ export function createBinanceDataHttpServer(options: BinanceDataHttpServerOption
           json(response, 200, queries.projects(requestId, url.searchParams), head);
           return;
         }
+        if (url.pathname === "/api/v1/binance/positions") {
+          json(response, 200, queries.positions(requestId, url.searchParams), head);
+          return;
+        }
         if (url.pathname === "/api/v1/binance/validations") {
           json(response, 200, queries.validations(requestId, url.searchParams), head);
           return;

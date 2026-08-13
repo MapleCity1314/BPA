@@ -253,6 +253,18 @@ describe("Binance copy-trading SQLite v26", () => {
     expect(result).toMatchObject({ newCurrentRecordCount: 2 });
     expect(store.listBinanceRawRecords(input.collectionRunId)).toHaveLength(3);
     expect(store.listBinanceCurrentRecords("project_1001")).toHaveLength(2);
+    expect(store.getBinanceOverview()).toMatchObject({ positionSnapshotCount: 1 });
+    expect(store.listBinancePositions({ limit: 10 })).toMatchObject({
+      hasMore: false,
+      items: [{
+        projectAlias: "leader-01",
+        symbol: "BTCUSDT",
+        positionSide: "做多",
+        ordinal: 1,
+        capturedAt: timestamp,
+        fields: { Symbol: "BTCUSDT 永续", 标记价格: "120001" }
+      }]
+    });
   });
 
   it("never exposes legacy position current rows through public record queries", () => {

@@ -48,6 +48,8 @@ import {
   type BinanceMarketSeek,
   type BinanceMarketWatermarkRecord,
   type BinanceOverviewRecord,
+  type BinancePositionReadRecord,
+  type BinancePositionSeek,
   type BinanceProjectReadRecord,
   type BinanceProjectSeek,
   type BinanceRawRecord,
@@ -3496,11 +3498,20 @@ export class SqlitePersistence implements Persistence {
     const records = this.#db.prepare(
       "SELECT COUNT(*) AS count FROM binance_copy_record_current WHERE source_tab<>'仓位'"
     ).get() as SqlRow;
+    const positions = this.#db.prepare(
+      `SELECT COUNT(*) AS count FROM binance_position_snapshots
+       WHERE collection_run_id=(
+         SELECT collection_run_id FROM binance_collection_runs
+         WHERE status IN ('success','authenticated_but_no_data')
+         ORDER BY capture_at DESC,collection_run_id DESC LIMIT 1
+       )`
+    ).get() as SqlRow;
     return {
       projectCount: Number(project.project_count ?? 0),
       ongoingProjectCount: Number(project.ongoing_count ?? 0),
       endedProjectCount: Number(project.ended_count ?? 0),
-      currentRecordCount: Number(records.count ?? 0)
+      currentRecordCount: Number(records.count ?? 0),
+      positionSnapshotCount: Number(positions.count ?? 0)
     };
   }
 
@@ -3648,6 +3659,74 @@ export class SqlitePersistence implements Persistence {
             nextSeek: {
               eventTimeKey: String(lastRow.event_time_key),
               currentRecordKey: String(lastRow.current_record_key)
+            }
+          }
+        : {})
+    };
+  }
+
+  listBinancePositions(input: {
+    limit: number;
+    after?: BinancePositionSeek;
+  }): BinanceReadPage<BinancePositionReadRecord, BinancePositionSeek> {
+    const limit = boundedReadLimit(input.limit);
+    const rows = this.#db.prepare(
+      `WITH latest_success AS (
+         SELECT collection_run_id FROM binance_collection_runs
+         WHERE status IN ('success','authenticated_but_no_data')
+         ORDER BY capture_at DESC,collection_run_id DESC LIMIT 1
+       )
+       SELECT p.*,a.project_alias
+       FROM binance_position_snapshots p
+       JOIN latest_success l ON l.collection_run_id=p.collection_run_id
+       JOIN binance_project_aliases a ON a.project_id=p.project_id
+       WHERE a.retired_at IS NULL
+         AND (? IS NULL OR a.project_alias > ?
+           OR (a.project_alias = ? AND p.symbol > ?)
+           OR (a.project_alias = ? AND p.symbol = ? AND p.position_side > ?)
+           OR (a.project_alias = ? AND p.symbol = ? AND p.position_side = ? AND p.ordinal > ?)
+           OR (a.project_alias = ? AND p.symbol = ? AND p.position_side = ? AND p.ordinal = ? AND p.snapshot_id > ?))
+       ORDER BY a.project_alias,p.symbol,p.position_side,p.ordinal,p.snapshot_id
+       LIMIT ?`
+    ).all(
+      input.after?.projectAlias ?? null,
+      input.after?.projectAlias ?? null,
+      input.after?.projectAlias ?? null,
+      input.after?.symbol ?? null,
+      input.after?.projectAlias ?? null,
+      input.after?.symbol ?? null,
+      input.after?.positionSide ?? null,
+      input.after?.projectAlias ?? null,
+      input.after?.symbol ?? null,
+      input.after?.positionSide ?? null,
+      input.after?.ordinal ?? null,
+      input.after?.projectAlias ?? null,
+      input.after?.symbol ?? null,
+      input.after?.positionSide ?? null,
+      input.after?.ordinal ?? null,
+      input.after?.snapshotId ?? null,
+      limit + 1
+    ) as SqlRow[];
+    const page = rows.slice(0, limit).map((row) => ({
+      projectAlias: String(row.project_alias),
+      symbol: String(row.symbol),
+      positionSide: String(row.position_side),
+      ordinal: Number(row.ordinal),
+      capturedAt: String(row.captured_at),
+      fields: publicBinanceJson(parseJson(row.fields_json))
+    }));
+    const lastRow = rows[Math.min(limit, rows.length) - 1];
+    return {
+      items: page,
+      hasMore: rows.length > limit,
+      ...(rows.length > limit && lastRow
+        ? {
+            nextSeek: {
+              projectAlias: String(lastRow.project_alias),
+              symbol: String(lastRow.symbol),
+              positionSide: String(lastRow.position_side),
+              ordinal: Number(lastRow.ordinal),
+              snapshotId: String(lastRow.snapshot_id)
             }
           }
         : {})

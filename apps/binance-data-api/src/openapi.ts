@@ -95,6 +95,10 @@ export const openApiDocument = {
       get: operation("listBinanceProjects", "ProjectListEnvelope", [limit, cursor]),
       head: head("headBinanceProjects", [limit, cursor])
     },
+    "/api/v1/binance/positions": {
+      get: operation("listBinancePositions", "PositionListEnvelope", [limit, cursor]),
+      head: head("headBinancePositions", [limit, cursor])
+    },
     "/api/v1/binance/projects/{alias}": {
       get: operation("getBinanceProject", "ProjectEnvelope", [alias]),
       head: head("headBinanceProject", [alias])
@@ -212,8 +216,8 @@ export const openApiDocument = {
       },
       Overview: {
         type: "object",
-        required: ["projectCount", "ongoingProjectCount", "endedProjectCount", "currentRecordCount"],
-        properties: Object.fromEntries(["projectCount", "ongoingProjectCount", "endedProjectCount", "currentRecordCount"].map((name) => [name, { type: "integer", minimum: 0 }])),
+        required: ["projectCount", "ongoingProjectCount", "endedProjectCount", "currentRecordCount", "positionSnapshotCount"],
+        properties: Object.fromEntries(["projectCount", "ongoingProjectCount", "endedProjectCount", "currentRecordCount", "positionSnapshotCount"].map((name) => [name, { type: "integer", minimum: 0 }])),
         additionalProperties: false
       },
       Run: {
@@ -236,6 +240,10 @@ export const openApiDocument = {
         type: "object", required: ["recordKey", "projectAlias", "sourceTab", "fields", "firstSeenAt", "lastSeenAt"],
         properties: { recordKey: { type: "string" }, projectAlias: { type: "string" }, sourceTab: { type: "string" }, originalEventTime: { type: "string" }, eventTimeUtc: { type: "string", format: "date-time" }, pageTimeZoneAssumption: { type: "string" }, fields: schema("JsonValue"), firstSeenAt: { type: "string", format: "date-time" }, lastSeenAt: { type: "string", format: "date-time" } }, additionalProperties: false
       },
+      Position: {
+        type: "object", required: ["projectAlias", "symbol", "positionSide", "ordinal", "capturedAt", "fields"],
+        properties: { projectAlias: { type: "string", pattern: "^leader-[0-9]+$" }, symbol: { type: "string" }, positionSide: { type: "string" }, ordinal: { type: "integer", minimum: 1 }, capturedAt: { type: "string", format: "date-time" }, fields: schema("JsonValue") }, additionalProperties: false
+      },
       Validation: {
         type: "object", required: ["validationId", "collectionRunId", "checkCode", "status", "severity", "observed", "expected", "createdAt"],
         properties: { validationId: { type: "string" }, collectionRunId: { type: "string" }, checkCode: { type: "string" }, status: { enum: ["passed", "warning", "failed", "unknown"] }, severity: { enum: ["info", "warning", "error"] }, observed: schema("JsonValue"), expected: schema("JsonValue"), createdAt: { type: "string", format: "date-time" } }, additionalProperties: false
@@ -252,9 +260,9 @@ export const openApiDocument = {
       OverviewEnvelope: { allOf: [schema("EnvelopeBase"), { type: "object", properties: { data: schema("Overview") } }] },
       ProjectEnvelope: { allOf: [schema("EnvelopeBase"), { type: "object", properties: { data: schema("Project") } }] },
       EnvelopeBase: { type: "object", required: ["meta", "data"], properties: { meta: schema("ResponseMeta"), data: {} } },
-      RunListEnvelope: schema("RunList"), ProjectListEnvelope: schema("ProjectList"), RecordListEnvelope: schema("RecordList"), ValidationListEnvelope: schema("ValidationList"), CandleListEnvelope: schema("CandleList"), FundingListEnvelope: schema("FundingList"),
+      RunListEnvelope: schema("RunList"), ProjectListEnvelope: schema("ProjectList"), PositionListEnvelope: schema("PositionList"), RecordListEnvelope: schema("RecordList"), ValidationListEnvelope: schema("ValidationList"), CandleListEnvelope: schema("CandleList"), FundingListEnvelope: schema("FundingList"),
       ...Object.fromEntries(([[
-        "RunList", "Run"], ["ProjectList", "Project"], ["RecordList", "Record"], ["ValidationList", "Validation"], ["CandleList", "Candle"], ["FundingList", "Funding"]
+        "RunList", "Run"], ["ProjectList", "Project"], ["PositionList", "Position"], ["RecordList", "Record"], ["ValidationList", "Validation"], ["CandleList", "Candle"], ["FundingList", "Funding"]
       ] as const).map(([name, item]) => [name, { type: "object", required: ["meta", "data", "page"], properties: { meta: schema("ResponseMeta"), data: { type: "array", items: schema(item) }, page: schema("Page") }, additionalProperties: false }]))
     }
   }
