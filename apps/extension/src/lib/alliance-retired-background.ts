@@ -107,6 +107,7 @@ const SCAN_ERROR_CODES = new Set<DoudianAllianceNodeErrorCode>([
   "RETIRED_PRODUCTS_PAGE_LIMIT_EXCEEDED",
   "RETIRED_PRODUCTS_TABLE_CHANGED",
   "SHOP_IDENTITY_MISMATCH",
+  "SHOP_IDENTITY_UNCERTAIN",
   "SHOP_LIST_INCOMPLETE",
   "SHOP_SWITCH_NOT_CONFIRMED",
   "SHOP_TARGET_INVALID"
@@ -469,7 +470,11 @@ export function createAllianceRetiredBrowserDriver(input: {
     } catch (error) {
       if (
         !(error instanceof AllianceRetiredDriverError) ||
-        error.code !== "BROWSER_DISCONNECTED"
+        ![
+          "BROWSER_DISCONNECTED",
+          "PAGE_LOADING",
+          "SHOP_IDENTITY_UNCERTAIN"
+        ].includes(error.code)
       ) {
         throw error;
       }

@@ -437,6 +437,103 @@ describe("alliance retired-products browser navigation", () => {
     expect(currentShop).toEqual({ id: "10001", name: "甲食品旗舰店" });
   });
 
+  it("recovers when the switch stage reports transient identity uncertainty during navigation", async () => {
+    const sourceUrl = "https://fxg.jinritemai.com/ffa/g/list";
+    const state = installBrowser(
+      [{
+        id: 1,
+        windowId: 10,
+        active: true,
+        status: "complete",
+        url: sourceUrl
+      }],
+      () => undefined
+    );
+    let currentShop = { id: "10001", name: "甲食品旗舰店" };
+    let recoveredReads = 0;
+    const originalSendMessage = browser.tabs.sendMessage;
+    browser.tabs.sendMessage = (async (
+      tabId: number,
+      message: {
+        type: string;
+        requestId?: string;
+        request?: { stage?: string; shop?: typeof shop };
+      }
+    ) => {
+      if (message.type === "bpa.risk.preflight") {
+        return { riskSignals: [] };
+      }
+      if (message.type !== "bpa.doudian.alliance.stage") {
+        return originalSendMessage(tabId, message);
+      }
+      const stage = message.request?.stage;
+      if (stage === "discover-shops") {
+        return {
+          ok: true,
+          requestId: message.requestId,
+          result: {
+            stage,
+            currentShop,
+            shops: [
+              {
+                name: "甲食品旗舰店",
+                status: "active",
+                statusText: "正常营业"
+              },
+              {
+                name: "乙食品专营店",
+                status: "active",
+                statusText: "正常营业"
+              }
+            ]
+          }
+        };
+      }
+      if (stage === "switch-shop") {
+        const requested = message.request?.shop;
+        currentShop = requested?.name === "乙食品专营店"
+          ? { id: "10002", name: requested.name }
+          : { id: "10001", name: "甲食品旗舰店" };
+        state.tabs.set(tabId, {
+          ...state.tabs.get(tabId)!,
+          url: "https://fxg.jinritemai.com/ffa/mshop/homepage/index",
+          status: "complete"
+        });
+        return {
+          ok: false,
+          requestId: message.requestId,
+          error: {
+            code: "SHOP_IDENTITY_UNCERTAIN",
+            message: "Identity changed while navigation was settling."
+          }
+        };
+      }
+      if (stage === "read-shop-context") {
+        recoveredReads += 1;
+        return {
+          ok: true,
+          requestId: message.requestId,
+          result: { stage, currentShop }
+        };
+      }
+      return originalSendMessage(tabId, message);
+    }) as typeof browser.tabs.sendMessage;
+    const driver = createAllianceRetiredBrowserDriver({
+      sourceTabId: 1,
+      deadline: new Date(Date.now() + 10_000).toISOString()
+    });
+
+    await expect(driver.discoverShopContext()).resolves.toMatchObject({
+      shops: [
+        { id: "10001", name: "甲食品旗舰店" },
+        { id: "10002", name: "乙食品专营店" }
+      ]
+    });
+    expect(recoveredReads).toBeGreaterThanOrEqual(2);
+    expect(state.tabs.get(1)?.url).toBe(sourceUrl);
+    expect(currentShop).toEqual({ id: "10001", name: "甲食品旗舰店" });
+  });
+
   it("rejects before a tab-opening stage when no managed slot is available", async () => {
     const state = installBrowser(
       [
