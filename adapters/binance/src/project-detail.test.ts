@@ -83,6 +83,33 @@ describe("Binance project detail collector", () => {
     expect(JSON.stringify(result)).not.toContain("敏感姓名");
   });
 
+  it("ignores Binance measurement and full-width empty placeholder rows", () => {
+    const document = page(`
+      <button role="tab" aria-selected="true">仓位</button>
+      <table><thead><tr><th>符号</th><th>大小</th></tr></thead><tbody>
+        <tr class="bn-web-table-measure-row" aria-hidden="true"><td></td><td></td></tr>
+        <tr class="bn-web-table-placeholder"><td colspan="2"></td></tr>
+      </tbody></table>
+    `);
+    expect(readBinanceDetailPage(document, {
+      projectId: "project_1001",
+      sourceTab: "仓位"
+    }).records).toEqual([]);
+  });
+
+  it("still fails closed for an unrecognized row shape", () => {
+    const document = page(`
+      <button role="tab" aria-selected="true">仓位</button>
+      <table><thead><tr><th>符号</th><th>大小</th></tr></thead><tbody>
+        <tr><td>BTCUSDT</td></tr>
+      </tbody></table>
+    `);
+    expect(() => readBinanceDetailPage(document, {
+      projectId: "project_1001",
+      sourceTab: "仓位"
+    })).toThrow("BINANCE_DETAIL_ROW_CHANGED");
+  });
+
   it("walks all eight tabs and restores the initially active tab", async () => {
     const labels = ["仓位", "仓位历史记录", "历史委托", "交易历史", "分润记录", "转账记录", "资金费用", "跟单失败订单"];
     const document = page(`

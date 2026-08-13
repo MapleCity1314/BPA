@@ -348,7 +348,19 @@ export function readBinanceDetailPage(
     throw new Error("BINANCE_DETAIL_HEADERS_MISSING");
   }
   const page = pageNumber(root);
-  const rows = Array.from(table.querySelectorAll("tbody tr,[role='row']"))
+  const tableRows = Array.from(table.querySelectorAll("tbody tr,[role='row']"))
+    .filter((row) => visible(row));
+  const placeholderRows = tableRows.filter((row) => {
+    const cells = Array.from(row.querySelectorAll<HTMLElement>(
+      "td,[role='cell'],[role='gridcell']"
+    ));
+    return row.classList.contains("bn-web-table-placeholder") &&
+      cells.length === 1 &&
+      Number(cells[0]!.getAttribute("colspan")) === headers.length &&
+      normalize(cells[0]!.textContent).length === 0;
+  });
+  const rows = tableRows
+    .filter((row) => !placeholderRows.includes(row))
     .filter((row) => row.querySelectorAll("td,[role='cell'],[role='gridcell']").length > 0)
     .slice(0, MAX_ROWS_PER_TAB + 1);
   if (rows.length > MAX_ROWS_PER_TAB) throw new Error("BINANCE_DETAIL_ROW_LIMIT_EXCEEDED");
