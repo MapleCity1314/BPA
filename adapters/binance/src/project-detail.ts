@@ -323,6 +323,45 @@ function recordKey(
     .join("|");
 }
 
+function responsiveRowFields(row: Element): Readonly<Record<string, string>> {
+  const fields: Record<string, string> = {};
+  const symbols = Array.from(row.querySelectorAll<HTMLElement>(
+    ".t-subtitle1.text-PrimaryText"
+  )).filter((element) => visible(element) && normalize(element.textContent).length > 0);
+  if (symbols.length !== 1) throw new Error("BINANCE_DETAIL_ROW_CHANGED");
+  fields.Symbol = normalize(symbols[0]!.textContent);
+  const directions = Array.from(row.querySelectorAll<HTMLElement>("div,span,p"))
+    .filter((element) =>
+      visible(element) &&
+      (normalize(element.textContent) === "做多" || normalize(element.textContent) === "做空") &&
+      !Array.from(element.children).some(
+        (child) => normalize(child.textContent) === normalize(element.textContent)
+      )
+    );
+  if (directions.length > 1) throw new Error("BINANCE_DETAIL_ROW_CHANGED");
+  if (directions[0]) fields.方向 = normalize(directions[0].textContent);
+  for (const container of Array.from(row.querySelectorAll<HTMLElement>("div"))) {
+    const children = Array.from(container.children).filter((child) => visible(child));
+    if (children.length !== 2) continue;
+    const labelElement = children[0]!;
+    const label = normalize(labelElement.textContent);
+    const value = normalize(children[1]!.textContent);
+    if (
+      !/t-caption/iu.test(String(labelElement.className)) ||
+      !/text-(?:Secondary|Tertiary)Text/iu.test(String(labelElement.className)) ||
+      label.length < 1 ||
+      value.length < 1 ||
+      SENSITIVE_HEADER.test(label)
+    ) continue;
+    if (fields[label] !== undefined && fields[label] !== value) {
+      throw new Error("BINANCE_DETAIL_ROW_CHANGED");
+    }
+    fields[label] = value;
+  }
+  if (Object.keys(fields).length < 2) throw new Error("BINANCE_DETAIL_ROW_CHANGED");
+  return fields;
+}
+
 export function readBinanceDetailPage(
   root: ParentNode,
   input: { readonly projectId: string; readonly sourceTab: BinanceDetailTab }
@@ -343,8 +382,8 @@ export function readBinanceDetailPage(
     };
   }
   const headers = Array.from(table.querySelectorAll("thead th,[role='columnheader']"))
-    .map((element) => normalize(element.textContent));
-  if (headers.length < 1 || headers.some((header) => header.length < 1)) {
+    .map((element, index) => normalize(element.textContent) || `_column_${index + 1}`);
+  if (headers.length < 1) {
     throw new Error("BINANCE_DETAIL_HEADERS_MISSING");
   }
   const page = pageNumber(root);
@@ -368,11 +407,13 @@ export function readBinanceDetailPage(
     const cells = Array.from(row.querySelectorAll("td,[role='cell'],[role='gridcell']"))
       .map((cell) => normalize(cell.textContent));
     if (cells.length !== headers.length) throw new Error("BINANCE_DETAIL_ROW_CHANGED");
-    const fields = Object.fromEntries(
-      headers.flatMap((header, cellIndex) =>
-        SENSITIVE_HEADER.test(header) ? [] : [[header, cells[cellIndex]!]]
-      )
-    );
+    const fields = headers.length === 1 && headers[0] === "Symbol"
+      ? responsiveRowFields(row)
+      : Object.fromEntries(
+          headers.flatMap((header, cellIndex) =>
+            SENSITIVE_HEADER.test(header) ? [] : [[header, cells[cellIndex]!]]
+          )
+        );
     const rowOrdinal = index + 1;
     return {
       recordKey: recordKey(input.projectId, input.sourceTab, page, rowOrdinal, fields),

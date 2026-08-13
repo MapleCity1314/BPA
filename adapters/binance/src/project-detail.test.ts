@@ -110,6 +110,42 @@ describe("Binance project detail collector", () => {
     })).toThrow("BINANCE_DETAIL_ROW_CHANGED");
   });
 
+  it("parses Binance responsive history rows from explicit label-value pairs", () => {
+    const document = page(`
+      <button role="tab" aria-selected="true">仓位历史记录</button>
+      <table><thead><tr><th>Symbol</th></tr></thead><tbody><tr><td>
+        <div><div class="t-subtitle1 text-PrimaryText">BTCUSDT</div><div><span>做多</span></div></div>
+        <div><div class="t-caption2 text-SecondaryText">开仓价格</div><div>100</div></div>
+        <div><div class="t-caption2 text-TertiaryText">开仓时间</div><div>2026-08-13</div></div>
+      </td></tr></tbody></table>
+    `);
+    expect(readBinanceDetailPage(document, {
+      projectId: "project_1001",
+      sourceTab: "仓位历史记录"
+    }).records[0]!.fields).toEqual({
+      Symbol: "BTCUSDT",
+      方向: "做多",
+      开仓价格: "100",
+      开仓时间: "2026-08-13"
+    });
+  });
+
+  it("retains a standard table column with an empty header by stable ordinal", () => {
+    const document = page(`
+      <button role="tab" aria-selected="true">历史委托</button>
+      <table><thead><tr><th></th><th>时间</th></tr></thead><tbody>
+        <tr><td>展开</td><td>2026-08-13</td></tr>
+      </tbody></table>
+    `);
+    expect(readBinanceDetailPage(document, {
+      projectId: "project_1001",
+      sourceTab: "历史委托"
+    }).records[0]!.fields).toEqual({
+      _column_1: "展开",
+      时间: "2026-08-13"
+    });
+  });
+
   it("walks all eight tabs and restores the initially active tab", async () => {
     const labels = ["仓位", "仓位历史记录", "历史委托", "交易历史", "分润记录", "转账记录", "资金费用", "跟单失败订单"];
     const document = page(`
