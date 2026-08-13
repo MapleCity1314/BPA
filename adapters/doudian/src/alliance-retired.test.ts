@@ -311,6 +311,40 @@ describe("Doudian alliance retired-products runtime", () => {
     });
   });
 
+  it("ignores stale aggregate ancestor text and binds the visible account popover ID", () => {
+    const doc = documentOf(`
+      <div id="fxg-pc-header">
+        <div class="header-shell">
+          <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+          <div class="cached-account">店铺ID 10002</div>
+        </div>
+      </div>
+      <div class="auxo-popover">
+        <div>甲食品旗舰店</div>
+        <div>店铺ID 10001</div>
+        <div>切换组织/店铺</div>
+      </div>
+    `);
+    expect(readDoudianHeaderShopIdentity(doc)).toEqual({
+      id: "10001",
+      name: "甲食品旗舰店"
+    });
+  });
+
+  it("accepts an explicit shop ID attribute without opening account text", () => {
+    const doc = documentOf(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName" data-shop-id="10001">
+          <span class="userName">甲食品旗舰店</span>
+        </div>
+      </div>
+    `);
+    expect(readDoudianHeaderShopIdentity(doc)).toEqual({
+      id: "10001",
+      name: "甲食品旗舰店"
+    });
+  });
+
   it("dispatches the pointer and mouse sequence on semantic account and switch-row containers", () => {
     const doc = documentOf(`
       <div id="fxg-pc-header">

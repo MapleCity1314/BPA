@@ -273,8 +273,6 @@ function readNumericShopIdNearHeaderElement(
         // Ignore malformed attributes from untrusted page content.
       }
     }
-    const textId = shopIdFromText(normalizeText(current.textContent));
-    if (textId) return textId;
     current = current.parentElement ?? undefined;
   }
   return undefined;
