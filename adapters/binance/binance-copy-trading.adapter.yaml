@@ -13,11 +13,11 @@ capabilities:
     nodeVersions: [1.0.0]
     handlerId: binance.copy-trading.management.snapshot.read
     handlerVersion: 1.0.0
-    implementationDigest: sha256:97f35cbb0afa664030e046d22d2a458c38755f807f5b2c782b46d1ad6e4f9b77
+    implementationDigest: sha256:1d7c389c35043f5bb58b2bf6a6035f952ab41f3043de3ee0ba04eaf4ffd75821
     permissions: [browser.dom.read, browser.dom.write, browser.tabs.read]
   - nodeId: binance.copy-trading.project.detail.collect
     nodeVersions: [1.0.0]
     handlerId: binance.copy-trading.project.detail.collect
     handlerVersion: 1.0.0
-    implementationDigest: sha256:97f35cbb0afa664030e046d22d2a458c38755f807f5b2c782b46d1ad6e4f9b77
+    implementationDigest: sha256:1d7c389c35043f5bb58b2bf6a6035f952ab41f3043de3ee0ba04eaf4ffd75821
     permissions: [browser.dom.read, browser.dom.write, browser.tabs.read]

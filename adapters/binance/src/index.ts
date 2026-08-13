@@ -153,11 +153,14 @@ function nearestProjectRoot(element: Element): Element {
     const text = normalizeText(current.textContent);
     const detailControls = Array.from(current.querySelectorAll<HTMLElement>(
       "button,[role='button'],a,span,div,p"
-    )).filter((candidate) =>
-      visible(candidate) && ["展开详情", "收起详情", "收起"].includes(
-        normalizeText(candidate.textContent)
-      )
-    );
+    )).filter((candidate) => {
+      if (!visible(candidate)) return false;
+      const label = normalizeText(candidate.textContent);
+      if (!["展开详情", "收起详情", "收起"].includes(label)) return false;
+      return !Array.from(candidate.children).some(
+        (child) => normalizeText(child.textContent) === label
+      );
+    });
     if (
       detailControls.length === 1 &&
       PROJECT_LABELS.some((label) => text.includes(label))

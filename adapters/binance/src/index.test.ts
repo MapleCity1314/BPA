@@ -71,7 +71,7 @@ describe("Binance copy-trading adapter", () => {
         <div><span>保证金余额</span><span>1,000 USDT</span></div>
         <section>
           <div>项目ID: project_1001</div><span>净利润</span><span>25 USDT</span>
-          <div role="button">展开详情</div>
+          <div class="cursor-pointer"><div>展开详情</div></div>
         </section>
       </div></body>
     `, { url: "https://www.binance.com/zh-CN/copy-trading/copy-management" }).window.document;
