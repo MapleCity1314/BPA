@@ -89,9 +89,10 @@ export function createBinanceDataHttpServer(options: BinanceDataHttpServerOption
       const head = request.method === "HEAD";
       const corsAllowed = applyCors(request, response, allowedOrigin);
       if (request.method === "OPTIONS") {
+        const requestedMethod = request.headers["access-control-request-method"];
         if (
           !corsAllowed ||
-          request.headers["access-control-request-method"] !== "GET"
+          (requestedMethod !== "GET" && requestedMethod !== "HEAD")
         ) {
           error(response, 403, requestId, "CORS_ORIGIN_DENIED", "Origin is not allowed", false, false);
           return;

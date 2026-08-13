@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import test from "node:test";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   assertManagedChromeManifest,
   assertManagedChromeProcessCommand,
@@ -212,6 +212,64 @@ test("binds the managed Chrome launcher and live command to one contract", () =>
       ),
     /differs from the Runtime closure/u
   );
+});
+
+test("passes the complete managed Chrome argv to the executable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bpa-managed-chrome-argv-"));
+  const bpaHome = join(root, "Application Support", "BPA");
+  const executable = join(bpaHome, MACOS_MANAGED_CHROME_CONTRACT.executablePath);
+  const appInfo = join(
+    bpaHome,
+    MACOS_MANAGED_CHROME_CONTRACT.applicationRelativePath,
+    "Contents",
+    "Info.plist"
+  );
+  const extension = join(bpaHome, MACOS_MANAGED_CHROME_CONTRACT.extensionRelativePath);
+  const launcherPath = join(root, "bpa-managed-chrome");
+  const argvPath = join(root, "argv.txt");
+  let child;
+  try {
+    await mkdir(dirname(executable), { recursive: true });
+    await mkdir(extension, { recursive: true });
+    await mkdir(dirname(appInfo), { recursive: true });
+    await writeFile(appInfo, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.google.chrome.for.testing</string></dict></plist>`);
+    await writeFile(join(extension, "manifest.json"), "{}\n");
+    await writeFile(executable, `#!/bin/zsh
+print -rl -- "$@" > ${JSON.stringify(argvPath)}
+while true; do /bin/sleep 1; done
+`);
+    await chmod(executable, 0o755);
+    await writeFile(launcherPath, renderManagedChromeLauncher("v0.6.2-rc.argv.node24.18.0"));
+    await chmod(launcherPath, 0o755);
+    child = spawn("/bin/zsh", [launcherPath], {
+      env: { ...process.env, BPA_HOME: bpaHome },
+      stdio: "ignore"
+    });
+    let captured;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        captured = await readFile(argvPath, "utf8");
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+    assert.ok(captured, "fake managed Chrome did not capture argv");
+    const argv = captured.trim().split("\n");
+    assert.deepEqual(argv, [
+      `--user-data-dir=${join(bpaHome, MACOS_MANAGED_CHROME_CONTRACT.profileRelativePath)}`,
+      `--remote-debugging-port=${MACOS_MANAGED_CHROME_CONTRACT.remoteDebuggingPort}`,
+      `--remote-debugging-address=${MACOS_MANAGED_CHROME_CONTRACT.remoteDebuggingAddress}`,
+      ...MACOS_MANAGED_CHROME_CONTRACT.flags,
+      `--disable-extensions-except=${extension}`,
+      `--load-extension=${extension}`
+    ]);
+  } finally {
+    child?.kill("SIGTERM");
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("writes the exact mode-0600 Launch Agent through the packaged gate", async () => {

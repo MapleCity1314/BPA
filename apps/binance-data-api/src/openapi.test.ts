@@ -8,9 +8,15 @@ describe("Binance Data API OpenAPI contract", () => {
     for (const path of Object.values(openApiDocument.paths)) {
       expect(Object.keys(path).sort()).toEqual(["get", "head"]);
       expect(path.get.responses).toHaveProperty("200");
-      expect(path.get.responses).toHaveProperty("400");
-      expect(path.get.responses).toHaveProperty("503");
     }
+    expect(Object.keys(openApiDocument.paths["/readyz"].get.responses).sort())
+      .toEqual(["200", "401"]);
+    expect(openApiDocument.paths["/readyz"].get.responses).not.toHaveProperty("503");
+    expect(openApiDocument.components.securitySchemes.BearerAuth).toMatchObject({
+      type: "http",
+      scheme: "bearer"
+    });
+    expect(openApiDocument.security).toEqual([{ BearerAuth: [] }, {}]);
     expect(openApiDocument.paths["/api/v1/binance/projects/{alias}"].get.parameters)
       .toContainEqual(expect.objectContaining({ name: "alias", in: "path", required: true }));
     expect(openApiDocument.paths["/api/v1/binance/market/candles"].get.parameters)
@@ -21,6 +27,14 @@ describe("Binance Data API OpenAPI contract", () => {
         expect.objectContaining({ name: "from", in: "query" }),
         expect.objectContaining({ name: "cursor", in: "query" })
       ]));
+    expect(openApiDocument.paths["/api/v1/binance/projects/{alias}/records"].head.parameters)
+      .toEqual(openApiDocument.paths["/api/v1/binance/projects/{alias}/records"].get.parameters);
+    expect(openApiDocument.paths["/api/v1/binance/validations"].head.parameters)
+      .toEqual(openApiDocument.paths["/api/v1/binance/validations"].get.parameters);
+    for (const status of ["400", "401", "403", "404", "405", "500", "503"] as const) {
+      expect(openApiDocument.paths["/api/v1/binance/runs"].get.responses)
+        .toHaveProperty(status);
+    }
     expect(openApiDocument.components.schemas).toMatchObject({
       ResponseMeta: expect.any(Object),
       ErrorEnvelope: expect.any(Object),

@@ -25,7 +25,8 @@ function store(readiness: BinanceReadinessRecord): BinanceReadStore {
     listBinanceRecords: () => ({ items: [], hasMore: false }),
     listBinanceValidations: () => ({ items: [], hasMore: false }),
     listBinanceCandles: () => ({ items: [], hasMore: false }),
-    listBinanceFunding: () => ({ items: [], hasMore: false })
+    listBinanceFunding: () => ({ items: [], hasMore: false }),
+    getBinanceMarketWatermark: () => undefined
   };
 }
 
@@ -173,6 +174,19 @@ describe("Binance Data API transport", () => {
         vary: "Origin"
       }
     });
+    const headPreflight = await fetchJson(address.port, "/healthz", "OPTIONS", {
+      origin: allowedOrigin,
+      "access-control-request-method": "HEAD",
+      "access-control-request-headers": "Authorization"
+    });
+    expect(headPreflight).toMatchObject({
+      status: 204,
+      headers: {
+        "access-control-allow-origin": allowedOrigin,
+        "access-control-allow-methods": "GET, HEAD",
+        "access-control-allow-headers": "Authorization"
+      }
+    });
     const denied = await fetchJson(address.port, "/healthz", "OPTIONS", {
       origin: "http://localhost:4173",
       "access-control-request-method": "GET"
@@ -182,11 +196,40 @@ describe("Binance Data API transport", () => {
       body: { error: { code: "CORS_ORIGIN_DENIED" } }
     });
     expect(denied.headers["access-control-allow-origin"]).toBeUndefined();
+    const invalidMethod = await fetchJson(address.port, "/healthz", "OPTIONS", {
+      origin: allowedOrigin,
+      "access-control-request-method": "POST"
+    });
+    expect(invalidMethod).toMatchObject({
+      status: 403,
+      body: { error: { code: "CORS_ORIGIN_DENIED" } }
+    });
   });
 
-  it("uses independent unknown freshness metadata for public market data", async () => {
+  it("uses an independent market watermark rather than follower readiness", async () => {
+    const readStore = store({
+      schemaVersion: 26,
+      latestSuccessfulRun: {
+        collectionRunId: "follower-run",
+        workflowRunId: "workflow-run",
+        sourceUrl: "https://www.binance.com/zh-CN/copy-trading/copy-management",
+        attemptAt: "2026-08-12T00:00:00.000Z",
+        captureAt: "2026-08-12T00:00:00.000Z",
+        status: "success",
+        contentDigest: `sha256:${"a".repeat(64)}`,
+        projectCount: 1,
+        pageCount: 1,
+        recordCount: 1,
+        lastSuccessAt: "2026-08-12T00:00:00.000Z",
+        createdAt: "2026-08-12T00:00:00.000Z"
+      }
+    });
+    readStore.getBinanceMarketWatermark = () => ({
+      lastSuccessAt: "2026-08-13T01:50:00.000Z",
+      lastSeenAt: "2026-08-13T01:50:00.000Z"
+    });
     const server = createBinanceDataHttpServer({
-      queries: new BinanceQueries(store({ schemaVersion: 26 })),
+      queries: new BinanceQueries(readStore, () => new Date(timestamp)),
       serviceReadiness: {
         ready: true,
         database_readable: true,
@@ -206,9 +249,10 @@ describe("Binance Data API transport", () => {
       body: {
         meta: {
           source: "binance_futures_public_market",
-          last_success_at: null,
-          stale_status: "unknown",
-          partial_status: "unknown"
+          last_success_at: "2026-08-13T01:50:00.000Z",
+          last_seen_at: "2026-08-13T01:50:00.000Z",
+          stale_status: "fresh",
+          partial_status: "complete"
         }
       }
     });

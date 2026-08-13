@@ -46,6 +46,7 @@ import {
   type BinanceFundingReadRecord,
   type BinanceMarketCaptureRecord,
   type BinanceMarketSeek,
+  type BinanceMarketWatermarkRecord,
   type BinanceOverviewRecord,
   type BinanceProjectReadRecord,
   type BinanceProjectSeek,
@@ -3764,6 +3765,28 @@ export class SqlitePersistence implements Persistence {
       ...(rows.length > limit && last
         ? { nextSeek: { eventTimeUtc: last.fundingTimeUtc } }
         : {})
+    };
+  }
+
+  getBinanceMarketWatermark(input: {
+    kind: "candles" | "funding";
+    symbol: string;
+  }): BinanceMarketWatermarkRecord | undefined {
+    const table = input.kind === "candles"
+      ? "binance_market_candles_1m"
+      : "binance_market_funding_rates";
+    const row = this.#db.prepare(
+      `SELECT MAX(c.capture_at) AS last_success_at,
+         MAX(m.last_seen_at) AS last_seen_at
+       FROM ${table} m
+       JOIN binance_market_captures c
+         ON c.market_capture_id=m.last_market_capture_id
+       WHERE m.symbol=?`
+    ).get(input.symbol) as SqlRow;
+    if (row.last_success_at == null || row.last_seen_at == null) return undefined;
+    return {
+      lastSuccessAt: String(row.last_success_at),
+      lastSeenAt: String(row.last_seen_at)
     };
   }
 

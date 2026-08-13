@@ -17,6 +17,7 @@ export interface ResponseMeta {
   request_id: string;
   as_of: string;
   last_success_at: string | null;
+  last_seen_at: string | null;
   stale_status: StaleStatus;
   partial_status: PartialStatus;
   source: typeof BINANCE_SOURCE | typeof BINANCE_MARKET_SOURCE;

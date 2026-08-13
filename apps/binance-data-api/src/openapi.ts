@@ -3,11 +3,17 @@ const jsonResponse = (name: string, description = "Read-only response") => ({
   description,
   content: { "application/json": { schema: schema(name) } }
 });
-const errors = {
+const commonErrors = {
   "400": jsonResponse("ErrorEnvelope", "Invalid query or cursor"),
   "401": jsonResponse("ErrorEnvelope", "Authentication required"),
+  "403": jsonResponse("ErrorEnvelope", "CORS preflight denied"),
   "404": jsonResponse("ErrorEnvelope", "Resource not found"),
+  "405": jsonResponse("ErrorEnvelope", "Method not allowed"),
+  "500": jsonResponse("ErrorEnvelope", "Internal read error"),
   "503": jsonResponse("ErrorEnvelope", "Read service not ready")
+};
+const readinessErrors = {
+  "401": commonErrors["401"]
 };
 const limit = {
   name: "limit",
@@ -34,21 +40,28 @@ const symbol = {
   required: true,
   schema: { type: "string", pattern: "^[A-Z0-9_]{5,30}$" }
 };
+const sourceTab = { name: "source_tab", in: "query", schema: { type: "string" } };
+const collectionRunId = { name: "collection_run_id", in: "query", schema: { type: "string" } };
 const operation = (
   operationId: string,
   responseSchema: string,
-  parameters: readonly object[] = []
+  parameters: readonly object[] = [],
+  responses: Readonly<Record<string, object>> = commonErrors
 ) => ({
   operationId,
   parameters,
-  responses: { "200": jsonResponse(responseSchema), ...errors }
+  responses: { "200": jsonResponse(responseSchema), ...responses }
 });
-const head = (operationId: string, parameters: readonly object[] = []) => ({
+const head = (
+  operationId: string,
+  parameters: readonly object[] = [],
+  responses: Readonly<Record<string, object>> = commonErrors
+) => ({
   operationId,
   parameters,
   responses: {
     "200": { description: "Same status and headers as GET, without a body" },
-    ...errors
+    ...responses
   }
 });
 
@@ -56,14 +69,15 @@ export const openApiDocument = {
   openapi: "3.1.0",
   info: { title: "BPA Binance Data API", version: "1.0.0" },
   servers: [{ url: "http://127.0.0.1:43124" }],
+  security: [{ BearerAuth: [] }, {}],
   paths: {
     "/healthz": {
-      get: operation("getHealth", "HealthResponse"),
-      head: head("headHealth")
+      get: operation("getHealth", "HealthResponse", [], readinessErrors),
+      head: head("headHealth", [], readinessErrors)
     },
     "/readyz": {
-      get: operation("getServiceReadiness", "ServiceReadiness"),
-      head: head("headServiceReadiness")
+      get: operation("getServiceReadiness", "ServiceReadiness", [], readinessErrors),
+      head: head("headServiceReadiness", [], readinessErrors)
     },
     "/api/v1/binance/readiness": {
       get: operation("getBinanceDataReadiness", "DataReadinessEnvelope"),
@@ -88,21 +102,21 @@ export const openApiDocument = {
     "/api/v1/binance/projects/{alias}/records": {
       get: operation("listBinanceRecords", "RecordListEnvelope", [
         alias,
-        { name: "source_tab", in: "query", schema: { type: "string" } },
+        sourceTab,
         from,
         to,
         limit,
         cursor
       ]),
-      head: head("headBinanceRecords", [alias, from, to, limit, cursor])
+      head: head("headBinanceRecords", [alias, sourceTab, from, to, limit, cursor])
     },
     "/api/v1/binance/validations": {
       get: operation("listBinanceValidations", "ValidationListEnvelope", [
-        { name: "collection_run_id", in: "query", schema: { type: "string" } },
+        collectionRunId,
         limit,
         cursor
       ]),
-      head: head("headBinanceValidations", [limit, cursor])
+      head: head("headBinanceValidations", [collectionRunId, limit, cursor])
     },
     "/api/v1/binance/market/candles": {
       get: operation("listBinanceCandles", "CandleListEnvelope", [symbol, from, to, limit, cursor]),
@@ -114,15 +128,24 @@ export const openApiDocument = {
     }
   },
   components: {
+    securitySchemes: {
+      BearerAuth: {
+        type: "http",
+        scheme: "bearer",
+        bearerFormat: "service token",
+        description: "Required whenever the API binds to a non-loopback interface; optional on the default loopback binding."
+      }
+    },
     schemas: {
       JsonValue: {},
       ResponseMeta: {
         type: "object",
-        required: ["request_id", "as_of", "last_success_at", "stale_status", "partial_status", "source"],
+        required: ["request_id", "as_of", "last_success_at", "last_seen_at", "stale_status", "partial_status", "source"],
         properties: {
           request_id: { type: "string", format: "uuid" },
           as_of: { type: "string", format: "date-time" },
           last_success_at: { type: ["string", "null"], format: "date-time" },
+          last_seen_at: { type: ["string", "null"], format: "date-time" },
           stale_status: { enum: ["fresh", "stale", "unknown"] },
           partial_status: { enum: ["complete", "partial", "unknown"] },
           source: { enum: ["binance_follower_copy_management", "binance_futures_public_market"] }

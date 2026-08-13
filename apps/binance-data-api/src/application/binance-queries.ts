@@ -75,19 +75,26 @@ export class BinanceQueries {
       request_id: requestId,
       as_of: this.now().toISOString(),
       last_success_at: latestSuccess?.lastSuccessAt ?? null,
+      last_seen_at: readiness.latestRun?.captureAt ?? null,
       stale_status: staleStatus(latestSuccess?.lastSuccessAt, this.now()),
       partial_status: partialStatus(readiness.latestRun?.status),
       source: BINANCE_SOURCE
     };
   }
 
-  marketMeta(requestId: string): ResponseMeta {
+  marketMeta(
+    requestId: string,
+    kind: "candles" | "funding",
+    symbol: string
+  ): ResponseMeta {
+    const watermark = this.store.getBinanceMarketWatermark({ kind, symbol });
     return {
       request_id: requestId,
       as_of: this.now().toISOString(),
-      last_success_at: null,
-      stale_status: "unknown",
-      partial_status: "unknown",
+      last_success_at: watermark?.lastSuccessAt ?? null,
+      last_seen_at: watermark?.lastSeenAt ?? null,
+      stale_status: staleStatus(watermark?.lastSuccessAt, this.now()),
+      partial_status: watermark ? "complete" : "unknown",
       source: BINANCE_MARKET_SOURCE
     };
   }
@@ -246,10 +253,10 @@ export class BinanceQueries {
     };
     if (kind === "candles") {
       const page = this.store.listBinanceCandles(options);
-      return listEnvelope(requestId, this.marketMeta(requestId), kind, filters, limit, page, (next) => ({ event_time_utc: next.eventTimeUtc }));
+      return listEnvelope(requestId, this.marketMeta(requestId, kind, symbol), kind, filters, limit, page, (next) => ({ event_time_utc: next.eventTimeUtc }));
     }
     const page = this.store.listBinanceFunding(options);
-    return listEnvelope(requestId, this.marketMeta(requestId), kind, filters, limit, page, (next) => ({ event_time_utc: next.eventTimeUtc }));
+    return listEnvelope(requestId, this.marketMeta(requestId, kind, symbol), kind, filters, limit, page, (next) => ({ event_time_utc: next.eventTimeUtc }));
   }
 }
 

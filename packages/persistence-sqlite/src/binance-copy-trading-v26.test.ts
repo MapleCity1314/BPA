@@ -295,5 +295,17 @@ describe("Binance copy-trading SQLite v26", () => {
       fundingCount: 1,
       referenceCount: 1
     });
+    expect(store.getBinanceMarketWatermark({
+      kind: "candles",
+      symbol: "BTCUSDT"
+    })).toEqual({ lastSuccessAt: timestamp, lastSeenAt: timestamp });
+    expect(store.getBinanceMarketWatermark({
+      kind: "funding",
+      symbol: "BTCUSDT"
+    })).toEqual({ lastSuccessAt: timestamp, lastSeenAt: timestamp });
+    expect(store.getBinanceMarketWatermark({
+      kind: "candles",
+      symbol: "ETHUSDT"
+    })).toBeUndefined();
   });
 });

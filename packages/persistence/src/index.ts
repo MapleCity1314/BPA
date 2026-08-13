@@ -846,6 +846,11 @@ export interface BinanceMarketSeek {
   eventTimeUtc: string;
 }
 
+export interface BinanceMarketWatermarkRecord {
+  lastSuccessAt: string;
+  lastSeenAt: string;
+}
+
 export interface BinanceProjectReadRecord {
   projectAlias: string;
   projectStatus: "ongoing" | "ended";
@@ -940,6 +945,10 @@ export interface BinanceReadStore {
     limit: number;
     after?: BinanceMarketSeek;
   }): BinanceReadPage<BinanceFundingReadRecord, BinanceMarketSeek>;
+  getBinanceMarketWatermark(input: {
+    kind: "candles" | "funding";
+    symbol: string;
+  }): BinanceMarketWatermarkRecord | undefined;
 }
 
 export interface BinanceCopyTradingStore {
