@@ -437,7 +437,11 @@ export function createAllianceRetiredBrowserDriver(input: {
         lastError = error;
         if (
           !(error instanceof AllianceRetiredDriverError) ||
-          !["BROWSER_DISCONNECTED", "PAGE_LOADING"].includes(error.code)
+          ![
+            "BROWSER_DISCONNECTED",
+            "PAGE_LOADING",
+            "SHOP_IDENTITY_UNCERTAIN"
+          ].includes(error.code)
         ) {
           throw error;
         }
