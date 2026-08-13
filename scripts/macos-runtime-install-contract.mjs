@@ -240,9 +240,7 @@ export function renderManagedChromeLauncher(releaseIdentity) {
   }
   const contract = MACOS_MANAGED_CHROME_CONTRACT;
   const staticArguments = contract.flags
-    .map((flag, index) =>
-      index === contract.flags.length - 1 ? `  "${flag}"` : `  "${flag}" \\`
-    )
+    .map((flag) => `  "${flag}" \\`)
     .join("\n");
   return `#!/bin/zsh
 set -euo pipefail
@@ -350,7 +348,9 @@ export function assertManagedChromeProcessCommand(command, bpaHome) {
     `--user-data-dir=${root}/${contract.profileRelativePath}`,
     `--remote-debugging-port=${contract.remoteDebuggingPort}`,
     `--remote-debugging-address=${contract.remoteDebuggingAddress}`,
-    ...contract.flags
+    ...contract.flags,
+    `--disable-extensions-except=${root}/${contract.extensionRelativePath}`,
+    `--load-extension=${root}/${contract.extensionRelativePath}`
   ];
   const containsArgument = (part) => {
     let offset = command.indexOf(part);

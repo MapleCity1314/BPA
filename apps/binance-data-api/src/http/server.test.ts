@@ -5,6 +5,7 @@ import type {
 } from "@bpa/persistence";
 import { afterEach, describe, expect, it } from "vitest";
 import { BinanceQueries } from "../application/binance-queries.js";
+import { encodeCursor } from "../application/cursor.js";
 import { createBinanceDataHttpServer } from "./server.js";
 
 const timestamp = "2026-08-13T02:00:00.000Z";
@@ -227,6 +228,18 @@ describe("Binance Data API transport", () => {
     servers.push(server);
     const address = await server.listen();
     await expect(fetchJson(address.port, "/api/v1/binance/runs?cursor=invalid")).resolves.toMatchObject({
+      status: 400,
+      body: { error: { code: "INVALID_CURSOR" } }
+    });
+    const cursor = encodeCursor(
+      "candles",
+      { symbol: "BTCUSDT", fromUtc: undefined, toUtc: undefined },
+      { event_time_utc: "2026-08-13T00:00:00.000Z" }
+    );
+    await expect(fetchJson(
+      address.port,
+      `/api/v1/binance/market/candles?symbol=ETHUSDT&cursor=${cursor}`
+    )).resolves.toMatchObject({
       status: 400,
       body: { error: { code: "INVALID_CURSOR" } }
     });

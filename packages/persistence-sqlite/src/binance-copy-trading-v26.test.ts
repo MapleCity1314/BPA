@@ -190,6 +190,24 @@ describe("Binance copy-trading SQLite v26", () => {
       ],
       hasMore: false
     });
+    const firstPage = store.listBinanceRecords({
+      projectAlias: "leader-01",
+      limit: 1
+    });
+    expect(firstPage.items).toHaveLength(1);
+    expect(firstPage.hasMore).toBe(true);
+    expect(firstPage.nextSeek).toBeDefined();
+    const secondPage = store.listBinanceRecords({
+      projectAlias: "leader-01",
+      limit: 1,
+      after: firstPage.nextSeek!
+    });
+    expect(secondPage.items).toHaveLength(1);
+    expect(secondPage.hasMore).toBe(false);
+    expect(new Set([
+      firstPage.items[0]!.recordKey,
+      secondPage.items[0]!.recordKey
+    ])).toHaveLength(2);
     expect(store.health().schemaVersion).toBe(26);
   });
 
