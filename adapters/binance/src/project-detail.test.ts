@@ -237,7 +237,7 @@ describe("Binance project detail collector", () => {
       }
     });
     expect(result.tabs).toHaveLength(8);
-    expect(waits).toBeGreaterThan(0);
+    expect(waits).toBeGreaterThanOrEqual(16);
   });
 
   it("waits while a selected detail table is replacing malformed rows", async () => {
@@ -349,6 +349,17 @@ describe("Binance project detail collector", () => {
     expect(() => readBinanceDetailPage(document, {
       projectId: "project_1001",
       sourceTab: "资金费用"
+    })).toThrow("BINANCE_DETAIL_STRUCTURE_UNCONFIRMED");
+  });
+
+  it("does not treat unrelated container text as the active tab empty state", () => {
+    const document = page(`
+      <button role="tab" aria-selected="true">历史委托</button>
+      <section>账户提示：暂无记录，请查看其他页签。</section>
+    `);
+    expect(() => readBinanceDetailPage(document, {
+      projectId: "project_1001",
+      sourceTab: "历史委托"
     })).toThrow("BINANCE_DETAIL_STRUCTURE_UNCONFIRMED");
   });
 });

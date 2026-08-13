@@ -107,8 +107,17 @@ function activeTable(root: ParentNode): HTMLTableElement | undefined {
 }
 
 function explicitEmpty(root: ParentNode): boolean {
-  const text = normalize(root.textContent);
-  return /暂无(?:仓位|记录|数据|订单)|没有(?:仓位|记录|数据|订单)|No (?:position|record|data|order)/iu.test(text);
+  const emptyText = /^(?:暂无(?:仓位|记录|数据|订单)|没有(?:仓位|记录|数据|订单)|No (?:position|record|data|order)s?)[。.!]?$/iu;
+  return Array.from(root.querySelectorAll<HTMLElement>(
+    "[class*='empty'],[class*='Empty'],[data-testid*='empty'],[role='status'],td,div,span,p"
+  )).some((element) => {
+    if (!visible(element)) return false;
+    const value = normalize(element.textContent);
+    if (!emptyText.test(value)) return false;
+    return !Array.from(element.children).some(
+      (child) => visible(child) && emptyText.test(normalize(child.textContent))
+    );
+  });
 }
 
 export interface BinanceDetailRecord {
@@ -461,10 +470,19 @@ async function waitForDetailPageReady(
   isCancelled: () => boolean
 ): Promise<BinanceDetailPage> {
   let lastReadinessError = "BINANCE_DETAIL_STRUCTURE_UNCONFIRMED";
+  let previousSignature: string | undefined;
+  let stableObservationCount = 0;
   while (Date.now() < deadline) {
     if (isCancelled()) throw new Error("COMMAND_CANCELLED");
     try {
-      return readBinanceDetailPage(root, input);
+      const observed = readBinanceDetailPage(root, input);
+      if (observed.signature === previousSignature) {
+        stableObservationCount += 1;
+      } else {
+        previousSignature = observed.signature;
+        stableObservationCount = 1;
+      }
+      if (stableObservationCount >= 3) return observed;
     } catch (error) {
       if (
         !(error instanceof Error) ||
@@ -478,7 +496,7 @@ async function waitForDetailPageReady(
       }
       lastReadinessError = error.message;
     }
-    await wait(100);
+    await wait(200);
   }
   throw new Error(lastReadinessError);
 }

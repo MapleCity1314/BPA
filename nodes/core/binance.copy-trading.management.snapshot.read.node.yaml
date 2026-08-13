@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha2
 kind: Node
 metadata:
   id: binance.copy-trading.management.snapshot.read
-  version: 1.7.0
+  version: 1.8.0
   title: 读取 Binance 合约跟单管理快照
   description: 只读提取当前管理页的账户汇总、真实跟单项目摘要和当前可见仓位；不点击详情、交易或设置控件。
 runtime: browser
@@ -43,4 +43,4 @@ execution:
   cancellable: true
 errors: [PAGE_MISMATCH, PAGE_CONTEXT_CHANGED, SESSION_EXPIRED, CAPTCHA_REQUIRED, RATE_LIMITED, RISK_CONTROL, BINANCE_STRUCTURE_UNCONFIRMED, BINANCE_MANAGEMENT_TAB_AMBIGUOUS, BINANCE_MANAGEMENT_TAB_TIMEOUT, BINANCE_PROJECT_DUPLICATED_ACROSS_TABS, BINANCE_PROJECT_TARGET_INVALID, BINANCE_PROJECT_TARGET_MISSING, BROWSER_DISCONNECTED, CONTENT_SCRIPT_UNAVAILABLE, DEADLINE_EXCEEDED]
 evidence: { required: [result, error] }
-adapter: { id: binance-copy-trading, versions: [1.7.0] }
+adapter: { id: binance-copy-trading, versions: [1.8.0] }
