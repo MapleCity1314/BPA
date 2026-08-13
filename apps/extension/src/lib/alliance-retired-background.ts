@@ -529,6 +529,37 @@ export function createAllianceRetiredBrowserDriver(input: {
       readonly shopOrdinal?: number;
     }
   ) => {
+    if (diagnosticBase.phase === "restore-source") {
+      try {
+        const observed = (await readShopContextAfterNavigation()).currentShop;
+        if (
+          normalizeShopName(observed.name) === normalizeShopName(shop.name) &&
+          (shop.id === undefined || observed.id === shop.id)
+        ) {
+          return observed;
+        }
+      } catch (error) {
+        if (
+          !(error instanceof AllianceRetiredDriverError) ||
+          ![
+            "BROWSER_DISCONNECTED",
+            "PAGE_LOADING",
+            "SHOP_IDENTITY_UNCERTAIN"
+          ].includes(error.code)
+        ) {
+          throw withAllianceDiagnostic(error, {
+            ...diagnosticBase,
+            switchResponse: "not-started",
+            navigationIdentity:
+              error instanceof AllianceRetiredDriverError &&
+              error.code === "SHOP_IDENTITY_MISMATCH"
+                ? "mismatched"
+                : "unavailable",
+            restoreResult: "failed"
+          });
+        }
+      }
+    }
     let switchResult:
       | Extract<AllianceRetiredStageResult, { stage: "switch-shop" }>
       | undefined;
@@ -630,9 +661,7 @@ export function createAllianceRetiredBrowserDriver(input: {
               ).length === 1))
         ) {
           resolved.push({ ...shop, id: sourceShop.id });
-          if (shop.id === undefined) {
-            sourceSwitcherOrdinal = shop.switcherOrdinal;
-          }
+          sourceSwitcherOrdinal = shop.switcherOrdinal;
           continue;
         }
         if (shop.id !== undefined) {

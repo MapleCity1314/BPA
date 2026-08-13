@@ -433,7 +433,7 @@ describe("alliance retired-products browser navigation", () => {
         { id: "10002", name: "乙食品专营店" }
       ]
     });
-    expect(targetReadAttempts).toBe(2);
+    expect(targetReadAttempts).toBe(3);
     expect(currentShop).toEqual({ id: "10001", name: "甲食品旗舰店" });
   });
 
@@ -893,6 +893,92 @@ describe("alliance retired-products browser navigation", () => {
         restoreResult: "succeeded"
       }
     });
+  });
+
+  it("does not repeat a source-shop click when a failed switch left the source identity intact", async () => {
+    installBrowser(
+      [{
+        id: 1,
+        windowId: 10,
+        active: true,
+        status: "complete",
+        url: "https://fxg.jinritemai.com/ffa/g/list"
+      }],
+      () => undefined
+    );
+    const sourceShop = {
+      name: "甲食品旗舰店",
+      status: "active" as const,
+      statusText: "正常营业"
+    };
+    const targetShop = {
+      name: "乙食品专营店",
+      status: "active" as const,
+      statusText: "正常营业"
+    };
+    const currentShop = { id: "10001", name: sourceShop.name };
+    const switchRequests: string[] = [];
+    const originalSendMessage = browser.tabs.sendMessage;
+    browser.tabs.sendMessage = (async (
+      tabId: number,
+      message: {
+        type: string;
+        requestId?: string;
+        request?: { stage?: string; shop?: typeof sourceShop };
+      }
+    ) => {
+      if (message.type === "bpa.risk.preflight") {
+        return { riskSignals: [] };
+      }
+      if (message.type !== "bpa.doudian.alliance.stage") {
+        return originalSendMessage(tabId, message);
+      }
+      const stage = message.request?.stage;
+      if (stage === "discover-shops") {
+        return {
+          ok: true,
+          requestId: message.requestId,
+          result: {
+            stage,
+            currentShop,
+            shops: [sourceShop, targetShop]
+          }
+        };
+      }
+      if (stage === "switch-shop") {
+        switchRequests.push(message.request!.shop!.name);
+        return {
+          ok: false,
+          requestId: message.requestId,
+          error: {
+            code: "SHOP_SWITCH_NOT_CONFIRMED",
+            message: "The switch action was not confirmed."
+          }
+        };
+      }
+      if (stage === "read-shop-context") {
+        return {
+          ok: true,
+          requestId: message.requestId,
+          result: { stage, currentShop }
+        };
+      }
+      return originalSendMessage(tabId, message);
+    }) as typeof browser.tabs.sendMessage;
+    const driver = createAllianceRetiredBrowserDriver({
+      sourceTabId: 1,
+      deadline: new Date(Date.now() + 10_000).toISOString()
+    });
+
+    await expect(driver.discoverShopContext()).rejects.toMatchObject({
+      code: "SHOP_SWITCH_NOT_CONFIRMED",
+      diagnostic: {
+        phase: "resolve-shop",
+        shopOrdinal: 2,
+        restoreResult: "succeeded"
+      }
+    });
+    expect(switchRequests).toEqual([targetShop.name]);
   });
 
   it("maps a rejected source-tab read to BROWSER_DISCONNECTED", async () => {
