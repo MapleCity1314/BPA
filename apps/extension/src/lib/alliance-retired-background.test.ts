@@ -907,6 +907,62 @@ describe("alliance retired-products browser navigation", () => {
     });
   });
 
+  it("reports an initial source identity failure before any shop switch", async () => {
+    installBrowser(
+      [
+        {
+          id: 1,
+          windowId: 10,
+          active: true,
+          status: "complete",
+          url: "https://fxg.jinritemai.com/ffa/g/list"
+        }
+      ],
+      () => undefined
+    );
+    const originalSendMessage = browser.tabs.sendMessage;
+    browser.tabs.sendMessage = (async (
+      tabId: number,
+      message: {
+        type: string;
+        requestId?: string;
+        request?: { stage?: string };
+      }
+    ) => {
+      if (message.type === "bpa.risk.preflight") {
+        return { riskSignals: [] };
+      }
+      if (
+        message.type === "bpa.doudian.alliance.stage" &&
+        message.request?.stage === "discover-shops"
+      ) {
+        return {
+          ok: false,
+          requestId: message.requestId,
+          error: {
+            code: "SHOP_IDENTITY_UNCERTAIN",
+            message: "The current shop identity is unavailable."
+          }
+        };
+      }
+      return originalSendMessage(tabId, message);
+    }) as typeof browser.tabs.sendMessage;
+    const driver = createAllianceRetiredBrowserDriver({
+      sourceTabId: 1,
+      deadline: new Date(Date.now() + 10_000).toISOString()
+    });
+
+    await expect(driver.discoverShopContext()).rejects.toMatchObject({
+      code: "SHOP_IDENTITY_UNCERTAIN",
+      diagnostic: {
+        phase: "discover-source",
+        switchResponse: "not-started",
+        navigationIdentity: "unavailable",
+        restoreResult: "not-required"
+      }
+    });
+  });
+
   it("does not confirm an active Core cancellation with a mismatched request id ack", async () => {
     installBrowser(
       [

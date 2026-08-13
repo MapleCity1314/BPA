@@ -76,7 +76,7 @@ export class AllianceRetiredDriverError extends Error {
 }
 
 export interface AllianceRetiredStageDiagnostic {
-  readonly phase: "resolve-shop" | "restore-source";
+  readonly phase: "discover-source" | "resolve-shop" | "restore-source";
   readonly shopOrdinal?: number;
   readonly switchResponse:
     | "not-started"
@@ -719,14 +719,24 @@ export function createAllianceRetiredBrowserDriver(input: {
         throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
       })
     ).url;
-    const result = await stage<Extract<
+    let result: Extract<
       AllianceRetiredStageResult,
       { stage: "discover-shops" }
-    >>(
-      input.sourceTabId,
-      { stage: "discover-shops" },
-      "discover-shops"
-    );
+    >;
+    try {
+      result = await stage(
+        input.sourceTabId,
+        { stage: "discover-shops" },
+        "discover-shops"
+      );
+    } catch (error) {
+      throw withAllianceDiagnostic(error, {
+        phase: "discover-source",
+        switchResponse: "not-started",
+        navigationIdentity: "unavailable",
+        restoreResult: "not-required"
+      });
+    }
     return {
       shops: await resolveDiscoveredShopIds(result.shops, result.currentShop),
       currentShop: result.currentShop
