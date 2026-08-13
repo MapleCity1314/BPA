@@ -41,6 +41,7 @@ import {
   type AttentionRecord,
   type AuditRecord,
   type BinanceCollectionRunRecord,
+  type BinanceAccountSummaryReadRecord,
   type BinanceCandleReadRecord,
   type BinanceCurrentRecord,
   type BinanceFundingReadRecord,
@@ -3512,6 +3513,34 @@ export class SqlitePersistence implements Persistence {
       endedProjectCount: Number(project.ended_count ?? 0),
       currentRecordCount: Number(records.count ?? 0),
       positionSnapshotCount: Number(positions.count ?? 0)
+    };
+  }
+
+  getLatestBinanceAccountSummary(): BinanceAccountSummaryReadRecord | undefined {
+    const row = this.#db.prepare(
+      `SELECT c.capture_at,c.payload_json
+       FROM binance_source_captures c
+       JOIN binance_collection_runs r
+         ON r.collection_run_id=c.collection_run_id
+       WHERE c.source_kind='management'
+         AND r.status IN ('success','authenticated_but_no_data')
+       ORDER BY c.capture_at DESC,c.capture_id DESC LIMIT 1`
+    ).get() as SqlRow | undefined;
+    if (!row) return undefined;
+    const payload = parseJson(row.payload_json);
+    if (
+      payload === null ||
+      typeof payload !== "object" ||
+      Array.isArray(payload) ||
+      !("accountSummary" in payload)
+    ) return undefined;
+    const fields = payload.accountSummary;
+    if (fields === null || typeof fields !== "object" || Array.isArray(fields)) {
+      return undefined;
+    }
+    return {
+      capturedAt: String(row.capture_at),
+      fields: publicBinanceJson(fields)
     };
   }
 

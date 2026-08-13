@@ -87,6 +87,10 @@ export const openApiDocument = {
       get: operation("getBinanceOverview", "OverviewEnvelope"),
       head: head("headBinanceOverview")
     },
+    "/api/v1/binance/account-summary": {
+      get: operation("getBinanceAccountSummary", "AccountSummaryEnvelope"),
+      head: head("headBinanceAccountSummary")
+    },
     "/api/v1/binance/runs": {
       get: operation("listBinanceRuns", "RunListEnvelope", [limit, cursor]),
       head: head("headBinanceRuns", [limit, cursor])
@@ -220,6 +224,27 @@ export const openApiDocument = {
         properties: Object.fromEntries(["projectCount", "ongoingProjectCount", "endedProjectCount", "currentRecordCount", "positionSnapshotCount"].map((name) => [name, { type: "integer", minimum: 0 }])),
         additionalProperties: false
       },
+      AccountSummary: {
+        type: "object",
+        required: ["available", "capturedAt", "balances"],
+        properties: {
+          available: { type: "boolean" },
+          capturedAt: { type: ["string", "null"], format: "date-time" },
+          balances: {
+            type: "object",
+            required: ["totalMarginBalance", "walletBalance", "realizedPnl", "netProfit", "asset"],
+            properties: {
+              totalMarginBalance: { type: ["string", "null"], pattern: "^[+-]?\\d+(?:\\.\\d+)?$" },
+              walletBalance: { type: ["string", "null"], pattern: "^[+-]?\\d+(?:\\.\\d+)?$" },
+              realizedPnl: { type: ["string", "null"], pattern: "^[+-]?\\d+(?:\\.\\d+)?$" },
+              netProfit: { type: ["string", "null"], pattern: "^[+-]?\\d+(?:\\.\\d+)?$" },
+              asset: { type: ["string", "null"] }
+            },
+            additionalProperties: false
+          }
+        },
+        additionalProperties: false
+      },
       Run: {
         type: "object",
         required: ["collectionRunId", "attemptAt", "captureAt", "status", "projectCount", "pageCount", "recordCount", "createdAt"],
@@ -258,6 +283,7 @@ export const openApiDocument = {
       },
       DataReadinessEnvelope: { allOf: [schema("EnvelopeBase"), { type: "object", properties: { data: schema("DataReadiness") } }] },
       OverviewEnvelope: { allOf: [schema("EnvelopeBase"), { type: "object", properties: { data: schema("Overview") } }] },
+      AccountSummaryEnvelope: { allOf: [schema("EnvelopeBase"), { type: "object", properties: { data: schema("AccountSummary") } }] },
       ProjectEnvelope: { allOf: [schema("EnvelopeBase"), { type: "object", properties: { data: schema("Project") } }] },
       EnvelopeBase: { type: "object", required: ["meta", "data"], properties: { meta: schema("ResponseMeta"), data: {} } },
       RunListEnvelope: schema("RunList"), ProjectListEnvelope: schema("ProjectList"), PositionListEnvelope: schema("PositionList"), RecordListEnvelope: schema("RecordList"), ValidationListEnvelope: schema("ValidationList"), CandleListEnvelope: schema("CandleList"), FundingListEnvelope: schema("FundingList"),

@@ -12,6 +12,7 @@ import {
   BINANCE_MARKET_SOURCE,
   type DataReadiness,
   type PartialStatus,
+  type PublicBinanceAccountSummary,
   type PublicBinanceRun,
   type ResponseMeta,
   type StaleStatus,
@@ -26,6 +27,67 @@ const PARTIAL = new Set([
   "pagination_failed",
   "partial_collection"
 ]);
+
+const ACCOUNT_FIELD_LABELS = {
+  totalMarginBalance: ["全部保证金余额", "保证金余额"],
+  walletBalance: ["钱包余额"],
+  totalRealizedPnl: ["已实现总盈亏"],
+  netProfit: ["净利润"]
+} as const;
+
+function accountAmount(
+  fields: Readonly<Record<string, unknown>>,
+  labels: readonly string[]
+): { amount: string; asset: string | null } | undefined {
+  const value = labels.map((label) => fields[label]).find(
+    (candidate): candidate is string => typeof candidate === "string"
+  );
+  if (!value) return undefined;
+  const match = value.trim().match(/^([+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?:\s+([A-Z0-9]{2,12}))?$/u);
+  if (!match?.[1]) return undefined;
+  return { amount: match[1].replaceAll(",", ""), asset: match[2] ?? null };
+}
+
+function publicAccountSummary(
+  record: ReturnType<BinanceReadStore["getLatestBinanceAccountSummary"]>
+): PublicBinanceAccountSummary {
+  if (
+    !record ||
+    record.fields === null ||
+    typeof record.fields !== "object" ||
+    Array.isArray(record.fields)
+  ) {
+    return {
+      available: false,
+      capturedAt: record?.capturedAt ?? null,
+      balances: {
+        totalMarginBalance: null,
+        walletBalance: null,
+        realizedPnl: null,
+        netProfit: null,
+        asset: null
+      }
+    };
+  }
+  const fields = record.fields as Readonly<Record<string, unknown>>;
+  const totalMarginBalance = accountAmount(fields, ACCOUNT_FIELD_LABELS.totalMarginBalance);
+  const walletBalance = accountAmount(fields, ACCOUNT_FIELD_LABELS.walletBalance);
+  const totalRealizedPnl = accountAmount(fields, ACCOUNT_FIELD_LABELS.totalRealizedPnl);
+  const netProfit = accountAmount(fields, ACCOUNT_FIELD_LABELS.netProfit);
+  const amounts = [totalMarginBalance, walletBalance, totalRealizedPnl, netProfit];
+  const assets = new Set(amounts.flatMap((item) => item?.asset ? [item.asset] : []));
+  return {
+    available: amounts.some(Boolean) && assets.size <= 1,
+    capturedAt: record.capturedAt,
+    balances: {
+      totalMarginBalance: totalMarginBalance?.amount ?? null,
+      walletBalance: walletBalance?.amount ?? null,
+      realizedPnl: totalRealizedPnl?.amount ?? null,
+      netProfit: netProfit?.amount ?? null,
+      asset: assets.size === 1 ? [...assets][0]! : null
+    }
+  };
+}
 
 function limitValue(value: string | null): number {
   if (value === null) return 100;
@@ -127,6 +189,13 @@ export class BinanceQueries {
 
   overview(requestId: string): SuccessEnvelope<ReturnType<BinanceReadStore["getBinanceOverview"]>> {
     return { meta: this.meta(requestId), data: this.store.getBinanceOverview() };
+  }
+
+  accountSummary(requestId: string): SuccessEnvelope<PublicBinanceAccountSummary> {
+    return {
+      meta: this.meta(requestId),
+      data: publicAccountSummary(this.store.getLatestBinanceAccountSummary())
+    };
   }
 
   runs(requestId: string, params: URLSearchParams) {

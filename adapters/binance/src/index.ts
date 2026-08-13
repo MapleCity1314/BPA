@@ -8,6 +8,7 @@ export const BINANCE_MANAGEMENT_PATH = "/zh-CN/copy-trading/copy-management";
 export * from "./project-detail.js";
 
 const ACCOUNT_LABELS = [
+  "全部保证金余额",
   "保证金余额",
   "钱包余额",
   "已实现总盈亏",

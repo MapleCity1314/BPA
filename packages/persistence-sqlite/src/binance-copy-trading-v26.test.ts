@@ -121,7 +121,13 @@ function capture(runId: string, execution: OperationalExecutionContext) {
         captureAt: timestamp,
         recordCount: 1,
         payloadDigest: contentDigest,
-        payload: { projects: 1 }
+        payload: {
+          accountSummary: {
+            全部保证金余额: "1,234.56789000 USDT",
+            钱包余额: "1,200.00000000 USDT"
+          },
+          projects: 1
+        }
       },
       {
         captureId: `capture:${runId}:trade:1`,
@@ -187,6 +193,13 @@ describe("Binance copy-trading SQLite v26", () => {
     expect(store.getBinanceProjectByAlias("leader-01")).toMatchObject({
       projectAlias: "leader-01",
       projectStatus: "ongoing"
+    });
+    expect(store.getLatestBinanceAccountSummary()).toEqual({
+      capturedAt: timestamp,
+      fields: {
+        全部保证金余额: "1,234.56789000 USDT",
+        钱包余额: "1,200.00000000 USDT"
+      }
     });
     expect(store.listBinanceRecords({
       projectAlias: "leader-01",

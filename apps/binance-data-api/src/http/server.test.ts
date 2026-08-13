@@ -21,6 +21,7 @@ function store(readiness: BinanceReadinessRecord): BinanceReadStore {
       currentRecordCount: 0,
       positionSnapshotCount: 0
     }),
+    getLatestBinanceAccountSummary: () => undefined,
     listBinanceCollectionRuns: () => ({ items: [], hasMore: false }),
     listBinanceProjects: () => ({ items: [], hasMore: false }),
     getBinanceProjectByAlias: () => undefined,
@@ -156,6 +157,47 @@ describe("Binance Data API transport", () => {
         body: {
           data: [{ projectAlias: "leader-01", symbol: "BTCUSDT", ordinal: 1 }],
           page: { has_more: false, limit: 100 }
+        }
+      });
+  });
+
+  it("serves canonical account balances as exact decimal strings", async () => {
+    const readStore = store({ schemaVersion: 26 });
+    readStore.getLatestBinanceAccountSummary = () => ({
+      capturedAt: timestamp,
+      fields: {
+        全部保证金余额: "1,234.56789000 USDT",
+        钱包余额: "1,200.00000000 USDT",
+        已实现总盈亏: "+34.56789000 USDT"
+      }
+    });
+    const server = createBinanceDataHttpServer({
+      queries: new BinanceQueries(readStore, () => new Date(timestamp)),
+      serviceReadiness: {
+        ready: true,
+        database_readable: true,
+        schema_ready: true,
+        schema_version: 26
+      },
+      port: 0
+    });
+    servers.push(server);
+    const address = await server.listen();
+    await expect(fetchJson(address.port, "/api/v1/binance/account-summary"))
+      .resolves.toMatchObject({
+        status: 200,
+        body: {
+          data: {
+            available: true,
+            capturedAt: timestamp,
+            balances: {
+              asset: "USDT",
+              totalMarginBalance: "1234.56789000",
+              walletBalance: "1200.00000000",
+              realizedPnl: "+34.56789000",
+              netProfit: null
+            }
+          }
         }
       });
   });

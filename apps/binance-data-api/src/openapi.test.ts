@@ -6,6 +6,7 @@ describe("Binance Data API OpenAPI contract", () => {
     expect(openApiDocument.openapi).toBe("3.1.0");
     expect(Object.keys(openApiDocument.paths)).toContain("/api/v1/binance/readiness");
     expect(Object.keys(openApiDocument.paths)).toContain("/api/v1/binance/positions");
+    expect(Object.keys(openApiDocument.paths)).toContain("/api/v1/binance/account-summary");
     for (const path of Object.values(openApiDocument.paths)) {
       expect(Object.keys(path).sort()).toEqual(["get", "head"]);
       expect(path.get.responses).toHaveProperty("200");
@@ -41,7 +42,8 @@ describe("Binance Data API OpenAPI contract", () => {
       ErrorEnvelope: expect.any(Object),
       Page: expect.any(Object),
       Candle: expect.any(Object),
-      Funding: expect.any(Object)
+      Funding: expect.any(Object),
+      AccountSummary: expect.any(Object)
     });
     const serialized = JSON.stringify(openApiDocument);
     expect(serialized).not.toContain("project_id");

@@ -141,6 +141,10 @@ export function createBinanceDataHttpServer(options: BinanceDataHttpServerOption
           json(response, 200, queries.overview(requestId), head);
           return;
         }
+        if (url.pathname === "/api/v1/binance/account-summary") {
+          json(response, 200, queries.accountSummary(requestId), head);
+          return;
+        }
         if (url.pathname === "/api/v1/binance/runs") {
           json(response, 200, queries.runs(requestId, url.searchParams), head);
           return;

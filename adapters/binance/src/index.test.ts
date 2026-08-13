@@ -65,6 +65,23 @@ describe("Binance copy-trading adapter", () => {
     expect(JSON.stringify(result)).not.toContain("不得落库的姓名");
   });
 
+  it("reads the current total margin balance label without losing decimal text", () => {
+    const document = page(`
+      <div><span>全部保证金余额</span><span>1,234.56789000 USDT</span></div>
+      <div><span>钱包余额</span><span>1,200.00000000 USDT</span></div>
+      <div data-project-id="project_1001">
+        <span>项目 ID：project_1001</span><span>跟单时间</span><span>2026-08-01</span>
+        <button>展开详情</button>
+      </div>
+    `);
+    expect(readBinanceManagementSnapshot(document)).toMatchObject({
+      accountSummary: {
+        全部保证金余额: "1,234.56789000 USDT",
+        钱包余额: "1,200.00000000 USDT"
+      }
+    });
+  });
+
   it("reads the current Binance __APP shell without a main landmark", () => {
     const document = new JSDOM(`
       <body><div id="__APP">

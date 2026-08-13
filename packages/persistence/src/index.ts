@@ -922,9 +922,15 @@ export interface BinanceOverviewRecord {
   positionSnapshotCount: number;
 }
 
+export interface BinanceAccountSummaryReadRecord {
+  capturedAt: string;
+  fields: JsonValue;
+}
+
 export interface BinanceReadStore {
   getBinanceReadiness(): BinanceReadinessRecord;
   getBinanceOverview(): BinanceOverviewRecord;
+  getLatestBinanceAccountSummary(): BinanceAccountSummaryReadRecord | undefined;
   listBinanceCollectionRuns(input: {
     limit: number;
     after?: BinanceRunSeek;

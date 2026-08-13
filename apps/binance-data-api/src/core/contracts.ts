@@ -61,6 +61,18 @@ export interface DataReadiness {
   reason_codes: readonly string[];
 }
 
+export interface PublicBinanceAccountSummary {
+  available: boolean;
+  capturedAt: string | null;
+  balances: {
+    totalMarginBalance: string | null;
+    walletBalance: string | null;
+    realizedPnl: string | null;
+    netProfit: string | null;
+    asset: string | null;
+  };
+}
+
 export type PublicBinanceRun = Omit<
   BinanceCollectionRunRecord,
   "workflowRunId" | "sourceUrl" | "contentDigest"
