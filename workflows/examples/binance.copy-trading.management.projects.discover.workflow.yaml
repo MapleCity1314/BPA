@@ -1,0 +1,64 @@
+apiVersion: bpa/v1alpha3
+kind: Workflow
+metadata:
+  id: binance.copy-trading.management.projects.discover
+  version: 1.0.0
+  title: Binance 合约跟单项目只读发现
+  description: 绑定已登录管理页，仅读取账户汇总和真实跟单项目列表，为受限单项目采集选择内部 project_id；不展开项目、不落明细、不执行账户写操作。
+spec:
+  riskLevel: R1
+  inputSchema:
+    type: object
+    additionalProperties: false
+  outputSchema:
+    type: object
+    additionalProperties: false
+    required: [status, management]
+    properties:
+      status: { const: success }
+      management: { type: object }
+  limits: { maxDepth: 2, maxStepExecutions: 3 }
+  resourceSlots:
+    binance_page:
+      kind: browser
+      capabilities: [browser.dom.read, browser.dom.write, browser.tabs.read]
+      allowedOrigins: [https://www.binance.com]
+      authentication: authenticated
+      purpose: 绑定已登录 Binance 合约跟单管理页，仅切换进行中和已结束列表并读取项目摘要
+  root:
+    kind: sequence
+    steps:
+      - key: read_management
+        kind: call
+        use: binance.copy-trading.management.snapshot.read@1.1.0
+        with: {}
+        timeout: 2m
+        resourceMappings: { browser: binance_page }
+        handlers:
+          failure:
+            kind: sequence
+            steps:
+              - key: discovery_failed
+                kind: terminal
+                status: failed
+                error: { code: BINANCE_MANAGEMENT_DISCOVERY_FAILED, message: Binance 管理页未形成可信项目列表。 }
+          rejected:
+            kind: sequence
+            steps:
+              - key: discovery_blocked
+                kind: terminal
+                status: rejected
+                error: { code: BINANCE_MANAGEMENT_DISCOVERY_BLOCKED, message: 登录、验证码、风控或页面上下文阻断了项目列表读取。 }
+          timeout:
+            kind: sequence
+            steps:
+              - key: discovery_timeout
+                kind: terminal
+                status: failed
+                error: { code: BINANCE_MANAGEMENT_DISCOVERY_TIMEOUT, message: Binance 项目列表读取超过硬 Deadline。 }
+      - key: complete
+        kind: terminal
+        status: succeeded
+        output:
+          status: success
+          management: ${steps.read_management.output}
