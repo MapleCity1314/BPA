@@ -530,24 +530,26 @@ function shopSwitcherCards(dialog: HTMLElement): HTMLElement[] {
 
 function visibleWithinSwitcher(
   card: HTMLElement,
-  dialog: HTMLElement
+  viewport: HTMLElement
 ): boolean {
   if (!visibleElement(card)) return false;
   const cardRect = card.getBoundingClientRect();
-  const dialogRect = dialog.getBoundingClientRect();
+  const viewportRect = viewport.getBoundingClientRect();
   const cardLeft = Number.isFinite(cardRect.left) ? cardRect.left : 0;
   const cardRight = Number.isFinite(cardRect.right)
     ? cardRect.right
     : cardLeft + cardRect.width;
-  const dialogLeft = Number.isFinite(dialogRect.left) ? dialogRect.left : 0;
-  const dialogRight = Number.isFinite(dialogRect.right)
-    ? dialogRect.right
-    : dialogLeft + dialogRect.width;
+  const viewportLeft = Number.isFinite(viewportRect.left)
+    ? viewportRect.left
+    : 0;
+  const viewportRight = Number.isFinite(viewportRect.right)
+    ? viewportRect.right
+    : viewportLeft + viewportRect.width;
   return (
-    cardRect.bottom > dialogRect.top &&
-    cardRect.top < dialogRect.bottom &&
-    cardRight > dialogLeft &&
-    cardLeft < dialogRight
+    cardRect.bottom > viewportRect.top &&
+    cardRect.top < viewportRect.bottom &&
+    cardRight > viewportLeft &&
+    cardLeft < viewportRight
   );
 }
 
@@ -695,8 +697,9 @@ export function selectDoudianAllianceShop(
     throw new DoudianAllianceError("SHOP_TARGET_INVALID");
   }
   const dialog = visibleShopDialog(doc);
+  const viewport = shopSwitcherScrollTarget(doc) ?? dialog;
   const matches = shopSwitcherCards(dialog).filter((card) => {
-    if (!visibleWithinSwitcher(card, dialog)) return false;
+    if (!visibleWithinSwitcher(card, viewport)) return false;
     const name = normalizeText(
       card.querySelector<HTMLElement>("[class*='introName']")?.textContent
     );

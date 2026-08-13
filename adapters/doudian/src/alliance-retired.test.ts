@@ -319,6 +319,40 @@ describe("Doudian alliance retired-products runtime", () => {
     expect(click).not.toHaveBeenCalled();
   });
 
+  it("uses the nested virtual scroller viewport instead of the outer dialog", () => {
+    const doc = documentOf(`
+      <div role="dialog">切换组织/店铺
+        <div class="virtual-scroller">
+          <div class="roleItem target"><span class="introName">乙食品专营店</span>正常营业</div>
+        </div>
+      </div>
+    `);
+    const dialog = doc.querySelector<HTMLElement>("[role=dialog]")!;
+    const scroller = doc.querySelector<HTMLElement>(".virtual-scroller")!;
+    const target = doc.querySelector<HTMLElement>(".target")!;
+    dialog.getBoundingClientRect = () =>
+      ({ left: 0, right: 400, top: 0, bottom: 600, width: 400, height: 600 }) as DOMRect;
+    scroller.getBoundingClientRect = () =>
+      ({ left: 0, right: 400, top: 100, bottom: 300, width: 400, height: 200 }) as DOMRect;
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 800 }
+    });
+    target.getBoundingClientRect = () =>
+      ({ left: 20, right: 380, top: 340, bottom: 380, width: 360, height: 40 }) as DOMRect;
+    const click = vi.fn();
+    target.addEventListener("click", click);
+
+    expect(() =>
+      selectDoudianAllianceShop(doc, {
+        name: "乙食品专营店",
+        status: "active",
+        statusText: "正常营业"
+      })
+    ).toThrow("SHOP_TARGET_AMBIGUOUS");
+    expect(click).not.toHaveBeenCalled();
+  });
+
   it("uses exact semantic entries for the Doudian-to-Buyin path", () => {
     const doc = documentOf(`
       <div id="fxg-pc-header">
