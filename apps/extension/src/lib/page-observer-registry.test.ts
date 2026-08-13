@@ -3,6 +3,28 @@ import { describe, expect, it } from "vitest";
 import { probeObservedPage } from "./page-observer-registry.js";
 
 describe("page observer registry", () => {
+  it("authenticates the current Binance shell with a stable local context", async () => {
+    const doc = new JSDOM(`
+      <body><div id="__APP"><section>
+        <div>项目ID: project_1001</div><span>净利润</span><span>25 USDT</span>
+        <div><div>展开详情</div></div>
+      </section></div></body>
+    `).window.document;
+    await expect(
+      probeObservedPage(
+        doc,
+        "https://www.binance.com/zh-CN/copy-trading/copy-management"
+      )
+    ).resolves.toMatchObject({
+      observerCapabilityId: "binance.copy-trading.page",
+      authentication: {
+        state: "authenticated",
+        contextRef: expect.stringMatching(/^auth-context-[a-f0-9]{64}$/u)
+      },
+      observationState: "ready"
+    });
+  });
+
   it("authenticates a Doudian product page from shop and shell evidence", async () => {
     const doc = new JSDOM(`
       <body>

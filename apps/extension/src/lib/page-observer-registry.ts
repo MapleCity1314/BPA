@@ -144,10 +144,20 @@ const observers: readonly PageObserver[] = [
         };
       }
       try {
-        readBinanceManagementSnapshot(document, url.href);
+        const snapshot = readBinanceManagementSnapshot(document, url.href);
+        const identity = snapshot.projects
+          .map((project) => project.projectId)
+          .sort()
+          .join("\u0000");
         return {
           observerCapabilityId: this.capabilityId,
-          authentication: { state: "authenticated" },
+          authentication: {
+            state: "authenticated",
+            contextRef: await authenticationContextRef(
+              this.capabilityId,
+              identity
+            )
+          },
           observationState: "ready"
         };
       } catch (error) {
