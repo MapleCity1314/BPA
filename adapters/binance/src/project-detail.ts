@@ -412,6 +412,27 @@ function waitForChange(
   })();
 }
 
+async function waitForDetailPageReady(
+  root: ParentNode,
+  input: { readonly projectId: string; readonly sourceTab: BinanceDetailTab },
+  deadline: number,
+  wait: (milliseconds: number) => Promise<void>,
+  isCancelled: () => boolean
+): Promise<BinanceDetailPage> {
+  while (Date.now() < deadline) {
+    if (isCancelled()) throw new Error("COMMAND_CANCELLED");
+    try {
+      return readBinanceDetailPage(root, input);
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "BINANCE_DETAIL_STRUCTURE_UNCONFIRMED") {
+        throw error;
+      }
+    }
+    await wait(100);
+  }
+  throw new Error("BINANCE_DETAIL_TAB_TIMEOUT");
+}
+
 export async function collectBinanceProjectDetail(
   document: Document,
   input: Readonly<Record<string, unknown>>,
@@ -492,7 +513,13 @@ export async function collectBinanceProjectDetail(
           await wait(100);
         }
       }
-      let page = readBinanceDetailPage(root, { projectId: target.projectId, sourceTab });
+      let page = await waitForDetailPageReady(
+        root,
+        { projectId: target.projectId, sourceTab },
+        deadline,
+        wait,
+        isCancelled
+      );
       const summary = tabSummary(root);
       const records: BinanceDetailRecord[] = [...page.records];
       const seenPages = new Set([page.page]);

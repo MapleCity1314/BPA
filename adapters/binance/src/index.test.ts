@@ -37,7 +37,7 @@ describe("Binance copy-trading adapter", () => {
       ].map((path) => readFileSync(new URL(`../../../${path}`, import.meta.url))).join("\n"))
       .digest("hex")}`;
     expect(adapter).toMatchObject({
-      metadata: { version: "1.4.0" },
+      metadata: { version: "1.5.0" },
       extension: { minimumVersion: "0.6.2" },
       capabilities: [
         {
