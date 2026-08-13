@@ -33,7 +33,7 @@ Windows 不安装公司业务 BPA Runtime、Extension、Native Host 或抖店 Ch
 
 现网与历史验收当前只可证明一条 Windows 专属业务交付：
 `doudian.alliance-retired-products-monitor@2.0.1`。本代码候选将仓库中的过渡 WorkBuddy
-Skill、PowerShell 安装器和两个 CI job 同步到 Workflow `3.0.0` 七资产闭包，以保留 canary
+Skill、PowerShell 安装器和两个 CI job 同步到 Workflow `3.0.1` 七资产闭包，以保留 canary
 前的修复能力，但该候选尚未部署，不能把它写成现网版本或新的生产证据。
 
 用户指出共有两条需要迁移，但第二条的 Workflow ID、Windows 调度入口、Profile 和
@@ -127,7 +127,7 @@ actor 审计和远程操作查询投影。
 - **当前必须保留**：清退 WorkBuddy Skill、内置 Runtime/Extension 安装入口、安装器、
   业务专属打包/验包脚本、仓库硬门、两个专属 CI job 和 Branch Protection 10 项检查，作为
   Mac 真实 canary 前的现网修复与回退能力。过渡安装器只发布当前 Node `2.0.0`、Workflow
-  `3.0.0` 闭包，不保留旧版本兼容资产；本计划阶段不部署该 Windows 包。
+  `3.0.1` 闭包，不保留旧版本兼容资产；本计划阶段不部署该 Windows 包。
 - **canary 后独立 PR**：Mac 登录态真实 E2E 和生产接管成立后，才删除上述业务旧交付；通用
   Windows Runtime RC 门禁仍保留。随后单独审计是否可移除 `release-workbuddy-skill` 与
   `validate-workbuddy-skill-windows` 两个 required contexts，其他保护不变。

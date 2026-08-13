@@ -253,7 +253,7 @@ installer 也尚未消费此协议，因此不能据此宣称公司 Mac 已具�
 
 当前证据：
 
-- 本代码候选已将 `doudian.alliance-retired-products-monitor` 升为 `3.0.0`，逐店浏览器
+- 本代码候选已将 `doudian.alliance-retired-products-monitor` 升为 `3.0.1`，逐店浏览器
   扫描成功后立即写入 Run-scoped Operational Fact；
 - Core 使用持久事实而非浏览器汇总判断 complete/partial/failed，并在完整或至少一店成功的
   部分结果上准备不可变 Dataset；Run 终态、Dataset、审计和 lineage 原子提交；
@@ -267,7 +267,8 @@ installer 也尚未消费此协议，因此不能据此宣称公司 Mac 已具�
 - 已有 Doudian Alliance Adapter `2.0.0`、Extension 执行端与 Core/Provider fixture 测试；
 - Windows WorkBuddy Skill、安装器、业务打包/验包器和两个专属 CI job 继续保留，作为
   Mac 真实 canary 前的现网修复与回退能力；过渡安装器同步发布 Node `2.0.0`、Workflow
-  `3.0.0` 当前闭包，但本代码变更不会部署它；登录态真实页面完整 E2E 尚不能据此判定完成。
+  `3.0.1` 当前闭包；该版本把店铺发现与逐店扫描的单次调用预算明确冻结为 5 分钟，避免旧发布
+  计划中的 120 秒上限提前截断真实页面切店。登录态真实页面完整 E2E 尚不能据此判定完成。
 
 2026-08-07 的交付候选进一步收紧 `ready`：安装器必须重新读取 smoke test 写入的
 日记录，核对最后一次 Run、完整扫描状态、已发现/已扫描店铺数相等且失败店铺为 0，

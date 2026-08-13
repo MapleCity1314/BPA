@@ -766,7 +766,7 @@ describe("local Doudian business Workflow acceptance",() => {
     const retired = await runTrigger(service,store,{
       id:"doudian-retired-local",appId:"retired-products-monitor",
       workflowId:"doudian.alliance-retired-products-monitor",
-      workflowVersion:"3.0.0",workflowInput:{ maxShops:100 }
+      workflowVersion:"3.0.1",workflowInput:{ maxShops:100 }
     });
     expect(retired).toMatchObject({
       run:{ status:"succeeded",output:{ alert:true,dailyRecord:{ status:"complete_with_items" } } },
@@ -1238,7 +1238,7 @@ describe("local Doudian business Workflow acceptance",() => {
     const result = await runTrigger(service,store,{
       id:"doudian-retired-partial",appId:"retired-products-monitor",
       workflowId:"doudian.alliance-retired-products-monitor",
-      workflowVersion:"3.0.0",workflowInput:{ maxShops:100 }
+      workflowVersion:"3.0.1",workflowInput:{ maxShops:100 }
     });
 
     expect(result).toMatchObject({
@@ -1306,7 +1306,7 @@ describe("local Doudian business Workflow acceptance",() => {
     const result = await runTrigger(service,store,{
       id:"doudian-retired-active-no-id",appId:"retired-products-monitor",
       workflowId:"doudian.alliance-retired-products-monitor",
-      workflowVersion:"3.0.0",workflowInput:{ maxShops:100 }
+      workflowVersion:"3.0.1",workflowInput:{ maxShops:100 }
     });
     expect(result.run).toMatchObject({ status:"uncertain" });
     expect(store.getEngineCheckpoint(result.run.id)?.state).toMatchObject({
@@ -1359,7 +1359,7 @@ describe("local Doudian business Workflow acceptance",() => {
     const result = await runTrigger(service,store,{
       id:"doudian-retired-blocked-skip",appId:"retired-products-monitor",
       workflowId:"doudian.alliance-retired-products-monitor",
-      workflowVersion:"3.0.0",workflowInput:{ maxShops:100 }
+      workflowVersion:"3.0.1",workflowInput:{ maxShops:100 }
     });
     expect(result.run).toMatchObject({
       status:"succeeded",
