@@ -37,7 +37,7 @@ describe("Binance copy-trading adapter", () => {
       ].map((path) => readFileSync(new URL(`../../../${path}`, import.meta.url))).join("\n"))
       .digest("hex")}`;
     expect(adapter).toMatchObject({
-      metadata: { version: "1.1.0" },
+      metadata: { version: "1.2.0" },
       extension: { minimumVersion: "0.6.2" },
       capabilities: [
         {
@@ -127,6 +127,50 @@ describe("Binance copy-trading adapter", () => {
       "ended_1001"
     ]);
     expect(document.querySelector("[role='tab'][aria-selected='true']")?.textContent).toBe("进行中");
+  });
+
+  it("waits for project rows after the status tab becomes active", async () => {
+    const document = page(`
+      <button role="tab" aria-selected="true">进行中</button>
+      <button role="tab" aria-selected="false">已结束</button>
+      <div id="projects" data-project-id="ongoing_1001">
+        <span>项目 ID：ongoing_1001</span><span>净利润</span><span>1 USDT</span><button>展开详情</button>
+      </div>
+    `);
+    const [ongoing, ended] = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("[role='tab']")
+    );
+    const projects = document.querySelector<HTMLElement>("#projects")!;
+    ended!.addEventListener("click", () => {
+      ongoing!.setAttribute("aria-selected", "false");
+      ended!.setAttribute("aria-selected", "true");
+    });
+    ongoing!.addEventListener("click", () => {
+      ongoing!.setAttribute("aria-selected", "true");
+      ended!.setAttribute("aria-selected", "false");
+      projects.setAttribute("data-project-id", "ongoing_1001");
+      projects.innerHTML = '<span>项目 ID：ongoing_1001</span><span>净利润</span><span>1 USDT</span><button>展开详情</button>';
+    });
+    let waits = 0;
+    const result = await collectBinanceManagementSnapshot(
+      document,
+      document.defaultView!.location.href,
+      {
+        deadline: new Date(Date.now() + 5_000).toISOString(),
+        wait: async () => {
+          waits += 1;
+          if (ended!.getAttribute("aria-selected") === "true") {
+            projects.setAttribute("data-project-id", "ended_1001");
+            projects.innerHTML = '<span>项目 ID：ended_1001</span><span>净利润</span><span>2 USDT</span><button>展开详情</button>';
+          }
+        }
+      }
+    );
+    expect(waits).toBeGreaterThan(0);
+    expect(result.projects.map((project) => project.projectId)).toEqual([
+      "ongoing_1001",
+      "ended_1001"
+    ]);
   });
 
   it("limits an A1 collection to one project without opening the other status tab", async () => {

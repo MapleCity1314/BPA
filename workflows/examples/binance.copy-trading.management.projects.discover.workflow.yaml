@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: binance.copy-trading.management.projects.discover
-  version: 1.0.0
+  version: 1.1.0
   title: Binance 合约跟单项目只读发现
   description: 绑定已登录管理页，仅读取账户汇总和真实跟单项目列表，为受限单项目采集选择内部 project_id；不展开项目、不落明细、不执行账户写操作。
 spec:
@@ -30,7 +30,7 @@ spec:
     steps:
       - key: read_management
         kind: call
-        use: binance.copy-trading.management.snapshot.read@1.1.0
+        use: binance.copy-trading.management.snapshot.read@1.2.0
         with: {}
         timeout: 2m
         resourceMappings: { browser: binance_page }
