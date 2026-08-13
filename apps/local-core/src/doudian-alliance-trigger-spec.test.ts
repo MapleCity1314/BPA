@@ -26,7 +26,7 @@ describe("Doudian alliance retired-products TriggerSpec template", () => {
       kind: "schedule",
       workflow: {
         id: "doudian.alliance-retired-products-monitor",
-        version: "3.0.3"
+        version: "3.0.4"
       },
       enabled: false,
       input: { maxShops: 100 },

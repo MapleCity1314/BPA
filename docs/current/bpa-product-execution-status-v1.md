@@ -253,7 +253,7 @@ installer 也尚未消费此协议，因此不能据此宣称公司 Mac 已具�
 
 当前证据：
 
-- 本代码候选已将 `doudian.alliance-retired-products-monitor` 升为 `3.0.3`，逐店浏览器
+- 本代码候选已将 `doudian.alliance-retired-products-monitor` 升为 `3.0.4`，逐店浏览器
   扫描成功后立即写入 Run-scoped Operational Fact；
 - Core 使用持久事实而非浏览器汇总判断 complete/partial/failed，并在完整或至少一店成功的
   部分结果上准备不可变 Dataset；Run 终态、Dataset、审计和 lineage 原子提交；
@@ -264,10 +264,10 @@ installer 也尚未消费此协议，因此不能据此宣称公司 Mac 已具�
   staging/intent；
 - 已新增 `15:00`、`run_once`、默认禁用且只绑定部署 placeholder 的 Mac TriggerSpec 模板；
   真实 `browserInstanceId` 和实测 p95 通过前不得发布启用；
-- 已有 Doudian Alliance Adapter `2.0.2`、Extension 执行端与 Core/Provider fixture 测试；
+- 已有 Doudian Alliance Adapter `2.0.3`、Extension 执行端与 Core/Provider fixture 测试；
 - Windows WorkBuddy Skill、安装器、业务打包/验包器和两个专属 CI job 继续保留，作为
-  Mac 真实 canary 前的现网修复与回退能力；过渡安装器同步发布浏览器 Node `2.0.2`、Workflow
-  `3.0.3` 当前闭包；该版本把店铺发现与逐店扫描的单次调用预算明确冻结为 5 分钟，避免旧发布
+  Mac 真实 canary 前的现网修复与回退能力；过渡安装器同步发布浏览器 Node `2.0.3`、Workflow
+  `3.0.4` 当前闭包；该版本把店铺发现与逐店扫描的单次调用预算明确冻结为 5 分钟，避免旧发布
   计划中的 120 秒上限提前截断真实页面切店，并记录切换、导航身份与恢复动作的受控阶段错误码。
   登录态真实页面完整 E2E 尚不能据此判定完成。
 
@@ -375,7 +375,7 @@ Core 竞态下错误释放有效控制权。正式部署前仍必须完成旧控
 导致声明 `additionalProperties: false` 的清退、体验分和库存 Workflow 在 Run 创建前全部
 被阻断。当前候选已移除这项输入污染：occurrence 与 Dataset 血缘只保留在不可变
 Trigger Run，Workflow 只接收其已冻结业务输入。候选同时用同一 Browser Session 依次
-走通清退商品 `2.0.2`、体验分 `2.0.0`、库存 `2.0.0` 的 Trigger、资源绑定、IR2、Provider、
+走通清退商品 `2.0.3`、体验分 `2.0.0`、库存 `2.0.0` 的 Trigger、资源绑定、IR2、Provider、
 终态与租约释放，并把普通单店失败改为 `collect` 后聚合为 `uncertain + partial`；登录、
 验证码和风控的 `rejected` 仍立即终止。该测试不启动 Chrome，不等于真实登录页 E2E。
 

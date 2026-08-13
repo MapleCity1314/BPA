@@ -338,14 +338,38 @@ export function createAllianceRetiredBrowserDriver(input: {
       Math.min(input.stageResponseTimeoutMs ?? 75_000, remaining)
     );
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopNavigationWatch = false;
     let response: StageResponse;
     try {
+      const navigationStarted =
+        expectedStage === "switch-shop"
+          ? (async (): Promise<never> => {
+              const initial = await browser.tabs
+                .get(tabId)
+                .catch(() => undefined);
+              while (!stopNavigationWatch && Date.now() < Date.parse(input.deadline)) {
+                const current = await browser.tabs
+                  .get(tabId)
+                  .catch(() => undefined);
+                if (
+                  !current ||
+                  current.status === "loading" ||
+                  (initial?.url !== undefined && current.url !== initial.url)
+                ) {
+                  throw new AllianceRetiredDriverError("PAGE_LOADING");
+                }
+                await new Promise((resolve) => setTimeout(resolve, 100));
+              }
+              return await new Promise<never>(() => undefined);
+            })()
+          : new Promise<never>(() => undefined);
       response = (await Promise.race([
         browser.tabs.sendMessage(tabId, {
           type: "bpa.doudian.alliance.stage",
           requestId,
           request
         }),
+        navigationStarted,
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(
             () =>
@@ -371,6 +395,7 @@ export function createAllianceRetiredBrowserDriver(input: {
       if (error instanceof AllianceRetiredDriverError) throw error;
       throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
     } finally {
+      stopNavigationWatch = true;
       if (timer) clearTimeout(timer);
       input.onStageStopped?.(requestId);
     }
