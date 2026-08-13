@@ -58,8 +58,8 @@ describe("Doudian alliance retired-products runtime", () => {
       )
       .digest("hex")}`;
 
-    expect(DOUDIAN_ALLIANCE_RUNTIME_VERSION).toBe("2.0.1");
-    expect(adapter.metadata.version).toBe("2.0.1");
+    expect(DOUDIAN_ALLIANCE_RUNTIME_VERSION).toBe("2.0.2");
+    expect(adapter.metadata.version).toBe("2.0.2");
     expect(adapter.extension.minimumVersion).toBe("0.6.2");
     expect(adapter.capabilities).toHaveLength(2);
     expect(adapter.capabilities.map((capability) => capability.nodeId)).toEqual([
@@ -68,8 +68,8 @@ describe("Doudian alliance retired-products runtime", () => {
     ]);
     for (const capability of adapter.capabilities) {
       expect(capability).toMatchObject({
-        nodeVersions: ["2.0.1"],
-        handlerVersion: "2.0.1",
+        nodeVersions: ["2.0.2"],
+        handlerVersion: "2.0.2",
         implementationDigest
       });
     }
@@ -466,6 +466,53 @@ describe("Doudian alliance retired-products runtime", () => {
       "mouseup",
       "click"
     ]);
+  });
+
+  it("uses the topmost interactive header when a transition leaves a duplicate", () => {
+    const doc = documentOf(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName stale"><span class="userName">甲食品旗舰店</span></div>
+        <div class="headerShopName active"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+    `);
+    const stale = doc.querySelector<HTMLElement>(".stale")!;
+    const active = doc.querySelector<HTMLElement>(".active")!;
+    Object.defineProperty(doc, "elementFromPoint", {
+      configurable: true,
+      value: () => active.querySelector(".userName")
+    });
+    const staleClick = vi.fn();
+    const activeClick = vi.fn();
+    stale.addEventListener("click", staleClick);
+    active.addEventListener("click", activeClick);
+
+    openDoudianShopSwitcher(doc);
+
+    expect(staleClick).not.toHaveBeenCalled();
+    expect(activeClick).toHaveBeenCalledOnce();
+  });
+
+  it("still rejects independently interactive duplicate shop triggers", () => {
+    const doc = documentOf(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName first"><span class="userName">甲食品旗舰店</span></div>
+        <div class="headerShopName second"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+    `);
+    const first = doc.querySelector<HTMLElement>(".first")!;
+    const second = doc.querySelector<HTMLElement>(".second")!;
+    first.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 100, height: 20 }) as DOMRect;
+    second.getBoundingClientRect = () =>
+      ({ left: 0, top: 30, width: 100, height: 20 }) as DOMRect;
+    Object.defineProperty(doc, "elementFromPoint", {
+      configurable: true,
+      value: (_x: number, y: number) => (y < 30 ? first : second)
+    });
+
+    expect(() => openDoudianShopSwitcher(doc)).toThrow(
+      "SHOP_SWITCH_TRIGGER_AMBIGUOUS"
+    );
   });
 
   it("rejects a numeric ID from an account popover for another shop", () => {

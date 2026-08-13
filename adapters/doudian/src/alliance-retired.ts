@@ -9,7 +9,7 @@ const BUYIN_RETIRED_PATH = "/dashboard/regulation/clear-out";
 const PRODUCT_ID_PATTERN = /(?:商品\s*ID|ID)[：:\s]*(\d{5,30})/iu;
 const NUMBER_PATTERN = /\d{5,30}/u;
 
-export const DOUDIAN_ALLIANCE_RUNTIME_VERSION = "2.0.1";
+export const DOUDIAN_ALLIANCE_RUNTIME_VERSION = "2.0.2";
 
 export type DoudianAllianceNodeErrorCode =
   | "ALLIANCE_CONTENT_RESPONSE_TIMEOUT"
@@ -175,6 +175,33 @@ function requireUnique(
   return elements[0]!;
 }
 
+function requireUniqueInteractive(
+  doc: Document,
+  elements: readonly HTMLElement[],
+  errorCode: string
+): HTMLElement {
+  if (elements.length === 1) return elements[0]!;
+  const elementFromPoint = doc.elementFromPoint?.bind(doc);
+  if (!elementFromPoint) throw new DoudianAllianceError(errorCode);
+  const hitCandidates = elements.filter((element) => {
+    if (
+      element.getAttribute("aria-hidden") === "true" ||
+      element.closest("[aria-hidden='true'],[inert]")
+    ) {
+      return false;
+    }
+    const view = doc.defaultView;
+    if (view?.getComputedStyle(element).pointerEvents === "none") return false;
+    const rect = element.getBoundingClientRect();
+    const hit = elementFromPoint(
+      rect.left + rect.width / 2,
+      rect.top + rect.height / 2
+    );
+    return Boolean(hit && (element.contains(hit) || hit.contains(element)));
+  });
+  return requireUnique(hitCandidates, errorCode);
+}
+
 function parsedUrl(pageUrl: string): URL {
   try {
     return new URL(pageUrl);
@@ -308,7 +335,8 @@ export function openDoudianShopSwitcher(doc: Document): void {
       )
     ];
     activateElement(
-      requireUnique(
+      requireUniqueInteractive(
+        doc,
         actionContainers,
         "SHOP_SWITCH_TRIGGER_AMBIGUOUS"
       )
@@ -332,7 +360,8 @@ export function openDoudianShopSwitcher(doc: Document): void {
       )
     )
   ];
-  const target = requireUnique(
+  const target = requireUniqueInteractive(
+    doc,
     actionCandidates,
     "SHOP_SWITCH_TRIGGER_AMBIGUOUS"
   );
