@@ -168,6 +168,44 @@ describe("Doudian alliance retired-products runtime", () => {
     ]);
   });
 
+  it("treats a nested semantic dialog as part of one Auxo modal switcher", () => {
+    const doc = documentOf(`
+      <div class="auxo-modal-wrap auxo-modal-centered">
+        <div class="auxo-modal">
+          <div role="dialog">
+            <div>切换组织/店铺</div>
+            <div class="roleItem"><span class="introName">甲食品旗舰店</span>店铺ID 10001 正常营业</div>
+          </div>
+        </div>
+      </div>
+    `);
+    expect(discoverDoudianAllianceShops(doc)).toEqual([
+      {
+        id: "10001",
+        name: "甲食品旗舰店",
+        status: "active",
+        statusText: "正常营业"
+      }
+    ]);
+  });
+
+  it("still rejects two independent visible shop switchers", () => {
+    const switcher = (shopName: string, shopId: string) => `
+      <div class="auxo-modal-wrap auxo-modal-centered">
+        <div role="dialog">
+          <div>切换组织/店铺</div>
+          <div class="roleItem"><span class="introName">${shopName}</span>店铺ID ${shopId} 正常营业</div>
+        </div>
+      </div>`;
+    const doc = documentOf(
+      switcher("甲食品旗舰店", "10001") +
+        switcher("乙食品专营店", "10002")
+    );
+    expect(() => discoverDoudianAllianceShops(doc)).toThrow(
+      "SHOP_SWITCH_DIALOG_AMBIGUOUS"
+    );
+  });
+
   it("fails closed when a shop list mixes valid and malformed cards", () => {
     const doc = documentOf(`
       <div role="dialog">切换组织/店铺

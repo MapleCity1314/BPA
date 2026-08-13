@@ -422,8 +422,9 @@ function visibleShopSwitcher(
   )) {
     const root =
       element.closest<HTMLElement>(
-        ".auxo-modal-wrap,.auxo-drawer-open,[role='dialog']"
+        ".auxo-modal-wrap,.auxo-drawer-open"
       ) ??
+      element.closest<HTMLElement>("[role='dialog']") ??
       element;
     if (!visibleElement(root) || roots.has(root)) continue;
     const text = normalizeText(root.textContent);
