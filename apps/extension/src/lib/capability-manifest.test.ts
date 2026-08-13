@@ -31,7 +31,7 @@ function canonicalJson(value: unknown): string {
 }
 
 describe("extension capability manifest", () => {
-  it("locks the inventory v2 capability to Runtime 0.6.2 and Extension manifest 0.6.3", () => {
+  it("locks the inventory v2 capability to Runtime and Extension 0.6.3", () => {
     for (const path of [
       "package.json",
       "apps/cli/package.json",
@@ -45,7 +45,7 @@ describe("extension capability manifest", () => {
       const packageJson = JSON.parse(
         readFileSync(new URL(path,repoRoot),"utf8")
       ) as { version:string };
-      expect(packageJson.version, path).toBe("0.6.2");
+      expect(packageJson.version, path).toBe("0.6.3");
     }
     expect(JSON.parse(readFileSync(
       new URL("apps/extension/package.json",repoRoot),"utf8"

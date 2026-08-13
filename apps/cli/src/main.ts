@@ -14,7 +14,7 @@ import { createCliProgram } from "./program.js";
 
 const controlClient = new ControlClient(
   new UnixSocketControlTransport(resolveControlSocketPath(), {
-    runtime: { name: "bpa-cli", version: "0.6.2" },
+    runtime: { name: "bpa-cli", version: "0.6.3" },
     features: [
       "evidence_refs",
       "resource_bindings",
@@ -135,7 +135,7 @@ await createCliProgram({
     return { url: consoleHost.launchUrl };
   }
 })
-  .version("0.6.2", "--cli-version", "show CLI version")
+  .version("0.6.3", "--cli-version", "show CLI version")
   .parseAsync();
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

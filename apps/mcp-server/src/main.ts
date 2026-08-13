@@ -25,13 +25,13 @@ import { assertMcpControlMethodAllowed } from "./policy.js";
 
 const server = new McpServer({
   name: "bpa-local",
-  version: "0.6.2"
+  version: "0.6.3"
 });
 const socket =
   process.env.BPA_CONTROL_SOCKET ?? resolveControlSocketPath();
 const control = new ControlClient(
   new UnixSocketControlTransport(socket, {
-    runtime: { name: "bpa-mcp", version: "0.6.2" },
+    runtime: { name: "bpa-mcp", version: "0.6.3" },
     features: ["evidence_refs", "resource_bindings", "staging_leases"]
   }),
   { timeoutMs: 10_000 }
