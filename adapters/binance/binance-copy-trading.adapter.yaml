@@ -2,7 +2,7 @@ apiVersion: bpa.adapter/v1alpha1
 kind: Adapter
 metadata:
   id: binance-copy-trading
-  version: 1.6.0
+  version: 1.7.0
   title: Binance 合约跟单只读采集 Adapter
   description: 从用户已登录的 Binance 合约跟单管理页读取账户汇总、项目摘要和当前可见仓位；不读取认证存储，不执行交易或设置操作。
 platform: binance
@@ -10,14 +10,14 @@ origins: [https://www.binance.com]
 extension: { minimumVersion: 0.6.2 }
 capabilities:
   - nodeId: binance.copy-trading.management.snapshot.read
-    nodeVersions: [1.6.0]
+    nodeVersions: [1.7.0]
     handlerId: binance.copy-trading.management.snapshot.read
-    handlerVersion: 1.6.0
-    implementationDigest: sha256:7ed6f513ebf264574737cce4148cce2c8c0dd141d48f6bf44e412267f8a36175
+    handlerVersion: 1.7.0
+    implementationDigest: sha256:edcf02baa948b74247519e3a3cb3e30aebd575efca8c49888464e7b84923b1c2
     permissions: [browser.dom.read, browser.dom.write, browser.tabs.read]
   - nodeId: binance.copy-trading.project.detail.collect
-    nodeVersions: [1.6.0]
+    nodeVersions: [1.7.0]
     handlerId: binance.copy-trading.project.detail.collect
-    handlerVersion: 1.6.0
-    implementationDigest: sha256:7ed6f513ebf264574737cce4148cce2c8c0dd141d48f6bf44e412267f8a36175
+    handlerVersion: 1.7.0
+    implementationDigest: sha256:edcf02baa948b74247519e3a3cb3e30aebd575efca8c49888464e7b84923b1c2
     permissions: [browser.dom.read, browser.dom.write, browser.tabs.read]

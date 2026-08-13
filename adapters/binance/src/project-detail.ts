@@ -460,18 +460,27 @@ async function waitForDetailPageReady(
   wait: (milliseconds: number) => Promise<void>,
   isCancelled: () => boolean
 ): Promise<BinanceDetailPage> {
+  let lastReadinessError = "BINANCE_DETAIL_STRUCTURE_UNCONFIRMED";
   while (Date.now() < deadline) {
     if (isCancelled()) throw new Error("COMMAND_CANCELLED");
     try {
       return readBinanceDetailPage(root, input);
     } catch (error) {
-      if (!(error instanceof Error) || error.message !== "BINANCE_DETAIL_STRUCTURE_UNCONFIRMED") {
+      if (
+        !(error instanceof Error) ||
+        ![
+          "BINANCE_DETAIL_STRUCTURE_UNCONFIRMED",
+          "BINANCE_DETAIL_HEADERS_MISSING",
+          "BINANCE_DETAIL_ROW_CHANGED"
+        ].includes(error.message)
+      ) {
         throw error;
       }
+      lastReadinessError = error.message;
     }
     await wait(100);
   }
-  throw new Error("BINANCE_DETAIL_TAB_TIMEOUT");
+  throw new Error(lastReadinessError);
 }
 
 export async function collectBinanceProjectDetail(

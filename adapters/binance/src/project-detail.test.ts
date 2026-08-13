@@ -240,6 +240,50 @@ describe("Binance project detail collector", () => {
     expect(waits).toBeGreaterThan(0);
   });
 
+  it("waits while a selected detail table is replacing malformed rows", async () => {
+    const labels = ["仓位", "仓位历史记录", "历史委托", "交易历史", "分润记录", "转账记录", "资金费用", "跟单失败订单"];
+    const document = page(`
+      <button role="tab" aria-selected="true">进行中 (1)</button>
+      <button role="tab" aria-selected="false">已结束 (0)</button>
+      <section data-project-id="project_1001"><span>项目 ID：project_1001</span>
+        <button id="toggle">展开详情</button><div id="details" hidden></div>
+      </section>
+    `);
+    const toggle = document.querySelector<HTMLButtonElement>("#toggle")!;
+    const details = document.querySelector<HTMLElement>("#details")!;
+    toggle.addEventListener("click", () => {
+      const opening = toggle.textContent === "展开详情";
+      toggle.textContent = opening ? "收起详情" : "展开详情";
+      details.hidden = !opening;
+      details.innerHTML = opening ? `
+        ${labels.map((label, index) => `<button role="tab" aria-selected="${index === 0}">${label}</button>`).join("")}
+        <table><thead><tr><th>时间</th><th>合约</th></tr></thead><tbody><tr><td>loading</td></tr></tbody></table>
+      ` : "";
+      for (const button of details.querySelectorAll<HTMLButtonElement>("[role='tab']")) {
+        button.addEventListener("click", () => {
+          for (const other of details.querySelectorAll("[role='tab']")) {
+            other.setAttribute("aria-selected", String(other === button));
+          }
+          details.querySelector("tbody")!.innerHTML = "<tr><td>loading</td></tr>";
+        });
+      }
+    });
+    let waits = 0;
+    const result = await collectBinanceProjectDetail(document, {
+      projectId: "project_1001",
+      projectStatus: "ongoing",
+      managementUrl
+    }, {
+      deadline: new Date(Date.now() + 5_000).toISOString(),
+      wait: async () => {
+        waits += 1;
+        details.querySelector("tbody")!.innerHTML = "<tr><td>2026-08-13</td><td>BTCUSDT</td></tr>";
+      }
+    });
+    expect(result.tabs).toHaveLength(8);
+    expect(waits).toBeGreaterThan(0);
+  });
+
   it("preserves a project that was already expanded by the user", async () => {
     const labels = ["仓位", "仓位历史记录", "历史委托", "交易历史", "分润记录", "转账记录", "资金费用", "跟单失败订单"];
     const document = page(`

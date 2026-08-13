@@ -71,7 +71,7 @@ describe("content action router", () => {
       }),
       node: {
         id: "binance.copy-trading.management.snapshot.read",
-        version: "1.6.0"
+        version: "1.7.0"
       },
       grantedPermissions: [
         "browser.dom.read",
