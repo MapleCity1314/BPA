@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -18,6 +18,23 @@ describe("SQLite Binance read repository", () => {
       expect(() => new SqlitePersistence({ path, readonly: true })).toThrow(
         "READONLY_SQLITE_REQUIRES_FILE_MUST_EXIST"
       );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not create a missing parent directory in readonly mode", () => {
+    const directory = mkdtempSync(join(tmpdir(), "bpa-binance-read-"));
+    const parent = join(directory, "missing", "nested");
+    const path = join(parent, "bpa.sqlite");
+    try {
+      const repository = openSqliteBinanceReadRepository(path);
+      expect(repository).toMatchObject({
+        schemaVersion: null,
+        errorCode: "DATABASE_UNREADABLE"
+      });
+      expect(existsSync(parent)).toBe(false);
+      expect(existsSync(path)).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

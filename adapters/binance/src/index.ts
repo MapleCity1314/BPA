@@ -105,8 +105,10 @@ function visible(element: Element): boolean {
 }
 
 function candidateElements(document: Document): Element[] {
-  return Array.from(document.querySelectorAll(
-    "main span,main div,main p,main dt,main dd,main td,main th,[role='main'] span,[role='main'] div"
+  const root = document.querySelector("#__APP,main,[role='main']");
+  if (!root) return [];
+  return Array.from(root.querySelectorAll(
+    "span,div,p,dt,dd,td,th"
   )).filter(visible).slice(0, 20_000);
 }
 

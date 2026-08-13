@@ -512,7 +512,7 @@ export class SqlitePersistence implements Persistence {
     if (options.readonly && options.fileMustExist !== true) {
       throw new Error("READONLY_SQLITE_REQUIRES_FILE_MUST_EXIST");
     }
-    if (options.path !== ":memory:") {
+    if (options.path !== ":memory:" && !options.readonly) {
       mkdirSync(dirname(options.path), { recursive: true, mode: 0o700 });
     }
     this.#db = new Database(options.path, {

@@ -253,9 +253,11 @@ function detailToggleControls(root: ParentNode, label: "展开详情" | "收起�
 }
 
 function projectIdentityElements(document: Document, projectId: string): HTMLElement[] {
-  const candidates = Array.from(document.querySelectorAll<HTMLElement>(
-    "[data-project-id],[data-portfolio-id],main span,main div,main p,[role='main'] span,[role='main'] div"
-  )).filter(visible);
+  const root = document.querySelector<HTMLElement>("#__APP,main,[role='main']");
+  if (!root) return [];
+  const candidates = [root, ...Array.from(root.querySelectorAll<HTMLElement>(
+    "[data-project-id],[data-portfolio-id],span,div,p"
+  ))].filter(visible);
   return candidates.filter((element) => {
     const attribute = element.getAttribute("data-project-id") ?? element.getAttribute("data-portfolio-id");
     if (attribute === projectId) return true;

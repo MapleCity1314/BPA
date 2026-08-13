@@ -15,6 +15,12 @@ function page(body: string): Document {
   }).window.document;
 }
 
+function appPage(body: string): Document {
+  return new JSDOM(`<body><div id="__APP">项目ID: project_1001${body}</div></body>`, {
+    url: managementUrl
+  }).window.document;
+}
+
 describe("Binance project detail collector", () => {
   it("accepts only a status-bound Binance management target", () => {
     expect(validateBinanceProjectTarget({
@@ -27,6 +33,36 @@ describe("Binance project detail collector", () => {
       projectStatus: "ongoing",
       managementUrl: "https://evil.example/copy-management"
     })).toThrow("BINANCE_PROJECT_TARGET_INVALID");
+  });
+
+  it("finds the project in the current Binance __APP shell", async () => {
+    const labels = ["仓位", "仓位历史记录", "历史委托", "交易历史", "分润记录", "转账记录", "资金费用", "跟单失败订单"];
+    const document = appPage(`
+      <button role="tab" aria-selected="true">进行中 (1)</button>
+      <button role="tab" aria-selected="false">已结束 (0)</button>
+      <section><div>项目ID: project_1001</div><button id="toggle">展开详情</button><div id="details" hidden></div></section>
+    `);
+    const toggle = document.querySelector<HTMLButtonElement>("#toggle")!;
+    const details = document.querySelector<HTMLElement>("#details")!;
+    toggle.addEventListener("click", () => {
+      const opening = toggle.textContent === "展开详情";
+      toggle.textContent = opening ? "收起详情" : "展开详情";
+      details.hidden = !opening;
+      details.innerHTML = opening
+        ? `${labels.map((label, index) => `<button role="tab" aria-selected="${index === 0}">${label}</button>`).join("")}<div>暂无记录</div>`
+        : "";
+      for (const button of details.querySelectorAll<HTMLButtonElement>("[role='tab']")) {
+        button.addEventListener("click", () => {
+          for (const other of details.querySelectorAll("[role='tab']")) other.setAttribute("aria-selected", String(other === button));
+        });
+      }
+    });
+    const result = await collectBinanceProjectDetail(document, {
+      projectId: "project_1001",
+      projectStatus: "ongoing",
+      managementUrl
+    }, { deadline: new Date(Date.now() + 5_000).toISOString() });
+    expect(result.tabs).toHaveLength(8);
   });
 
   it("keeps legitimate duplicate trades using page and row ordinal", () => {

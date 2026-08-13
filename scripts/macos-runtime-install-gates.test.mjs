@@ -248,7 +248,7 @@ while true; do /bin/sleep 1; done
       stdio: "ignore"
     });
     let captured;
-    for (let attempt = 0; attempt < 50; attempt += 1) {
+    for (let attempt = 0; attempt < 250; attempt += 1) {
       try {
         captured = await readFile(argvPath, "utf8");
         break;

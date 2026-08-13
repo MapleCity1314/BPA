@@ -65,6 +65,22 @@ describe("Binance copy-trading adapter", () => {
     expect(JSON.stringify(result)).not.toContain("不得落库的姓名");
   });
 
+  it("reads the current Binance __APP shell without a main landmark", () => {
+    const document = new JSDOM(`
+      <body><div id="__APP">
+        <div><span>保证金余额</span><span>1,000 USDT</span></div>
+        <section>
+          <div>项目ID: project_1001</div><span>净利润</span><span>25 USDT</span>
+          <div role="button">展开详情</div>
+        </section>
+      </div></body>
+    `, { url: "https://www.binance.com/zh-CN/copy-trading/copy-management" }).window.document;
+    expect(readBinanceManagementSnapshot(document)).toMatchObject({
+      accountSummary: { 保证金余额: "1,000 USDT" },
+      projects: [{ projectId: "project_1001", summary: { 净利润: "25 USDT" } }]
+    });
+  });
+
   it("accepts an explicit empty state", () => {
     expect(readBinanceManagementSnapshot(page("<div>暂无进行中跟单项目</div>"))).toMatchObject({ status: "empty_confirmed", projects: [] });
   });
