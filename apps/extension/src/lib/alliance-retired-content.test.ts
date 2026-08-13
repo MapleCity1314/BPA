@@ -458,6 +458,44 @@ describe("alliance retired-products content stages", () => {
     });
   });
 
+  it("accepts the numeric identity discovered after an id-less SPA shop switch", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName" data-shop-id="10001"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div role="dialog">切换组织/店铺
+        <div class="roleItem"><span class="introName">乙食品专营店</span>正常营业</div>
+      </div>
+    `);
+    const header = document.querySelector<HTMLElement>(".headerShopName")!;
+    const name = document.querySelector<HTMLElement>(".userName")!;
+    document.querySelector<HTMLElement>(".roleItem")!.addEventListener(
+      "click",
+      () => {
+        header.dataset.shopId = "10002";
+        name.textContent = "乙食品专营店";
+      }
+    );
+
+    await expect(
+      executeAllianceRetiredStage(
+        {
+          stage: "switch-shop",
+          shop: {
+            name: "乙食品专营店",
+            status: "active",
+            statusText: "正常营业"
+          }
+        },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      stage: "switch-shop",
+      currentShop: { id: "10002", name: "乙食品专营店" }
+    });
+  });
+
   it("fails closed when the switched header name matches but numeric id does not", async () => {
     const document = doc(`
       <div id="fxg-pc-header">

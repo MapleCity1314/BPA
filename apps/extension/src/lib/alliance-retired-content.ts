@@ -353,7 +353,7 @@ export async function executeAllianceRetiredStage(
     );
     assertNotCancelled(isCancelled);
     const identity = await readCurrentShopIdentity(doc, isCancelled);
-    if (!request.shop.id || identity.id !== request.shop.id) {
+    if (request.shop.id !== undefined && identity.id !== request.shop.id) {
       throw new DoudianAllianceError("SHOP_IDENTITY_MISMATCH");
     }
     return { stage: request.stage, shopName, currentShop: identity };
