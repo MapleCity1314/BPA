@@ -3581,7 +3581,6 @@ export class SqlitePersistence implements Persistence {
        FROM binance_project_aliases a
        JOIN binance_copy_project_snapshots p ON p.project_id=a.project_id
        WHERE a.project_alias=? AND a.retired_at IS NULL
-         AND r.source_tab<>'仓位'
        ORDER BY p.captured_at DESC,p.collection_run_id DESC LIMIT 1`
     ).get(projectAlias) as SqlRow | undefined;
     return row ? readBinanceProjectRow(row) : undefined;
@@ -3602,6 +3601,7 @@ export class SqlitePersistence implements Persistence {
        FROM binance_copy_record_current r
        JOIN binance_project_aliases a ON a.project_id=r.project_id
        WHERE a.project_alias=? AND a.retired_at IS NULL
+         AND r.source_tab<>'仓位'
          AND (? IS NULL OR r.source_tab=?)
          AND (? IS NULL OR r.event_time_utc>=?)
          AND (? IS NULL OR r.event_time_utc<?)

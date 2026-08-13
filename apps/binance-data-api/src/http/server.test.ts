@@ -3,6 +3,7 @@ import type {
   BinanceReadStore,
   BinanceReadinessRecord
 } from "@bpa/persistence";
+import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { BinanceQueries } from "../application/binance-queries.js";
 import { encodeCursor } from "../application/cursor.js";
@@ -86,6 +87,66 @@ describe("Binance Data API transport", () => {
         }
       }
     });
+  });
+
+  it("serves a project detail over GET and HEAD", async () => {
+    const readStore = store({ schemaVersion: 26 });
+    readStore.getBinanceProjectByAlias = () => ({
+      projectAlias: "leader-01",
+      projectStatus: "ongoing",
+      capturedAt: timestamp,
+      summary: { status: "available" }
+    });
+    const server = createBinanceDataHttpServer({
+      queries: new BinanceQueries(readStore, () => new Date(timestamp)),
+      serviceReadiness: {
+        ready: true,
+        database_readable: true,
+        schema_ready: true,
+        schema_version: 26
+      },
+      port: 0
+    });
+    servers.push(server);
+    const address = await server.listen();
+    await expect(fetchJson(
+      address.port,
+      "/api/v1/binance/projects/leader-01"
+    )).resolves.toMatchObject({
+      status: 200,
+      body: { data: { projectAlias: "leader-01", projectStatus: "ongoing" } }
+    });
+    await expect(fetchJson(
+      address.port,
+      "/api/v1/binance/projects/leader-01",
+      "HEAD"
+    )).resolves.toMatchObject({ status: 200, raw: "" });
+  });
+
+  it("does not turn a missing project into 500 with the real SQLite query", async () => {
+    const readStore = new SqlitePersistence({ path: ":memory:" });
+    const server = createBinanceDataHttpServer({
+      queries: new BinanceQueries(readStore, () => new Date(timestamp)),
+      serviceReadiness: {
+        ready: true,
+        database_readable: true,
+        schema_ready: true,
+        schema_version: 26
+      },
+      port: 0
+    });
+    servers.push(server);
+    const address = await server.listen();
+    await expect(fetchJson(
+      address.port,
+      "/api/v1/binance/projects/leader-01"
+    )).resolves.toMatchObject({
+      status: 404,
+      body: { error: { code: "NOT_FOUND" } }
+    });
+    await server.close();
+    servers.splice(servers.indexOf(server), 1);
+    readStore.close();
   });
 
   it("reports an unmigrated database without confusing health and readiness", async () => {

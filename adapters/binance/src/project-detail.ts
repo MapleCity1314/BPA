@@ -106,11 +106,37 @@ function activeTable(root: ParentNode): HTMLTableElement | undefined {
   return tables[0];
 }
 
+function activeTabPanel(
+  root: ParentNode,
+  sourceTab: BinanceDetailTab
+): HTMLElement | undefined {
+  const controls = exactVisibleElements(root, sourceTab);
+  if (controls.length !== 1) return undefined;
+  const control = controls[0]!;
+  const controlledId = control.getAttribute("aria-controls")?.trim();
+  if (controlledId) {
+    const candidate = control.ownerDocument.getElementById(controlledId);
+    if (candidate && root.contains(candidate) && visible(candidate)) return candidate;
+    return undefined;
+  }
+  const panels = Array.from(root.querySelectorAll<HTMLElement>(
+    "[role='tabpanel']"
+  )).filter((panel) => visible(panel));
+  if (panels.length !== 1) return undefined;
+  const labelledBy = panels[0]!.getAttribute("aria-labelledby")?.trim();
+  if (labelledBy && labelledBy !== control.id) return undefined;
+  return panels[0];
+}
+
 function explicitEmpty(root: ParentNode): boolean {
   const emptyText = /^(?:暂无(?:仓位|记录|数据|订单)|没有(?:仓位|记录|数据|订单)|No (?:position|record|data|order)s?)[。.!]?$/iu;
-  return Array.from(root.querySelectorAll<HTMLElement>(
+  const candidates = [
+    ...(root.nodeType === 1 ? [root as HTMLElement] : []),
+    ...Array.from(root.querySelectorAll<HTMLElement>(
     "[class*='empty'],[class*='Empty'],[data-testid*='empty'],[role='status'],td,div,span,p"
-  )).some((element) => {
+    ))
+  ];
+  return candidates.some((element) => {
     if (!visible(element)) return false;
     const value = normalize(element.textContent);
     if (!emptyText.test(value)) return false;
@@ -379,7 +405,10 @@ export function readBinanceDetailPage(
   if (active !== input.sourceTab) throw new Error("BINANCE_DETAIL_TAB_NOT_ACTIVE");
   const table = activeTable(root);
   if (!table) {
-    if (!explicitEmpty(root)) throw new Error("BINANCE_DETAIL_STRUCTURE_UNCONFIRMED");
+    const panel = activeTabPanel(root, input.sourceTab);
+    if (!panel || !explicitEmpty(panel)) {
+      throw new Error("BINANCE_DETAIL_STRUCTURE_UNCONFIRMED");
+    }
     const page = pageNumber(root);
     return {
       projectId: input.projectId,
@@ -495,6 +524,8 @@ async function waitForDetailPageReady(
         throw error;
       }
       lastReadinessError = error.message;
+      previousSignature = undefined;
+      stableObservationCount = 0;
     }
     await wait(200);
   }

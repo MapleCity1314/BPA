@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   EngineCheckpointRecord,
   ExecutionEventRecord,
@@ -5,6 +8,7 @@ import type {
   RunPlanSnapshotRecord,
   RunRecord
 } from "@bpa/persistence";
+import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { SqlitePersistence } from "./index.js";
 
@@ -180,6 +184,10 @@ describe("Binance copy-trading SQLite v26", () => {
       items: [{ projectAlias: "leader-01", projectStatus: "ongoing" }],
       hasMore: false
     });
+    expect(store.getBinanceProjectByAlias("leader-01")).toMatchObject({
+      projectAlias: "leader-01",
+      projectStatus: "ongoing"
+    });
     expect(store.listBinanceRecords({
       projectAlias: "leader-01",
       limit: 10
@@ -245,6 +253,72 @@ describe("Binance copy-trading SQLite v26", () => {
     expect(result).toMatchObject({ newCurrentRecordCount: 2 });
     expect(store.listBinanceRawRecords(input.collectionRunId)).toHaveLength(3);
     expect(store.listBinanceCurrentRecords("project_1001")).toHaveLength(2);
+  });
+
+  it("never exposes legacy position current rows through public record queries", () => {
+    const directory = mkdtempSync(join(tmpdir(), "bpa-binance-position-boundary-"));
+    const path = join(directory, "bpa.sqlite");
+    try {
+      const writable = new SqlitePersistence({ path });
+      const runId = "run:binance:legacy-position";
+      const execution = context(runId);
+      createRun(writable, runId, execution);
+      const input = capture(runId, execution);
+      writable.persistBinanceCopyTradingCapture(input);
+      writable.close();
+
+      const database = new Database(path);
+      database.prepare(
+        `INSERT INTO binance_copy_record_current(
+          current_record_key,project_id,source_tab,original_event_time,
+          event_time_utc,page_time_zone_assumption,fields_json,fields_digest,
+          first_collection_run_id,last_collection_run_id,first_seen_at,last_seen_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).run(
+        "current:legacy:position",
+        "project_1001",
+        "仓位",
+        null,
+        timestamp,
+        "Asia/Shanghai",
+        JSON.stringify({ Symbol: "BTCUSDT 永续", 标记价格: "120001" }),
+        `sha256:${"d".repeat(64)}`,
+        input.collectionRunId,
+        input.collectionRunId,
+        timestamp,
+        timestamp
+      );
+      database.close();
+
+      const readonly = new SqlitePersistence({ path, readonly: true, fileMustExist: true });
+      expect(readonly.listBinanceRecords({
+        projectAlias: "leader-01",
+        limit: 10
+      }).items.map((record) => record.sourceTab)).toEqual(["交易历史", "交易历史"]);
+      expect(readonly.listBinanceRecords({
+        projectAlias: "leader-01",
+        sourceTab: "仓位",
+        limit: 10
+      })).toMatchObject({ items: [], hasMore: false });
+      const firstPage = readonly.listBinanceRecords({
+        projectAlias: "leader-01",
+        limit: 1
+      });
+      const secondPage = readonly.listBinanceRecords({
+        projectAlias: "leader-01",
+        limit: 1,
+        after: firstPage.nextSeek!
+      });
+      expect(firstPage).toMatchObject({ hasMore: true });
+      expect(secondPage).toMatchObject({ hasMore: false });
+      expect([
+        ...firstPage.items,
+        ...secondPage.items
+      ].map((record) => record.sourceTab)).toEqual(["交易历史", "交易历史"]);
+      readonly.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("rolls back the whole capture when any raw identity conflicts", () => {

@@ -49,7 +49,7 @@ describe("Binance project detail collector", () => {
       toggle.textContent = opening ? "收起详情" : "展开详情";
       details.hidden = !opening;
       details.innerHTML = opening
-        ? `${labels.map((label, index) => `<button role="tab" aria-selected="${index === 0}">${label}</button>`).join("")}<div>暂无记录</div>`
+        ? `${labels.map((label, index) => `<button role="tab" aria-selected="${index === 0}">${label}</button>`).join("")}<div role="tabpanel">暂无记录</div>`
         : "";
       for (const button of details.querySelectorAll<HTMLButtonElement>("[role='tab']")) {
         button.addEventListener("click", () => {
@@ -361,5 +361,58 @@ describe("Binance project detail collector", () => {
       projectId: "project_1001",
       sourceTab: "历史委托"
     })).toThrow("BINANCE_DETAIL_STRUCTURE_UNCONFIRMED");
+  });
+
+  it("does not use an exact empty leaf outside the active tab panel", () => {
+    const document = page(`
+      <button id="orders-tab" role="tab" aria-selected="true" aria-controls="orders-panel">历史委托</button>
+      <section id="orders-panel" role="tabpanel" aria-labelledby="orders-tab">页面加载中</section>
+      <aside><span>暂无记录</span></aside>
+    `);
+    expect(() => readBinanceDetailPage(document, {
+      projectId: "project_1001",
+      sourceTab: "历史委托"
+    })).toThrow("BINANCE_DETAIL_STRUCTURE_UNCONFIRMED");
+  });
+
+  it("requires three new stable observations after an intermediate parsing error", async () => {
+    const labels = ["仓位", "仓位历史记录", "历史委托", "交易历史", "分润记录", "转账记录", "资金费用", "跟单失败订单"];
+    const document = page(`
+      <button role="tab" aria-selected="true">进行中 (1)</button>
+      <button role="tab" aria-selected="false">已结束 (0)</button>
+      <section data-project-id="project_1001"><span>项目 ID：project_1001</span>
+        <button id="toggle">收起详情</button>
+        <div id="details">
+          ${labels.map((label, index) => `<button role="tab" aria-selected="${index === 0}">${label}</button>`).join("")}
+          <table><thead><tr><th>时间</th><th>合约</th></tr></thead>
+          <tbody><tr><td>2026-08-13</td><td>BTCUSDT</td></tr></tbody></table>
+        </div>
+      </section>
+    `);
+    const details = document.querySelector<HTMLElement>("#details")!;
+    for (const button of details.querySelectorAll<HTMLButtonElement>("[role='tab']")) {
+      button.addEventListener("click", () => {
+        for (const other of details.querySelectorAll("[role='tab']")) {
+          other.setAttribute("aria-selected", String(other === button));
+        }
+      });
+    }
+    let waits = 0;
+    await collectBinanceProjectDetail(document, {
+      projectId: "project_1001",
+      projectStatus: "ongoing",
+      managementUrl
+    }, {
+      deadline: new Date(Date.now() + 5_000).toISOString(),
+      wait: async () => {
+        waits += 1;
+        if (waits === 2) {
+          details.querySelector("tbody")!.innerHTML = "<tr><td>malformed</td></tr>";
+        } else if (waits === 3) {
+          details.querySelector("tbody")!.innerHTML = "<tr><td>2026-08-13</td><td>BTCUSDT</td></tr>";
+        }
+      }
+    });
+    expect(waits).toBe(19);
   });
 });
