@@ -510,14 +510,21 @@ export function createAllianceRetiredBrowserDriver(input: {
     if (!current) {
       throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
     }
-    if (!tabMatches(current, source.origin, source.pathname)) {
+    await waitForComplete(input.sourceTabId);
+    const settled = await browser.tabs
+      .get(input.sourceTabId)
+      .catch(() => undefined);
+    if (!settled) {
+      throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+    }
+    if (!tabMatches(settled, source.origin, source.pathname)) {
       await browser.tabs
         .update(input.sourceTabId, { url: sourceUrl })
         .catch(() => {
           throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
         });
+      await waitForComplete(input.sourceTabId);
     }
-    await waitForComplete(input.sourceTabId);
     const retryUntil = Math.min(
       Date.parse(input.deadline),
       Date.now() + (input.shopIdentityWaitMs ?? 60_000)

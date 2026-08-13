@@ -31,7 +31,7 @@ function canonicalJson(value: unknown): string {
 }
 
 describe("extension capability manifest", () => {
-  it("locks the inventory v2 capability to Runtime and Extension 0.6.4", () => {
+  it("locks the inventory v2 capability to Runtime and Extension 0.6.5", () => {
     for (const path of [
       "package.json",
       "apps/cli/package.json",
@@ -45,14 +45,14 @@ describe("extension capability manifest", () => {
       const packageJson = JSON.parse(
         readFileSync(new URL(path,repoRoot),"utf8")
       ) as { version:string };
-      expect(packageJson.version, path).toBe("0.6.4");
+      expect(packageJson.version, path).toBe("0.6.5");
     }
     expect(JSON.parse(readFileSync(
       new URL("apps/extension/package.json",repoRoot),"utf8"
-    )).version).toBe("0.6.4");
+    )).version).toBe("0.6.5");
     expect(
       readFileSync(new URL("apps/extension/wxt.config.ts",repoRoot),"utf8")
-    ).toContain('version: "0.6.4"');
+    ).toContain('version: "0.6.5"');
     const experienceAdapter = parse(readFileSync(
       new URL("adapters/doudian/doudian-experience.adapter.yaml",repoRoot),
       "utf8"
@@ -84,8 +84,8 @@ describe("extension capability manifest", () => {
         expect.objectContaining({
           node_id: "doudian.alliance.shop.retired-products.scan",
           adapter_id: "doudian-alliance",
-          adapter_version: "2.0.3",
-          versions: ["2.0.3"],
+          adapter_version: "2.0.4",
+          versions: ["2.0.4"],
           routes: expect.arrayContaining([
             {
               origin: "https://fxg.jinritemai.com",
@@ -236,7 +236,7 @@ describe("extension capability manifest", () => {
     },
     {
       nodeId: "doudian.alliance.shop.retired-products.scan",
-      nodeVersion: "2.0.3",
+      nodeVersion: "2.0.4",
       currentUrl: "https://fxg.jinritemai.com/ffa/g/list",
       grantedPermissions: [
         "browser.dom.read",

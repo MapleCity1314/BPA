@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: doudian.alliance-retired-products-monitor
-  version: 3.0.4
+  version: 3.0.5
   title: 抖店精选联盟逐店清退商品巡检
   description: 枚举店铺后逐店读取清退商品，每店成功后立即形成不可变事实；Core 聚合完整性并为完整或部分结果准备终态 Dataset 发布意图。
 spec:
@@ -47,7 +47,7 @@ spec:
     steps:
       - key: discover_shops
         kind: call
-        use: doudian.alliance.shops.discover@2.0.3
+        use: doudian.alliance.shops.discover@2.0.4
         with:
           maxShops: ${input.maxShops}
         timeout: 5m
@@ -92,7 +92,7 @@ spec:
           steps:
             - key: scan_shop
               kind: call
-              use: doudian.alliance.shop.retired-products.scan@2.0.3
+              use: doudian.alliance.shop.retired-products.scan@2.0.4
               with:
                 shop: ${item}
                 sourceShop: ${steps.discover_shops.output.sourceShop}
