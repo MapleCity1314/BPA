@@ -2,7 +2,7 @@ apiVersion: bpa.adapter/v1alpha1
 kind: Adapter
 metadata:
   id: doudian-alliance
-  version: 2.0.4
+  version: 2.0.5
   title: 抖店精选联盟已清退商品巡检 Adapter
   description: 固定从抖店登录上下文进入精选联盟、逐店切换、关闭已知广告弹窗和只读采集清退商品的跨域实现。
 platform: doudian
@@ -10,14 +10,14 @@ origins:
   - https://fxg.jinritemai.com
   - https://buyin.jinritemai.com
 extension:
-  minimumVersion: 0.6.5
+  minimumVersion: 0.6.6
 capabilities:
   - nodeId: doudian.alliance.shops.discover
     nodeVersions:
-      - 2.0.4
+      - 2.0.5
     handlerId: doudian.alliance.shops.discover
-    handlerVersion: 2.0.4
-    implementationDigest: sha256:42f97423a3fe3f25a8b033cf38385d1b22fd8f6ab46177d0fdacb49e27750059
+    handlerVersion: 2.0.5
+    implementationDigest: sha256:59169517936dc905bd69293e9bf1dca07357aaa23c6206dcfbfb2eb40129559e
     permissions:
       - browser.dom.read
       - browser.dom.write
@@ -25,10 +25,10 @@ capabilities:
       - browser.tabs.navigate
   - nodeId: doudian.alliance.shop.retired-products.scan
     nodeVersions:
-      - 2.0.4
+      - 2.0.5
     handlerId: doudian.alliance.shop.retired-products.scan
-    handlerVersion: 2.0.4
-    implementationDigest: sha256:42f97423a3fe3f25a8b033cf38385d1b22fd8f6ab46177d0fdacb49e27750059
+    handlerVersion: 2.0.5
+    implementationDigest: sha256:59169517936dc905bd69293e9bf1dca07357aaa23c6206dcfbfb2eb40129559e
     permissions:
       - browser.dom.read
       - browser.dom.write

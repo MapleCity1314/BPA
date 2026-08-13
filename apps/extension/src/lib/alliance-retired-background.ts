@@ -243,6 +243,15 @@ function tabMatches(
   }
 }
 
+function isAuthenticationRoute(tab: Browser.tabs.Tab): boolean {
+  if (typeof tab.url !== "string") return false;
+  try {
+    return /login|passport|signin|authorize/iu.test(new URL(tab.url).pathname);
+  } catch {
+    return false;
+  }
+}
+
 function normalizeShopName(value: string): string {
   return value.normalize("NFKC").replace(/\s+/gu, "");
 }
@@ -517,6 +526,9 @@ export function createAllianceRetiredBrowserDriver(input: {
     if (!settled) {
       throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
     }
+    if (isAuthenticationRoute(settled)) {
+      throw new AllianceRetiredDriverError("AUTH_REQUIRED");
+    }
     if (!tabMatches(settled, source.origin, source.pathname)) {
       await browser.tabs
         .update(input.sourceTabId, { url: sourceUrl })
@@ -524,6 +536,15 @@ export function createAllianceRetiredBrowserDriver(input: {
           throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
         });
       await waitForComplete(input.sourceTabId);
+      const restored = await browser.tabs
+        .get(input.sourceTabId)
+        .catch(() => undefined);
+      if (!restored) {
+        throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+      }
+      if (isAuthenticationRoute(restored)) {
+        throw new AllianceRetiredDriverError("AUTH_REQUIRED");
+      }
     }
     const retryUntil = Math.min(
       Date.parse(input.deadline),
@@ -750,7 +771,15 @@ export function createAllianceRetiredBrowserDriver(input: {
     } catch (error) {
       primaryError = error;
     }
-    if (mayNeedRestore) {
+    const restorationBlocked =
+      primaryError instanceof AllianceRetiredDriverError &&
+      [
+        "AUTH_REQUIRED",
+        "CAPTCHA_REQUIRED",
+        "RISK_CONTROL",
+        "SESSION_EXPIRED"
+      ].includes(primaryError.code);
+    if (mayNeedRestore && !restorationBlocked) {
       try {
         await switchAndConfirmShop(
           {

@@ -9,7 +9,7 @@ const BUYIN_RETIRED_PATH = "/dashboard/regulation/clear-out";
 const PRODUCT_ID_PATTERN = /(?:商品\s*ID|ID)[：:\s]*(\d{5,30})/iu;
 const NUMBER_PATTERN = /\d{5,30}/u;
 
-export const DOUDIAN_ALLIANCE_RUNTIME_VERSION = "2.0.4";
+export const DOUDIAN_ALLIANCE_RUNTIME_VERSION = "2.0.5";
 
 export type DoudianAllianceNodeErrorCode =
   | "ALLIANCE_CONTENT_RESPONSE_TIMEOUT"
