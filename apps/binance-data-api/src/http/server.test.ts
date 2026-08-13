@@ -194,7 +194,7 @@ describe("Binance Data API transport", () => {
               asset: "USDT",
               totalMarginBalance: "1234.56789000",
               walletBalance: "1200.00000000",
-              realizedPnl: "+34.56789000",
+              realizedPnl: "34.56789000",
               netProfit: null
             }
           }

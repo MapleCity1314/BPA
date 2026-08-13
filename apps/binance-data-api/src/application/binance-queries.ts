@@ -45,7 +45,10 @@ function accountAmount(
   if (!value) return undefined;
   const match = value.trim().match(/^([+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?:\s+([A-Z0-9]{2,12}))?$/u);
   if (!match?.[1]) return undefined;
-  return { amount: match[1].replaceAll(",", ""), asset: match[2] ?? null };
+  return {
+    amount: match[1].replaceAll(",", "").replace(/^\+/u, ""),
+    asset: match[2] ?? null
+  };
 }
 
 function publicAccountSummary(
