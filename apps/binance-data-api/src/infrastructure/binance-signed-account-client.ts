@@ -44,6 +44,9 @@ const object = (value: unknown): Record<string, unknown> | null =>
 export class BinanceSignedAccountClient {
   readonly #fetch: typeof fetch;
   readonly #now: () => Date;
+  #cached: DirectBinanceAccount | null = null;
+  #cacheExpiresAt = 0;
+  #inFlight: Promise<DirectBinanceAccount> | null = null;
 
   constructor(private readonly options: SignedAccountClientOptions) {
     this.#fetch = options.fetchImpl ?? fetch;
@@ -51,7 +54,23 @@ export class BinanceSignedAccountClient {
   }
 
   async load(signal?: AbortSignal): Promise<DirectBinanceAccount> {
-    const observedAt = this.#now().toISOString();
+    const now = this.#now();
+    if (this.#cached && now.getTime() < this.#cacheExpiresAt) return this.#cached;
+    if (this.#inFlight) return this.#inFlight;
+    const pending = this.#load(now, signal);
+    this.#inFlight = pending;
+    try {
+      const result = await pending;
+      this.#cached = result;
+      this.#cacheExpiresAt = now.getTime() + (result.available ? 4_000 : 30_000);
+      return result;
+    } finally {
+      if (this.#inFlight === pending) this.#inFlight = null;
+    }
+  }
+
+  async #load(now: Date, signal?: AbortSignal): Promise<DirectBinanceAccount> {
+    const observedAt = now.toISOString();
     const requestSignal = signal ?? AbortSignal.timeout(3_000);
     try {
       const [accountValue, positionsValue] = await Promise.all([

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/main.ts",
+    "install:macos": "tsx src/macos-launch-agent.ts install",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --root ../.. apps/binance-data-api/src"
   },

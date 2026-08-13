@@ -39,4 +39,21 @@ describe("BinanceSignedAccountClient", () => {
       available: false, reason: "upstream-unavailable", positions: []
     });
   });
+
+  it("deduplicates concurrent requests and caches an unavailable upstream for 30 seconds", async () => {
+    let now = new Date("2026-08-13T12:00:00.000Z");
+    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error("offline"));
+    const client = new BinanceSignedAccountClient({
+      apiKey: "key", secretKey: "secret", fetchImpl, now: () => now
+    });
+
+    await Promise.all([client.load(), client.load(), client.load()]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    await client.load();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+
+    now = new Date("2026-08-13T12:00:31.000Z");
+    await client.load();
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
 });

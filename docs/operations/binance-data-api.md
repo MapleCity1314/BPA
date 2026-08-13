@@ -4,11 +4,22 @@
 
 ## 启动
 
-使用 Node.js 24.18.0：
+使用 Node.js 24：
 
 ```bash
 BPA_HOME="$HOME/Library/Application Support/BPA" pnpm binance-data-api
 ```
+
+macOS 长期运行使用独立 LaunchAgent。它只把 env 文件的绝对路径写入本机 plist，不复制或输出任何 Key：
+
+```bash
+chmod 600 /absolute/path/to/binance.env
+pnpm --filter @bpa/binance-data-api install:macos -- \
+  --env-file /absolute/path/to/binance.env \
+  --node /absolute/path/to/node-v24/bin/node
+```
+
+安装入口校验 Node 24、运行文件和 env 权限，写入 `~/Library/LaunchAgents/com.bpa.binance-data-api.plist`（0600），再由 launchd 以 `KeepAlive` 方式绑定 `127.0.0.1:43124`。仓库移动或依赖重装后需重新运行安装命令；不要手工复制 Secret 到 plist。
 
 默认监听 `127.0.0.1:43124`，读取 `$BPA_HOME/data/bpa.sqlite`。可配置：
 
@@ -16,7 +27,7 @@ BPA_HOME="$HOME/Library/Application Support/BPA" pnpm binance-data-api
 - `BINANCE_DATA_HOST`：默认 `127.0.0.1`。
 - `BINANCE_DATA_PORT`：默认 `43124`。
 - `BINANCE_DATA_TOKEN`：非 loopback 监听时必填，使用 Bearer token；推荐仍由受控网关终止鉴权。
-- `BINANCE_DATA_ALLOWED_ORIGIN`：可选的单一 exact Origin。默认不发送 CORS；攀升本地开发可显式设为 `http://127.0.0.1:4173`。正式 Native Origin 待宿主确认。
+- `BINANCE_DATA_ALLOWED_ORIGIN`：可选的单一 exact Origin。默认不发送 CORS；Native WebView 使用 `zero://app`，浏览器开发服务器通过 Vite 同源代理访问。
 - `BINANCE_DATA_ENV_FILE`：可选的本机 dotenv 文件。仅服务进程读取，用于注入 `BINANCE_API_KEY` 和 `BINANCE_SECRET_KEY`；路径和值不得进入客户端、日志或仓库。
 - `BINANCE_API_KEY` / `BINANCE_SECRET_KEY`：可选的 Binance USDⓈ-M `USER_DATA` 只读旁路。不可达或未配置时仅 `/direct-account` 显示不可用，不改变 SQLite 业务 readiness。
 
