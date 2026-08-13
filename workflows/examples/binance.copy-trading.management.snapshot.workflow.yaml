@@ -7,7 +7,11 @@ metadata:
   description: 绑定已登录管理页，采集进行中和已结束项目，逐项目遍历八个详情页签及全部分页，并在完整覆盖后单事务追加落库。
 spec:
   riskLevel: R1
-  inputSchema: { type: object, additionalProperties: false }
+  inputSchema:
+    type: object
+    additionalProperties: false
+    properties:
+      projectId: { type: string, pattern: "^[A-Za-z0-9_-]{4,120}$" }
   outputSchema:
     type: object
     additionalProperties: false
@@ -30,7 +34,7 @@ spec:
       - key: read_management
         kind: call
         use: binance.copy-trading.management.snapshot.read@1.0.0
-        with: {}
+        with: ${input}
         timeout: 2m
         resourceMappings: { browser: binance_page }
         handlers:

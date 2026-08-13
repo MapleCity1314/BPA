@@ -161,7 +161,7 @@ function capture(runId: string, execution: OperationalExecutionContext) {
   };
 }
 
-describe("Binance copy-trading SQLite v26", () => {
+describe("Binance copy-trading SQLite v27", () => {
   it("atomically keeps duplicate rows and idempotently replays one capture", () => {
     const store = new SqlitePersistence({ path: ":memory:" });
     const runId = "run:binance:1";
@@ -176,7 +176,21 @@ describe("Binance copy-trading SQLite v26", () => {
     expect(second).toMatchObject({ status: "duplicate", newCurrentRecordCount: 0 });
     expect(store.listBinanceRawRecords(input.collectionRunId)).toHaveLength(2);
     expect(store.listBinanceCurrentRecords("project_1001")).toHaveLength(2);
-    expect(store.health().schemaVersion).toBe(26);
+    expect(store.listBinanceProjects({ limit: 10 })).toMatchObject({
+      items: [{ projectAlias: "leader-01", projectStatus: "ongoing" }],
+      hasMore: false
+    });
+    expect(store.listBinanceRecords({
+      projectAlias: "leader-01",
+      limit: 10
+    })).toMatchObject({
+      items: [
+        { projectAlias: "leader-01", sourceTab: "交易历史" },
+        { projectAlias: "leader-01", sourceTab: "交易历史" }
+      ],
+      hasMore: false
+    });
+    expect(store.health().schemaVersion).toBe(27);
   });
 
   it("rolls back the whole capture when any raw identity conflicts", () => {

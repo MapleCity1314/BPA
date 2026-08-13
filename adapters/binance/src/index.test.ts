@@ -113,6 +113,71 @@ describe("Binance copy-trading adapter", () => {
     expect(document.querySelector("[role='tab'][aria-selected='true']")?.textContent).toBe("进行中");
   });
 
+  it("limits an A1 collection to one project without opening the other status tab", async () => {
+    const document = page(`
+      <button role="tab" aria-selected="true">进行中</button>
+      <button role="tab" aria-selected="false">已结束</button>
+      <div data-project-id="ongoing_1001">
+        <span>项目 ID：ongoing_1001</span><span>净利润</span><span>1 USDT</span><button>展开详情</button>
+      </div>
+      <div data-project-id="ongoing_1002">
+        <span>项目 ID：ongoing_1002</span><span>净利润</span><span>2 USDT</span><button>展开详情</button>
+      </div>
+    `);
+    const ended = document.querySelectorAll<HTMLButtonElement>("[role='tab']")[1]!;
+    let endedClicks = 0;
+    ended.addEventListener("click", () => {
+      endedClicks += 1;
+    });
+    const result = await collectBinanceManagementSnapshot(
+      document,
+      document.defaultView!.location.href,
+      {
+        deadline: new Date(Date.now() + 5_000).toISOString(),
+        projectId: "ongoing_1002"
+      }
+    );
+    expect(result.projects.map((project) => project.projectId)).toEqual([
+      "ongoing_1002"
+    ]);
+    expect(endedClicks).toBe(0);
+  });
+
+  it("fails closed when the requested A1 project is absent", async () => {
+    const document = page(`
+      <button role="tab" aria-selected="true">进行中</button>
+      <button role="tab" aria-selected="false">已结束</button>
+      <div id="projects" data-project-id="ongoing_1001">
+        <span>项目 ID：ongoing_1001</span><span>净利润</span><span>1 USDT</span><button>展开详情</button>
+      </div>
+    `);
+    const [ongoing, ended] = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("[role='tab']")
+    );
+    const projects = document.querySelector<HTMLElement>("#projects")!;
+    ended!.addEventListener("click", () => {
+      ongoing!.setAttribute("aria-selected", "false");
+      ended!.setAttribute("aria-selected", "true");
+      projects.remove();
+      document.querySelector("main")!.insertAdjacentHTML(
+        "beforeend",
+        "<div>暂无已结束跟单项目</div>"
+      );
+    });
+    ongoing!.addEventListener("click", () => {
+      ongoing!.setAttribute("aria-selected", "true");
+      ended!.setAttribute("aria-selected", "false");
+    });
+    await expect(collectBinanceManagementSnapshot(
+      document,
+      document.defaultView!.location.href,
+      {
+        deadline: new Date(Date.now() + 5_000).toISOString(),
+        projectId: "ended_9999"
+      }
+    )).rejects.toThrow("BINANCE_PROJECT_TARGET_MISSING");
+  });
+
   it("fails closed on structure drift", () => {
     expect(() => readBinanceManagementSnapshot(page("<div>页面已改版</div>"))).toThrow("BINANCE_STRUCTURE_UNCONFIRMED");
   });

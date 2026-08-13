@@ -1,0 +1,20 @@
+{
+  "name": "@bpa/binance-data-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --root ../.. apps/binance-data-api/src"
+  },
+  "dependencies": {
+    "@bpa/persistence": "workspace:*",
+    "@bpa/persistence-sqlite": "workspace:*",
+    "@bpa/platform-runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6"
+  }
+}

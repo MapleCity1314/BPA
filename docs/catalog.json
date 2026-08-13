@@ -149,6 +149,17 @@
       "public": false
     },
     {
+      "id": "repo.operations.binance-data-api",
+      "source": "docs/operations/binance-data-api.md",
+      "title": "Binance Data API 运行合同",
+      "summary": "Binance 跟单 SQLite 的 loopback-only 只读投影、状态语义、路由和安全边界。",
+      "authority": "operations",
+      "implementation": "active",
+      "audience": ["operator", "developer", "ai"],
+      "since": "0.6.2",
+      "public": false
+    },
+    {
       "id": "repo.operations.shadow-run",
       "source": "docs/operations/shadow-run-comparison.md",
       "title": "Shadow-run 只读迁移比较器",

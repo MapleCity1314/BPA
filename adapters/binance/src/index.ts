@@ -221,6 +221,7 @@ export async function collectBinanceManagementSnapshot(
     readonly deadline: string;
     readonly wait?: (milliseconds: number) => Promise<void>;
     readonly observedAt?: Date;
+    readonly projectId?: string;
   }
 ): Promise<BinanceManagementSnapshot> {
   const deadline = Date.parse(options.deadline);
@@ -230,10 +231,20 @@ export async function collectBinanceManagementSnapshot(
   const wait = options.wait ?? ((milliseconds: number) =>
     new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   const initial = readBinanceManagementSnapshot(document, pageUrl, options.observedAt);
+  const targetProjectId = options.projectId;
+  if (
+    targetProjectId !== undefined &&
+    !/^[A-Za-z0-9_-]{4,120}$/u.test(targetProjectId)
+  ) {
+    throw new Error("BINANCE_PROJECT_TARGET_INVALID");
+  }
   const collected: BinanceCopyProject[] = [];
   const seen = new Set<string>();
   const add = (snapshot: BinanceManagementSnapshot): void => {
     for (const project of snapshot.projects) {
+      if (targetProjectId !== undefined && project.projectId !== targetProjectId) {
+        continue;
+      }
       if (seen.has(project.projectId)) throw new Error("BINANCE_PROJECT_DUPLICATED_ACROSS_TABS");
       seen.add(project.projectId);
       collected.push(project);
@@ -241,7 +252,10 @@ export async function collectBinanceManagementSnapshot(
   };
   const initialLabel = initial.activeTab === "ended" ? "已结束" : "进行中";
   try {
-    for (const target of ["ongoing", "ended"] as const) {
+    const targets = initial.activeTab === "ongoing"
+      ? (["ongoing", "ended"] as const)
+      : (["ended", "ongoing"] as const);
+    for (const target of targets) {
       const label = target === "ended" ? "已结束" : "进行中";
       let snapshot = readBinanceManagementSnapshot(document, pageUrl, options.observedAt);
       if (snapshot.activeTab !== target) {
@@ -255,6 +269,7 @@ export async function collectBinanceManagementSnapshot(
         if (snapshot.activeTab !== target) throw new Error("BINANCE_MANAGEMENT_TAB_TIMEOUT");
       }
       add(snapshot);
+      if (targetProjectId !== undefined && collected.length === 1) break;
     }
   } finally {
     const current = readBinanceManagementSnapshot(document, pageUrl, options.observedAt);
@@ -269,6 +284,9 @@ export async function collectBinanceManagementSnapshot(
         throw new Error("BINANCE_MANAGEMENT_RESTORE_FAILED");
       }
     }
+  }
+  if (targetProjectId !== undefined && collected.length !== 1) {
+    throw new Error("BINANCE_PROJECT_TARGET_MISSING");
   }
   return {
     ...initial,

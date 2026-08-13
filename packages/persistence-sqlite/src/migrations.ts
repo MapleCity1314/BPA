@@ -2187,6 +2187,45 @@ export const migrations: Migration[] = [
 
       CREATE INDEX binance_market_reference_symbol_observed
         ON binance_market_reference_snapshots(symbol, observed_at);
+
+    `
+  },
+  {
+    version: 27,
+    sql: `
+      CREATE TABLE binance_project_aliases (
+        project_id TEXT PRIMARY KEY,
+        project_alias TEXT NOT NULL UNIQUE CHECK (
+          substr(project_alias, 1, 7) = 'leader-' AND
+          length(project_alias) >= 9 AND
+          substr(project_alias, 8) NOT GLOB '*[^0-9]*'
+        ),
+        created_at TEXT NOT NULL,
+        retired_at TEXT
+      ) STRICT;
+
+      CREATE TABLE binance_collection_validations (
+        validation_id TEXT PRIMARY KEY,
+        collection_run_id TEXT NOT NULL
+          REFERENCES binance_collection_runs(collection_run_id)
+          ON DELETE RESTRICT,
+        check_code TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (
+          status IN ('passed', 'warning', 'failed', 'unknown')
+        ),
+        severity TEXT NOT NULL CHECK (
+          severity IN ('info', 'warning', 'error')
+        ),
+        observed_json TEXT NOT NULL,
+        expected_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(collection_run_id, check_code)
+      ) STRICT;
+
+      CREATE INDEX binance_collection_validations_run_created
+        ON binance_collection_validations(
+          collection_run_id, created_at DESC, validation_id DESC
+        );
     `
   }
 ];

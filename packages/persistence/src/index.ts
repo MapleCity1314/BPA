@@ -817,6 +817,131 @@ export interface BinanceCurrentRecord {
   lastSeenAt: string;
 }
 
+export interface BinanceReadPage<T, TSeek> {
+  items: readonly T[];
+  nextSeek?: TSeek;
+  hasMore: boolean;
+}
+
+export interface BinanceRunSeek {
+  captureAt: string;
+  collectionRunId: string;
+}
+
+export interface BinanceProjectSeek {
+  projectAlias: string;
+}
+
+export interface BinanceRecordSeek {
+  eventTimeKey: string;
+  currentRecordKey: string;
+}
+
+export interface BinanceValidationSeek {
+  createdAt: string;
+  validationId: string;
+}
+
+export interface BinanceMarketSeek {
+  eventTimeUtc: string;
+}
+
+export interface BinanceProjectReadRecord {
+  projectAlias: string;
+  projectStatus: "ongoing" | "ended";
+  capturedAt: string;
+  summary: JsonValue;
+}
+
+export interface BinanceRecordReadRecord {
+  recordKey: string;
+  projectAlias: string;
+  sourceTab: string;
+  originalEventTime?: string;
+  eventTimeUtc?: string;
+  pageTimeZoneAssumption?: string;
+  fields: JsonValue;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+export interface BinanceValidationReadRecord {
+  validationId: string;
+  collectionRunId: string;
+  checkCode: string;
+  status: "passed" | "warning" | "failed" | "unknown";
+  severity: "info" | "warning" | "error";
+  observed: JsonValue;
+  expected: JsonValue;
+  createdAt: string;
+}
+
+export interface BinanceCandleReadRecord extends BinanceMarketCandleInput {
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+export interface BinanceFundingReadRecord extends BinanceMarketFundingInput {
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+export interface BinanceReadinessRecord {
+  schemaVersion: number;
+  latestRun?: BinanceCollectionRunRecord;
+  latestSuccessfulRun?: BinanceCollectionRunRecord;
+}
+
+export interface BinanceOverviewRecord {
+  projectCount: number;
+  ongoingProjectCount: number;
+  endedProjectCount: number;
+  currentRecordCount: number;
+}
+
+export interface BinanceReadStore {
+  getBinanceReadiness(): BinanceReadinessRecord;
+  getBinanceOverview(): BinanceOverviewRecord;
+  listBinanceCollectionRuns(input: {
+    limit: number;
+    after?: BinanceRunSeek;
+  }): BinanceReadPage<BinanceCollectionRunRecord, BinanceRunSeek>;
+  listBinanceProjects(input: {
+    limit: number;
+    after?: BinanceProjectSeek;
+  }): BinanceReadPage<BinanceProjectReadRecord, BinanceProjectSeek>;
+  getBinanceProjectByAlias(
+    projectAlias: string
+  ): BinanceProjectReadRecord | undefined;
+  listBinanceRecords(input: {
+    projectAlias: string;
+    sourceTab?: string;
+    fromUtc?: string;
+    toUtc?: string;
+    limit: number;
+    after?: BinanceRecordSeek;
+  }): BinanceReadPage<BinanceRecordReadRecord, BinanceRecordSeek>;
+  listBinanceValidations(input: {
+    collectionRunId?: string;
+    limit: number;
+    after?: BinanceValidationSeek;
+  }): BinanceReadPage<BinanceValidationReadRecord, BinanceValidationSeek>;
+  listBinanceCandles(input: {
+    symbol: string;
+    fromUtc?: string;
+    toUtc?: string;
+    limit: number;
+    after?: BinanceMarketSeek;
+  }): BinanceReadPage<BinanceCandleReadRecord, BinanceMarketSeek>;
+  listBinanceFunding(input: {
+    symbol: string;
+    fromUtc?: string;
+    toUtc?: string;
+    limit: number;
+    after?: BinanceMarketSeek;
+  }): BinanceReadPage<BinanceFundingReadRecord, BinanceMarketSeek>;
+}
+
 export interface BinanceCopyTradingStore {
   persistBinanceCopyTradingCapture(
     input: PersistBinanceCopyTradingCaptureInput
@@ -2052,6 +2177,7 @@ export interface Persistence
     DatasetPublicationUnitOfWork,
     OperationalFactStore,
     BinanceCopyTradingStore,
+    BinanceReadStore,
     BinanceMarketStore,
     DecisionRecordStore,
     GatewayDeliveryUnitOfWork,

@@ -45,6 +45,7 @@
     "bpa": "BPA_CONSOLE_HOST_ENTRY=apps/console-host/src/main.ts tsx apps/cli/src/main.ts",
     "precore": "pnpm runtime:check && pnpm sqlite-observability:check",
     "core": "tsx apps/local-core/src/main.ts",
+    "binance-data-api": "tsx apps/binance-data-api/src/main.ts",
     "prenative-host": "pnpm runtime:check",
     "native-host": "tsx apps/native-host/src/main.ts",
     "premcp": "pnpm runtime:check",

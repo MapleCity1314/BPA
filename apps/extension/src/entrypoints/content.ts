@@ -159,14 +159,17 @@ async function readShopContextWhenReady(
 }
 
 const handlers: ContentActionHandlers = {
-  async "binance.copy-trading.management.snapshot.read"(_input, request) {
+  async "binance.copy-trading.management.snapshot.read"(input, request) {
     const startedAt = Date.now();
     const riskSignals = detectBinanceRiskSignals(document, location.href);
     if (firstBlockingRiskSignal(riskSignals)) {
       throw new ContentActionRiskError(riskSignals);
     }
     const output = await collectBinanceManagementSnapshot(document, location.href, {
-      deadline: request.deadline!
+      deadline: request.deadline!,
+      ...(typeof input.projectId === "string"
+        ? { projectId: input.projectId }
+        : {})
     });
     return {
       output: { ...output },

@@ -41,9 +41,22 @@ import {
   type AttentionRecord,
   type AuditRecord,
   type BinanceCollectionRunRecord,
+  type BinanceCandleReadRecord,
   type BinanceCurrentRecord,
+  type BinanceFundingReadRecord,
   type BinanceMarketCaptureRecord,
+  type BinanceMarketSeek,
+  type BinanceOverviewRecord,
+  type BinanceProjectReadRecord,
+  type BinanceProjectSeek,
   type BinanceRawRecord,
+  type BinanceReadPage,
+  type BinanceReadinessRecord,
+  type BinanceRecordReadRecord,
+  type BinanceRecordSeek,
+  type BinanceRunSeek,
+  type BinanceValidationReadRecord,
+  type BinanceValidationSeek,
   type BrowserCapabilityRecord,
   type BrowserControlLeaseRecord,
   type BrowserPageObservationRecord,
@@ -159,6 +172,70 @@ function json(value: unknown): string {
 
 function parseJson(value: unknown): unknown {
   return value == null ? undefined : JSON.parse(String(value));
+}
+
+function publicBinanceJson(value: unknown): JsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(publicBinanceJson);
+  if (typeof value !== "object") return null;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) =>
+        !/(?:project|portfolio)[_\s-]*id|display[_\s-]*name|trader|交易员|带单员/iu.test(key)
+      )
+      .map(([key, item]) => [key, publicBinanceJson(item)])
+  );
+}
+
+function boundedReadLimit(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 500) {
+    throw new Error("Binance read limit must be between 1 and 500");
+  }
+  return value;
+}
+
+function readBinanceProjectRow(row: SqlRow): BinanceProjectReadRecord {
+  return {
+    projectAlias: String(row.project_alias),
+    projectStatus: String(row.project_status) as "ongoing" | "ended",
+    capturedAt: String(row.captured_at),
+    summary: publicBinanceJson(parseJson(row.summary_json))
+  };
+}
+
+function readBinanceCandleRow(row: SqlRow): BinanceCandleReadRecord {
+  return {
+    symbol: String(row.symbol),
+    openTimeUtc: String(row.open_time_utc),
+    closeTimeUtc: String(row.close_time_utc),
+    open: String(row.open),
+    high: String(row.high),
+    low: String(row.low),
+    close: String(row.close),
+    volume: String(row.volume),
+    quoteVolume: String(row.quote_volume),
+    tradeCount: Number(row.trade_count),
+    firstSeenAt: String(row.first_seen_at),
+    lastSeenAt: String(row.last_seen_at)
+  };
+}
+
+function readBinanceFundingRow(row: SqlRow): BinanceFundingReadRecord {
+  return {
+    symbol: String(row.symbol),
+    fundingTimeUtc: String(row.funding_time_utc),
+    fundingRate: String(row.funding_rate),
+    ...(row.mark_price == null ? {} : { markPrice: String(row.mark_price) }),
+    firstSeenAt: String(row.first_seen_at),
+    lastSeenAt: String(row.last_seen_at)
+  };
 }
 
 function canonicalJson(value: unknown): string {
@@ -3244,8 +3321,25 @@ export class SqlitePersistence implements Persistence {
           summary_json
         ) VALUES (?,?,?,?,?,?)`
       );
+      const projectAliasStatement = this.#db.prepare(
+        `INSERT OR IGNORE INTO binance_project_aliases(
+          project_id,project_alias,created_at
+        ) VALUES (
+          ?,
+          printf('leader-%02d',
+            COALESCE((SELECT MAX(
+              CAST(substr(project_alias, 8) AS INTEGER)
+            ) FROM binance_project_aliases), 0) + 1
+          ),
+          ?
+        )`
+      );
       for (const project of input.projects) {
         assertJsonCompatible(project.summary, "Binance project summary");
+        projectAliasStatement.run(
+          project.projectId,
+          this.#clock().toISOString()
+        );
         projectStatement.run(
           input.collectionRunId,
           project.projectId,
@@ -3362,6 +3456,311 @@ export class SqlitePersistence implements Persistence {
        ORDER BY capture_at DESC,collection_run_id DESC LIMIT 1`
     ).get() as SqlRow | undefined;
     return row ? this.#readBinanceCollectionRun(row) : undefined;
+  }
+
+  getBinanceReadiness(): BinanceReadinessRecord {
+    const schemaVersion = this.health().schemaVersion;
+    if (schemaVersion < 26) return { schemaVersion };
+    const latest = this.#db.prepare(
+      `SELECT * FROM binance_collection_runs
+       ORDER BY capture_at DESC,collection_run_id DESC LIMIT 1`
+    ).get() as SqlRow | undefined;
+    const latestSuccessful = this.getLatestSuccessfulBinanceCollectionRun();
+    return {
+      schemaVersion,
+      ...(latest ? { latestRun: this.#readBinanceCollectionRun(latest) } : {}),
+      ...(latestSuccessful ? { latestSuccessfulRun: latestSuccessful } : {})
+    };
+  }
+
+  getBinanceOverview(): BinanceOverviewRecord {
+    const project = this.#db.prepare(
+      `WITH latest AS (
+        SELECT p.project_id,p.project_status,ROW_NUMBER() OVER (
+          PARTITION BY p.project_id
+          ORDER BY p.captured_at DESC,p.collection_run_id DESC
+        ) AS rank
+        FROM binance_copy_project_snapshots p
+      )
+      SELECT COUNT(*) AS project_count,
+        SUM(CASE WHEN project_status='ongoing' THEN 1 ELSE 0 END) AS ongoing_count,
+        SUM(CASE WHEN project_status='ended' THEN 1 ELSE 0 END) AS ended_count
+      FROM latest WHERE rank=1`
+    ).get() as SqlRow;
+    const records = this.#db.prepare(
+      "SELECT COUNT(*) AS count FROM binance_copy_record_current"
+    ).get() as SqlRow;
+    return {
+      projectCount: Number(project.project_count ?? 0),
+      ongoingProjectCount: Number(project.ongoing_count ?? 0),
+      endedProjectCount: Number(project.ended_count ?? 0),
+      currentRecordCount: Number(records.count ?? 0)
+    };
+  }
+
+  listBinanceCollectionRuns(input: {
+    limit: number;
+    after?: BinanceRunSeek;
+  }): BinanceReadPage<BinanceCollectionRunRecord, BinanceRunSeek> {
+    const limit = boundedReadLimit(input.limit);
+    const rows = this.#db.prepare(
+      `SELECT * FROM binance_collection_runs
+       WHERE (? IS NULL OR capture_at < ? OR
+         (capture_at = ? AND collection_run_id < ?))
+       ORDER BY capture_at DESC,collection_run_id DESC LIMIT ?`
+    ).all(
+      input.after?.captureAt ?? null,
+      input.after?.captureAt ?? null,
+      input.after?.captureAt ?? null,
+      input.after?.collectionRunId ?? null,
+      limit + 1
+    ) as SqlRow[];
+    const page = rows.slice(0, limit).map((row) =>
+      this.#readBinanceCollectionRun(row)
+    );
+    const last = page.at(-1);
+    return {
+      items: page,
+      hasMore: rows.length > limit,
+      ...(rows.length > limit && last
+        ? {
+            nextSeek: {
+              captureAt: last.captureAt,
+              collectionRunId: last.collectionRunId
+            }
+          }
+        : {})
+    };
+  }
+
+  listBinanceProjects(input: {
+    limit: number;
+    after?: BinanceProjectSeek;
+  }): BinanceReadPage<BinanceProjectReadRecord, BinanceProjectSeek> {
+    const limit = boundedReadLimit(input.limit);
+    const rows = this.#db.prepare(
+      `WITH latest AS (
+        SELECT p.*,ROW_NUMBER() OVER (
+          PARTITION BY p.project_id
+          ORDER BY p.captured_at DESC,p.collection_run_id DESC
+        ) AS rank
+        FROM binance_copy_project_snapshots p
+      )
+      SELECT a.project_alias,l.project_status,l.captured_at,l.summary_json
+      FROM binance_project_aliases a
+      JOIN latest l ON l.project_id=a.project_id AND l.rank=1
+      WHERE a.retired_at IS NULL AND (? IS NULL OR a.project_alias > ?)
+      ORDER BY a.project_alias ASC LIMIT ?`
+    ).all(
+      input.after?.projectAlias ?? null,
+      input.after?.projectAlias ?? null,
+      limit + 1
+    ) as SqlRow[];
+    const page = rows.slice(0, limit).map(readBinanceProjectRow);
+    const last = page.at(-1);
+    return {
+      items: page,
+      hasMore: rows.length > limit,
+      ...(rows.length > limit && last
+        ? { nextSeek: { projectAlias: last.projectAlias } }
+        : {})
+    };
+  }
+
+  getBinanceProjectByAlias(
+    projectAlias: string
+  ): BinanceProjectReadRecord | undefined {
+    const row = this.#db.prepare(
+      `SELECT a.project_alias,p.project_status,p.captured_at,p.summary_json
+       FROM binance_project_aliases a
+       JOIN binance_copy_project_snapshots p ON p.project_id=a.project_id
+       WHERE a.project_alias=? AND a.retired_at IS NULL
+       ORDER BY p.captured_at DESC,p.collection_run_id DESC LIMIT 1`
+    ).get(projectAlias) as SqlRow | undefined;
+    return row ? readBinanceProjectRow(row) : undefined;
+  }
+
+  listBinanceRecords(input: {
+    projectAlias: string;
+    sourceTab?: string;
+    fromUtc?: string;
+    toUtc?: string;
+    limit: number;
+    after?: BinanceRecordSeek;
+  }): BinanceReadPage<BinanceRecordReadRecord, BinanceRecordSeek> {
+    const limit = boundedReadLimit(input.limit);
+    const rows = this.#db.prepare(
+      `SELECT r.*,a.project_alias,
+         COALESCE(r.event_time_utc,'') AS event_time_key
+       FROM binance_copy_record_current r
+       JOIN binance_project_aliases a ON a.project_id=r.project_id
+       WHERE a.project_alias=? AND a.retired_at IS NULL
+         AND (? IS NULL OR r.source_tab=?)
+         AND (? IS NULL OR r.event_time_utc>=?)
+         AND (? IS NULL OR r.event_time_utc<?)
+         AND (? IS NULL OR COALESCE(r.event_time_utc,'') > ? OR
+           (COALESCE(r.event_time_utc,'') = ? AND r.current_record_key > ?))
+       ORDER BY COALESCE(r.event_time_utc,''),r.current_record_key LIMIT ?`
+    ).all(
+      input.projectAlias,
+      input.sourceTab ?? null,
+      input.sourceTab ?? null,
+      input.fromUtc ?? null,
+      input.fromUtc ?? null,
+      input.toUtc ?? null,
+      input.toUtc ?? null,
+      input.after?.eventTimeKey ?? null,
+      input.after?.eventTimeKey ?? null,
+      input.after?.eventTimeKey ?? null,
+      input.after?.currentRecordKey ?? null,
+      limit + 1
+    ) as SqlRow[];
+    const page = rows.slice(0, limit).map((row) => ({
+      recordKey: String(row.current_record_key),
+      projectAlias: String(row.project_alias),
+      sourceTab: String(row.source_tab),
+      ...(row.original_event_time == null
+        ? {}
+        : { originalEventTime: String(row.original_event_time) }),
+      ...(row.event_time_utc == null
+        ? {}
+        : { eventTimeUtc: String(row.event_time_utc) }),
+      ...(row.page_time_zone_assumption == null
+        ? {}
+        : { pageTimeZoneAssumption: String(row.page_time_zone_assumption) }),
+      fields: publicBinanceJson(parseJson(row.fields_json)),
+      firstSeenAt: String(row.first_seen_at),
+      lastSeenAt: String(row.last_seen_at)
+    }));
+    const lastRow = rows[Math.min(limit, rows.length) - 1];
+    return {
+      items: page,
+      hasMore: rows.length > limit,
+      ...(rows.length > limit && lastRow
+        ? {
+            nextSeek: {
+              eventTimeKey: String(lastRow.event_time_key),
+              currentRecordKey: String(lastRow.current_record_key)
+            }
+          }
+        : {})
+    };
+  }
+
+  listBinanceValidations(input: {
+    collectionRunId?: string;
+    limit: number;
+    after?: BinanceValidationSeek;
+  }): BinanceReadPage<BinanceValidationReadRecord, BinanceValidationSeek> {
+    const limit = boundedReadLimit(input.limit);
+    const rows = this.#db.prepare(
+      `SELECT * FROM binance_collection_validations
+       WHERE (? IS NULL OR collection_run_id=?)
+         AND (? IS NULL OR created_at < ? OR
+           (created_at = ? AND validation_id < ?))
+       ORDER BY created_at DESC,validation_id DESC LIMIT ?`
+    ).all(
+      input.collectionRunId ?? null,
+      input.collectionRunId ?? null,
+      input.after?.createdAt ?? null,
+      input.after?.createdAt ?? null,
+      input.after?.createdAt ?? null,
+      input.after?.validationId ?? null,
+      limit + 1
+    ) as SqlRow[];
+    const page = rows.slice(0, limit).map((row) => ({
+      validationId: String(row.validation_id),
+      collectionRunId: String(row.collection_run_id),
+      checkCode: String(row.check_code),
+      status: String(row.status) as BinanceValidationReadRecord["status"],
+      severity: String(row.severity) as BinanceValidationReadRecord["severity"],
+      observed: publicBinanceJson(parseJson(row.observed_json)),
+      expected: publicBinanceJson(parseJson(row.expected_json)),
+      createdAt: String(row.created_at)
+    }));
+    const last = page.at(-1);
+    return {
+      items: page,
+      hasMore: rows.length > limit,
+      ...(rows.length > limit && last
+        ? {
+            nextSeek: {
+              createdAt: last.createdAt,
+              validationId: last.validationId
+            }
+          }
+        : {})
+    };
+  }
+
+  listBinanceCandles(input: {
+    symbol: string;
+    fromUtc?: string;
+    toUtc?: string;
+    limit: number;
+    after?: BinanceMarketSeek;
+  }): BinanceReadPage<BinanceCandleReadRecord, BinanceMarketSeek> {
+    const limit = boundedReadLimit(input.limit);
+    const rows = this.#db.prepare(
+      `SELECT * FROM binance_market_candles_1m
+       WHERE symbol=? AND (? IS NULL OR open_time_utc>=?)
+         AND (? IS NULL OR open_time_utc<?)
+         AND (? IS NULL OR open_time_utc>?)
+       ORDER BY open_time_utc LIMIT ?`
+    ).all(
+      input.symbol,
+      input.fromUtc ?? null,
+      input.fromUtc ?? null,
+      input.toUtc ?? null,
+      input.toUtc ?? null,
+      input.after?.eventTimeUtc ?? null,
+      input.after?.eventTimeUtc ?? null,
+      limit + 1
+    ) as SqlRow[];
+    const page = rows.slice(0, limit).map(readBinanceCandleRow);
+    const last = page.at(-1);
+    return {
+      items: page,
+      hasMore: rows.length > limit,
+      ...(rows.length > limit && last
+        ? { nextSeek: { eventTimeUtc: last.openTimeUtc } }
+        : {})
+    };
+  }
+
+  listBinanceFunding(input: {
+    symbol: string;
+    fromUtc?: string;
+    toUtc?: string;
+    limit: number;
+    after?: BinanceMarketSeek;
+  }): BinanceReadPage<BinanceFundingReadRecord, BinanceMarketSeek> {
+    const limit = boundedReadLimit(input.limit);
+    const rows = this.#db.prepare(
+      `SELECT * FROM binance_market_funding_rates
+       WHERE symbol=? AND (? IS NULL OR funding_time_utc>=?)
+         AND (? IS NULL OR funding_time_utc<?)
+         AND (? IS NULL OR funding_time_utc>?)
+       ORDER BY funding_time_utc LIMIT ?`
+    ).all(
+      input.symbol,
+      input.fromUtc ?? null,
+      input.fromUtc ?? null,
+      input.toUtc ?? null,
+      input.toUtc ?? null,
+      input.after?.eventTimeUtc ?? null,
+      input.after?.eventTimeUtc ?? null,
+      limit + 1
+    ) as SqlRow[];
+    const page = rows.slice(0, limit).map(readBinanceFundingRow);
+    const last = page.at(-1);
+    return {
+      items: page,
+      hasMore: rows.length > limit,
+      ...(rows.length > limit && last
+        ? { nextSeek: { eventTimeUtc: last.fundingTimeUtc } }
+        : {})
+    };
   }
 
   listBinanceRawRecords(collectionRunId: string): BinanceRawRecord[] {

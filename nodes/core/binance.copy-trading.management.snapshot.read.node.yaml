@@ -6,7 +6,11 @@ metadata:
   title: 读取 Binance 合约跟单管理快照
   description: 只读提取当前管理页的账户汇总、真实跟单项目摘要和当前可见仓位；不点击详情、交易或设置控件。
 runtime: browser
-inputSchema: { type: object, additionalProperties: false }
+inputSchema:
+  type: object
+  additionalProperties: false
+  properties:
+    projectId: { type: string, pattern: "^[A-Za-z0-9_-]{4,120}$" }
 outputSchema:
   type: object
   additionalProperties: false
@@ -37,6 +41,6 @@ execution:
   idempotency: repeatable_read
   retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED, CONTENT_SCRIPT_UNAVAILABLE]
   cancellable: true
-errors: [PAGE_MISMATCH, PAGE_CONTEXT_CHANGED, SESSION_EXPIRED, CAPTCHA_REQUIRED, RATE_LIMITED, RISK_CONTROL, BINANCE_STRUCTURE_UNCONFIRMED, BINANCE_MANAGEMENT_TAB_AMBIGUOUS, BINANCE_MANAGEMENT_TAB_TIMEOUT, BINANCE_PROJECT_DUPLICATED_ACROSS_TABS, BROWSER_DISCONNECTED, CONTENT_SCRIPT_UNAVAILABLE, DEADLINE_EXCEEDED]
+errors: [PAGE_MISMATCH, PAGE_CONTEXT_CHANGED, SESSION_EXPIRED, CAPTCHA_REQUIRED, RATE_LIMITED, RISK_CONTROL, BINANCE_STRUCTURE_UNCONFIRMED, BINANCE_MANAGEMENT_TAB_AMBIGUOUS, BINANCE_MANAGEMENT_TAB_TIMEOUT, BINANCE_PROJECT_DUPLICATED_ACROSS_TABS, BINANCE_PROJECT_TARGET_INVALID, BINANCE_PROJECT_TARGET_MISSING, BROWSER_DISCONNECTED, CONTENT_SCRIPT_UNAVAILABLE, DEADLINE_EXCEEDED]
 evidence: { required: [result, error] }
 adapter: { id: binance-copy-trading, versions: [1.0.0] }
