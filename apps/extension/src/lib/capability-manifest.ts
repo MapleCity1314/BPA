@@ -1,7 +1,7 @@
 import type { BridgeCapability } from "@bpa/browser-bridge";
 
 export const BROWSER_PROTOCOL = "bpa.browser/2";
-export const BINANCE_ADAPTER_VERSION = "1.0.0";
+export const BINANCE_ADAPTER_VERSION = "1.1.0";
 export const BINANCE_ORIGIN = "https://www.binance.com";
 export const DOUDIAN_ADAPTER_VERSION = "1.2.0";
 export const DOUDIAN_INVENTORY_ADAPTER_VERSION = "2.0.0";
@@ -62,7 +62,7 @@ const READ_ONLY_PERMISSIONS = [
 export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   {
     nodeId: "binance.copy-trading.management.snapshot.read",
-    versions: ["1.0.0"],
+    versions: ["1.1.0"],
     riskLevel: "R1",
     permissions: [
       "browser.dom.read",
@@ -80,7 +80,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   },
   {
     nodeId: "binance.copy-trading.project.detail.collect",
-    versions: ["1.0.0"],
+    versions: ["1.1.0"],
     riskLevel: "R1",
     permissions: [
       "browser.dom.read",

@@ -1,7 +1,7 @@
 import type { RiskSignal } from "@bpa/schemas";
 
 export const BINANCE_ADAPTER_ID = "binance-copy-trading";
-export const BINANCE_ADAPTER_VERSION = "1.0.0";
+export const BINANCE_ADAPTER_VERSION = "1.1.0";
 export const BINANCE_ORIGIN = "https://www.binance.com";
 export const BINANCE_MANAGEMENT_PATH = "/zh-CN/copy-trading/copy-management";
 
