@@ -399,7 +399,7 @@ export function createAllianceRetiredBrowserDriver(input: {
     throw new AllianceRetiredDriverError("ALLIANCE_TAB_TIMEOUT");
   };
 
-  const readShopContextAfterNavigation = async () => {
+  const readShopContextAfterNavigation = async (expectedShop?: AllianceShop) => {
     if (!sourceUrl) {
       throw new AllianceRetiredDriverError("ALLIANCE_SOURCE_TAB_MISSING");
     }
@@ -426,7 +426,7 @@ export function createAllianceRetiredBrowserDriver(input: {
     while (Date.now() < retryUntil) {
       assertNotCancelled();
       try {
-        return await stage<Extract<
+        const result = await stage<Extract<
           AllianceRetiredStageResult,
           { stage: "read-shop-context" }
         >>(
@@ -434,6 +434,20 @@ export function createAllianceRetiredBrowserDriver(input: {
           { stage: "read-shop-context" },
           "read-shop-context"
         );
+        if (
+          expectedShop &&
+          (normalizeShopName(result.currentShop.name) !==
+            normalizeShopName(expectedShop.name) ||
+            (expectedShop.id !== undefined &&
+              result.currentShop.id !== expectedShop.id))
+        ) {
+          lastError = new AllianceRetiredDriverError(
+            "SHOP_IDENTITY_MISMATCH"
+          );
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          continue;
+        }
+        return result;
       } catch (error) {
         lastError = error;
         if (
@@ -479,8 +493,14 @@ export function createAllianceRetiredBrowserDriver(input: {
         throw error;
       }
     }
-    const observed = switchResult?.currentShop ??
-      (await readShopContextAfterNavigation()).currentShop;
+    const immediate = switchResult?.currentShop;
+    const immediateMatches =
+      immediate !== undefined &&
+      normalizeShopName(immediate.name) === normalizeShopName(shop.name) &&
+      (shop.id === undefined || immediate.id === shop.id);
+    const observed = immediateMatches
+      ? immediate
+      : (await readShopContextAfterNavigation(shop)).currentShop;
     if (
       normalizeShopName(observed.name) !== normalizeShopName(shop.name) ||
       (shop.id !== undefined && observed.id !== shop.id)
