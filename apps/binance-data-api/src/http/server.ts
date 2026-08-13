@@ -5,6 +5,8 @@ import { InvalidCursorError } from "../application/cursor.js";
 import { QueryInputError } from "../application/binance-queries.js";
 import type { ErrorEnvelope, ServiceReadiness } from "../core/contracts.js";
 import { openApiDocument } from "../openapi.js";
+import type { DirectBinanceAccount } from "../infrastructure/binance-signed-account-client.js";
+import { unavailableDirectAccount } from "../infrastructure/binance-signed-account-client.js";
 
 export interface BinanceDataHttpServerOptions {
   queries?: BinanceQueries;
@@ -14,10 +16,12 @@ export interface BinanceDataHttpServerOptions {
   bearerToken?: string;
   allowedOrigin?: string;
   requestTimeoutMs?: number;
+  directAccount?: { load(signal?: AbortSignal): Promise<DirectBinanceAccount> };
 }
 
 function validAllowedOrigin(value: string | undefined): string | undefined {
   if (!value) return undefined;
+  if (value === "zero://app") return value;
   const origin = new URL(value);
   if (origin.origin !== value || origin.username || origin.password) {
     throw new Error("BINANCE_DATA_API_ALLOWED_ORIGIN_INVALID");
@@ -84,7 +88,7 @@ export function createBinanceDataHttpServer(options: BinanceDataHttpServerOption
   }
   const server = createServer(
     { requestTimeout: options.requestTimeoutMs ?? 10_000, headersTimeout: 5_000, maxHeaderSize: 16_384 },
-    (request, response) => {
+    async (request, response) => {
       const requestId = randomUUID();
       const head = request.method === "HEAD";
       const corsAllowed = applyCors(request, response, allowedOrigin);
@@ -145,6 +149,17 @@ export function createBinanceDataHttpServer(options: BinanceDataHttpServerOption
           json(response, 200, queries.accountSummary(requestId), head);
           return;
         }
+        if (url.pathname === "/api/v1/binance/direct-account") {
+          const direct = options.directAccount
+            ? await options.directAccount.load()
+            : unavailableDirectAccount(new Date().toISOString());
+          json(response, 200, { meta: queries.meta(requestId), data: direct }, head);
+          return;
+        }
+        if (url.pathname === "/api/v1/binance/account-snapshots") {
+          json(response, 200, queries.accountSnapshots(requestId, url.searchParams), head);
+          return;
+        }
         if (url.pathname === "/api/v1/binance/runs") {
           json(response, 200, queries.runs(requestId, url.searchParams), head);
           return;
@@ -155,6 +170,10 @@ export function createBinanceDataHttpServer(options: BinanceDataHttpServerOption
         }
         if (url.pathname === "/api/v1/binance/positions") {
           json(response, 200, queries.positions(requestId, url.searchParams), head);
+          return;
+        }
+        if (url.pathname === "/api/v1/binance/position-snapshots") {
+          json(response, 200, queries.positionSnapshots(requestId, url.searchParams), head);
           return;
         }
         if (url.pathname === "/api/v1/binance/validations") {

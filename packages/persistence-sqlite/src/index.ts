@@ -42,6 +42,7 @@ import {
   type AuditRecord,
   type BinanceCollectionRunRecord,
   type BinanceAccountSummaryReadRecord,
+  type BinanceAccountSnapshotSeek,
   type BinanceCandleReadRecord,
   type BinanceCurrentRecord,
   type BinanceFundingReadRecord,
@@ -51,6 +52,7 @@ import {
   type BinanceOverviewRecord,
   type BinancePositionReadRecord,
   type BinancePositionSeek,
+  type BinancePositionSnapshotSeek,
   type BinanceProjectReadRecord,
   type BinanceProjectSeek,
   type BinanceRawRecord,
@@ -3544,6 +3546,52 @@ export class SqlitePersistence implements Persistence {
     };
   }
 
+  listBinanceAccountSummaries(input: {
+    limit: number;
+    after?: BinanceAccountSnapshotSeek;
+  }): BinanceReadPage<BinanceAccountSummaryReadRecord, BinanceAccountSnapshotSeek> {
+    const limit = boundedReadLimit(input.limit);
+    const rows = this.#db.prepare(
+      `SELECT c.capture_id,c.capture_at,c.payload_json
+       FROM binance_source_captures c
+       JOIN binance_collection_runs r ON r.collection_run_id=c.collection_run_id
+       WHERE c.source_kind='management'
+         AND r.status IN ('success','authenticated_but_no_data')
+         AND (? IS NULL OR c.capture_at < ? OR
+           (c.capture_at = ? AND c.capture_id < ?))
+       ORDER BY c.capture_at DESC,c.capture_id DESC LIMIT ?`
+    ).all(
+      input.after?.capturedAt ?? null,
+      input.after?.capturedAt ?? null,
+      input.after?.capturedAt ?? null,
+      input.after?.captureId ?? null,
+      limit + 1
+    ) as SqlRow[];
+    const readable = rows.map((row) => {
+      const payload = parseJson(row.payload_json);
+      const fields =
+        payload === null || typeof payload !== "object" || Array.isArray(payload) ||
+        !("accountSummary" in payload) || payload.accountSummary === null ||
+        typeof payload.accountSummary !== "object" || Array.isArray(payload.accountSummary)
+          ? {}
+          : publicBinanceJson(payload.accountSummary);
+      return {
+        capturedAt: String(row.capture_at),
+        fields,
+        captureId: String(row.capture_id)
+      };
+    });
+    const page = readable.slice(0, limit);
+    const last = page.at(-1);
+    return {
+      items: page.map(({ capturedAt, fields }) => ({ capturedAt, fields })),
+      hasMore: rows.length > limit,
+      ...(last && rows.length > limit
+        ? { nextSeek: { capturedAt: last.capturedAt, captureId: last.captureId } }
+        : {})
+    };
+  }
+
   listBinanceCollectionRuns(input: {
     limit: number;
     after?: BinanceRunSeek;
@@ -3759,6 +3807,75 @@ export class SqlitePersistence implements Persistence {
             }
           }
         : {})
+    };
+  }
+
+  listBinancePositionSnapshots(input: {
+    limit: number;
+    after?: BinancePositionSnapshotSeek;
+  }): BinanceReadPage<BinancePositionReadRecord, BinancePositionSnapshotSeek> {
+    const limit = boundedReadLimit(input.limit);
+    const rows = this.#db.prepare(
+      `SELECT p.*,a.project_alias
+       FROM binance_position_snapshots p
+       JOIN binance_collection_runs r ON r.collection_run_id=p.collection_run_id
+       JOIN binance_project_aliases a ON a.project_id=p.project_id
+       WHERE r.status IN ('success','authenticated_but_no_data')
+         AND a.retired_at IS NULL
+         AND (? IS NULL OR p.captured_at < ?
+           OR (p.captured_at = ? AND a.project_alias > ?)
+           OR (p.captured_at = ? AND a.project_alias = ? AND p.symbol > ?)
+           OR (p.captured_at = ? AND a.project_alias = ? AND p.symbol = ? AND p.position_side > ?)
+           OR (p.captured_at = ? AND a.project_alias = ? AND p.symbol = ? AND p.position_side = ? AND p.ordinal > ?)
+           OR (p.captured_at = ? AND a.project_alias = ? AND p.symbol = ? AND p.position_side = ? AND p.ordinal = ? AND p.snapshot_id > ?))
+       ORDER BY p.captured_at DESC,a.project_alias,p.symbol,p.position_side,p.ordinal,p.snapshot_id
+       LIMIT ?`
+    ).all(
+      input.after?.capturedAt ?? null,
+      input.after?.capturedAt ?? null,
+      input.after?.capturedAt ?? null,
+      input.after?.projectAlias ?? null,
+      input.after?.capturedAt ?? null,
+      input.after?.projectAlias ?? null,
+      input.after?.symbol ?? null,
+      input.after?.capturedAt ?? null,
+      input.after?.projectAlias ?? null,
+      input.after?.symbol ?? null,
+      input.after?.positionSide ?? null,
+      input.after?.capturedAt ?? null,
+      input.after?.projectAlias ?? null,
+      input.after?.symbol ?? null,
+      input.after?.positionSide ?? null,
+      input.after?.ordinal ?? null,
+      input.after?.capturedAt ?? null,
+      input.after?.projectAlias ?? null,
+      input.after?.symbol ?? null,
+      input.after?.positionSide ?? null,
+      input.after?.ordinal ?? null,
+      input.after?.snapshotId ?? null,
+      limit + 1
+    ) as SqlRow[];
+    const pageRows = rows.slice(0, limit);
+    const items = pageRows.map((row) => ({
+      projectAlias: String(row.project_alias),
+      symbol: String(row.symbol),
+      positionSide: String(row.position_side),
+      ordinal: Number(row.ordinal),
+      capturedAt: String(row.captured_at),
+      fields: publicBinanceJson(parseJson(row.fields_json))
+    }));
+    const last = pageRows.at(-1);
+    return {
+      items,
+      hasMore: rows.length > limit,
+      ...(rows.length > limit && last ? { nextSeek: {
+        capturedAt: String(last.captured_at),
+        projectAlias: String(last.project_alias),
+        symbol: String(last.symbol),
+        positionSide: String(last.position_side),
+        ordinal: Number(last.ordinal),
+        snapshotId: String(last.snapshot_id)
+      } } : {})
     };
   }
 

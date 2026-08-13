@@ -22,11 +22,13 @@ function store(readiness: BinanceReadinessRecord): BinanceReadStore {
       positionSnapshotCount: 0
     }),
     getLatestBinanceAccountSummary: () => undefined,
+    listBinanceAccountSummaries: () => ({ items: [], hasMore: false }),
     listBinanceCollectionRuns: () => ({ items: [], hasMore: false }),
     listBinanceProjects: () => ({ items: [], hasMore: false }),
     getBinanceProjectByAlias: () => undefined,
     listBinanceRecords: () => ({ items: [], hasMore: false }),
     listBinancePositions: () => ({ items: [], hasMore: false }),
+    listBinancePositionSnapshots: () => ({ items: [], hasMore: false }),
     listBinanceValidations: () => ({ items: [], hasMore: false }),
     listBinanceCandles: () => ({ items: [], hasMore: false }),
     listBinanceFunding: () => ({ items: [], hasMore: false }),
@@ -202,6 +204,39 @@ describe("Binance Data API transport", () => {
       });
   });
 
+  it("serves account and position history with opaque cursors", async () => {
+    const readStore = store({ schemaVersion: 26 });
+    readStore.listBinanceAccountSummaries = () => ({
+      items: [{ capturedAt: timestamp, fields: { 全部保证金余额: "100.50000000 USDT" } }],
+      hasMore: true,
+      nextSeek: { capturedAt: timestamp, captureId: "capture-private" }
+    });
+    readStore.listBinancePositionSnapshots = () => ({
+      items: [{
+        projectAlias: "leader-01", symbol: "BTCUSDT", positionSide: "做多",
+        ordinal: 1, capturedAt: timestamp, fields: { 大小: "0.01 BTC" }
+      }],
+      hasMore: true,
+      nextSeek: {
+        capturedAt: timestamp, projectAlias: "leader-01", symbol: "BTCUSDT",
+        positionSide: "做多", ordinal: 1, snapshotId: "snapshot-private"
+      }
+    });
+    const server = createBinanceDataHttpServer({
+      queries: new BinanceQueries(readStore, () => new Date(timestamp)),
+      serviceReadiness: { ready: true, database_readable: true, schema_ready: true, schema_version: 26 },
+      port: 0
+    });
+    servers.push(server);
+    const address = await server.listen();
+    const accounts = await fetchJson(address.port, "/api/v1/binance/account-snapshots?limit=10");
+    const positions = await fetchJson(address.port, "/api/v1/binance/position-snapshots?limit=10");
+    expect(accounts).toMatchObject({ status: 200, body: { data: [{ available: true }], page: { has_more: true } } });
+    expect(positions).toMatchObject({ status: 200, body: { data: [{ projectAlias: "leader-01" }], page: { has_more: true } } });
+    expect(JSON.stringify(accounts.body)).not.toContain("capture-private");
+    expect(JSON.stringify(positions.body)).not.toContain("snapshot-private");
+  });
+
   it("does not turn a missing project into 500 with the real SQLite query", async () => {
     const readStore = new SqlitePersistence({ path: ":memory:" });
     const server = createBinanceDataHttpServer({
@@ -344,6 +379,20 @@ describe("Binance Data API transport", () => {
       status: 403,
       body: { error: { code: "CORS_ORIGIN_DENIED" } }
     });
+  });
+
+  it("allows only the zero-native application origin", async () => {
+    const server = createBinanceDataHttpServer({
+      serviceReadiness: { ready: false, database_readable: false, schema_ready: false, schema_version: null },
+      allowedOrigin: "zero://app",
+      port: 0
+    });
+    servers.push(server);
+    const address = await server.listen();
+    const allowed = await fetchJson(address.port, "/healthz", "GET", { origin: "zero://app" });
+    const denied = await fetchJson(address.port, "/healthz", "GET", { origin: "http://127.0.0.1:5173" });
+    expect(allowed.headers["access-control-allow-origin"]).toBe("zero://app");
+    expect(denied.headers["access-control-allow-origin"]).toBeUndefined();
   });
 
   it("uses an independent market watermark rather than follower readiness", async () => {

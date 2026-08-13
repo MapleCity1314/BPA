@@ -927,10 +927,28 @@ export interface BinanceAccountSummaryReadRecord {
   fields: JsonValue;
 }
 
+export interface BinanceAccountSnapshotSeek {
+  capturedAt: string;
+  captureId: string;
+}
+
+export interface BinancePositionSnapshotSeek {
+  capturedAt: string;
+  projectAlias: string;
+  symbol: string;
+  positionSide: string;
+  ordinal: number;
+  snapshotId: string;
+}
+
 export interface BinanceReadStore {
   getBinanceReadiness(): BinanceReadinessRecord;
   getBinanceOverview(): BinanceOverviewRecord;
   getLatestBinanceAccountSummary(): BinanceAccountSummaryReadRecord | undefined;
+  listBinanceAccountSummaries(input: {
+    limit: number;
+    after?: BinanceAccountSnapshotSeek;
+  }): BinanceReadPage<BinanceAccountSummaryReadRecord, BinanceAccountSnapshotSeek>;
   listBinanceCollectionRuns(input: {
     limit: number;
     after?: BinanceRunSeek;
@@ -954,6 +972,10 @@ export interface BinanceReadStore {
     limit: number;
     after?: BinancePositionSeek;
   }): BinanceReadPage<BinancePositionReadRecord, BinancePositionSeek>;
+  listBinancePositionSnapshots(input: {
+    limit: number;
+    after?: BinancePositionSnapshotSeek;
+  }): BinanceReadPage<BinancePositionReadRecord, BinancePositionSnapshotSeek>;
   listBinanceValidations(input: {
     collectionRunId?: string;
     limit: number;

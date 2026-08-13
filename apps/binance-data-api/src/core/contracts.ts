@@ -73,6 +73,10 @@ export interface PublicBinanceAccountSummary {
   };
 }
 
+export interface PublicBinanceAccountSnapshot extends PublicBinanceAccountSummary {
+  capturedAt: string;
+}
+
 export type PublicBinanceRun = Omit<
   BinanceCollectionRunRecord,
   "workflowRunId" | "sourceUrl" | "contentDigest"

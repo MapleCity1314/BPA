@@ -4,6 +4,8 @@ import type {
   BinanceRunSeek,
   BinanceProjectSeek,
   BinancePositionSeek,
+  BinancePositionSnapshotSeek,
+  BinanceAccountSnapshotSeek,
   BinanceValidationSeek,
   BinanceMarketSeek
 } from "@bpa/persistence";
@@ -13,6 +15,7 @@ import {
   type DataReadiness,
   type PartialStatus,
   type PublicBinanceAccountSummary,
+  type PublicBinanceAccountSnapshot,
   type PublicBinanceRun,
   type ResponseMeta,
   type StaleStatus,
@@ -90,6 +93,13 @@ function publicAccountSummary(
       asset: assets.size === 1 ? [...assets][0]! : null
     }
   };
+}
+
+function publicAccountSnapshot(
+  record: NonNullable<ReturnType<BinanceReadStore["getLatestBinanceAccountSummary"]>>
+): PublicBinanceAccountSnapshot {
+  const summary = publicAccountSummary(record);
+  return { ...summary, capturedAt: record.capturedAt };
 }
 
 function limitValue(value: string | null): number {
@@ -201,6 +211,23 @@ export class BinanceQueries {
     };
   }
 
+  accountSnapshots(requestId: string, params: URLSearchParams) {
+    const endpoint = "account-snapshots";
+    const limit = limitValue(params.get("limit"));
+    const filters = {};
+    const seek = decodeCursor(params.get("cursor") ?? undefined, endpoint, filters, ["captured_at", "capture_id"]);
+    const page = this.store.listBinanceAccountSummaries({
+      limit,
+      ...(seek ? { after: {
+        capturedAt: seek.captured_at!, captureId: seek.capture_id!
+      } satisfies BinanceAccountSnapshotSeek } : {})
+    });
+    return listEnvelope(requestId, this.meta(requestId), endpoint, filters, limit, {
+      ...page,
+      items: page.items.map(publicAccountSnapshot)
+    }, (next) => ({ captured_at: next.capturedAt, capture_id: next.captureId }));
+  }
+
   runs(requestId: string, params: URLSearchParams) {
     const endpoint = "runs";
     const limit = limitValue(params.get("limit"));
@@ -309,6 +336,38 @@ export class BinanceQueries {
         : {})
     });
     return listEnvelope(requestId, this.meta(requestId), endpoint, filters, limit, page, (next) => ({
+      project_alias: next.projectAlias,
+      symbol: next.symbol,
+      position_side: next.positionSide,
+      ordinal: String(next.ordinal),
+      snapshot_id: next.snapshotId
+    }));
+  }
+
+  positionSnapshots(requestId: string, params: URLSearchParams) {
+    const endpoint = "position-snapshots";
+    const limit = limitValue(params.get("limit"));
+    const filters = {};
+    const seek = decodeCursor(params.get("cursor") ?? undefined, endpoint, filters, [
+      "captured_at", "project_alias", "symbol", "position_side", "ordinal", "snapshot_id"
+    ]);
+    const ordinal = seek ? Number(seek.ordinal) : undefined;
+    if (ordinal !== undefined && (!Number.isSafeInteger(ordinal) || ordinal < 1)) {
+      throw new QueryInputError("INVALID_CURSOR", "position snapshot cursor ordinal is invalid");
+    }
+    const page = this.store.listBinancePositionSnapshots({
+      limit,
+      ...(seek ? { after: {
+        capturedAt: seek.captured_at!,
+        projectAlias: seek.project_alias!,
+        symbol: seek.symbol!,
+        positionSide: seek.position_side!,
+        ordinal: ordinal!,
+        snapshotId: seek.snapshot_id!
+      } satisfies BinancePositionSnapshotSeek } : {})
+    });
+    return listEnvelope(requestId, this.meta(requestId), endpoint, filters, limit, page, (next) => ({
+      captured_at: next.capturedAt,
       project_alias: next.projectAlias,
       symbol: next.symbol,
       position_side: next.positionSide,

@@ -91,6 +91,14 @@ export const openApiDocument = {
       get: operation("getBinanceAccountSummary", "AccountSummaryEnvelope"),
       head: head("headBinanceAccountSummary")
     },
+    "/api/v1/binance/direct-account": {
+      get: operation("getDirectBinanceAccount", "DirectAccountEnvelope"),
+      head: head("headDirectBinanceAccount")
+    },
+    "/api/v1/binance/account-snapshots": {
+      get: operation("listBinanceAccountSnapshots", "AccountSnapshotListEnvelope", [limit, cursor]),
+      head: head("headBinanceAccountSnapshots", [limit, cursor])
+    },
     "/api/v1/binance/runs": {
       get: operation("listBinanceRuns", "RunListEnvelope", [limit, cursor]),
       head: head("headBinanceRuns", [limit, cursor])
@@ -102,6 +110,10 @@ export const openApiDocument = {
     "/api/v1/binance/positions": {
       get: operation("listBinancePositions", "PositionListEnvelope", [limit, cursor]),
       head: head("headBinancePositions", [limit, cursor])
+    },
+    "/api/v1/binance/position-snapshots": {
+      get: operation("listBinancePositionSnapshots", "PositionListEnvelope", [limit, cursor]),
+      head: head("headBinancePositionSnapshots", [limit, cursor])
     },
     "/api/v1/binance/projects/{alias}": {
       get: operation("getBinanceProject", "ProjectEnvelope", [alias]),
@@ -284,11 +296,13 @@ export const openApiDocument = {
       DataReadinessEnvelope: { allOf: [schema("EnvelopeBase"), { type: "object", properties: { data: schema("DataReadiness") } }] },
       OverviewEnvelope: { allOf: [schema("EnvelopeBase"), { type: "object", properties: { data: schema("Overview") } }] },
       AccountSummaryEnvelope: { allOf: [schema("EnvelopeBase"), { type: "object", properties: { data: schema("AccountSummary") } }] },
+      DirectAccountEnvelope: { allOf: [schema("EnvelopeBase"), { type: "object", properties: { data: schema("JsonValue") } }] },
+      AccountSnapshotListEnvelope: schema("AccountSummaryList"),
       ProjectEnvelope: { allOf: [schema("EnvelopeBase"), { type: "object", properties: { data: schema("Project") } }] },
       EnvelopeBase: { type: "object", required: ["meta", "data"], properties: { meta: schema("ResponseMeta"), data: {} } },
       RunListEnvelope: schema("RunList"), ProjectListEnvelope: schema("ProjectList"), PositionListEnvelope: schema("PositionList"), RecordListEnvelope: schema("RecordList"), ValidationListEnvelope: schema("ValidationList"), CandleListEnvelope: schema("CandleList"), FundingListEnvelope: schema("FundingList"),
       ...Object.fromEntries(([[
-        "RunList", "Run"], ["ProjectList", "Project"], ["PositionList", "Position"], ["RecordList", "Record"], ["ValidationList", "Validation"], ["CandleList", "Candle"], ["FundingList", "Funding"]
+        "AccountSummaryList", "AccountSummary"], ["RunList", "Run"], ["ProjectList", "Project"], ["PositionList", "Position"], ["RecordList", "Record"], ["ValidationList", "Validation"], ["CandleList", "Candle"], ["FundingList", "Funding"]
       ] as const).map(([name, item]) => [name, { type: "object", required: ["meta", "data", "page"], properties: { meta: schema("ResponseMeta"), data: { type: "array", items: schema(item) }, page: schema("Page") }, additionalProperties: false }]))
     }
   }

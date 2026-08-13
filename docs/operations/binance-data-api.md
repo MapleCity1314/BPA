@@ -17,6 +17,8 @@ BPA_HOME="$HOME/Library/Application Support/BPA" pnpm binance-data-api
 - `BINANCE_DATA_PORT`：默认 `43124`。
 - `BINANCE_DATA_TOKEN`：非 loopback 监听时必填，使用 Bearer token；推荐仍由受控网关终止鉴权。
 - `BINANCE_DATA_ALLOWED_ORIGIN`：可选的单一 exact Origin。默认不发送 CORS；攀升本地开发可显式设为 `http://127.0.0.1:4173`。正式 Native Origin 待宿主确认。
+- `BINANCE_DATA_ENV_FILE`：可选的本机 dotenv 文件。仅服务进程读取，用于注入 `BINANCE_API_KEY` 和 `BINANCE_SECRET_KEY`；路径和值不得进入客户端、日志或仓库。
+- `BINANCE_API_KEY` / `BINANCE_SECRET_KEY`：可选的 Binance USDⓈ-M `USER_DATA` 只读旁路。不可达或未配置时仅 `/direct-account` 显示不可用，不改变 SQLite 业务 readiness。
 
 服务禁止 wildcard CORS。仅当请求 Origin 精确匹配配置值时返回 `Access-Control-Allow-Origin` 与 `Vary: Origin`，并接受无状态 OPTIONS 预检；业务路由仍只允许 GET/HEAD。响应使用 `Cache-Control: no-store` 和 `X-Content-Type-Options: nosniff`。
 
@@ -29,9 +31,13 @@ BPA_HOME="$HOME/Library/Application Support/BPA" pnpm binance-data-api
 ## v1 路由
 
 - `/api/v1/binance/overview`
+- `/api/v1/binance/account-summary`
+- `/api/v1/binance/account-snapshots`（历史管理页资金快照）
+- `/api/v1/binance/direct-account`（可选的签名只读账户旁路）
 - `/api/v1/binance/runs`
 - `/api/v1/binance/projects`
 - `/api/v1/binance/positions`（最近一次成功采集的结构化仓位快照；可能为空）
+- `/api/v1/binance/position-snapshots`（历史结构化仓位快照）
 - `/api/v1/binance/projects/{alias}`
 - `/api/v1/binance/projects/{alias}/records`
 - `/api/v1/binance/validations`
