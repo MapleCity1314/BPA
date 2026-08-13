@@ -172,8 +172,8 @@ test("binds the managed Chrome launcher and live command to one contract", () =>
     "--remote-debugging-port=17660",
     "--remote-debugging-address=127.0.0.1",
     ...MACOS_MANAGED_CHROME_CONTRACT.flags,
-    `--disable-extensions-except=${bpaHome}/extension`,
-    `--load-extension=${bpaHome}/extension`
+    `--disable-extensions-except=${bpaHome}/${MACOS_MANAGED_CHROME_CONTRACT.extensionRelativePath}`,
+    `--load-extension=${bpaHome}/${MACOS_MANAGED_CHROME_CONTRACT.extensionRelativePath}`
   ].join(" ");
   assert.doesNotThrow(() =>
     assertManagedChromeProcessCommand(command, bpaHome)

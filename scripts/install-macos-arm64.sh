@@ -519,7 +519,7 @@ if ! $MANAGED_CHROME_READY; then
   print -u2 "Installed managed Chrome did not become ready in time."
   exit 1
 fi
-if [[ ! -f "$EXTENSION_ROOT/manifest.json" || ! -f "$HOST_MANIFEST" || \
+if [[ ! -f "$RUNTIME_ROOT/current/extension/manifest.json" || ! -f "$HOST_MANIFEST" || \
   ! -f "$CHROME_LAUNCH_AGENT" ]]; then
   print -u2 "Extension, Native Host, or managed Chrome installation is incomplete."
   exit 1
@@ -527,6 +527,7 @@ fi
 rm "$HEALTH_RESULT"
 rm "$MAINTENANCE_RESULT" 2>/dev/null || true
 [[ -d "$MIGRATION_TEST_ROOT" ]] && rm -rf "$MIGRATION_TEST_ROOT"
+[[ -d "$EXTENSION_ROOT" ]] && rm -rf "$EXTENSION_ROOT"
 [[ -d "$EXTENSION_BACKUP" ]] && rm -rf "$EXTENSION_BACKUP"
 [[ -f "$AGENT_BACKUP" ]] && rm "$AGENT_BACKUP"
 [[ -f "$HOST_MANIFEST_BACKUP" ]] && rm "$HOST_MANIFEST_BACKUP"
@@ -538,7 +539,7 @@ trap - EXIT
 
 print "BPA $VERSION installed from a verified production closure."
 print "CLI: $RUNTIME_ROOT/current/bin/bpa"
-print "Extension: $EXTENSION_ROOT"
+print "Extension: $RUNTIME_ROOT/current/extension"
 print "Managed Chrome: $CHROME_LAUNCH_AGENT"
 if [[ -n "$DATABASE_BACKUP" ]]; then
   print "Pre-upgrade database backup: $DATABASE_BACKUP"

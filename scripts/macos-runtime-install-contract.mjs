@@ -11,7 +11,7 @@ export const MACOS_MANAGED_CHROME_CONTRACT = Object.freeze({
   executablePath:
     "browser/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
   profileRelativePath: "chrome-inventory-profile",
-  extensionRelativePath: "extension",
+  extensionRelativePath: "runtime/current/extension",
   remoteDebuggingAddress: "127.0.0.1",
   remoteDebuggingPort: 17660,
   flags: Object.freeze([
