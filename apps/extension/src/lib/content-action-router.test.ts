@@ -63,6 +63,47 @@ function handlers(): ContentActionHandlers {
 }
 
 describe("content action router", () => {
+  it("allows only the bounded optional Binance project target", async () => {
+    const actions = handlers();
+    const validRequest = {
+      ...request("binance.copy-trading.management.snapshot.read", {
+        projectId: "project_1001"
+      }),
+      node: {
+        id: "binance.copy-trading.management.snapshot.read",
+        version: "1.3.0"
+      },
+      grantedPermissions: [
+        "browser.dom.read",
+        "browser.dom.write",
+        "browser.tabs.read"
+      ]
+    };
+    await expect(routeContentAction({
+      request: validRequest,
+      currentUrl: "https://www.binance.com/zh-CN/copy-trading/copy-management",
+      handlers: actions,
+      now: Date.parse("2026-07-28T00:00:00.000Z")
+    })).resolves.toMatchObject({ response: { ok: true } });
+
+    for (const invalidInput of [
+      { projectId: "bad id" },
+      { projectId: "project_1001", extra: true }
+    ]) {
+      await expect(routeContentAction({
+        request: { ...validRequest, input: invalidInput },
+        currentUrl: "https://www.binance.com/zh-CN/copy-trading/copy-management",
+        handlers: actions,
+        now: Date.parse("2026-07-28T00:00:00.000Z")
+      })).resolves.toMatchObject({
+        response: {
+          ok: false,
+          error: { code: "BINANCE_PROJECT_TARGET_INVALID" }
+        }
+      });
+    }
+  });
+
   it("binds a marketplace probe to the declared platform origin", async () => {
     const actions = handlers();
     await expect(

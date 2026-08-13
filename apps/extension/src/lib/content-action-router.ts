@@ -127,6 +127,17 @@ function failure(
   };
 }
 
+function binanceManagementInputValid(
+  input: Readonly<Record<string, unknown>>
+): boolean {
+  const keys = Object.keys(input);
+  if (keys.length === 0) return true;
+  return keys.length === 1 &&
+    keys[0] === "projectId" &&
+    typeof input.projectId === "string" &&
+    /^[A-Za-z0-9_-]{4,120}$/u.test(input.projectId);
+}
+
 function recordInput(value: unknown): Readonly<Record<string, unknown>> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Readonly<Record<string, unknown>>)
@@ -297,6 +308,8 @@ export async function routeContentAction(input: {
   if (
     route.capability.nodeId !==
       "doudian.editor.priority-items.inspect" &&
+    route.capability.nodeId !==
+      "binance.copy-trading.management.snapshot.read" &&
     route.capability.nodeId !== "doudian.product.editor.open" &&
     route.capability.nodeId !== "doudian.product.scope.restore" &&
     route.capability.nodeId !== "doudian.inventory.product.snapshot.read" &&
@@ -307,6 +320,17 @@ export async function routeContentAction(input: {
     return failure(
       "INPUT_INVALID",
       "该只读页面动作不接受额外输入。",
+      request.pageEpoch
+    );
+  }
+  if (
+    route.capability.nodeId ===
+      "binance.copy-trading.management.snapshot.read" &&
+    !binanceManagementInputValid(actionInput)
+  ) {
+    return failure(
+      "BINANCE_PROJECT_TARGET_INVALID",
+      "Binance 单项目目标输入无效。",
       request.pageEpoch
     );
   }

@@ -78,13 +78,13 @@ describe("extension capability manifest", () => {
           node_id: "binance.copy-trading.management.snapshot.read",
           risk_level: "R1",
           adapter_id: "binance-copy-trading",
-          versions: ["1.2.0"]
+          versions: ["1.3.0"]
         }),
         expect.objectContaining({
           node_id: "binance.copy-trading.project.detail.collect",
           risk_level: "R1",
           adapter_id: "binance-copy-trading",
-          versions: ["1.2.0"]
+          versions: ["1.3.0"]
         }),
         expect.objectContaining({
           node_id: "ecommerce.marketplace.search-results.read",
@@ -173,13 +173,13 @@ describe("extension capability manifest", () => {
   it.each([
     {
       nodeId: "binance.copy-trading.management.snapshot.read",
-      nodeVersion: "1.2.0",
+      nodeVersion: "1.3.0",
       currentUrl: "https://www.binance.com/zh-CN/copy-trading/copy-management",
       grantedPermissions: ["browser.dom.read", "browser.dom.write", "browser.tabs.read"]
     },
     {
       nodeId: "binance.copy-trading.project.detail.collect",
-      nodeVersion: "1.2.0",
+      nodeVersion: "1.3.0",
       currentUrl: "https://www.binance.com/zh-CN/copy-trading/copy-management",
       grantedPermissions: ["browser.dom.read", "browser.dom.write", "browser.tabs.read"]
     },
