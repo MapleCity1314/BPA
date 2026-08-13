@@ -31,7 +31,7 @@ function canonicalJson(value: unknown): string {
 }
 
 describe("extension capability manifest", () => {
-  it("locks the inventory v2 capability to Runtime and Extension 0.6.2", () => {
+  it("locks the inventory v2 capability to Runtime and Extension 0.6.3", () => {
     for (const path of [
       "package.json",
       "apps/cli/package.json",
@@ -46,11 +46,11 @@ describe("extension capability manifest", () => {
       const packageJson = JSON.parse(
         readFileSync(new URL(path,repoRoot),"utf8")
       ) as { version:string };
-      expect(packageJson.version, path).toBe("0.6.2");
+      expect(packageJson.version, path).toBe("0.6.3");
     }
     expect(
       readFileSync(new URL("apps/extension/wxt.config.ts",repoRoot),"utf8")
-    ).toContain('version: "0.6.2"');
+    ).toContain('version: "0.6.3"');
     const experienceAdapter = parse(readFileSync(
       new URL("adapters/doudian/doudian-experience.adapter.yaml",repoRoot),
       "utf8"
