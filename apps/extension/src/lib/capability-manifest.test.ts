@@ -82,8 +82,8 @@ describe("extension capability manifest", () => {
         expect.objectContaining({
           node_id: "doudian.alliance.shop.retired-products.scan",
           adapter_id: "doudian-alliance",
-          adapter_version: "2.0.0",
-          versions: ["2.0.0"],
+          adapter_version: "2.0.1",
+          versions: ["2.0.1"],
           routes: expect.arrayContaining([
             {
               origin: "https://fxg.jinritemai.com",
@@ -234,7 +234,7 @@ describe("extension capability manifest", () => {
     },
     {
       nodeId: "doudian.alliance.shop.retired-products.scan",
-      nodeVersion: "2.0.0",
+      nodeVersion: "2.0.1",
       currentUrl: "https://fxg.jinritemai.com/ffa/g/list",
       grantedPermissions: [
         "browser.dom.read",

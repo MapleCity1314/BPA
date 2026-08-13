@@ -90,6 +90,9 @@ export interface AllianceRetiredStageDiagnostic {
     | "mismatched"
     | "unavailable";
   readonly restoreResult: "not-required" | "succeeded" | "failed";
+  readonly switchErrorCode?: DoudianAllianceNodeErrorCode;
+  readonly navigationErrorCode?: DoudianAllianceNodeErrorCode;
+  readonly restoreErrorCode?: DoudianAllianceNodeErrorCode;
 }
 
 function allianceStageDiagnosticText(
@@ -101,9 +104,26 @@ function allianceStageDiagnosticText(
       ? []
       : [`shop_ordinal=${diagnostic.shopOrdinal}`]),
     `switch_response=${diagnostic.switchResponse}`,
+    ...(diagnostic.switchErrorCode === undefined
+      ? []
+      : [`switch_error=${diagnostic.switchErrorCode}`]),
     `navigation_identity=${diagnostic.navigationIdentity}`,
-    `restore_result=${diagnostic.restoreResult}`
+    ...(diagnostic.navigationErrorCode === undefined
+      ? []
+      : [`navigation_error=${diagnostic.navigationErrorCode}`]),
+    `restore_result=${diagnostic.restoreResult}`,
+    ...(diagnostic.restoreErrorCode === undefined
+      ? []
+      : [`restore_error=${diagnostic.restoreErrorCode}`])
   ].join(";");
+}
+
+function allianceErrorCode(
+  error: unknown
+): DoudianAllianceNodeErrorCode | undefined {
+  return error instanceof AllianceRetiredDriverError
+    ? error.code
+    : undefined;
 }
 
 function withAllianceDiagnostic(
@@ -232,6 +252,7 @@ export function createAllianceRetiredBrowserDriver(input: {
   readonly deadline: string;
   readonly isCancelled?: () => boolean;
   readonly stageResponseTimeoutMs?: number;
+  readonly shopIdentityWaitMs?: number;
   readonly reserveManagedTab?: () => boolean;
   readonly releaseManagedTabReservation?: () => void;
   readonly onStageStarted?: (stage: {
@@ -474,7 +495,7 @@ export function createAllianceRetiredBrowserDriver(input: {
     await waitForComplete(input.sourceTabId);
     const retryUntil = Math.min(
       Date.parse(input.deadline),
-      Date.now() + 20_000
+      Date.now() + (input.shopIdentityWaitMs ?? 60_000)
     );
     let lastError: unknown;
     while (Date.now() < retryUntil) {
@@ -539,6 +560,7 @@ export function createAllianceRetiredBrowserDriver(input: {
           return observed;
         }
       } catch (error) {
+        const navigationErrorCode = allianceErrorCode(error);
         if (
           !(error instanceof AllianceRetiredDriverError) ||
           ![
@@ -555,7 +577,10 @@ export function createAllianceRetiredBrowserDriver(input: {
               error.code === "SHOP_IDENTITY_MISMATCH"
                 ? "mismatched"
                 : "unavailable",
-            restoreResult: "failed"
+            restoreResult: "failed",
+            ...(navigationErrorCode === undefined
+              ? {}
+              : { navigationErrorCode })
           });
         }
       }
@@ -565,6 +590,7 @@ export function createAllianceRetiredBrowserDriver(input: {
       | undefined;
     let switchResponse: AllianceRetiredStageDiagnostic["switchResponse"] =
       "not-started";
+    let switchErrorCode: DoudianAllianceNodeErrorCode | undefined;
     try {
       switchResult = await stage<Extract<
         AllianceRetiredStageResult,
@@ -576,6 +602,7 @@ export function createAllianceRetiredBrowserDriver(input: {
       );
       switchResponse = "mismatched";
     } catch (error) {
+      switchErrorCode = allianceErrorCode(error);
       if (
         !(error instanceof AllianceRetiredDriverError) ||
         ![
@@ -588,7 +615,8 @@ export function createAllianceRetiredBrowserDriver(input: {
           ...diagnosticBase,
           switchResponse: "failed",
           navigationIdentity: "not-required",
-          restoreResult: "not-required"
+          restoreResult: "not-required",
+          ...(switchErrorCode === undefined ? {} : { switchErrorCode })
         });
       }
       switchResponse = "recoverable-error";
@@ -605,15 +633,20 @@ export function createAllianceRetiredBrowserDriver(input: {
         ? immediate
         : (await readShopContextAfterNavigation(shop)).currentShop;
     } catch (error) {
+      const navigationErrorCode = allianceErrorCode(error);
       throw withAllianceDiagnostic(error, {
         ...diagnosticBase,
         switchResponse,
+        ...(switchErrorCode === undefined ? {} : { switchErrorCode }),
         navigationIdentity:
           error instanceof AllianceRetiredDriverError &&
           error.code === "SHOP_IDENTITY_MISMATCH"
             ? "mismatched"
             : "unavailable",
-        restoreResult: "not-required"
+        restoreResult: "not-required",
+        ...(navigationErrorCode === undefined
+          ? {}
+          : { navigationErrorCode })
       });
     }
     if (
@@ -627,7 +660,8 @@ export function createAllianceRetiredBrowserDriver(input: {
           ...diagnosticBase,
           switchResponse,
           navigationIdentity: "mismatched",
-          restoreResult: "not-required"
+          restoreResult: "not-required",
+          navigationErrorCode: "SHOP_IDENTITY_MISMATCH"
         }
       );
     }
@@ -699,6 +733,7 @@ export function createAllianceRetiredBrowserDriver(input: {
           { phase: "restore-source" }
         );
       } catch (restoreError) {
+        const restoreErrorCode = allianceErrorCode(restoreError);
         const diagnostic =
           primaryError instanceof AllianceRetiredDriverError &&
           primaryError.diagnostic
@@ -715,7 +750,13 @@ export function createAllianceRetiredBrowserDriver(input: {
         throw new AllianceRetiredDriverError(
           "SHOP_CONTEXT_RESTORE_FAILED",
           [],
-          { ...diagnostic, restoreResult: "failed" }
+          {
+            ...diagnostic,
+            restoreResult: "failed",
+            ...(restoreErrorCode === undefined
+              ? {}
+              : { restoreErrorCode })
+          }
         );
       }
     }

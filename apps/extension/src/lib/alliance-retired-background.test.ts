@@ -981,6 +981,77 @@ describe("alliance retired-products browser navigation", () => {
     expect(switchRequests).toEqual([targetShop.name]);
   });
 
+  it("preserves switch, navigation, and restore error codes in discovery diagnostics", async () => {
+    installBrowser(
+      [{
+        id: 1,
+        windowId: 10,
+        active: true,
+        status: "complete",
+        url: "https://fxg.jinritemai.com/ffa/g/list"
+      }],
+      () => undefined
+    );
+    const sourceShop = {
+      name: "甲食品旗舰店",
+      status: "active" as const,
+      statusText: "正常营业"
+    };
+    const targetShop = {
+      name: "乙食品专营店",
+      status: "active" as const,
+      statusText: "正常营业"
+    };
+    const originalSendMessage = browser.tabs.sendMessage;
+    browser.tabs.sendMessage = (async (
+      tabId: number,
+      message: {
+        type: string;
+        requestId?: string;
+        request?: { stage?: string };
+      }
+    ) => {
+      if (message.type === "bpa.risk.preflight") {
+        return { riskSignals: [] };
+      }
+      if (message.type !== "bpa.doudian.alliance.stage") {
+        return originalSendMessage(tabId, message);
+      }
+      if (message.request?.stage === "discover-shops") {
+        return {
+          ok: true,
+          requestId: message.requestId,
+          result: {
+            stage: "discover-shops",
+            currentShop: { id: "10001", name: sourceShop.name },
+            shops: [sourceShop, targetShop]
+          }
+        };
+      }
+      return {
+        ok: false,
+        requestId: message.requestId,
+        error: { code: "PAGE_LOADING", message: "Page is loading." }
+      };
+    }) as typeof browser.tabs.sendMessage;
+    const driver = createAllianceRetiredBrowserDriver({
+      sourceTabId: 1,
+      deadline: new Date(Date.now() + 2_000).toISOString(),
+      shopIdentityWaitMs: 5
+    });
+
+    await expect(driver.discoverShopContext()).rejects.toMatchObject({
+      code: "SHOP_CONTEXT_RESTORE_FAILED",
+      diagnostic: {
+        phase: "resolve-shop",
+        shopOrdinal: 2,
+        switchErrorCode: "PAGE_LOADING",
+        navigationErrorCode: "PAGE_LOADING",
+        restoreErrorCode: "PAGE_LOADING"
+      }
+    });
+  });
+
   it("maps a rejected source-tab read to BROWSER_DISCONNECTED", async () => {
     installBrowser([], () => undefined);
     const driver = createAllianceRetiredBrowserDriver({
