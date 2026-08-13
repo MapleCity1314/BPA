@@ -8,6 +8,7 @@ import type {
 } from "@bpa/persistence";
 import {
   BINANCE_SOURCE,
+  BINANCE_MARKET_SOURCE,
   type DataReadiness,
   type PartialStatus,
   type PublicBinanceRun,
@@ -77,6 +78,17 @@ export class BinanceQueries {
       stale_status: staleStatus(latestSuccess?.lastSuccessAt, this.now()),
       partial_status: partialStatus(readiness.latestRun?.status),
       source: BINANCE_SOURCE
+    };
+  }
+
+  marketMeta(requestId: string): ResponseMeta {
+    return {
+      request_id: requestId,
+      as_of: this.now().toISOString(),
+      last_success_at: null,
+      stale_status: "unknown",
+      partial_status: "unknown",
+      source: BINANCE_MARKET_SOURCE
     };
   }
 
@@ -234,10 +246,10 @@ export class BinanceQueries {
     };
     if (kind === "candles") {
       const page = this.store.listBinanceCandles(options);
-      return listEnvelope(requestId, this.meta(requestId), kind, filters, limit, page, (next) => ({ event_time_utc: next.eventTimeUtc }));
+      return listEnvelope(requestId, this.marketMeta(requestId), kind, filters, limit, page, (next) => ({ event_time_utc: next.eventTimeUtc }));
     }
     const page = this.store.listBinanceFunding(options);
-    return listEnvelope(requestId, this.meta(requestId), kind, filters, limit, page, (next) => ({ event_time_utc: next.eventTimeUtc }));
+    return listEnvelope(requestId, this.marketMeta(requestId), kind, filters, limit, page, (next) => ({ event_time_utc: next.eventTimeUtc }));
   }
 }
 

@@ -31,10 +31,11 @@ function store(readiness: BinanceReadinessRecord): BinanceReadStore {
 async function fetchJson(
   port: number,
   path: string,
-  method = "GET"
+  method = "GET",
+  headers: Record<string, string> = {}
 ): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: unknown; raw: string }> {
   return new Promise((resolve, reject) => {
-    const call = request({ host: "127.0.0.1", port, path, method }, (response) => {
+    const call = request({ host: "127.0.0.1", port, path, method, headers }, (response) => {
       const chunks: Buffer[] = [];
       response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
       response.on("end", () => {
@@ -128,7 +129,7 @@ describe("Binance Data API transport", () => {
     expect(post).toMatchObject({
       status: 405,
       headers: {
-        allow: "GET, HEAD",
+        allow: "GET, HEAD, OPTIONS",
         "cache-control": "no-store",
         "x-content-type-options": "nosniff"
       }
@@ -136,6 +137,80 @@ describe("Binance Data API transport", () => {
     expect(post.headers["access-control-allow-origin"]).toBeUndefined();
     const head = await fetchJson(address.port, "/healthz", "HEAD");
     expect(head).toMatchObject({ status: 200, raw: "" });
+  });
+
+  it("allows only the configured exact CORS origin and its preflight", async () => {
+    const allowedOrigin = "http://127.0.0.1:4173";
+    const server = createBinanceDataHttpServer({
+      serviceReadiness: {
+        ready: false,
+        database_readable: false,
+        schema_ready: false,
+        schema_version: null
+      },
+      allowedOrigin,
+      port: 0
+    });
+    servers.push(server);
+    const address = await server.listen();
+    const allowed = await fetchJson(address.port, "/healthz", "GET", {
+      origin: allowedOrigin
+    });
+    expect(allowed.headers).toMatchObject({
+      "access-control-allow-origin": allowedOrigin,
+      vary: "Origin"
+    });
+    const preflight = await fetchJson(address.port, "/healthz", "OPTIONS", {
+      origin: allowedOrigin,
+      "access-control-request-method": "GET"
+    });
+    expect(preflight).toMatchObject({
+      status: 204,
+      headers: {
+        "access-control-allow-origin": allowedOrigin,
+        "access-control-allow-methods": "GET, HEAD",
+        vary: "Origin"
+      }
+    });
+    const denied = await fetchJson(address.port, "/healthz", "OPTIONS", {
+      origin: "http://localhost:4173",
+      "access-control-request-method": "GET"
+    });
+    expect(denied).toMatchObject({
+      status: 403,
+      body: { error: { code: "CORS_ORIGIN_DENIED" } }
+    });
+    expect(denied.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("uses independent unknown freshness metadata for public market data", async () => {
+    const server = createBinanceDataHttpServer({
+      queries: new BinanceQueries(store({ schemaVersion: 26 })),
+      serviceReadiness: {
+        ready: true,
+        database_readable: true,
+        schema_ready: true,
+        schema_version: 26
+      },
+      port: 0
+    });
+    servers.push(server);
+    const address = await server.listen();
+    const market = await fetchJson(
+      address.port,
+      "/api/v1/binance/market/candles?symbol=BTCUSDT"
+    );
+    expect(market).toMatchObject({
+      status: 200,
+      body: {
+        meta: {
+          source: "binance_futures_public_market",
+          last_success_at: null,
+          stale_status: "unknown",
+          partial_status: "unknown"
+        }
+      }
+    });
   });
 
   it("rejects malformed and cross-filter cursors", async () => {

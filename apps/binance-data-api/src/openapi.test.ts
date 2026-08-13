@@ -7,7 +7,27 @@ describe("Binance Data API OpenAPI contract", () => {
     expect(Object.keys(openApiDocument.paths)).toContain("/api/v1/binance/readiness");
     for (const path of Object.values(openApiDocument.paths)) {
       expect(Object.keys(path).sort()).toEqual(["get", "head"]);
+      expect(path.get.responses).toHaveProperty("200");
+      expect(path.get.responses).toHaveProperty("400");
+      expect(path.get.responses).toHaveProperty("503");
     }
+    expect(openApiDocument.paths["/api/v1/binance/projects/{alias}"].get.parameters)
+      .toContainEqual(expect.objectContaining({ name: "alias", in: "path", required: true }));
+    expect(openApiDocument.paths["/api/v1/binance/market/candles"].get.parameters)
+      .toContainEqual(expect.objectContaining({ name: "symbol", in: "query", required: true }));
+    expect(openApiDocument.paths["/api/v1/binance/projects/{alias}/records"].get.parameters)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: "source_tab", in: "query" }),
+        expect.objectContaining({ name: "from", in: "query" }),
+        expect.objectContaining({ name: "cursor", in: "query" })
+      ]));
+    expect(openApiDocument.components.schemas).toMatchObject({
+      ResponseMeta: expect.any(Object),
+      ErrorEnvelope: expect.any(Object),
+      Page: expect.any(Object),
+      Candle: expect.any(Object),
+      Funding: expect.any(Object)
+    });
     const serialized = JSON.stringify(openApiDocument);
     expect(serialized).not.toContain("project_id");
     expect(serialized).not.toContain("payload_json");

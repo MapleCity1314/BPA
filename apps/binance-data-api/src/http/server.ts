@@ -12,7 +12,29 @@ export interface BinanceDataHttpServerOptions {
   host?: string;
   port?: number;
   bearerToken?: string;
+  allowedOrigin?: string;
   requestTimeoutMs?: number;
+}
+
+function validAllowedOrigin(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const origin = new URL(value);
+  if (origin.origin !== value || origin.username || origin.password) {
+    throw new Error("BINANCE_DATA_API_ALLOWED_ORIGIN_INVALID");
+  }
+  return origin.origin;
+}
+
+function applyCors(
+  request: IncomingMessage,
+  response: ServerResponse,
+  allowedOrigin: string | undefined
+): boolean {
+  const origin = request.headers.origin;
+  if (!allowedOrigin || origin !== allowedOrigin) return false;
+  response.setHeader("access-control-allow-origin", allowedOrigin);
+  response.setHeader("vary", "Origin");
+  return true;
 }
 
 function json(
@@ -56,6 +78,7 @@ function authorized(request: IncomingMessage, token: string | undefined): boolea
 
 export function createBinanceDataHttpServer(options: BinanceDataHttpServerOptions) {
   const host = options.host ?? "127.0.0.1";
+  const allowedOrigin = validAllowedOrigin(options.allowedOrigin);
   if (!loopback(host) && !options.bearerToken) {
     throw new Error("BINANCE_DATA_API_NON_LOOPBACK_REQUIRES_AUTH");
   }
@@ -64,8 +87,25 @@ export function createBinanceDataHttpServer(options: BinanceDataHttpServerOption
     (request, response) => {
       const requestId = randomUUID();
       const head = request.method === "HEAD";
+      const corsAllowed = applyCors(request, response, allowedOrigin);
+      if (request.method === "OPTIONS") {
+        if (
+          !corsAllowed ||
+          request.headers["access-control-request-method"] !== "GET"
+        ) {
+          error(response, 403, requestId, "CORS_ORIGIN_DENIED", "Origin is not allowed", false, false);
+          return;
+        }
+        response.statusCode = 204;
+        response.setHeader("access-control-allow-methods", "GET, HEAD");
+        response.setHeader("access-control-allow-headers", "Authorization");
+        response.setHeader("cache-control", "no-store");
+        response.setHeader("x-content-type-options", "nosniff");
+        response.end();
+        return;
+      }
       if (request.method !== "GET" && !head) {
-        response.setHeader("allow", "GET, HEAD");
+        response.setHeader("allow", "GET, HEAD, OPTIONS");
         error(response, 405, requestId, "METHOD_NOT_ALLOWED", "Only GET and HEAD are allowed", false, false);
         return;
       }

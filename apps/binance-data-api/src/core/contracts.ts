@@ -8,6 +8,7 @@ import type {
 } from "@bpa/persistence";
 
 export const BINANCE_SOURCE = "binance_follower_copy_management" as const;
+export const BINANCE_MARKET_SOURCE = "binance_futures_public_market" as const;
 
 export type StaleStatus = "fresh" | "stale" | "unknown";
 export type PartialStatus = "complete" | "partial" | "unknown";
@@ -18,7 +19,7 @@ export interface ResponseMeta {
   last_success_at: string | null;
   stale_status: StaleStatus;
   partial_status: PartialStatus;
-  source: typeof BINANCE_SOURCE;
+  source: typeof BINANCE_SOURCE | typeof BINANCE_MARKET_SOURCE;
 }
 
 export interface ResponsePage {

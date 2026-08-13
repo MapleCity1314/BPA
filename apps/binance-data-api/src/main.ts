@@ -20,6 +20,9 @@ const server = createBinanceDataHttpServer({
   },
   host: process.env.BINANCE_DATA_HOST?.trim() || "127.0.0.1",
   port: Number(process.env.BINANCE_DATA_PORT?.trim() || "43124"),
+  ...(process.env.BINANCE_DATA_ALLOWED_ORIGIN?.trim()
+    ? { allowedOrigin: process.env.BINANCE_DATA_ALLOWED_ORIGIN.trim() }
+    : {}),
   ...(process.env.BINANCE_DATA_TOKEN?.trim() ? { bearerToken: process.env.BINANCE_DATA_TOKEN.trim() } : {})
 });
 

@@ -16,8 +16,9 @@ BPA_HOME="$HOME/Library/Application Support/BPA" pnpm binance-data-api
 - `BINANCE_DATA_HOST`：默认 `127.0.0.1`。
 - `BINANCE_DATA_PORT`：默认 `43124`。
 - `BINANCE_DATA_TOKEN`：非 loopback 监听时必填，使用 Bearer token；推荐仍由受控网关终止鉴权。
+- `BINANCE_DATA_ALLOWED_ORIGIN`：可选的单一 exact Origin。默认不发送 CORS；攀升本地开发可显式设为 `http://127.0.0.1:4173`。正式 Native Origin 待宿主确认。
 
-服务不发送 wildcard CORS。所有路由只允许 GET/HEAD，响应使用 `Cache-Control: no-store` 和 `X-Content-Type-Options: nosniff`。
+服务禁止 wildcard CORS。仅当请求 Origin 精确匹配配置值时返回 `Access-Control-Allow-Origin` 与 `Vary: Origin`，并接受无状态 OPTIONS 预检；业务路由仍只允许 GET/HEAD。响应使用 `Cache-Control: no-store` 和 `X-Content-Type-Options: nosniff`。
 
 ## 状态语义
 
