@@ -10,10 +10,39 @@ export * from "./project-detail.js";
 const ACCOUNT_LABELS = [
   "全部保证金余额",
   "保证金余额",
+  "全部钱包余额",
   "钱包余额",
   "已实现总盈亏",
   "净利润"
 ] as const;
+
+function accountFields(root: ParentNode): Record<string, string> {
+  const elements = Array.from(root.querySelectorAll("span,div,p,dt,dd,td,th"))
+    .filter(visible)
+    .slice(0, 5_000);
+  const result: Record<string, string> = {};
+  for (const label of ACCOUNT_LABELS) {
+    const element = elements.find((candidate) => {
+      const text = normalizeText(candidate.textContent);
+      return text === label || new RegExp(`^${label} \\([A-Z0-9]{2,12}\\)$`, "u").test(text);
+    });
+    if (!element) continue;
+    const labelText = normalizeText(element.textContent);
+    const asset = labelText.match(/\(([A-Z0-9]{2,12})\)$/u)?.[1];
+    const candidates = [
+      element.nextElementSibling,
+      element.parentElement?.nextElementSibling,
+      element.parentElement
+    ];
+    const value = candidates
+      .map((candidate) => normalizeText(candidate?.textContent))
+      .find((candidate) => candidate.length > 0 && candidate !== labelText && candidate.length <= 500);
+    if (!value) continue;
+    const canonicalLabel = label === "全部钱包余额" ? "钱包余额" : label;
+    result[canonicalLabel] = asset && !value.endsWith(asset) ? `${value} ${asset}` : value;
+  }
+  return result;
+}
 
 const PROJECT_LABELS = [
   "跟单时间",
@@ -351,7 +380,7 @@ export function readBinanceManagementSnapshot(
     status: projects.length === 0 ? "empty_confirmed" : "complete",
     observedAt: observedAt.toISOString(),
     pageUrl: url.href,
-    accountSummary: labeledFields(document, ACCOUNT_LABELS),
+    accountSummary: accountFields(document),
     activeTab,
     projects,
     warnings: ["DETAIL_TABS_NOT_COLLECTED_IN_V0_1"],

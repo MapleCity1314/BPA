@@ -67,8 +67,10 @@ describe("Binance copy-trading adapter", () => {
 
   it("reads the current total margin balance label without losing decimal text", () => {
     const document = page(`
-      <div><span>全部保证金余额</span><span>1,234.56789000 USDT</span></div>
-      <div><span>钱包余额</span><span>1,200.00000000 USDT</span></div>
+      <div><span>全部保证金余额 (USDT)</span><span>1,234.56789000</span></div>
+      <div><span>全部钱包余额 (USDT)</span><span>1,200.00000000</span></div>
+      <div><span>已实现总盈亏 (USDT)</span><span>+34.56789000</span></div>
+      <div><span>净利润 (USDT)</span><span>+12.34567890</span></div>
       <div data-project-id="project_1001">
         <span>项目 ID：project_1001</span><span>跟单时间</span><span>2026-08-01</span>
         <button>展开详情</button>
@@ -77,7 +79,9 @@ describe("Binance copy-trading adapter", () => {
     expect(readBinanceManagementSnapshot(document)).toMatchObject({
       accountSummary: {
         全部保证金余额: "1,234.56789000 USDT",
-        钱包余额: "1,200.00000000 USDT"
+        钱包余额: "1,200.00000000 USDT",
+        已实现总盈亏: "+34.56789000 USDT",
+        净利润: "+12.34567890 USDT"
       }
     });
   });
