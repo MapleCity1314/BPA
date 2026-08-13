@@ -528,6 +528,29 @@ function shopSwitcherCards(dialog: HTMLElement): HTMLElement[] {
   return cards;
 }
 
+function visibleWithinSwitcher(
+  card: HTMLElement,
+  dialog: HTMLElement
+): boolean {
+  if (!visibleElement(card)) return false;
+  const cardRect = card.getBoundingClientRect();
+  const dialogRect = dialog.getBoundingClientRect();
+  const cardLeft = Number.isFinite(cardRect.left) ? cardRect.left : 0;
+  const cardRight = Number.isFinite(cardRect.right)
+    ? cardRect.right
+    : cardLeft + cardRect.width;
+  const dialogLeft = Number.isFinite(dialogRect.left) ? dialogRect.left : 0;
+  const dialogRight = Number.isFinite(dialogRect.right)
+    ? dialogRect.right
+    : dialogLeft + dialogRect.width;
+  return (
+    cardRect.bottom >= dialogRect.top &&
+    cardRect.top <= dialogRect.bottom &&
+    cardRight >= dialogLeft &&
+    cardLeft <= dialogRight
+  );
+}
+
 export function discoverDoudianAllianceShops(
   doc: Document
 ): readonly AllianceShop[] {
@@ -673,6 +696,7 @@ export function selectDoudianAllianceShop(
   }
   const dialog = visibleShopDialog(doc);
   const matches = shopSwitcherCards(dialog).filter((card) => {
+    if (!visibleWithinSwitcher(card, dialog)) return false;
     const name = normalizeText(
       card.querySelector<HTMLElement>("[class*='introName']")?.textContent
     );

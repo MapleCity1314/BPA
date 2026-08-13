@@ -268,6 +268,32 @@ describe("Doudian alliance retired-products runtime", () => {
     expect(clicks[1]).toHaveBeenCalledOnce();
   });
 
+  it("does not activate a virtualized card outside the visible switcher viewport", () => {
+    const doc = documentOf(`
+      <div role="dialog">切换组织/店铺
+        <div class="roleItem"><span class="introName">甲食品旗舰店</span>正常营业</div>
+        <div class="roleItem target"><span class="introName">乙食品专营店</span>正常营业</div>
+      </div>
+    `);
+    const dialog = doc.querySelector<HTMLElement>("[role=dialog]")!;
+    const target = doc.querySelector<HTMLElement>(".target")!;
+    dialog.getBoundingClientRect = () =>
+      ({ left: 0, right: 400, top: 0, bottom: 300, width: 400, height: 300 }) as DOMRect;
+    target.getBoundingClientRect = () =>
+      ({ left: 20, right: 380, top: 500, bottom: 540, width: 360, height: 40 }) as DOMRect;
+    const click = vi.fn();
+    target.addEventListener("click", click);
+
+    expect(() =>
+      selectDoudianAllianceShop(doc, {
+        name: "乙食品专营店",
+        status: "active",
+        statusText: "正常营业"
+      })
+    ).toThrow("SHOP_TARGET_AMBIGUOUS");
+    expect(click).not.toHaveBeenCalled();
+  });
+
   it("uses exact semantic entries for the Doudian-to-Buyin path", () => {
     const doc = documentOf(`
       <div id="fxg-pc-header">
