@@ -918,6 +918,7 @@ describe("alliance retired-products browser navigation", () => {
     };
     const currentShop = { id: "10001", name: sourceShop.name };
     const switchRequests: string[] = [];
+    const update = vi.spyOn(browser.tabs, "update");
     const originalSendMessage = browser.tabs.sendMessage;
     browser.tabs.sendMessage = (async (
       tabId: number,
@@ -979,6 +980,9 @@ describe("alliance retired-products browser navigation", () => {
       }
     });
     expect(switchRequests).toEqual([targetShop.name]);
+    expect(update).toHaveBeenCalledWith(1, {
+      url: "https://fxg.jinritemai.com/ffa/g/list"
+    });
   });
 
   it("maps a rejected source-tab read to BROWSER_DISCONNECTED", async () => {

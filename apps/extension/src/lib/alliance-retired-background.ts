@@ -457,20 +457,22 @@ export function createAllianceRetiredBrowserDriver(input: {
     if (!sourceUrl) {
       throw new AllianceRetiredDriverError("ALLIANCE_SOURCE_TAB_MISSING");
     }
-    const source = new URL(sourceUrl);
     const current = await browser.tabs
       .get(input.sourceTabId)
       .catch(() => undefined);
     if (!current) {
       throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
     }
-    if (!tabMatches(current, source.origin, source.pathname)) {
-      await browser.tabs
-        .update(input.sourceTabId, { url: sourceUrl })
-        .catch(() => {
-          throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
-        });
-    }
+    // A SPA shop switch can close the content-script port before Chrome has
+    // committed the new URL. tabs.get() may still report the frozen source
+    // path even though that document can no longer answer messages. Reloading
+    // the exact frozen URL is therefore the readiness fence whenever the
+    // switch response did not already prove the target identity.
+    await browser.tabs
+      .update(input.sourceTabId, { url: sourceUrl })
+      .catch(() => {
+        throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+      });
     await waitForComplete(input.sourceTabId);
     const retryUntil = Math.min(
       Date.parse(input.deadline),
