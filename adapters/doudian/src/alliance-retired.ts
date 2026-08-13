@@ -544,10 +544,10 @@ function visibleWithinSwitcher(
     ? dialogRect.right
     : dialogLeft + dialogRect.width;
   return (
-    cardRect.bottom >= dialogRect.top &&
-    cardRect.top <= dialogRect.bottom &&
-    cardRight >= dialogLeft &&
-    cardLeft <= dialogRight
+    cardRect.bottom > dialogRect.top &&
+    cardRect.top < dialogRect.bottom &&
+    cardRight > dialogLeft &&
+    cardLeft < dialogRight
   );
 }
 

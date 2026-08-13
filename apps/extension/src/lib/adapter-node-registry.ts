@@ -389,8 +389,23 @@ const discoverAllianceShops: AdapterNodeHandler = async (input, context) => {
       throw new AllianceRetiredDriverError("SHOP_LIMIT_EXCEEDED");
     }
     const active = shops.filter((shop) => shop.status === "active");
-    if (active.some((shop) => !NUMERIC_SHOP_ID.test(shop.id ?? ""))) {
-      throw new AllianceRetiredDriverError("SHOP_IDENTITY_UNCERTAIN");
+    const invalidIdentityIndex = shops.findIndex(
+      (shop) =>
+        shop.status === "active" &&
+        !NUMERIC_SHOP_ID.test(shop.id ?? "")
+    );
+    if (invalidIdentityIndex >= 0) {
+      throw new AllianceRetiredDriverError(
+        "SHOP_IDENTITY_UNCERTAIN",
+        [],
+        {
+          phase: "resolve-shop",
+          shopOrdinal: invalidIdentityIndex + 1,
+          switchResponse: "not-started",
+          navigationIdentity: "unavailable",
+          restoreResult: "not-required"
+        }
+      );
     }
     const sourceMatches = active.filter(
       (shop) =>

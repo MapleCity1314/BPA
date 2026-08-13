@@ -43,8 +43,26 @@ vi.mock("./alliance-retired-background.js", () => ({
   AllianceRetiredDriverError: class AllianceRetiredDriverError extends Error {
     readonly riskSignals = [];
 
-    constructor(readonly code: string) {
-      super(`safe:${code}`);
+    constructor(
+      readonly code: string,
+      _riskSignals: readonly unknown[] = [],
+      readonly diagnostic?: {
+        readonly phase: string;
+        readonly shopOrdinal?: number;
+        readonly switchResponse: string;
+        readonly navigationIdentity: string;
+        readonly restoreResult: string;
+      }
+    ) {
+      super(
+        diagnostic
+          ? `safe:${code} [phase=${diagnostic.phase};` +
+              `${diagnostic.shopOrdinal === undefined ? "" : `shop_ordinal=${diagnostic.shopOrdinal};`}` +
+              `switch_response=${diagnostic.switchResponse};` +
+              `navigation_identity=${diagnostic.navigationIdentity};` +
+              `restore_result=${diagnostic.restoreResult}]`
+          : `safe:${code}`
+      );
     }
   },
   createAllianceRetiredBrowserDriver: () => driver
@@ -605,6 +623,43 @@ describe("Adapter Node registry", () => {
       code: "ALLIANCE_STAGE_FAILED",
       message: "safe:ALLIANCE_STAGE_FAILED"
     });
+  });
+
+  it("reports the ordinal of an unresolved discovery identity without exposing shop data", async () => {
+    driver.discoverShopContext.mockResolvedValueOnce({
+      currentShop: { id: "10001", name: "甲食品旗舰店" },
+      shops: [
+        {
+          id: "10001",
+          name: "甲食品旗舰店",
+          status: "active",
+          statusText: "正常营业"
+        },
+        {
+          name: "乙食品专营店",
+          status: "active",
+          statusText: "正常营业"
+        }
+      ]
+    });
+
+    const result = await executeRegisteredAdapterNode(
+      "doudian.alliance.shops.discover",
+      { maxShops: 100 },
+      context
+    );
+
+    expect(result?.error).toEqual({
+      code: "SHOP_IDENTITY_UNCERTAIN",
+      message:
+        "safe:SHOP_IDENTITY_UNCERTAIN " +
+        "[phase=resolve-shop;shop_ordinal=2;switch_response=not-started;" +
+        "navigation_identity=unavailable;restore_result=not-required]",
+      retryable: false
+    });
+    expect(result?.error?.message).not.toContain("甲食品旗舰店");
+    expect(result?.error?.message).not.toContain("乙食品专营店");
+    expect(result?.error?.message).not.toContain("10001");
   });
 
   it("reports source-shop restoration failure ahead of an earlier scan error", async () => {
