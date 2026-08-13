@@ -12,7 +12,7 @@ import type {
 import type { ArtifactRef, JsonValue } from "@bpa/workflow-ir";
 
 const NODE_ID = "binance.copy-trading.capture.persist";
-const NODE_VERSION = "1.0.0";
+const NODE_VERSION = "1.1.0";
 const PERMISSION = "binance.copy-trading.capture.write";
 const TIME_FIELDS = ["时间", "成交时间", "资金费时间", "Time"] as const;
 const SYMBOL_FIELDS = ["合约", "交易对", "Symbol"] as const;
@@ -98,6 +98,18 @@ function firstString(
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return undefined;
+}
+
+function normalizedSymbol(fields: JsonObject): string | undefined {
+  const raw = firstString(fields, SYMBOL_FIELDS);
+  if (!raw) return undefined;
+  const candidates = raw.toUpperCase().replace(/[^A-Z0-9]/gu, " ")
+    .split(/\s+/u)
+    .filter(Boolean);
+  return candidates.find((candidate) =>
+    /^[A-Z0-9]{5,30}$/u.test(candidate) &&
+    /(USDT|USDC|BUSD)$/u.test(candidate)
+  );
 }
 
 function eventTimeUtc(
@@ -288,27 +300,6 @@ export class BinanceDataRuntimeProvider implements RuntimeProvider {
           capturedAt: captureAt,
           summary: object(project.summary ?? null, "project.summary")
         });
-        const currentPositions = array(
-          project.currentPositions,
-          "project.currentPositions"
-        );
-        currentPositions.forEach((positionValue, index) => {
-          const position = object(positionValue, "project position");
-          const fields = object(position.values ?? null, "project position values");
-          positions.push({
-            snapshotId: stableId("binance-position", {
-              collectionRunId,
-              projectId,
-              ordinal: index + 1
-            }),
-            projectId,
-            symbol: firstString(fields, SYMBOL_FIELDS) ?? "unknown",
-            positionSide: firstString(fields, SIDE_FIELDS) ?? "unknown",
-            ordinal: index + 1,
-            capturedAt: captureAt,
-            fields
-          });
-        });
       }
       const rawRecords: Parameters<
         BinanceCopyTradingStore["persistBinanceCopyTradingCapture"]
@@ -330,6 +321,25 @@ export class BinanceDataRuntimeProvider implements RuntimeProvider {
           const pageCount = integer(tab.pageCount, "detail pageCount");
           if (pageCount < 1) throw new Error("Detail pageCount must be positive");
           const records = array(tab.records, "detail records");
+          if (sourceTab === "仓位") {
+            records.forEach((recordValue, index) => {
+              const record = object(recordValue, "position record");
+              const fields = object(record.fields ?? null, "position fields");
+              positions.push({
+                snapshotId: stableId("binance-position", {
+                  collectionRunId,
+                  projectId: item.itemKey,
+                  ordinal: index + 1
+                }),
+                projectId: item.itemKey,
+                symbol: normalizedSymbol(fields) ?? "unknown",
+                positionSide: firstString(fields, SIDE_FIELDS) ?? "unknown",
+                ordinal: index + 1,
+                capturedAt: detailCaptureAt,
+                fields
+              });
+            });
+          }
           const byPage = new Map<number, JsonObject[]>();
           for (const recordValue of records) {
             const record = object(recordValue, "detail record");

@@ -211,6 +211,42 @@ describe("Binance copy-trading SQLite v26", () => {
     expect(store.health().schemaVersion).toBe(26);
   });
 
+  it("keeps position rows as snapshots without counting valuation changes as new history", () => {
+    const store = new SqlitePersistence({ path: ":memory:" });
+    const runId = "run:binance:position";
+    const execution = context(runId);
+    createRun(store, runId, execution);
+    const input = capture(runId, execution);
+    const positionRecord = {
+      ...input.rawRecords[0]!,
+      rawRecordId: `raw:${runId}:position`,
+      currentRecordKey: "current:position:dynamic",
+      sourceTab: "仓位",
+      fields: { Symbol: "BTCUSDT 永续", 标记价格: "120001" },
+      fieldsDigest: `sha256:${"b".repeat(64)}`
+    };
+    const result = store.persistBinanceCopyTradingCapture({
+      ...input,
+      recordCount: input.recordCount + 1,
+      rawRecords: [...input.rawRecords, positionRecord],
+      positions: [
+        {
+          snapshotId: `position:${runId}:1`,
+          projectId: "project_1001",
+          symbol: "BTCUSDT",
+          positionSide: "做多",
+          ordinal: 1,
+          capturedAt: input.captureAt,
+          fields: positionRecord.fields
+        }
+      ]
+    });
+
+    expect(result).toMatchObject({ newCurrentRecordCount: 2 });
+    expect(store.listBinanceRawRecords(input.collectionRunId)).toHaveLength(3);
+    expect(store.listBinanceCurrentRecords("project_1001")).toHaveLength(2);
+  });
+
   it("rolls back the whole capture when any raw identity conflicts", () => {
     const store = new SqlitePersistence({ path: ":memory:" });
     const runId = "run:binance:rollback";

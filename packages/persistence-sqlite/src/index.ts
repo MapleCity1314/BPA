@@ -3417,6 +3417,7 @@ export class SqlitePersistence implements Persistence {
           json(record.fields),
           record.fieldsDigest
         );
+        if (record.sourceTab === "仓位") continue;
         if (!currentExistsStatement.get(record.currentRecordKey)) {
           newCurrentRecordCount += 1;
         }
@@ -3493,7 +3494,7 @@ export class SqlitePersistence implements Persistence {
       FROM latest WHERE rank=1`
     ).get() as SqlRow;
     const records = this.#db.prepare(
-      "SELECT COUNT(*) AS count FROM binance_copy_record_current"
+      "SELECT COUNT(*) AS count FROM binance_copy_record_current WHERE source_tab<>'仓位'"
     ).get() as SqlRow;
     return {
       projectCount: Number(project.project_count ?? 0),
@@ -3580,6 +3581,7 @@ export class SqlitePersistence implements Persistence {
        FROM binance_project_aliases a
        JOIN binance_copy_project_snapshots p ON p.project_id=a.project_id
        WHERE a.project_alias=? AND a.retired_at IS NULL
+         AND r.source_tab<>'仓位'
        ORDER BY p.captured_at DESC,p.collection_run_id DESC LIMIT 1`
     ).get(projectAlias) as SqlRow | undefined;
     return row ? readBinanceProjectRow(row) : undefined;
@@ -3820,11 +3822,11 @@ export class SqlitePersistence implements Persistence {
   listBinanceCurrentRecords(projectId?: string): BinanceCurrentRecord[] {
     const rows = (projectId
       ? this.#db.prepare(
-          `SELECT * FROM binance_copy_record_current WHERE project_id=?
+          `SELECT * FROM binance_copy_record_current WHERE project_id=? AND source_tab<>'仓位'
            ORDER BY source_tab,event_time_utc,current_record_key`
         ).all(projectId)
       : this.#db.prepare(
-          `SELECT * FROM binance_copy_record_current
+          `SELECT * FROM binance_copy_record_current WHERE source_tab<>'仓位'
            ORDER BY project_id,source_tab,event_time_utc,current_record_key`
         ).all()) as SqlRow[];
     return rows.map((row) => ({

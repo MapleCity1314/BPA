@@ -327,10 +327,10 @@ describe("published default asset sources", () => {
       binanceFollowerWorkflow,
       catalog
     );
-    expect(binanceFollowerPlan.workflow.version).toBe("3.9.0");
+    expect(binanceFollowerPlan.workflow.version).toBe("3.10.0");
     expect(binanceFollowerPlan.steps.persist_capture).toMatchObject({
       kind: "call",
-      node: { id: "binance.copy-trading.capture.persist", version: "1.0.0" }
+      node: { id: "binance.copy-trading.capture.persist", version: "1.1.0" }
     });
     expect(
       Object.values(binanceFollowerPlan.steps).some(

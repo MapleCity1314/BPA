@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: binance.copy-trading.management.snapshot
-  version: 3.9.0
+  version: 3.10.0
   title: Binance 合约跟单全量只读采集
   description: 绑定已登录管理页，采集进行中和已结束项目，逐项目遍历八个详情页签及全部分页，并在完整覆盖后单事务追加落库。
 spec:
@@ -107,7 +107,7 @@ spec:
                       error: { code: BINANCE_PROJECT_COLLECTION_TIMEOUT, message: 项目详情采集超时且完整性未知。 }
       - key: persist_capture
         kind: call
-        use: binance.copy-trading.capture.persist@1.0.0
+        use: binance.copy-trading.capture.persist@1.1.0
         with:
           management: ${steps.read_management.output}
           projects: ${steps.collect_projects.output}

@@ -60,7 +60,7 @@ function invocation(projects: unknown): RuntimeInvocation {
     node: {
       kind: "node",
       id: "binance.copy-trading.capture.persist",
-      version: "1.0.0",
+      version: "1.1.0",
       digest: `sha256:${"a".repeat(64)}`
     },
     providerId: "binance-data",
@@ -122,6 +122,24 @@ function completeProjects() {
             pageUrl: "https://www.binance.com/zh-CN/copy-trading/copy-management",
             tabs: [
               {
+                sourceTab: "仓位",
+                pageCount: 1,
+                records: [
+                  {
+                    recordKey: "position-row-1",
+                    projectId: "project_1001",
+                    sourceTab: "仓位",
+                    page: 1,
+                    rowOrdinal: 1,
+                    fields: {
+                      Symbol: "BTCUSDT 永续",
+                      方向: "做多",
+                      仓位大小: "0.01"
+                    }
+                  }
+                ]
+              },
+              {
                 sourceTab: "交易历史",
                 pageCount: 1,
                 records: [
@@ -164,15 +182,18 @@ describe("BinanceDataRuntimeProvider", () => {
 
     expect(result.status).toBe("succeeded");
     expect(store.calls).toHaveLength(1);
-    expect(store.calls[0]!.rawRecords).toHaveLength(2);
-    expect(store.calls[0]!.rawRecords[0]!.currentRecordKey).not.toBe(
-      store.calls[0]!.rawRecords[1]!.currentRecordKey
+    expect(store.calls[0]!.rawRecords).toHaveLength(3);
+    expect(store.calls[0]!.positions).toMatchObject([
+      { projectId: "project_1001", symbol: "BTCUSDT", positionSide: "做多" }
+    ]);
+    expect(store.calls[0]!.rawRecords[1]!.currentRecordKey).not.toBe(
+      store.calls[0]!.rawRecords[2]!.currentRecordKey
     );
-    expect(store.calls[0]!.rawRecords.map((record) => record.eventTimeUtc)).toEqual([
+    expect(store.calls[0]!.rawRecords.slice(1).map((record) => record.eventTimeUtc)).toEqual([
       "2026-08-12T04:00:00Z",
       "2026-08-12T04:00:00Z"
     ]);
-    expect(store.calls[0]!.pageCount).toBe(2);
+    expect(store.calls[0]!.pageCount).toBe(3);
   });
 
   it("fails closed without a store call when foreach coverage is incomplete", async () => {

@@ -2,9 +2,9 @@ apiVersion: bpa/v1alpha1
 kind: Node
 metadata:
   id: binance.copy-trading.capture.persist
-  version: 1.0.0
+  version: 1.1.0
   title: 持久化 Binance 合约跟单完整采集
-  description: 在全部项目详情完整返回后，以单事务追加保存原始采集、项目和仓位快照，并幂等更新规范化当前视图；任何校验失败均不提交。
+  description: 在全部项目详情完整返回后，以单事务追加保存原始采集、项目和仓位快照；历史页签幂等更新规范化当前视图，当前仓位动态估值不计为新历史记录。
 runtime: engine_builtin
 inputSchema:
   type: object
