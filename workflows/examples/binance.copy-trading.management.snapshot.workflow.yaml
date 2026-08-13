@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: binance.copy-trading.management.snapshot
-  version: 3.7.0
+  version: 3.8.0
   title: Binance 合约跟单全量只读采集
   description: 绑定已登录管理页，采集进行中和已结束项目，逐项目遍历八个详情页签及全部分页，并在完整覆盖后单事务追加落库。
 spec:
@@ -15,11 +15,10 @@ spec:
   outputSchema:
     type: object
     additionalProperties: false
-    required: [status, collection, market]
+    required: [status, collection]
     properties:
       status: { enum: [success, authenticated_but_no_data, page_not_updated_yet] }
       collection: { type: object }
-      market: { type: object }
   limits: { maxDepth: 3, maxStepExecutions: 1100 }
   resourceSlots:
     binance_page:
@@ -136,43 +135,9 @@ spec:
                 kind: terminal
                 status: uncertain
                 error: { code: BINANCE_CAPTURE_PERSIST_TIMEOUT, message: 持久化超时且提交状态不确定，禁止自动重试写入。 }
-      - key: collect_market_reference
-        kind: call
-        use: binance.futures.market-reference.collect@1.0.0
-        with:
-          projects: ${steps.collect_projects.output}
-          pageTimeZone: Asia/Shanghai
-        timeout: 30m
-        retry:
-          maxAttempts: 2
-          backoff: 30s
-          retryableErrors: [BINANCE_MARKET_NETWORK_FAILURE, BINANCE_MARKET_HTTP_FAILURE, BINANCE_MARKET_RATE_LIMITED]
-        handlers:
-          failure:
-            kind: sequence
-            steps:
-              - key: market_failed
-                kind: terminal
-                status: failed
-                error: { code: BINANCE_MARKET_COLLECTION_FAILED, message: 官方市场参考数据未形成完整窗口；跟单原始数据已保存，但本轮整体不得宣称完整。 }
-          rejected:
-            kind: sequence
-            steps:
-              - key: market_rejected
-                kind: terminal
-                status: rejected
-                error: { code: BINANCE_MARKET_COLLECTION_REJECTED, message: 市场数据只读权限或固定 Origin 不匹配。 }
-          timeout:
-            kind: sequence
-            steps:
-              - key: market_timeout
-                kind: terminal
-                status: failed
-                error: { code: BINANCE_MARKET_COLLECTION_TIMEOUT, message: 官方市场数据窗口采集超时，禁止发布不完整参考数据。 }
       - key: complete
         kind: terminal
         status: succeeded
         output:
           status: ${steps.persist_capture.output.status}
           collection: ${steps.persist_capture.output}
-          market: ${steps.collect_market_reference.output}

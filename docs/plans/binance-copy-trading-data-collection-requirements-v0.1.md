@@ -272,7 +272,7 @@ BPA 引擎终态仍使用 `succeeded`、`rejected`、`failed`、`uncertain` 等�
 
 已实现并通过本地行为测试：
 
-- Workflow v3：管理页真实项目发现、逐项目八页签全分页、完整覆盖后原子持久化、公开市场参考数据补齐。
+- Follower Workflow v3.8：管理页真实项目发现、逐项目八页签全分页、完整覆盖后原子持久化。公开市场参考数据保持独立 Node 和独立失败状态，不再使已成功的 follower 采集 Run 被行情网络故障标记为失败。
 - SQLite v26 专用表：采集 Run、原始 Source Capture、项目/仓位快照、原始详情行、规范化当前视图、交易对元数据、1 分钟 K 线、资金费率、标记价、指数价和未平仓量。
 - 原始详情行 append-only；同值多次撮合按本轮稳定出现次序保留，不按整行去重。
 - 同一运行写入可幂等重放；不完整 foreach、分页失败或结构校验失败不会提交 Copy Trading Capture。

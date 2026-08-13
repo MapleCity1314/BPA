@@ -319,5 +319,25 @@ describe("published default asset sources", () => {
       node: { id: "doudian.shop.context.read", version: "1.3.0" },
       resourceMappings: { browser: { slotName: "doudian_page" } }
     });
+
+    const binanceFollowerWorkflow = loadYaml<WorkflowDefinitionV1Alpha3>(
+      "workflows/examples/binance.copy-trading.management.snapshot.workflow.yaml"
+    );
+    const binanceFollowerPlan = compileCanonicalWorkflow(
+      binanceFollowerWorkflow,
+      catalog
+    );
+    expect(binanceFollowerPlan.workflow.version).toBe("3.8.0");
+    expect(binanceFollowerPlan.steps.persist_capture).toMatchObject({
+      kind: "call",
+      node: { id: "binance.copy-trading.capture.persist", version: "1.0.0" }
+    });
+    expect(
+      Object.values(binanceFollowerPlan.steps).some(
+        (step) =>
+          step.kind === "call" &&
+          step.node.id === "binance.futures.market-reference.collect"
+      )
+    ).toBe(false);
   });
 });
