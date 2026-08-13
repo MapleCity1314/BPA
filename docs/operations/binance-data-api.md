@@ -22,7 +22,7 @@ BPA_HOME="$HOME/Library/Application Support/BPA" pnpm binance-data-api
 ## 状态语义
 
 - `GET /healthz`：仅证明进程存活。
-- `GET /readyz`：证明配置、SQLite 可读和 schema v27 可用。始终以 HTTP 200 返回 `ready` 布尔值，避免因业务数据状态触发守护进程重启环。
+- `GET /readyz`：证明配置、SQLite 可读和 schema v26 可用。始终以 HTTP 200 返回 `ready` 布尔值，避免因业务数据状态触发守护进程重启环。
 - `GET /api/v1/binance/readiness`：业务数据是否新鲜、完整、可供下游读取。无数据、过期、部分采集和登录失效分别表达。
 
 ## v1 路由

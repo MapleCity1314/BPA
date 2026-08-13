@@ -33,43 +33,43 @@ export interface ContentActionResult {
 }
 
 export interface ContentActionHandlers {
-  readonly "binance.copy-trading.management.snapshot.read": (
+  readonly "binance.copy-trading.management.snapshot.read"?: (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
   ) => Promise<ContentActionResult>;
-  readonly "binance.copy-trading.project.detail.collect": (
+  readonly "binance.copy-trading.project.detail.collect"?: (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
   ) => Promise<ContentActionResult>;
-  readonly "ecommerce.marketplace.search-results.read": (
+  readonly "ecommerce.marketplace.search-results.read"?: (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
   ) => Promise<ContentActionResult>;
-  readonly "browser.design.snapshot.capture": (
+  readonly "browser.design.snapshot.capture"?: (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
   ) => Promise<ContentActionResult>;
-  readonly "doudian.shop.context.read": (
+  readonly "doudian.shop.context.read"?: (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
   ) => Promise<ContentActionResult>;
-  readonly "doudian.product.scope.collect": (
+  readonly "doudian.product.scope.collect"?: (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
   ) => Promise<ContentActionResult>;
-  readonly "doudian.product.scope.restore": (
+  readonly "doudian.product.scope.restore"?: (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
   ) => Promise<ContentActionResult>;
-  readonly "doudian.inventory.product.snapshot.read": (
+  readonly "doudian.inventory.product.snapshot.read"?: (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
   ) => Promise<ContentActionResult>;
-  readonly "doudian.product.editor.open": (
+  readonly "doudian.product.editor.open"?: (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
   ) => Promise<ContentActionResult>;
-  readonly "doudian.editor.priority-items.inspect": (
+  readonly "doudian.editor.priority-items.inspect"?: (
     input: Readonly<Record<string, unknown>>,
     request: ContentActionRequest
   ) => Promise<ContentActionResult>;
@@ -384,10 +384,17 @@ export async function routeContentAction(input: {
   }
   const handler = input.handlers[
     route.capability.nodeId as keyof ContentActionHandlers
-  ] as (
+  ] as ((
     actionInput: Readonly<Record<string, unknown>>,
     actionRequest: ContentActionRequest
-  ) => Promise<ContentActionResult>;
+  ) => Promise<ContentActionResult>) | undefined;
+  if (!handler) {
+    return failure(
+      "ADAPTER_HANDLER_UNAVAILABLE",
+      "当前页面未加载该平台的 Adapter。",
+      request.pageEpoch
+    );
+  }
   try {
     const result = await handler(actionInput, request);
     if (

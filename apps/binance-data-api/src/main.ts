@@ -9,7 +9,7 @@ const bpaHome = resolveDefaultBpaHome(
 );
 const databasePath = process.env.BINANCE_DATA_DATABASE?.trim() || join(bpaHome, "data", "bpa.sqlite");
 const repository = openSqliteBinanceReadRepository(databasePath);
-const schemaReady = repository.schemaVersion !== null && repository.schemaVersion >= 27;
+const schemaReady = repository.schemaVersion !== null && repository.schemaVersion >= 26;
 const server = createBinanceDataHttpServer({
   ...(repository.store && schemaReady ? { queries: new BinanceQueries(repository.store) } : {}),
   serviceReadiness: {

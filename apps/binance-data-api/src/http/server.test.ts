@@ -60,12 +60,12 @@ afterEach(async () => {
 describe("Binance Data API transport", () => {
   it("keeps service ready while business data is not ready", async () => {
     const server = createBinanceDataHttpServer({
-      queries: new BinanceQueries(store({ schemaVersion: 27 }), () => new Date(timestamp)),
+      queries: new BinanceQueries(store({ schemaVersion: 26 }), () => new Date(timestamp)),
       serviceReadiness: {
         ready: true,
         database_readable: true,
         schema_ready: true,
-        schema_version: 27
+        schema_version: 26
       },
       port: 0
     });
@@ -113,12 +113,12 @@ describe("Binance Data API transport", () => {
 
   it("enforces GET/HEAD, security headers and no wildcard CORS", async () => {
     const server = createBinanceDataHttpServer({
-      queries: new BinanceQueries(store({ schemaVersion: 27 })),
+      queries: new BinanceQueries(store({ schemaVersion: 26 })),
       serviceReadiness: {
         ready: true,
         database_readable: true,
         schema_ready: true,
-        schema_version: 27
+        schema_version: 26
       },
       port: 0
     });
@@ -140,12 +140,12 @@ describe("Binance Data API transport", () => {
 
   it("rejects malformed and cross-filter cursors", async () => {
     const server = createBinanceDataHttpServer({
-      queries: new BinanceQueries(store({ schemaVersion: 27 })),
+      queries: new BinanceQueries(store({ schemaVersion: 26 })),
       serviceReadiness: {
         ready: true,
         database_readable: true,
         schema_ready: true,
-        schema_version: 27
+        schema_version: 26
       },
       port: 0
     });

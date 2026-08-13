@@ -14,7 +14,8 @@ export function openSqliteBinanceReadRepository(
   try {
     const persistence = new SqlitePersistence({
       path: databasePath,
-      readonly: true
+      readonly: true,
+      fileMustExist: true
     });
     return {
       store: persistence,

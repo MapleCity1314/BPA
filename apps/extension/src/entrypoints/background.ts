@@ -53,6 +53,7 @@ import {
   enforceCommandResultPayloadBound,
   executeRegisteredAdapterNode
 } from "../lib/adapter-node-registry";
+import { executeBinanceNode } from "../lib/binance-node-registry";
 import {
   completeCoreCancellationAfterStageStop,
   requestAllianceStageCancellation
@@ -493,7 +494,11 @@ export default defineBackground(() => {
           inject: async () => {
             await browser.scripting.executeScript({
               target: { tabId },
-              files: ["/content-scripts/content.js"]
+              files: [
+                url.origin === "https://www.binance.com"
+                  ? "/binance-content.js"
+                  : "/content-scripts/content.js"
+              ]
             });
           }
         })) as {
@@ -1179,28 +1184,37 @@ export default defineBackground(() => {
         // preflight, and navigation waits must not claim a tab opened by a
         // human or another RPA that happens to share the source page.
         managedTabs.start(commandId, executingTabId);
-        const registeredResponse = await executeRegisteredAdapterNode(
-          payload.node.id,
-          nodeInput,
-          {
+        const executionContext = {
             sourceTabId: tab.id,
             deadline: String(payload.deadline),
             isCancelled: () => cancelledCommands.has(commandId),
             reserveManagedTab: () => managedTabs.reserve(commandId),
             releaseManagedTabReservation: () =>
               managedTabs.releaseReservation(commandId),
-            onAllianceStageStarted: (stage) => {
+            onAllianceStageStarted: (stage: {
+              readonly tabId: number;
+              readonly requestId: string;
+            }) => {
               activeAllianceStages.set(commandId, stage);
             },
-            onAllianceStageStopped: (requestId) => {
+            onAllianceStageStopped: (requestId: string) => {
               if (
                 activeAllianceStages.get(commandId)?.requestId === requestId
               ) {
                 activeAllianceStages.delete(commandId);
               }
             }
-          }
-        );
+          };
+        const registeredResponse =
+          await executeBinanceNode(
+            payload.node.id,
+            nodeInput,
+            executionContext
+          ) ?? await executeRegisteredAdapterNode(
+            payload.node.id,
+            nodeInput,
+            executionContext
+          );
         if (registeredResponse) {
           adapterResponse = { ...registeredResponse, pageEpoch };
           await probeTab(tab.id);

@@ -32,7 +32,6 @@ function dropMigration26(database: Database.Database): void {
     DROP TABLE binance_collection_validations;
     DROP TABLE binance_project_aliases;
   `);
-  database.prepare("DELETE FROM schema_migrations WHERE version=27").run();
   const tables = [
     "binance_market_reference_snapshots",
     "binance_market_funding_rates",
@@ -543,7 +542,7 @@ describe("migration v24", () => {
       v23.close();
 
       const upgraded = new SqlitePersistence({ path: databasePath });
-      expect(upgraded.health().schemaVersion).toBe(27);
+      expect(upgraded.health().schemaVersion).toBe(26);
       upgraded.close();
       const inspected = new Database(databasePath, { readonly: true });
       expect(
@@ -601,7 +600,7 @@ describe("migration v24", () => {
       inspected.close();
 
       const recovered = new SqlitePersistence({ path: databasePath });
-      expect(recovered.health().schemaVersion).toBe(27);
+      expect(recovered.health().schemaVersion).toBe(26);
       recovered.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -837,7 +836,7 @@ describe("inventory effect reconciliation persistence v25", () => {
       ).get()).toBeUndefined();
       inspected.close();
       const recovered = new SqlitePersistence({ path:databasePath });
-      expect(recovered.health().schemaVersion).toBe(27);
+      expect(recovered.health().schemaVersion).toBe(26);
       recovered.close();
     } finally {
       rmSync(directory,{ recursive:true,force:true });

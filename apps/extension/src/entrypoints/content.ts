@@ -1,9 +1,4 @@
 import {
-  collectBinanceManagementSnapshot,
-  detectBinanceRiskSignals,
-  readBinanceManagementSnapshot
-} from "@bpa/adapter-binance";
-import {
   collectDoudianProductScope,
   collectDoudianProductInventorySnapshot,
   detectDoudianRiskSignals,
@@ -42,18 +37,8 @@ import {
   type ExperienceScoreStageRequest
 } from "../lib/experience-score-content";
 import { probeObservedPage } from "../lib/page-observer-registry";
-import {
-  binanceDetailErrorPayload,
-  executeBinanceDetailStage,
-  type BinanceDetailStageRequest
-} from "../lib/binance-detail-content";
 
 const runningAllianceStages = new Map<
-  string,
-  { readonly controller: AbortController; readonly completion: Promise<void> }
->();
-
-const runningBinanceStages = new Map<
   string,
   { readonly controller: AbortController; readonly completion: Promise<void> }
 >();
@@ -159,30 +144,6 @@ async function readShopContextWhenReady(
 }
 
 const handlers: ContentActionHandlers = {
-  async "binance.copy-trading.management.snapshot.read"(input, request) {
-    const startedAt = Date.now();
-    const riskSignals = detectBinanceRiskSignals(document, location.href);
-    if (firstBlockingRiskSignal(riskSignals)) {
-      throw new ContentActionRiskError(riskSignals);
-    }
-    const output = await collectBinanceManagementSnapshot(document, location.href, {
-      deadline: request.deadline!,
-      ...(typeof input.projectId === "string"
-        ? { projectId: input.projectId }
-        : {})
-    });
-    return {
-      output: { ...output },
-      riskSignals,
-      timingObservation: {
-        readiness_wait_ms: Date.now() - startedAt,
-        stable_for_ms: 0
-      }
-    };
-  },
-  async "binance.copy-trading.project.detail.collect"() {
-    throw new Error("BACKGROUND_ORCHESTRATION_REQUIRED");
-  },
   async "ecommerce.marketplace.search-results.read"(input) {
     const startedAt = Date.now();
     const riskSignals = detectMarketplaceRiskSignals(document, location.href);
@@ -398,7 +359,6 @@ const handlers: ContentActionHandlers = {
 
 export default defineContentScript({
   matches: [
-    "https://www.binance.com/zh-CN/copy-trading/copy-management*",
     "https://fxg.jinritemai.com/ffa/g/list*",
     "https://fxg.jinritemai.com/ffa/g/create*",
     "https://fxg.jinritemai.com/ffa/morder/order/*",
@@ -489,54 +449,8 @@ export default defineContentScript({
               "https://search.jd.com"
             ].includes(location.origin)
               ? detectMarketplaceRiskSignals(document, location.href)
-              : location.origin === "https://www.binance.com"
-                ? detectBinanceRiskSignals(document, location.href)
               : detectDoudianRiskSignals(document, location.href)
           });
-          return true;
-        }
-        if (request.type === "bpa.binance.detail.cancel-stage") {
-          const requestId = (
-            request as ContentActionRequest & { requestId?: unknown }
-          ).requestId;
-          if (typeof requestId !== "string" || requestId.length < 1) {
-            sendResponse({ ok: false, stopped: false });
-            return false;
-          }
-          const running = runningBinanceStages.get(requestId);
-          running?.controller.abort();
-          void (running?.completion ?? Promise.resolve()).finally(() =>
-            sendResponse({ ok: true, requestId, stopped: true })
-          );
-          return true;
-        }
-        if (request.type === "bpa.binance.detail.stage") {
-          const stageRequest = request as ContentActionRequest & {
-            requestId?: unknown;
-            request: BinanceDetailStageRequest;
-          };
-          if (
-            typeof stageRequest.requestId !== "string" ||
-            stageRequest.requestId.length < 1 ||
-            runningBinanceStages.has(stageRequest.requestId)
-          ) {
-            sendResponse({ ok: false, error: binanceDetailErrorPayload(undefined) });
-            return false;
-          }
-          const requestId = stageRequest.requestId;
-          const controller = new AbortController();
-          const completion = executeBinanceDetailStage(
-            stageRequest.request,
-            document,
-            location.href,
-            () => controller.signal.aborted
-          )
-            .then((result) => sendResponse({ ok: true, requestId, result }))
-            .catch((error) =>
-              sendResponse({ ok: false, requestId, error: binanceDetailErrorPayload(error) })
-            )
-            .finally(() => runningBinanceStages.delete(requestId));
-          runningBinanceStages.set(requestId, { controller, completion });
           return true;
         }
         if (request.type === "bpa.doudian.alliance.cancel-stage") {

@@ -25,11 +25,11 @@ describe("Binance copy-trading adapter", () => {
     };
     const implementationDigest = `sha256:${createHash("sha256")
       .update([
-        "apps/extension/src/entrypoints/content.ts",
+        "apps/extension/src/entrypoints/binance-content.ts",
         "apps/extension/src/lib/capability-manifest.ts",
         "apps/extension/src/lib/content-action-router.ts",
         "apps/extension/src/lib/page-observer-registry.ts",
-        "apps/extension/src/lib/adapter-node-registry.ts",
+        "apps/extension/src/lib/binance-node-registry.ts",
         "apps/extension/src/lib/binance-detail-background.ts",
         "apps/extension/src/lib/binance-detail-content.ts",
         "adapters/binance/src/index.ts",

@@ -485,6 +485,7 @@ function now(): string {
 export interface SqlitePersistenceOptions {
   path: string;
   readonly?: boolean;
+  fileMustExist?: boolean;
   sqliteObservabilityExtensionPath?: string;
   failureInjector?: (point: string) => void;
   clock?: () => Date;
@@ -507,12 +508,15 @@ export class SqlitePersistence implements Persistence {
   readonly #idFactory: () => string;
 
   constructor(options: SqlitePersistenceOptions) {
+    if (options.readonly && options.fileMustExist !== true) {
+      throw new Error("READONLY_SQLITE_REQUIRES_FILE_MUST_EXIST");
+    }
     if (options.path !== ":memory:") {
       mkdirSync(dirname(options.path), { recursive: true, mode: 0o700 });
     }
     this.#db = new Database(options.path, {
       readonly: options.readonly ?? false,
-      fileMustExist: options.readonly ?? false,
+      fileMustExist: options.fileMustExist ?? false,
       timeout: 5_000
     });
     this.#failureInjector = options.failureInjector;

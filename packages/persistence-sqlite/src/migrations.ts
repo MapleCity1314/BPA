@@ -2188,11 +2188,6 @@ export const migrations: Migration[] = [
       CREATE INDEX binance_market_reference_symbol_observed
         ON binance_market_reference_snapshots(symbol, observed_at);
 
-    `
-  },
-  {
-    version: 27,
-    sql: `
       CREATE TABLE binance_project_aliases (
         project_id TEXT PRIMARY KEY,
         project_alias TEXT NOT NULL UNIQUE CHECK (

@@ -12,10 +12,6 @@ import {
   createExperienceScoreBrowserDriver,
   ExperienceScoreDriverError
 } from "./experience-score-background";
-import {
-  BinanceDetailDriverError,
-  createBinanceDetailBrowserDriver
-} from "./binance-detail-background";
 
 export interface AdapterNodeResponse {
   readonly ok: boolean;
@@ -348,64 +344,6 @@ function experienceErrorResponse(
       message: safeError.message,
       retryable: EXPERIENCE_RETRYABLE_ERRORS.has(safeError.code),
       ...(safeError.detail ? { detail: safeError.detail } : {})
-    },
-    ...(riskSignals.length > 0 ? { riskSignals } : {})
-  };
-}
-
-const BINANCE_RETRYABLE_ERRORS = new Set([
-  "BINANCE_CONTENT_RESPONSE_TIMEOUT",
-  "BINANCE_DETAIL_TAB_TIMEOUT",
-  "BINANCE_PAGINATION_TIMEOUT",
-  "BROWSER_DISCONNECTED",
-  "PAGE_LOADING"
-]);
-
-function binanceErrorResponse(error: unknown): AdapterNodeResponse {
-  const safe =
-    error instanceof BinanceDetailDriverError
-      ? error
-      : new BinanceDetailDriverError("BINANCE_DETAIL_STAGE_FAILED");
-  const blocking = [
-    "BINANCE_MANAGEMENT_RESTORE_FAILED",
-    "CAPTCHA_REQUIRED",
-    "PAGE_CONTEXT_CHANGED",
-    "RATE_LIMITED",
-    "RISK_CONTROL",
-    "SESSION_EXPIRED"
-  ].includes(safe.code);
-  const riskSignals = safe.riskSignals.length > 0
-    ? [...safe.riskSignals]
-    : blocking
-      ? [{
-          code: safe.code === "SESSION_EXPIRED"
-            ? "SESSION_EXPIRED" as const
-            : safe.code === "CAPTCHA_REQUIRED"
-              ? "CAPTCHA_REQUIRED" as const
-              : safe.code === "RATE_LIMITED"
-                ? "RATE_LIMITED" as const
-                : safe.code === "PAGE_CONTEXT_CHANGED" || safe.code === "BINANCE_MANAGEMENT_RESTORE_FAILED"
-                  ? "PAGE_CONTEXT_CHANGED" as const
-                  : "RISK_CONTROL" as const,
-          category: safe.code === "SESSION_EXPIRED"
-            ? "session" as const
-            : safe.code === "PAGE_CONTEXT_CHANGED" || safe.code === "BINANCE_MANAGEMENT_RESTORE_FAILED"
-              ? "page_context" as const
-              : safe.code === "RATE_LIMITED"
-                ? "throttle" as const
-                : "challenge" as const,
-          severity: "blocking" as const,
-          source: "adapter" as const,
-          detected_at: new Date().toISOString(),
-          detail: `Binance 详情采集已停止：${safe.code}`
-        }]
-      : [];
-  return {
-    ok: false,
-    error: {
-      code: safe.code,
-      message: safe.message,
-      retryable: BINANCE_RETRYABLE_ERRORS.has(safe.code)
     },
     ...(riskSignals.length > 0 ? { riskSignals } : {})
   };
@@ -811,30 +749,7 @@ const readExperienceShop: AdapterNodeHandler = async (input, context) => {
   }
 };
 
-const collectBinanceProject: AdapterNodeHandler = async (input, context) => {
-  const startedAt = Date.now();
-  const driver = createBinanceDetailBrowserDriver({
-    sourceTabId: context.sourceTabId,
-    deadline: context.deadline,
-    ...(context.isCancelled ? { isCancelled: context.isCancelled } : {})
-  });
-  try {
-    const snapshot = await driver.collectProject(input);
-    return {
-      ok: true,
-      output: { ...snapshot },
-      timingObservation: {
-        readiness_wait_ms: Date.now() - startedAt,
-        stable_for_ms: 300
-      }
-    };
-  } catch (error) {
-    return binanceErrorResponse(error);
-  }
-};
-
 const handlers = new Map<string, AdapterNodeHandler>([
-  ["binance.copy-trading.project.detail.collect", collectBinanceProject],
   ["doudian.inventory.shop.activate", activateInventoryShop],
   ["doudian.alliance.shops.discover", discoverAllianceShops],
   ["doudian.alliance.shop.retired-products.scan", scanAllianceShop],

@@ -978,7 +978,7 @@ describe("migration v9", () => {
           })
       ).toThrow("crash");
       const recovered = new SqlitePersistence({ path });
-      expect(recovered.health().schemaVersion).toBe(27);
+      expect(recovered.health().schemaVersion).toBe(26);
       expect(recovered.getAuthoringSession("missing")).toBeUndefined();
       recovered.close();
     } finally {

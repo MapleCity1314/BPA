@@ -161,7 +161,7 @@ function capture(runId: string, execution: OperationalExecutionContext) {
   };
 }
 
-describe("Binance copy-trading SQLite v27", () => {
+describe("Binance copy-trading SQLite v26", () => {
   it("atomically keeps duplicate rows and idempotently replays one capture", () => {
     const store = new SqlitePersistence({ path: ":memory:" });
     const runId = "run:binance:1";
@@ -190,7 +190,7 @@ describe("Binance copy-trading SQLite v27", () => {
       ],
       hasMore: false
     });
-    expect(store.health().schemaVersion).toBe(27);
+    expect(store.health().schemaVersion).toBe(26);
   });
 
   it("rolls back the whole capture when any raw identity conflicts", () => {
