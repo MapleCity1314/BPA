@@ -1380,6 +1380,55 @@ describe("alliance retired-products browser navigation", () => {
     });
   });
 
+  it("preserves a typed switch-stage selector error instead of flattening it", async () => {
+    installBrowser(
+      [{
+        id: 1,
+        windowId: 10,
+        active: true,
+        status: "complete",
+        url: "https://fxg.jinritemai.com/ffa/g/list"
+      }],
+      () => undefined
+    );
+    const originalSendMessage = browser.tabs.sendMessage;
+    browser.tabs.sendMessage = (async (
+      tabId: number,
+      message: {
+        type: string;
+        requestId?: string;
+        request?: { stage?: string };
+      }
+    ) => {
+      if (message.type === "bpa.risk.preflight") {
+        return { riskSignals: [] };
+      }
+      if (
+        message.type === "bpa.doudian.alliance.stage" &&
+        message.request?.stage === "switch-shop"
+      ) {
+        return {
+          ok: false,
+          requestId: message.requestId,
+          error: {
+            code: "SHOP_SWITCH_TRIGGER_AMBIGUOUS",
+            message: "The switch trigger is ambiguous."
+          }
+        };
+      }
+      return originalSendMessage(tabId, message);
+    }) as typeof browser.tabs.sendMessage;
+    const driver = createAllianceRetiredBrowserDriver({
+      sourceTabId: 1,
+      deadline: new Date(Date.now() + 10_000).toISOString()
+    });
+
+    await expect(driver.switchShop(shop)).rejects.toMatchObject({
+      code: "SHOP_SWITCH_TRIGGER_AMBIGUOUS",
+      diagnostic: { phase: "resolve-shop" }
+    });
+  });
+
   it("maps a rejected source-tab read to BROWSER_DISCONNECTED", async () => {
     installBrowser([], () => undefined);
     const driver = createAllianceRetiredBrowserDriver({

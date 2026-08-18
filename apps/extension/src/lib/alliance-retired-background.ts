@@ -178,6 +178,8 @@ const DISCOVERY_ERROR_CODES = new Set<DoudianAllianceNodeErrorCode>([
 ]);
 
 const SCAN_ERROR_CODES = new Set<DoudianAllianceNodeErrorCode>([
+  "ALLIANCE_PROMOTION_ENTRY_TIMEOUT",
+  "BUYIN_PRODUCT_PROMOTION_ENTRY_TIMEOUT",
   "PAGE_LOADING",
   "PAGE_MISMATCH",
   "PAGE_URL_INVALID",
@@ -185,7 +187,11 @@ const SCAN_ERROR_CODES = new Set<DoudianAllianceNodeErrorCode>([
   "PROMOTION_DIALOG_UNRECOGNIZED",
   "RETIRED_PRODUCT_LIMIT_EXCEEDED",
   "RETIRED_PRODUCT_ROW_CHANGED",
+  "RETIRED_PRODUCTS_ENTRY_TIMEOUT",
+  "RETIRED_PRODUCTS_PAGE_LOADING",
   "RETIRED_PRODUCTS_PAGE_LIMIT_EXCEEDED",
+  "RETIRED_PRODUCTS_PAGE_TIMEOUT",
+  "RETIRED_PRODUCTS_PAGINATION_TIMEOUT",
   "RETIRED_PRODUCTS_TABLE_CHANGED",
   "SHOP_IDENTITY_MISMATCH",
   "SHOP_IDENTITY_UNCERTAIN",
@@ -200,7 +206,8 @@ function safeContentCode(
 ): DoudianAllianceNodeErrorCode {
   const discoveryStage =
     expectedStage === "discover-shops" ||
-    expectedStage === "read-shop-context";
+    expectedStage === "read-shop-context" ||
+    expectedStage === "switch-shop";
   const fallback =
     discoveryStage
       ? "DOUDIAN_ALLIANCE_DISCOVERY_FAILED"
