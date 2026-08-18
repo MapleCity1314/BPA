@@ -149,6 +149,25 @@ export function observationCoversFrozenRevision(
   );
 }
 
+export function bindingIdentifiesCommandTab(
+  binding: {
+    readonly browserInstanceId: string;
+    readonly tabId: number;
+    readonly origin: string;
+  },
+  tabRef: {
+    readonly browser_instance_id: string;
+    readonly tab_id: number;
+    readonly origin?: string;
+  }
+): boolean {
+  return (
+    binding.browserInstanceId === tabRef.browser_instance_id &&
+    binding.tabId === tabRef.tab_id &&
+    (tabRef.origin === undefined || binding.origin === tabRef.origin)
+  );
+}
+
 export function shouldRequestBoundPageRefresh(input: {
   readonly now: number;
   readonly commandCreatedAt: string;
@@ -1950,7 +1969,6 @@ export class LocalBrowserGateway implements RuntimeProvider {
         tab_id?: unknown;
         origin?: unknown;
       };
-      page_epoch?: unknown;
     };
     if (
       payload.tab_ref &&
@@ -1958,13 +1976,13 @@ export class LocalBrowserGateway implements RuntimeProvider {
       Number.isSafeInteger(payload.tab_ref.tab_id)
     ) {
       const bindings = Object.values(snapshot.bindings).filter(
-        (binding) =>
-          binding.browserInstanceId === payload.tab_ref!.browser_instance_id &&
-          binding.tabId === payload.tab_ref!.tab_id &&
-          (typeof payload.tab_ref!.origin !== "string" ||
-            binding.origin === payload.tab_ref!.origin) &&
-          (typeof payload.page_epoch !== "string" ||
-            binding.pageEpoch === payload.page_epoch)
+        (binding) => bindingIdentifiesCommandTab(binding, {
+          browser_instance_id: payload.tab_ref!.browser_instance_id as string,
+          tab_id: payload.tab_ref!.tab_id as number,
+          ...(typeof payload.tab_ref!.origin === "string"
+            ? { origin: payload.tab_ref!.origin }
+            : {})
+        })
       );
       if (bindings.length !== 1) return undefined;
       return [bindings[0]!.sessionId];

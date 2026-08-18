@@ -14,6 +14,7 @@ import {
 } from "@bpa/gateway-core";
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import {
+  bindingIdentifiesCommandTab,
   LocalBrowserGateway,
   observationCoversFrozenRevision,
   shouldRequestBoundPageRefresh
@@ -107,6 +108,37 @@ describe("local browser gateway", () => {
         expected,
         page: undefined
       })
+    ).toBe(false);
+  });
+
+  it("keeps the frozen Session owner when an authorized tab navigation changes page epoch", () => {
+    expect(
+      bindingIdentifiesCommandTab(
+        {
+          browserInstanceId: "browser-1",
+          tabId: 42,
+          origin: "https://fxg.jinritemai.com"
+        },
+        {
+          browser_instance_id: "browser-1",
+          tab_id: 42,
+          origin: "https://fxg.jinritemai.com"
+        }
+      )
+    ).toBe(true);
+    expect(
+      bindingIdentifiesCommandTab(
+        {
+          browserInstanceId: "browser-1",
+          tabId: 42,
+          origin: "https://fxg.jinritemai.com"
+        },
+        {
+          browser_instance_id: "browser-1",
+          tab_id: 42,
+          origin: "https://buyin.jinritemai.com"
+        }
+      )
     ).toBe(false);
   });
 
