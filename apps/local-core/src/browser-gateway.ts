@@ -173,8 +173,14 @@ export function shouldRequestBoundPageRefresh(input: {
     | undefined;
 }): boolean {
   const page = input.page;
+  const createdAt = Date.parse(input.commandCreatedAt);
+  const withinTransitionGrace =
+    Number.isFinite(createdAt) &&
+    input.now - createdAt <= BOUND_PAGE_TRANSITION_GRACE_MS;
+  if (!page) {
+    return withinTransitionGrace;
+  }
   if (
-    !page ||
     page.browserInstanceId !== input.expected.browserInstanceId ||
     page.origin !== input.expected.origin
   ) {
@@ -196,11 +202,7 @@ export function shouldRequestBoundPageRefresh(input: {
       Number.isFinite(observedAt) && input.now - observedAt > 30_000
     );
   }
-  const createdAt = Date.parse(input.commandCreatedAt);
-  return (
-    Number.isFinite(createdAt) &&
-    input.now - createdAt <= BOUND_PAGE_TRANSITION_GRACE_MS
-  );
+  return withinTransitionGrace;
 }
 
 function parseExtensionResourceUsage(
@@ -1850,7 +1852,6 @@ export class LocalBrowserGateway implements RuntimeProvider {
     const tabId = Number(payload.tab_ref.tab_id);
     const page = this.persistence.getBrowserPageObservation(sessionId, tabId);
     if (
-      !page ||
       !shouldRequestBoundPageRefresh({
         now: Date.now(),
         commandCreatedAt: command.createdAt,
@@ -1878,10 +1879,14 @@ export class LocalBrowserGateway implements RuntimeProvider {
     try {
       this.requestPageProbe({
         sessionId,
-        browserInstanceId: page.browserInstanceId,
-        tabId: page.tabId,
-        ...(page.windowId === undefined ? {} : { windowId: page.windowId }),
-        origin: page.origin,
+        browserInstanceId:
+          page?.browserInstanceId ??
+          String(payload.tab_ref.browser_instance_id),
+        tabId: page?.tabId ?? tabId,
+        ...((page?.windowId ?? payload.tab_ref.window_id) === undefined
+          ? {}
+          : { windowId: page?.windowId ?? Number(payload.tab_ref.window_id) }),
+        origin: page?.origin ?? String(payload.tab_ref.origin),
         timeoutMs: 5_000,
         requestId
       });

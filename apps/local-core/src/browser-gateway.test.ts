@@ -92,6 +92,22 @@ describe("local browser gateway", () => {
         page: { ...page, origin: "https://buyin.jinritemai.com" }
       })
     ).toBe(false);
+    expect(
+      shouldRequestBoundPageRefresh({
+        now: Date.parse("2026-08-18T05:18:00.002Z"),
+        commandCreatedAt: "2026-08-18T05:18:00.000Z",
+        expected,
+        page: undefined
+      })
+    ).toBe(true);
+    expect(
+      shouldRequestBoundPageRefresh({
+        now: Date.parse("2026-08-18T05:18:10.001Z"),
+        commandCreatedAt: "2026-08-18T05:18:00.000Z",
+        expected,
+        page: undefined
+      })
+    ).toBe(false);
   });
 
   it("reports only the browser gateway queues with an exact total", () => {
