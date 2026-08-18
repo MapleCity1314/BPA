@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: doudian.inventory.production-cycle
-  version: 1.0.0
+  version: 1.0.1
   title: 抖店多店库存预测生产周期
   description: 在一个已认证 Mac Chrome 标签页和一个 Run 级库存领域租约内，串行完成固定 13 店的订单新鲜度、库存事实、预测与风险闭环，并恢复源店铺；已知单店实证最大商品数为 86，首版每店容量 250，超限失败关闭。
 spec:
@@ -86,7 +86,7 @@ spec:
           steps:
             - key: activate_shop
               kind: call
-              use: doudian.inventory.shop.activate@1.0.0
+              use: doudian.inventory.shop.activate@1.0.1
               with:
                 targetShop: ${item}
               resourceMappings: { browser: inventory_browser }
@@ -163,7 +163,7 @@ spec:
                       steps:
                         - key: read_inventory_snapshot
                           kind: call
-                          use: doudian.inventory.product.snapshot.read@2.0.0
+                          use: doudian.inventory.product.snapshot.read@2.0.1
                           with:
                             shop:
                               id: ${steps.activate_shop.output.currentShop.id}
@@ -264,7 +264,7 @@ spec:
                       forecastRisk: null
       - key: restore_source_shop
         kind: call
-        use: doudian.inventory.shop.activate@1.0.0
+        use: doudian.inventory.shop.activate@1.0.1
         with:
           targetShop:
             id: ${steps.read_source_shop.output.shop.id}

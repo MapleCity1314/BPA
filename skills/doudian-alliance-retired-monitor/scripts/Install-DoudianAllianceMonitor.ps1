@@ -207,12 +207,12 @@ $RequiredAssets = @(
   @{
     type = "node"
     file = "doudian.alliance.shops.discover.node.yaml"
-    sha256 = "5aed5838ab0f5e85074b69ed179246fdc1bd74f3eab484b0f0a88199467ec9d9"
+    sha256 = "79b00d57f7c637ed5eea385e6c0320574f709037a9900a39a9180f79f23e8951"
   },
   @{
     type = "node"
     file = "doudian.alliance.shop.retired-products.scan.node.yaml"
-    sha256 = "8591f36793f1922e4ac34147c55666dda3484eaef8272667daa3df493168ae46"
+    sha256 = "098da0fdf49b8849e6aa0d2a79b140751a48155c78a7cbb9d2550d9feaee6c65"
   },
   @{
     type = "node"
@@ -232,12 +232,12 @@ $RequiredAssets = @(
   @{
     type = "adapter"
     file = "doudian-alliance.adapter.yaml"
-    sha256 = "ab042f6bb8d5b21a9b4c511edb1d00f3e787f7680bd48f61d1af4e4e78dcfa24"
+    sha256 = "7c0b89dc8e20a4ac8ade8ccc4b9fc5100ea9c57d0ced1ddb973cf334a37cb199"
   },
   @{
     type = "workflow"
     file = "doudian.alliance-retired-products-monitor.workflow.yaml"
-    sha256 = "3401a05a964f41c98c8539592ae99710f2f302c92bb0b96875fbb4db874a5636"
+    sha256 = "f482a1d7e7c2ad0028f52f557ebcd1fc9f4d537130d14e0ac49ddd3f93e6085a"
   }
 )
 foreach ($Asset in $RequiredAssets) {
@@ -379,7 +379,7 @@ $CapableSessions = @(
     -not $DisconnectedAt -and $CapabilityDigest -and
     @($Capabilities | Where-Object {
       $_.nodeId -eq "doudian.alliance.shops.discover" -and
-      $_.nodeVersion -eq "2.0.5"
+      $_.nodeVersion -eq "2.0.6"
     }).Count -gt 0
   }
 )
@@ -468,7 +468,7 @@ $Configuration = [ordered]@{
   runtimeIdentity = $RequiredIdentity
   bpaCommand = $BpaCommand
   recordsDir = $RecordsRoot
-  workflow = "doudian.alliance-retired-products-monitor@3.0.6"
+  workflow = "doudian.alliance-retired-products-monitor@3.0.7"
   maxShops = 100
   schedule = "daily 13:00"
   timezone = "Asia/Shanghai"
@@ -515,7 +515,7 @@ $InputJson = @{ maxShops = $EffectiveMaxShops } | ConvertTo-Json -Compress
 $Arguments = @(
   "workflow-run",
   "doudian.alliance-retired-products-monitor",
-  "--version", "3.0.6",
+  "--version", "3.0.7",
   "--input-file", $InputFile,
   "--wait-seconds", "28800"
 )

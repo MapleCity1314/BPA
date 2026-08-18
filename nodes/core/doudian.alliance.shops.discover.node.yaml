@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha2
 kind: Node
 metadata:
   id: doudian.alliance.shops.discover
-  version: 2.0.5
+  version: 2.0.6
   title: 发现抖店联盟店铺
   description: 从已绑定的抖店商品管理标签页读取完整可切换店铺列表；经营中店铺必须具有稳定数字 ID，才能进入逐店事实链路。
 runtime: browser
@@ -102,4 +102,4 @@ errors:
   - SHOP_TARGET_INVALID
   - SHOP_TARGET_TIMEOUT
 evidence: { required: [result, error] }
-adapter: { id: doudian-alliance, versions: [2.0.5] }
+adapter: { id: doudian-alliance, versions: [2.0.6] }
