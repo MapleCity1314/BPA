@@ -23,6 +23,17 @@ export interface PendingCommandStart {
   startedAt: string;
 }
 
+export function shouldRemovePendingResultAfterAck(input: {
+  readonly accepted: boolean;
+  readonly reasonCode?: string;
+}): boolean {
+  return (
+    input.accepted ||
+    input.reasonCode === "STALE_FENCING_TOKEN" ||
+    input.reasonCode === "EVIDENCE_INVALID"
+  );
+}
+
 export function interruptedCommandResult(
   started: PendingCommandStart
 ): PendingResult {

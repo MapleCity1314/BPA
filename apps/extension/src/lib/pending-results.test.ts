@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   interruptedCommandResult,
   normalizePendingResultForReplay,
+  shouldRemovePendingResultAfterAck,
   type PendingResult
 } from "./pending-results.js";
 
@@ -16,6 +17,28 @@ const pending: PendingResult = {
 };
 
 describe("pending result replay migration", () => {
+  it("drops terminally stale or invalid results while retaining retryable evidence waits", () => {
+    expect(shouldRemovePendingResultAfterAck({ accepted: true })).toBe(true);
+    expect(
+      shouldRemovePendingResultAfterAck({
+        accepted: false,
+        reasonCode: "STALE_FENCING_TOKEN"
+      })
+    ).toBe(true);
+    expect(
+      shouldRemovePendingResultAfterAck({
+        accepted: false,
+        reasonCode: "EVIDENCE_INVALID"
+      })
+    ).toBe(true);
+    expect(
+      shouldRemovePendingResultAfterAck({
+        accepted: false,
+        reasonCode: "EVIDENCE_NOT_READY"
+      })
+    ).toBe(false);
+  });
+
   it("preserves a protocol-safe page epoch", () => {
     expect(normalizePendingResultForReplay(pending)).toBe(pending);
   });

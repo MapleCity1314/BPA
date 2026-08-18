@@ -787,12 +787,12 @@
                 "rate_limit_wait_ms": {
                   "type": "integer",
                   "minimum": 0,
-                  "maximum": 120000
+                  "maximum": 28800000
                 },
                 "readiness_wait_ms": {
                   "type": "integer",
                   "minimum": 0,
-                  "maximum": 120000
+                  "maximum": 28800000
                 },
                 "stable_for_ms": {
                   "type": "integer",

@@ -26,7 +26,8 @@ import {
   removePendingResult,
   savePendingEvidenceUpload,
   savePendingCommandStart,
-  savePendingResult
+  savePendingResult,
+  shouldRemovePendingResultAfterAck
 } from "../lib/pending-results";
 import {
   AssistancePanelRepository,
@@ -1585,12 +1586,19 @@ export default defineBackground(() => {
         break;
       }
       case "result.ack":
-        if (message.payload.accepted) {
+        if (
+          shouldRemovePendingResultAfterAck({
+            accepted: message.payload.accepted === true,
+            ...(typeof message.payload.reason_code === "string"
+              ? { reasonCode: message.payload.reason_code }
+              : {})
+          })
+        ) {
           const commandId = String(message.payload.command_id);
           const pending = (await listPendingResults()).find(
             (entry) => entry.commandId === commandId
           );
-          if (pending) {
+          if (pending && message.payload.accepted) {
             const stored = await browser.storage.local.get(
               "lastAckedCommandSeq"
             );

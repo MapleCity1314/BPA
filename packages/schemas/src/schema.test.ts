@@ -270,10 +270,12 @@ describe("timing and risk schemas", () => {
     ];
     result.payload.timing_observation = {
       rate_limit_wait_ms: 350,
-      readiness_wait_ms: 420,
+      readiness_wait_ms: 223_274,
       stable_for_ms: 300
     };
     expect(validateBrowserProtocolMessage(result)).toBe(true);
+    result.payload.timing_observation.readiness_wait_ms = 28_800_001;
+    expect(validateBrowserProtocolMessage(result)).toBe(false);
   });
 
   it("bounds Extension runtime resources on heartbeat pong", () => {
