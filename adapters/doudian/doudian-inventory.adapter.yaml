@@ -2,7 +2,7 @@ apiVersion: bpa.adapter/v1alpha1
 kind: Adapter
 metadata:
   id: doudian-inventory
-  version: 2.0.2
+  version: 2.0.3
   title: 抖店库存页面 Adapter
   description: 在同一受管商品页中精确切换店铺，并只读采集 SKU、占用、未占用及渠道库存；不提交平台库存修改。
 platform: doudian
@@ -12,10 +12,10 @@ extension:
   minimumVersion: 0.6.2
 capabilities:
   - nodeId: doudian.inventory.shop.activate
-    nodeVersions: [1.0.2]
+    nodeVersions: [1.0.3]
     handlerId: doudian.inventory.shop.activate
-    handlerVersion: 1.0.2
-    implementationDigest: sha256:825f8e6e762c49e9bcc765a0b5cfa963622cf763d66b9c8b09b48243b2a469c7
+    handlerVersion: 1.0.3
+    implementationDigest: sha256:b7545d5f25ae577c3f35d3afcea20544a416bb757ffa1b12e1d07ef9e5ffdf21
     permissions:
       - browser.dom.read
       - browser.dom.write
@@ -23,10 +23,10 @@ capabilities:
       - browser.tabs.navigate
   - nodeId: doudian.inventory.product.snapshot.read
     nodeVersions:
-      - 2.0.2
+      - 2.0.3
     handlerId: doudian.inventory.product.snapshot.read
-    handlerVersion: 2.0.2
-    implementationDigest: sha256:825f8e6e762c49e9bcc765a0b5cfa963622cf763d66b9c8b09b48243b2a469c7
+    handlerVersion: 2.0.3
+    implementationDigest: sha256:b7545d5f25ae577c3f35d3afcea20544a416bb757ffa1b12e1d07ef9e5ffdf21
     permissions:
       - browser.dom.read
       - browser.dom.write
