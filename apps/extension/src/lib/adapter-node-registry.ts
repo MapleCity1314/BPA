@@ -625,6 +625,7 @@ const activateInventoryShop: AdapterNodeHandler = async (input, context) => {
   const driver = createAllianceRetiredBrowserDriver({
     sourceTabId: context.sourceTabId,
     deadline: context.deadline,
+    restoreProductListAfterSwitch: true,
     ...(context.isCancelled ? { isCancelled: context.isCancelled } : {}),
     ...(context.reserveManagedTab
       ? { reserveManagedTab: context.reserveManagedTab }

@@ -211,6 +211,9 @@ describe("published default asset sources", () => {
       "workflows/examples/doudian.alliance-retired-products-monitor.workflow.yaml"
     );
     const alliancePlan = compileCanonicalWorkflow(allianceMonitor, catalog);
+    expect(alliancePlan.resourceSlots?.alliance_browser?.continuity).toBe(
+      "same_tab_origin"
+    );
     const scanShops = alliancePlan.steps.scan_shops;
     expect(scanShops?.kind).toBe("foreach");
     if (scanShops?.kind !== "foreach") throw new Error("fixture changed");
@@ -242,6 +245,9 @@ describe("published default asset sources", () => {
       "workflows/examples/doudian.inventory.production-cycle.workflow.yaml"
     );
     const inventoryPlan = compileCanonicalWorkflow(inventoryCycle, catalog);
+    expect(inventoryPlan.resourceSlots?.inventory_browser?.continuity).toBe(
+      "same_tab_origin"
+    );
     expect(estimateMaxStepExecutions(inventoryPlan)).toBe(9_889n);
     expect(estimateMaxStepExecutions(inventoryPlan)).toBeLessThan(10_000n);
     const processInventoryShops = inventoryPlan.steps.process_shops;

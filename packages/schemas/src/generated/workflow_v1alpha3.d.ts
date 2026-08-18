@@ -78,6 +78,7 @@ export interface BrowserResourceSlot {
    */
   allowedOrigins: HttpsOrigin[];
   authentication: "anonymous" | "optional" | "authenticated" | "membership";
+  continuity?: "fixed" | "same_tab_origin";
   purpose: string;
 }
 export interface Block {

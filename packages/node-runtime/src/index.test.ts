@@ -164,11 +164,14 @@ describe("runtime provider registry", () => {
 
   it("validates frozen Resource Bindings before provider dispatch", async () => {
     let calls = 0;
+    let dispatchedPageEpoch: string | undefined;
     const registry = new RuntimeProviderRegistry();
     registry.register({
       ...provider("browser"),
-      invoke: async () => {
+      invoke: async (received) => {
         calls += 1;
+        dispatchedPageEpoch =
+          received.resourceBindings?.page_session?.binding.pageEpoch;
         return {
           status: "succeeded",
           output: null,
@@ -227,6 +230,7 @@ describe("runtime provider registry", () => {
             purpose: "Read metrics"
           },
           requirementDigest: "c".repeat(64),
+          continuity: "fixed" as const,
           binding: {
             bindingId: "binding-1",
             revision: 1,
@@ -268,6 +272,34 @@ describe("runtime provider registry", () => {
     ).resolves.toMatchObject({ status: "succeeded" });
     expect(calls).toBe(1);
 
+    const continuousSession = {
+      ...session,
+      observationRevision: 7,
+      pathname: "/ffa/g/list",
+      pageEpoch: "tab-42:7:after-shop-switch",
+      authenticationContextRef: "auth-context-next-shop"
+    };
+    const continuousDispatcher = new ResourceValidatedRuntimeDispatcher(
+      registry,
+      { getBrowserSession: () => continuousSession }
+    );
+    await expect(
+      continuousDispatcher.invoke(
+        {
+          ...invocation,
+          resourceBindings: {
+            page_session: {
+              ...invocation.resourceBindings.page_session,
+              continuity: "same_tab_origin"
+            }
+          }
+        },
+        new AbortController().signal
+      )
+    ).resolves.toMatchObject({ status: "succeeded" });
+    expect(calls).toBe(2);
+    expect(dispatchedPageEpoch).toBe("tab-42:7:after-shop-switch");
+
     const changedDispatcher = new ResourceValidatedRuntimeDispatcher(
       registry,
       {
@@ -283,7 +315,7 @@ describe("runtime provider registry", () => {
       status: "rejected",
       error: { code: "RESOURCE_BINDING_INVALID", retryable: false }
     });
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
   });
 });
 

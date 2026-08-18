@@ -165,6 +165,7 @@ describe("invocation Resource Binding validation", () => {
     slotName: "metrics_source",
     requirement,
     requirementDigest: "b".repeat(64),
+    continuity: "fixed",
     binding
   };
   const session = {
@@ -185,6 +186,30 @@ describe("invocation Resource Binding validation", () => {
 
   it("accepts only the exact frozen session context", () => {
     expect(validateInvocationResourceBinding(resource, session)).toEqual([]);
+  });
+
+  it("allows an explicitly continuous slot to follow the same authenticated tab", () => {
+    expect(
+      validateInvocationResourceBinding(
+        { ...resource, continuity: "same_tab_origin" },
+        {
+          ...session,
+          observationRevision: 7,
+          pathname: "/ffa/g/list",
+          pageEpoch: "tab-42:7:after-shop-switch",
+          authentication: "authenticated",
+          authenticationContextRef: "auth-context-next-shop"
+        }
+      )
+    ).toEqual([]);
+  });
+
+  it("still rejects a different origin for a continuous slot", () => {
+    const issues = validateInvocationResourceBinding(
+      { ...resource, continuity: "same_tab_origin" },
+      { ...session, origin: "https://example.com" }
+    );
+    expect(issues.map((issue) => issue.code)).toContain("ORIGIN_MISMATCH");
   });
 
   it.each([

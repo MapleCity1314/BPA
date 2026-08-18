@@ -230,6 +230,7 @@ export interface BrowserResourceRequirementSnapshot {
   readonly capabilities: readonly string[];
   readonly allowedOrigins: readonly string[];
   readonly authentication: ResourceAuthentication;
+  readonly continuity?: "fixed" | "same_tab_origin";
   readonly purpose: string;
 }
 
@@ -277,6 +278,8 @@ export interface InvocationResourceBinding {
   readonly slotName: string;
   readonly requirement: BrowserResourceRequirementSnapshot;
   readonly requirementDigest: string;
+  /** Workflow-controlled continuity policy for this Run-level slot. */
+  readonly continuity: "fixed" | "same_tab_origin";
   /** Immutable reference copied from the Run-level binding snapshot. */
   readonly binding: ResourceBindingRef;
 }

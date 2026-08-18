@@ -524,6 +524,8 @@ export class Ir2WorkflowRuntime {
         slotName: mapping.slotName,
         requirement: structuredClone(mapping.requirement),
         requirementDigest: mapping.requirementDigest,
+        continuity:
+          snapshot.resourceSlots[mapping.slotName]?.continuity ?? "fixed",
         binding: { ...binding }
       };
     }

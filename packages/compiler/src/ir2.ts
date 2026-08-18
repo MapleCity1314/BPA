@@ -433,13 +433,18 @@ function defaultExecution(
 }
 
 function freezeResourceRequirement(
-  requirement: NonNullable<NodeDefinitionV1Alpha2["resources"]>[string]
+  requirement: NonNullable<NodeDefinitionV1Alpha2["resources"]>[string] & {
+    readonly continuity?: "fixed" | "same_tab_origin";
+  }
 ): BrowserResourceRequirementSnapshot {
   return {
     kind: "browser",
     capabilities: [...requirement.capabilities].sort(),
     allowedOrigins: [...requirement.allowedOrigins].sort(),
     authentication: requirement.authentication,
+    ...(requirement.continuity === undefined
+      ? {}
+      : { continuity: requirement.continuity }),
     purpose: requirement.purpose
   };
 }

@@ -109,6 +109,9 @@ export class ResourceValidatedRuntimeDispatcher {
   ): Promise<RuntimeOutcome> {
     const mappings = invocation.resourceMappings ?? {};
     const bindings = invocation.resourceBindings ?? {};
+    const effectiveBindings: Record<string, InvocationResourceBinding> = {
+      ...bindings
+    };
     for (const name of Object.keys(bindings)) {
       if (!mappings[name]) {
         return rejectedResourceOutcome(
@@ -158,12 +161,51 @@ export class ResourceValidatedRuntimeDispatcher {
           issues.map((issue) => issue.code)
         );
       }
+      if (resource.continuity === "same_tab_origin") {
+        const {
+          windowId: _previousWindowId,
+          observerCapabilityId: _previousObserverCapabilityId,
+          authenticationContextRef: _previousAuthenticationContextRef,
+          ...stableBinding
+        } = resource.binding;
+        effectiveBindings[name] = {
+          ...resource,
+          binding: {
+            ...stableBinding,
+            revision: session.observationRevision,
+            browserInstanceId: session.browserInstanceId,
+            tabId: session.tabId,
+            ...(session.windowId === undefined
+              ? {}
+              : { windowId: session.windowId }),
+            capabilityDigest: session.capabilityDigest,
+            origin: session.origin,
+            pathname: session.pathname,
+            pageEpoch: session.pageEpoch,
+            ...(session.observerCapabilityId === undefined
+              ? {}
+              : { observerCapabilityId: session.observerCapabilityId }),
+            authentication: session.authentication,
+            ...(session.authenticationContextRef === undefined
+              ? {}
+              : {
+                  authenticationContextRef:
+                    session.authenticationContextRef
+                })
+          }
+        };
+      }
     }
     const provider = this.registry.resolve(
       invocation.providerId,
       invocation.node
     );
-    return provider.invoke(invocation, signal);
+    return provider.invoke(
+      Object.keys(effectiveBindings).length === 0
+        ? invocation
+        : { ...invocation, resourceBindings: effectiveBindings },
+      signal
+    );
   }
 }
 

@@ -41,6 +41,7 @@ spec:
       capabilities: [browser.dom.read, browser.dom.write, browser.tabs.read, browser.tabs.navigate]
       allowedOrigins: [https://fxg.jinritemai.com]
       authentication: authenticated
+      continuity: same_tab_origin
       purpose: 绑定一个确切且已认证的抖店商品管理标签页，由 Adapter 进入联盟并在每店结束后恢复源店铺
   root:
     kind: sequence

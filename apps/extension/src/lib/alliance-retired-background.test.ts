@@ -249,6 +249,43 @@ describe("alliance retired-products browser navigation", () => {
     expect(state.removed).toEqual([]);
   });
 
+  it("restores the product-list route after a successful shop switch starts navigation", async () => {
+    const sourceUrl = "https://fxg.jinritemai.com/ffa/g/list";
+    const state = installBrowser(
+      [
+        {
+          id: 1,
+          windowId: 10,
+          active: true,
+          status: "complete",
+          url: sourceUrl
+        }
+      ],
+      (stage, tabs) => {
+        if (stage === "switch-shop") {
+          tabs.set(1, {
+            ...tabs.get(1)!,
+            url: "https://fxg.jinritemai.com/ffa/mshop/homepage/index"
+          });
+        }
+      }
+    );
+    const driver = createAllianceRetiredBrowserDriver({
+      sourceTabId: 1,
+      deadline: new Date(Date.now() + 10_000).toISOString(),
+      restoreProductListAfterSwitch: true
+    });
+
+    await driver.switchShop(shop);
+
+    expect(state.tabs.get(1)?.url).toBe(sourceUrl);
+    expect(
+      state.sentMessages.filter(
+        (message) => message.type === "bpa.doudian.alliance.stage"
+      )
+    ).toHaveLength(2);
+  });
+
   it("resumes id-less discovery after a shop switch reloads the source tab", async () => {
     const sourceUrl = "https://fxg.jinritemai.com/ffa/g/list";
     const state = installBrowser(

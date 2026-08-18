@@ -262,6 +262,7 @@ export function createAllianceRetiredBrowserDriver(input: {
   readonly isCancelled?: () => boolean;
   readonly stageResponseTimeoutMs?: number;
   readonly shopIdentityWaitMs?: number;
+  readonly restoreProductListAfterSwitch?: boolean;
   readonly reserveManagedTab?: () => boolean;
   readonly releaseManagedTabReservation?: () => void;
   readonly onStageStarted?: (stage: {
@@ -682,9 +683,18 @@ export function createAllianceRetiredBrowserDriver(input: {
     if (immediateMatches) switchResponse = "confirmed";
     let observed: { readonly id: string; readonly name: string };
     try {
-      observed = immediateMatches
-        ? immediate
-        : (await readShopContextAfterNavigation(shop)).currentShop;
+      if (immediateMatches && !input.restoreProductListAfterSwitch) {
+        observed = immediate;
+      } else {
+        if (input.restoreProductListAfterSwitch) {
+          const remainingMs = Date.parse(input.deadline) - Date.now();
+          if (remainingMs <= 0) assertBeforeDeadline();
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.min(1_000, remainingMs))
+          );
+        }
+        observed = (await readShopContextAfterNavigation(shop)).currentShop;
+      }
     } catch (error) {
       const navigationErrorCode = allianceErrorCode(error);
       throw withAllianceDiagnostic(error, {
@@ -880,6 +890,14 @@ export function createAllianceRetiredBrowserDriver(input: {
       return (await discoverShopContext()).shops;
     },
     async switchShop(shop) {
+      sourceUrl ??= (
+        await browser.tabs.get(input.sourceTabId).catch(() => {
+          throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+        })
+      ).url;
+      if (!sourceUrl) {
+        throw new AllianceRetiredDriverError("ALLIANCE_SOURCE_TAB_MISSING");
+      }
       await switchAndConfirmShop(shop, { phase: "resolve-shop" });
     },
     async openPromotion(_shop) {
@@ -975,6 +993,9 @@ export function createAllianceRetiredBrowserDriver(input: {
       ) {
         await browser.tabs.update(source.id, { url: sourceUrl });
         await waitForComplete(source.id);
+      }
+      if (sourceUrl && input.restoreProductListAfterSwitch) {
+        await readShopContextAfterNavigation();
       }
       managedTabIds.clear();
       promoteTabId = undefined;

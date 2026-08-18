@@ -178,7 +178,8 @@ function requireUnique(
 function requireUniqueInteractive(
   doc: Document,
   elements: readonly HTMLElement[],
-  errorCode: string
+  errorCode: string,
+  preferRightmost = false
 ): HTMLElement {
   if (elements.length === 1) return elements[0]!;
   const elementFromPoint = doc.elementFromPoint?.bind(doc);
@@ -199,7 +200,22 @@ function requireUniqueInteractive(
     );
     return Boolean(hit && (element.contains(hit) || hit.contains(element)));
   });
-  return requireUnique(hitCandidates, errorCode);
+  if (hitCandidates.length === 1) return hitCandidates[0]!;
+  if (preferRightmost && hitCandidates.length > 1) {
+    const ranked = [...hitCandidates].sort(
+      (left, right) =>
+        right.getBoundingClientRect().right -
+        left.getBoundingClientRect().right
+    );
+    if (
+      ranked[0]!.getBoundingClientRect().right -
+        ranked[1]!.getBoundingClientRect().right >=
+      8
+    ) {
+      return ranked[0]!;
+    }
+  }
+  throw new DoudianAllianceError(errorCode);
 }
 
 function parsedUrl(pageUrl: string): URL {
@@ -320,7 +336,9 @@ export function openDoudianShopSwitcher(doc: Document): void {
     const actionContainers = [
       ...new Set(
         switchEntries.map((element) => {
-          let action = element;
+          let action =
+            element.closest<HTMLElement>("[class*='descriptions']") ??
+            element;
           while (
             action.parentElement &&
             !action.parentElement.matches(".auxo-popover") &&
@@ -363,7 +381,8 @@ export function openDoudianShopSwitcher(doc: Document): void {
   const target = requireUniqueInteractive(
     doc,
     actionCandidates,
-    "SHOP_SWITCH_TRIGGER_AMBIGUOUS"
+    "SHOP_SWITCH_TRIGGER_AMBIGUOUS",
+    true
   );
   activateElement(target);
 }

@@ -232,12 +232,12 @@ $RequiredAssets = @(
   @{
     type = "adapter"
     file = "doudian-alliance.adapter.yaml"
-    sha256 = "8f3c293a42fda328c12316239b4bb1eda7c96c6d7e605a6588d784c5013d387e"
+    sha256 = "ab042f6bb8d5b21a9b4c511edb1d00f3e787f7680bd48f61d1af4e4e78dcfa24"
   },
   @{
     type = "workflow"
     file = "doudian.alliance-retired-products-monitor.workflow.yaml"
-    sha256 = "d555a6e8e823c72884b5b38fbc1a5494594dc413146906e6c4d89ad8c65a2e83"
+    sha256 = "3401a05a964f41c98c8539592ae99710f2f302c92bb0b96875fbb4db874a5636"
   }
 )
 foreach ($Asset in $RequiredAssets) {

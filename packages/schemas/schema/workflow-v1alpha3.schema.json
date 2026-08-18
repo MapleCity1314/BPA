@@ -125,6 +125,9 @@
         "authentication": {
           "enum": ["anonymous", "optional", "authenticated", "membership"]
         },
+        "continuity": {
+          "enum": ["fixed", "same_tab_origin"]
+        },
         "purpose": {
           "type": "string",
           "minLength": 1,

@@ -515,6 +515,34 @@ describe("Doudian alliance retired-products runtime", () => {
     );
   });
 
+  it("uses the rightmost independently interactive account trigger in the top header", () => {
+    const doc = documentOf(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName secondary"><span class="userName">甲食品旗舰店</span></div>
+        <div class="headerShopName account"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+    `);
+    const secondary = doc.querySelector<HTMLElement>(".secondary")!;
+    const account = doc.querySelector<HTMLElement>(".account")!;
+    secondary.getBoundingClientRect = () =>
+      ({ left: 900, right: 1000, top: 0, width: 100, height: 20 }) as DOMRect;
+    account.getBoundingClientRect = () =>
+      ({ left: 1300, right: 1400, top: 0, width: 100, height: 20 }) as DOMRect;
+    Object.defineProperty(doc, "elementFromPoint", {
+      configurable: true,
+      value: (x: number) => (x < 1200 ? secondary : account)
+    });
+    const secondaryClick = vi.fn();
+    const accountClick = vi.fn();
+    secondary.addEventListener("click", secondaryClick);
+    account.addEventListener("click", accountClick);
+
+    openDoudianShopSwitcher(doc);
+
+    expect(secondaryClick).not.toHaveBeenCalled();
+    expect(accountClick).toHaveBeenCalledOnce();
+  });
+
   it("rejects a numeric ID from an account popover for another shop", () => {
     const doc = documentOf(`
       <div id="fxg-pc-header">

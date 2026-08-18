@@ -437,6 +437,7 @@ export function validateInvocationResourceBinding(
 ): readonly ResourceBindingValidationIssue[] {
   const issues: ResourceBindingValidationIssue[] = [];
   const binding = resource.binding;
+  const sameTabOrigin = resource.continuity === "same_tab_origin";
   if (
     binding.slotName !== resource.slotName ||
     resource.requirementName.length === 0
@@ -473,7 +474,11 @@ export function validateInvocationResourceBinding(
       message: "Browser tab differs from the frozen binding."
     });
   }
-  if (session.observationRevision !== binding.revision) {
+  if (
+    sameTabOrigin
+      ? session.observationRevision < binding.revision
+      : session.observationRevision !== binding.revision
+  ) {
     issues.push({
       code: "OBSERVATION_REVISION_MISMATCH",
       message: "Page observation revision differs from the frozen binding."
@@ -502,13 +507,13 @@ export function validateInvocationResourceBinding(
       message: "Browser origin differs from the frozen binding."
     });
   }
-  if (session.pathname !== binding.pathname) {
+  if (!sameTabOrigin && session.pathname !== binding.pathname) {
     issues.push({
       code: "PATHNAME_MISMATCH",
       message: "Browser pathname differs from the frozen binding."
     });
   }
-  if (session.pageEpoch !== binding.pageEpoch) {
+  if (!sameTabOrigin && session.pageEpoch !== binding.pageEpoch) {
     issues.push({
       code: "PAGE_EPOCH_MISMATCH",
       message: "Browser page epoch differs from the frozen binding."
@@ -521,6 +526,7 @@ export function validateInvocationResourceBinding(
     });
   }
   if (
+    !sameTabOrigin &&
     session.authenticationContextRef !== binding.authenticationContextRef
   ) {
     issues.push({
@@ -534,7 +540,7 @@ export function validateInvocationResourceBinding(
       message: "Browser origin is outside the immutable Node requirement."
     });
   }
-  if (session.authentication !== binding.authentication) {
+  if (!sameTabOrigin && session.authentication !== binding.authentication) {
     issues.push({
       code: "AUTHENTICATION_MISMATCH",
       message: "Authentication level differs from the frozen binding."

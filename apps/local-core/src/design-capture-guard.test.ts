@@ -65,6 +65,7 @@ function invocation(
         slotName: "design_mode",
         requirementDigest:
           "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        continuity: "fixed",
         requirement: {
           kind: "browser",
           capabilities: ["page-model.design.read"],

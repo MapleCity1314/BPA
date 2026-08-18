@@ -185,6 +185,9 @@ function normalizeResourceRequirement(
       .map((origin) => origin.trim())
       .sort(),
     authentication: requirement.authentication,
+    ...(requirement.continuity === undefined
+      ? {}
+      : { continuity: requirement.continuity }),
     purpose: requirement.purpose.trim()
   };
 }
