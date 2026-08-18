@@ -126,6 +126,7 @@ interface ActiveSession {
 }
 
 const BROWSER_HEARTBEAT_INTERVAL_MS = 20_000;
+const BOUND_PAGE_TRANSITION_GRACE_MS = 10_000;
 
 interface BrowserConnection {
   id: string;
@@ -145,6 +146,60 @@ export function observationCoversFrozenRevision(
     Number.isSafeInteger(currentRevision) &&
     Number.isSafeInteger(frozenRevision) &&
     currentRevision >= frozenRevision
+  );
+}
+
+export function shouldRequestBoundPageRefresh(input: {
+  readonly now: number;
+  readonly commandCreatedAt: string;
+  readonly expected: {
+    readonly browserInstanceId: unknown;
+    readonly origin: unknown;
+    readonly pageEpoch: unknown;
+    readonly observationRevision: unknown;
+    readonly authenticationContextRef: unknown;
+  };
+  readonly page:
+    | {
+        readonly browserInstanceId: string;
+        readonly origin: string;
+        readonly pageEpoch: string;
+        readonly revision: number;
+        readonly authenticationContextRef?: string;
+        readonly observationState: string;
+        readonly contentScriptReady: boolean;
+        readonly observedAt: string;
+      }
+    | undefined;
+}): boolean {
+  const page = input.page;
+  if (
+    !page ||
+    page.browserInstanceId !== input.expected.browserInstanceId ||
+    page.origin !== input.expected.origin
+  ) {
+    return false;
+  }
+  const exactBinding =
+    page.pageEpoch === input.expected.pageEpoch &&
+    observationCoversFrozenRevision(
+      page.revision,
+      Number(input.expected.observationRevision)
+    ) &&
+    page.authenticationContextRef ===
+      input.expected.authenticationContextRef;
+  const ready =
+    page.observationState === "ready" && page.contentScriptReady;
+  if (exactBinding && ready) {
+    const observedAt = Date.parse(page.observedAt);
+    return (
+      Number.isFinite(observedAt) && input.now - observedAt > 30_000
+    );
+  }
+  const createdAt = Date.parse(input.commandCreatedAt);
+  return (
+    Number.isFinite(createdAt) &&
+    input.now - createdAt <= BOUND_PAGE_TRANSITION_GRACE_MS
   );
 }
 
@@ -1796,18 +1851,19 @@ export class LocalBrowserGateway implements RuntimeProvider {
     const page = this.persistence.getBrowserPageObservation(sessionId, tabId);
     if (
       !page ||
-      page.observationState !== "ready" ||
-      !page.contentScriptReady ||
-      page.browserInstanceId !== payload.tab_ref.browser_instance_id ||
-      page.origin !== payload.tab_ref.origin ||
-      page.pageEpoch !== payload.page_epoch ||
-      !observationCoversFrozenRevision(
-        page.revision,
-        Number(payload.observation_revision)
-      ) ||
-      page.authenticationContextRef !==
-        payload.authentication_context_ref ||
-      Date.now() - Date.parse(page.observedAt) <= 30_000
+      !shouldRequestBoundPageRefresh({
+        now: Date.now(),
+        commandCreatedAt: command.createdAt,
+        expected: {
+          browserInstanceId: payload.tab_ref.browser_instance_id,
+          origin: payload.tab_ref.origin,
+          pageEpoch: payload.page_epoch,
+          observationRevision: payload.observation_revision,
+          authenticationContextRef:
+            payload.authentication_context_ref
+        },
+        page
+      })
     ) {
       return false;
     }

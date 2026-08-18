@@ -15,7 +15,8 @@ import {
 import { SqlitePersistence } from "@bpa/persistence-sqlite";
 import {
   LocalBrowserGateway,
-  observationCoversFrozenRevision
+  observationCoversFrozenRevision,
+  shouldRequestBoundPageRefresh
 } from "./browser-gateway.js";
 import { BrowserEvidenceReceiver } from "./browser-evidence.js";
 import { LocalCoreService } from "./control.js";
@@ -47,6 +48,50 @@ describe("local browser gateway", () => {
     expect(observationCoversFrozenRevision(1,1)).toBe(true);
     expect(observationCoversFrozenRevision(2,1)).toBe(true);
     expect(observationCoversFrozenRevision(1,2)).toBe(false);
+  });
+
+  it("probes a transient same-tab observation before rejecting it", () => {
+    const expected = {
+      browserInstanceId: "browser-1",
+      origin: "https://fxg.jinritemai.com",
+      pageEpoch: "tab-42:current",
+      observationRevision: 53,
+      authenticationContextRef: "auth-context-1"
+    };
+    const page = {
+      browserInstanceId: "browser-1",
+      origin: "https://fxg.jinritemai.com",
+      pageEpoch: "tab-42:current",
+      revision: 53,
+      authenticationContextRef: "auth-context-1",
+      observationState: "loading",
+      contentScriptReady: false,
+      observedAt: "2026-08-18T05:18:00.000Z"
+    };
+    expect(
+      shouldRequestBoundPageRefresh({
+        now: Date.parse("2026-08-18T05:18:00.002Z"),
+        commandCreatedAt: "2026-08-18T05:18:00.000Z",
+        expected,
+        page
+      })
+    ).toBe(true);
+    expect(
+      shouldRequestBoundPageRefresh({
+        now: Date.parse("2026-08-18T05:18:10.001Z"),
+        commandCreatedAt: "2026-08-18T05:18:00.000Z",
+        expected,
+        page
+      })
+    ).toBe(false);
+    expect(
+      shouldRequestBoundPageRefresh({
+        now: Date.parse("2026-08-18T05:18:00.002Z"),
+        commandCreatedAt: "2026-08-18T05:18:00.000Z",
+        expected,
+        page: { ...page, origin: "https://buyin.jinritemai.com" }
+      })
+    ).toBe(false);
   });
 
   it("reports only the browser gateway queues with an exact total", () => {
