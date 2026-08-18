@@ -30,6 +30,10 @@ describe("Doudian inventory and retired-products background scheduling", () => {
     ).toBe(true);
     expect(inventory).toMatchObject({
       enabled: false,
+      workflow: {
+        id: "doudian.inventory.production-cycle",
+        version: "1.0.4"
+      },
       concurrencyKey: "doudian-account:company-main",
       retryPolicy: "none",
       missedRunPolicy: "skip",
@@ -46,6 +50,10 @@ describe("Doudian inventory and retired-products background scheduling", () => {
     });
     expect(retired).toMatchObject({
       enabled: false,
+      workflow: {
+        id: "doudian.alliance-retired-products-monitor",
+        version: "3.0.10"
+      },
       concurrencyKey: "doudian-account:company-main",
       retryPolicy: "none",
       missedRunPolicy: "run_once",
