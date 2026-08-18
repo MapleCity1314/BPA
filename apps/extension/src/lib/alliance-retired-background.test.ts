@@ -631,6 +631,16 @@ describe("alliance retired-products browser navigation", () => {
       }
       if (stage === "read-shop-context") {
         recoveredReads += 1;
+        if (recoveredReads <= 2) {
+          return {
+            ok: false,
+            requestId: message.requestId,
+            error: {
+              code: "PAGE_LOADING",
+              message: "The switched shop page is still loading."
+            }
+          };
+        }
         return {
           ok: true,
           requestId: message.requestId,
@@ -641,7 +651,8 @@ describe("alliance retired-products browser navigation", () => {
     }) as typeof browser.tabs.sendMessage;
     const driver = createAllianceRetiredBrowserDriver({
       sourceTabId: 1,
-      deadline: new Date(Date.now() + 10_000).toISOString()
+      deadline: new Date(Date.now() + 10_000).toISOString(),
+      shopIdentityWaitMs: 2_000
     });
 
     await expect(driver.discoverShopContext()).resolves.toMatchObject({
@@ -650,7 +661,7 @@ describe("alliance retired-products browser navigation", () => {
         { id: "10002", name: "乙食品专营店" }
       ]
     });
-    expect(recoveredReads).toBeGreaterThanOrEqual(2);
+    expect(recoveredReads).toBeGreaterThanOrEqual(4);
     expect(state.tabs.get(1)?.url).toBe(sourceUrl);
     expect(currentShop).toEqual({ id: "10001", name: "甲食品旗舰店" });
   });

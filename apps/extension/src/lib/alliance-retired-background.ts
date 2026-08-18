@@ -549,7 +549,7 @@ export function createAllianceRetiredBrowserDriver(input: {
     }
     const retryUntil = Math.min(
       Date.parse(input.deadline),
-      Date.now() + (input.shopIdentityWaitMs ?? 60_000)
+      Date.now() + (input.shopIdentityWaitMs ?? 180_000)
     );
     let lastError: unknown;
     while (Date.now() < retryUntil) {

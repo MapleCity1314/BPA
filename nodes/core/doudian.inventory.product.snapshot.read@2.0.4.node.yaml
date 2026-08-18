@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha2
 kind: Node
 metadata:
   id: doudian.inventory.product.snapshot.read
-  version: 2.0.3
+  version: 2.0.4
   title: 读取抖店商品 SKU 与渠道库存快照
   description: 在已由正式店铺激活节点验证的商品管理页只读打开指定商品库存抽屉，读取 SKU 当前、占用、未占用及渠道库存，并严格绑定店铺与商品身份。
 runtime: browser
@@ -91,4 +91,4 @@ execution:
   cancellable: true
 errors: [AUTH_REQUIRED, BROWSER_DISCONNECTED, CAPTCHA_REQUIRED, CHANNEL_STOCK_UNAVAILABLE, INVENTORY_DRAWER_NOT_READY, INVENTORY_SKU_COLUMNS_MISSING, INVENTORY_SKU_LIST_INCOMPLETE, INVENTORY_SKU_ROWS_EMPTY, PAGE_MISMATCH, PRODUCT_ROW_AMBIGUOUS, PRODUCT_ROW_NOT_FOUND, PRODUCT_STOCK_TOTAL_MISMATCH, RATE_LIMITED, RISK_CONTROL, SESSION_EXPIRED, SHOP_IDENTITY_MISMATCH, SKU_STOCK_TOTAL_MISMATCH]
 evidence: { required: [result, error] }
-adapter: { id: doudian-inventory, versions: [2.0.3] }
+adapter: { id: doudian-inventory, versions: [2.0.4] }
