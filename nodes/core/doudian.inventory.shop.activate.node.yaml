@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha2
 kind: Node
 metadata:
   id: doudian.inventory.shop.activate
-  version: 1.0.5
+  version: 1.0.6
   title: 激活并验证抖店库存目标店铺
   description: 在同一受管商品管理标签页内切换到固定目标店铺，并以数字 ID 与名称确认当前上下文；不创建额外浏览器实例。
 runtime: browser
@@ -56,4 +56,4 @@ execution:
     rateLimit: { scope: authentication_context, minIntervalMs: 1000, maxQueueMs: 10000 }
 errors: [AUTH_REQUIRED, BROWSER_DISCONNECTED, CAPTCHA_REQUIRED, COMMAND_CANCELLED, COMMAND_RESULT_TOO_LARGE, DEADLINE_EXCEEDED, INVENTORY_CANARY_FAILED, INVENTORY_PRODUCT_PAGE_TIMEOUT, PAGE_LOADING, PAGE_MISMATCH, PAGE_URL_INVALID, RISK_CONTROL, SESSION_EXPIRED, SHOP_CONTEXT_RESTORE_FAILED, SHOP_IDENTITY_AMBIGUOUS, SHOP_IDENTITY_MISMATCH, SHOP_IDENTITY_UNCERTAIN]
 evidence: { required: [result, error] }
-adapter: { id: doudian-inventory, versions: [2.0.5] }
+adapter: { id: doudian-inventory, versions: [2.0.6] }

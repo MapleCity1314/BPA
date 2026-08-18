@@ -286,7 +286,6 @@ export function createAllianceRetiredBrowserDriver(input: {
   }) => void;
   readonly onStageStopped?: (requestId: string) => void;
 }): AllianceRetiredBrowserDriver {
-  const managedTabIds = new Set<number>();
   let promoteTabId: number | undefined;
   let retiredTabId: number | undefined;
   let sourceUrl: string | undefined;
@@ -304,21 +303,6 @@ export function createAllianceRetiredBrowserDriver(input: {
   const assertNotCancelled = (): void => {
     if (input.isCancelled?.()) {
       throw new AllianceRetiredDriverError("COMMAND_CANCELLED");
-    }
-  };
-
-  const withManagedTabReservation = async <T>(
-    operation: () => Promise<T>
-  ): Promise<T> => {
-    if (input.reserveManagedTab && !input.reserveManagedTab()) {
-      throw new AllianceRetiredDriverError(
-        "BROWSER_TAB_CAPACITY_EXCEEDED"
-      );
-    }
-    try {
-      return await operation();
-    } finally {
-      input.releaseManagedTabReservation?.();
     }
   };
 
@@ -434,88 +418,6 @@ export function createAllianceRetiredBrowserDriver(input: {
       );
     }
     return response.result as T;
-  };
-
-  const captureTabs = async (): Promise<Map<number, Browser.tabs.Tab>> =>
-    new Map(
-      (await browser.tabs.query({}).catch(() => {
-        throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
-      })).flatMap((tab) =>
-        tab.id == null ? [] : [[tab.id, tab] as const]
-      )
-    );
-
-  const waitForAttributedTab = async (
-    before: ReadonlyMap<number, Browser.tabs.Tab>,
-    initiatingTabId: number,
-    matches: (tab: Browser.tabs.Tab) => boolean,
-    timeoutCode: "ALLIANCE_TAB_TIMEOUT"
-  ): Promise<number> => {
-    const initiating = before.get(initiatingTabId);
-    if (!initiating) {
-      throw new AllianceRetiredDriverError("ALLIANCE_SOURCE_TAB_MISSING");
-    }
-    const activeBefore = new Set(
-      [...before.values()]
-        .filter(
-          (tab) =>
-            tab.windowId === initiating.windowId && tab.active === true
-        )
-        .flatMap((tab) => (tab.id == null ? [] : [tab.id]))
-    );
-    const waitDeadline = Math.min(
-      Date.parse(input.deadline),
-      Date.now() + (input.tabWaitTimeoutMs ?? 90_000)
-    );
-    while (Date.now() < waitDeadline) {
-      assertNotCancelled();
-      const tabs = await browser.tabs
-        .query({ windowId: initiating.windowId })
-        .catch(() => {
-          throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
-        });
-      const candidates = tabs
-        .filter((tab) => {
-          if (
-            tab.id == null ||
-            tab.windowId !== initiating.windowId ||
-            tab.status !== "complete" ||
-            !matches(tab)
-          ) {
-            return false;
-          }
-          const previous = before.get(tab.id);
-          return (
-            tab.id === initiatingTabId ||
-            (!previous && tab.openerTabId === initiatingTabId) ||
-            (previous && previous.url !== tab.url) ||
-            (tab.active === true && !activeBefore.has(tab.id))
-          );
-        })
-        .sort((left, right) => {
-          const priority = (tab: Browser.tabs.Tab): number => {
-            if (tab.id === initiatingTabId) return 0;
-            if (
-              !before.has(tab.id!) &&
-              tab.openerTabId === initiatingTabId
-            ) {
-              return 1;
-            }
-            if (before.get(tab.id!)?.url !== tab.url) return 2;
-            return 3;
-          };
-          return priority(left) - priority(right);
-        });
-      const candidate = candidates[0];
-      if (candidate?.id != null) {
-        if (!before.has(candidate.id)) {
-          managedTabIds.add(candidate.id);
-        }
-        return candidate.id;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-    throw new AllianceRetiredDriverError(timeoutCode);
   };
 
   const waitForComplete = async (tabId: number): Promise<void> => {
@@ -924,55 +826,31 @@ export function createAllianceRetiredBrowserDriver(input: {
       await switchAndConfirmShop(shop, { phase: "resolve-shop" });
     },
     async openPromotion(_shop) {
-      let landingTabId: number;
       try {
-        landingTabId = await withManagedTabReservation(async () => {
-          const before = await captureTabs();
-          await stage(
-            input.sourceTabId,
-            { stage: "open-promotion" },
-            "open-promotion"
-          );
-          return waitForAttributedTab(
-            before,
-            input.sourceTabId,
-            (tab) =>
-              typeof tab.url === "string" &&
-              tab.url.startsWith(`${BUYIN_ORIGIN}/dashboard`),
-            "ALLIANCE_TAB_TIMEOUT"
-          );
-        });
+        await browser.tabs
+          .update(input.sourceTabId, {
+            url: `${BUYIN_ORIGIN}${PROMOTE_PATH}`
+          })
+          .catch(() => {
+            throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+          });
+        await waitForComplete(input.sourceTabId);
+        const landingTab = await browser.tabs
+          .get(input.sourceTabId)
+          .catch(() => undefined);
+        if (!landingTab) {
+          throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+        }
+        if (isAuthenticationRoute(landingTab)) {
+          throw new AllianceRetiredDriverError("AUTH_REQUIRED");
+        }
+        if (!tabMatches(landingTab, BUYIN_ORIGIN, PROMOTE_PATH)) {
+          throw new AllianceRetiredDriverError("PAGE_MISMATCH");
+        }
+        promoteTabId = input.sourceTabId;
       } catch (error) {
         throw withAllianceDiagnostic(error, {
           phase: "open-promotion",
-          switchResponse: "not-started",
-          navigationIdentity: "not-required",
-          restoreResult: "not-required"
-        });
-      }
-      const landingTab = await browser.tabs.get(landingTabId);
-      if (tabMatches(landingTab, BUYIN_ORIGIN, PROMOTE_PATH)) {
-        promoteTabId = landingTabId;
-        return;
-      }
-      try {
-        promoteTabId = await withManagedTabReservation(async () => {
-          const beforePromote = await captureTabs();
-          await stage(
-            landingTabId,
-            { stage: "open-product-promotion" },
-            "open-product-promotion"
-          );
-          return waitForAttributedTab(
-            beforePromote,
-            landingTabId,
-            (tab) => tabMatches(tab, BUYIN_ORIGIN, PROMOTE_PATH),
-            "ALLIANCE_TAB_TIMEOUT"
-          );
-        });
-      } catch (error) {
-        throw withAllianceDiagnostic(error, {
-          phase: "open-product-promotion",
           switchResponse: "not-started",
           navigationIdentity: "not-required",
           restoreResult: "not-required"
@@ -985,20 +863,27 @@ export function createAllianceRetiredBrowserDriver(input: {
       }
       const promotionSourceTabId = promoteTabId;
       try {
-        retiredTabId = await withManagedTabReservation(async () => {
-          const before = await captureTabs();
-          await stage(
-            promotionSourceTabId,
-            { stage: "open-retired-products" },
-            "open-retired-products"
-          );
-          return waitForAttributedTab(
-            before,
-            promotionSourceTabId,
-            (tab) => tabMatches(tab, BUYIN_ORIGIN, RETIRED_PATH),
-            "ALLIANCE_TAB_TIMEOUT"
-          );
-        });
+        await browser.tabs
+          .update(promotionSourceTabId, {
+            url: `${BUYIN_ORIGIN}${RETIRED_PATH}`
+          })
+          .catch(() => {
+            throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+          });
+        await waitForComplete(promotionSourceTabId);
+        const retiredTab = await browser.tabs
+          .get(promotionSourceTabId)
+          .catch(() => undefined);
+        if (!retiredTab) {
+          throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+        }
+        if (isAuthenticationRoute(retiredTab)) {
+          throw new AllianceRetiredDriverError("AUTH_REQUIRED");
+        }
+        if (!tabMatches(retiredTab, BUYIN_ORIGIN, RETIRED_PATH)) {
+          throw new AllianceRetiredDriverError("PAGE_MISMATCH");
+        }
+        retiredTabId = promotionSourceTabId;
       } catch (error) {
         throw withAllianceDiagnostic(error, {
           phase: "open-retired-products",
@@ -1034,15 +919,6 @@ export function createAllianceRetiredBrowserDriver(input: {
       }
     },
     async cleanupShopTabs() {
-      const existing = new Set(
-        (await browser.tabs.query({}))
-          .map((tab) => tab.id)
-          .filter((id): id is number => id != null)
-      );
-      const removable = [...managedTabIds].filter(
-        (id) => id !== input.sourceTabId && existing.has(id)
-      );
-      if (removable.length > 0) await browser.tabs.remove(removable);
       const source = await browser.tabs
         .get(input.sourceTabId)
         .catch(() => undefined);
@@ -1057,7 +933,6 @@ export function createAllianceRetiredBrowserDriver(input: {
       if (sourceUrl && input.restoreProductListAfterSwitch) {
         await readShopContextAfterNavigation();
       }
-      managedTabIds.clear();
       promoteTabId = undefined;
       retiredTabId = undefined;
     }

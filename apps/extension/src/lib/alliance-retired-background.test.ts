@@ -20,7 +20,11 @@ function installBrowser(
     initialTabs.map((tab) => [Number(tab.id), { ...tab }])
   );
   const removed: number[][] = [];
-  const sentMessages: Array<{ type: string; requestId?: string }> = [];
+  const sentMessages: Array<{
+    type: string;
+    requestId?: string;
+    stage?: string;
+  }> = [];
   const api = {
     tabs: {
       async query(query: { windowId?: number }) {
@@ -47,7 +51,8 @@ function installBrowser(
       ) {
         sentMessages.push({
           type: message.type,
-          ...(message.requestId ? { requestId: message.requestId } : {})
+          ...(message.requestId ? { requestId: message.requestId } : {}),
+          ...(message.request?.stage ? { stage: message.request.stage } : {})
         });
         if (message.type === "bpa.risk.preflight") {
           return { riskSignals: [] };
@@ -927,69 +932,7 @@ describe("alliance retired-products browser navigation", () => {
     expect(currentShop).toEqual({ id: "10001", name: "甲食品旗舰店" });
   });
 
-  it("rejects before a tab-opening stage when no managed slot is available", async () => {
-    const state = installBrowser(
-      [
-        {
-          id: 1,
-          windowId: 10,
-          active: true,
-          status: "complete",
-          url: "https://fxg.jinritemai.com/ffa/g/list"
-        }
-      ],
-      () => undefined
-    );
-    const releaseManagedTabReservation = vi.fn();
-    const driver = createAllianceRetiredBrowserDriver({
-      sourceTabId: 1,
-      deadline: new Date(Date.now() + 10_000).toISOString(),
-      reserveManagedTab: () => false,
-      releaseManagedTabReservation
-    });
-
-    await expect(driver.openPromotion(shop)).rejects.toMatchObject({
-      code: "BROWSER_TAB_CAPACITY_EXCEEDED"
-    });
-    expect(releaseManagedTabReservation).not.toHaveBeenCalled();
-    expect(
-      state.sentMessages.some(
-        (message) => message.type === "bpa.doudian.alliance.stage"
-      )
-    ).toBe(false);
-  });
-
-  it("bounds tab attribution independently and reports the failed stage", async () => {
-    installBrowser(
-      [
-        {
-          id: 1,
-          windowId: 10,
-          active: true,
-          status: "complete",
-          url: "https://fxg.jinritemai.com/ffa/g/list"
-        }
-      ],
-      () => undefined
-    );
-    const driver = createAllianceRetiredBrowserDriver({
-      sourceTabId: 1,
-      deadline: new Date(Date.now() + 10_000).toISOString(),
-      tabWaitTimeoutMs: 1
-    });
-
-    await expect(driver.openPromotion(shop)).rejects.toMatchObject({
-      code: "ALLIANCE_TAB_TIMEOUT",
-      diagnostic: {
-        phase: "open-promotion",
-        switchResponse: "not-started",
-        navigationIdentity: "not-required",
-        restoreResult: "not-required"
-      }
-    });
-  });
-
-  it("reuses an existing Buyin tab without claiming or closing it", async () => {
+  it("navigates only the source tab and never sends popup-opening DOM stages", async () => {
     const state = installBrowser(
       [
         {
@@ -1037,9 +980,23 @@ describe("alliance retired-products browser navigation", () => {
     await driver.cleanupShopTabs();
     expect(state.tabs.has(2)).toBe(true);
     expect(state.removed).toEqual([]);
+    expect(state.tabs.get(1)?.url).toBe(
+      "https://fxg.jinritemai.com/ffa/g/list"
+    );
+    expect(
+      state.sentMessages.flatMap((message) =>
+        message.stage ? [message.stage] : []
+      )
+    ).not.toEqual(
+      expect.arrayContaining([
+        "open-promotion",
+        "open-product-promotion",
+        "open-retired-products"
+      ])
+    );
   });
 
-  it("owns and closes an attributed new Buyin tab without an opener", async () => {
+  it("uses the source tab and never claims an unrelated openerless tab", async () => {
     const state = installBrowser(
       [
         {
@@ -1087,7 +1044,7 @@ describe("alliance retired-products browser navigation", () => {
     await driver.cleanupShopTabs();
 
     expect(state.tabs.has(2)).toBe(false);
-    expect(state.removed).toEqual([[2]]);
+    expect(state.removed).toEqual([]);
   });
 
   it("returns a precise timeout when an injected stage never answers", async () => {
