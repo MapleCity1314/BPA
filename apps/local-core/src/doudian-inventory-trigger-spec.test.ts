@@ -52,7 +52,7 @@ describe("Doudian inventory and retired-products background scheduling", () => {
       enabled: false,
       workflow: {
         id: "doudian.alliance-retired-products-monitor",
-        version: "3.0.10"
+        version: "3.0.11"
       },
       concurrencyKey: "doudian-account:company-main",
       retryPolicy: "none",

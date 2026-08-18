@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha2
 kind: Node
 metadata:
   id: doudian.alliance.shop.retired-products.scan
-  version: 2.0.9
+  version: 2.0.10
   title: 单店采集精选联盟已清退商品
   description: 切换到一个具有稳定身份的经营中店铺，从抖店入口进入精选联盟，只读采集清退商品并恢复源店铺。
 runtime: browser
@@ -116,7 +116,7 @@ resources:
     authentication: authenticated
     purpose: 对一个已枚举店铺完成可恢复的联盟清退商品只读采集
 execution:
-  timeoutDefault: 5m
+  timeoutDefault: 12m
   idempotency: repeatable_read
   retryableErrors: [PAGE_LOADING, BROWSER_DISCONNECTED, ALLIANCE_TAB_TIMEOUT]
   cancellable: true
@@ -157,4 +157,4 @@ errors:
   - SHOP_SWITCH_NOT_CONFIRMED
   - SHOP_TARGET_INVALID
 evidence: { required: [result, error] }
-adapter: { id: doudian-alliance, versions: [2.0.9] }
+adapter: { id: doudian-alliance, versions: [2.0.10] }

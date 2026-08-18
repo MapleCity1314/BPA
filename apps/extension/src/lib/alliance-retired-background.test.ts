@@ -959,6 +959,36 @@ describe("alliance retired-products browser navigation", () => {
     ).toBe(false);
   });
 
+  it("bounds tab attribution independently and reports the failed stage", async () => {
+    installBrowser(
+      [
+        {
+          id: 1,
+          windowId: 10,
+          active: true,
+          status: "complete",
+          url: "https://fxg.jinritemai.com/ffa/g/list"
+        }
+      ],
+      () => undefined
+    );
+    const driver = createAllianceRetiredBrowserDriver({
+      sourceTabId: 1,
+      deadline: new Date(Date.now() + 10_000).toISOString(),
+      tabWaitTimeoutMs: 1
+    });
+
+    await expect(driver.openPromotion(shop)).rejects.toMatchObject({
+      code: "ALLIANCE_TAB_TIMEOUT",
+      diagnostic: {
+        phase: "open-promotion",
+        switchResponse: "not-started",
+        navigationIdentity: "not-required",
+        restoreResult: "not-required"
+      }
+    });
+  });
+
   it("reuses an existing Buyin tab without claiming or closing it", async () => {
     const state = installBrowser(
       [

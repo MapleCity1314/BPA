@@ -76,7 +76,14 @@ export class AllianceRetiredDriverError extends Error {
 }
 
 export interface AllianceRetiredStageDiagnostic {
-  readonly phase: "discover-source" | "resolve-shop" | "restore-source";
+  readonly phase:
+    | "discover-source"
+    | "resolve-shop"
+    | "open-promotion"
+    | "open-product-promotion"
+    | "open-retired-products"
+    | "collect-retired-products"
+    | "restore-source";
   readonly shopOrdinal?: number;
   readonly switchResponse:
     | "not-started"
@@ -261,6 +268,7 @@ export function createAllianceRetiredBrowserDriver(input: {
   readonly deadline: string;
   readonly isCancelled?: () => boolean;
   readonly stageResponseTimeoutMs?: number;
+  readonly tabWaitTimeoutMs?: number;
   readonly shopIdentityWaitMs?: number;
   readonly restoreProductListAfterSwitch?: boolean;
   readonly reserveManagedTab?: () => boolean;
@@ -448,7 +456,11 @@ export function createAllianceRetiredBrowserDriver(input: {
         )
         .flatMap((tab) => (tab.id == null ? [] : [tab.id]))
     );
-    while (Date.now() < Date.parse(input.deadline)) {
+    const waitDeadline = Math.min(
+      Date.parse(input.deadline),
+      Date.now() + (input.tabWaitTimeoutMs ?? 90_000)
+    );
+    while (Date.now() < waitDeadline) {
       assertNotCancelled();
       const tabs = await browser.tabs
         .query({ windowId: initiating.windowId })
@@ -500,7 +512,11 @@ export function createAllianceRetiredBrowserDriver(input: {
   };
 
   const waitForComplete = async (tabId: number): Promise<void> => {
-    while (Date.now() < Date.parse(input.deadline)) {
+    const waitDeadline = Math.min(
+      Date.parse(input.deadline),
+      Date.now() + (input.tabWaitTimeoutMs ?? 90_000)
+    );
+    while (Date.now() < waitDeadline) {
       assertNotCancelled();
       const tab = await browser.tabs.get(tabId).catch(() => undefined);
       if (tab?.status === "complete") return;
@@ -901,61 +917,89 @@ export function createAllianceRetiredBrowserDriver(input: {
       await switchAndConfirmShop(shop, { phase: "resolve-shop" });
     },
     async openPromotion(_shop) {
-      const landingTabId = await withManagedTabReservation(async () => {
-        const before = await captureTabs();
-        await stage(
-          input.sourceTabId,
-          { stage: "open-promotion" },
-          "open-promotion"
-        );
-        return waitForAttributedTab(
-          before,
-          input.sourceTabId,
-          (tab) =>
-            typeof tab.url === "string" &&
-            tab.url.startsWith(`${BUYIN_ORIGIN}/dashboard`),
-          "ALLIANCE_TAB_TIMEOUT"
-        );
-      });
+      let landingTabId: number;
+      try {
+        landingTabId = await withManagedTabReservation(async () => {
+          const before = await captureTabs();
+          await stage(
+            input.sourceTabId,
+            { stage: "open-promotion" },
+            "open-promotion"
+          );
+          return waitForAttributedTab(
+            before,
+            input.sourceTabId,
+            (tab) =>
+              typeof tab.url === "string" &&
+              tab.url.startsWith(`${BUYIN_ORIGIN}/dashboard`),
+            "ALLIANCE_TAB_TIMEOUT"
+          );
+        });
+      } catch (error) {
+        throw withAllianceDiagnostic(error, {
+          phase: "open-promotion",
+          switchResponse: "not-started",
+          navigationIdentity: "not-required",
+          restoreResult: "not-required"
+        });
+      }
       const landingTab = await browser.tabs.get(landingTabId);
       if (tabMatches(landingTab, BUYIN_ORIGIN, PROMOTE_PATH)) {
         promoteTabId = landingTabId;
         return;
       }
-      promoteTabId = await withManagedTabReservation(async () => {
-        const beforePromote = await captureTabs();
-        await stage(
-          landingTabId,
-          { stage: "open-product-promotion" },
-          "open-product-promotion"
-        );
-        return waitForAttributedTab(
-          beforePromote,
-          landingTabId,
-          (tab) => tabMatches(tab, BUYIN_ORIGIN, PROMOTE_PATH),
-          "ALLIANCE_TAB_TIMEOUT"
-        );
-      });
+      try {
+        promoteTabId = await withManagedTabReservation(async () => {
+          const beforePromote = await captureTabs();
+          await stage(
+            landingTabId,
+            { stage: "open-product-promotion" },
+            "open-product-promotion"
+          );
+          return waitForAttributedTab(
+            beforePromote,
+            landingTabId,
+            (tab) => tabMatches(tab, BUYIN_ORIGIN, PROMOTE_PATH),
+            "ALLIANCE_TAB_TIMEOUT"
+          );
+        });
+      } catch (error) {
+        throw withAllianceDiagnostic(error, {
+          phase: "open-product-promotion",
+          switchResponse: "not-started",
+          navigationIdentity: "not-required",
+          restoreResult: "not-required"
+        });
+      }
     },
     async openRetiredProducts(_shop) {
       if (promoteTabId == null) {
         throw new AllianceRetiredDriverError("PROMOTION_TAB_MISSING");
       }
       const promotionSourceTabId = promoteTabId;
-      retiredTabId = await withManagedTabReservation(async () => {
-        const before = await captureTabs();
-        await stage(
-          promotionSourceTabId,
-          { stage: "open-retired-products" },
-          "open-retired-products"
-        );
-        return waitForAttributedTab(
-          before,
-          promotionSourceTabId,
-          (tab) => tabMatches(tab, BUYIN_ORIGIN, RETIRED_PATH),
-          "ALLIANCE_TAB_TIMEOUT"
-        );
-      });
+      try {
+        retiredTabId = await withManagedTabReservation(async () => {
+          const before = await captureTabs();
+          await stage(
+            promotionSourceTabId,
+            { stage: "open-retired-products" },
+            "open-retired-products"
+          );
+          return waitForAttributedTab(
+            before,
+            promotionSourceTabId,
+            (tab) => tabMatches(tab, BUYIN_ORIGIN, RETIRED_PATH),
+            "ALLIANCE_TAB_TIMEOUT"
+          );
+        });
+      } catch (error) {
+        throw withAllianceDiagnostic(error, {
+          phase: "open-retired-products",
+          switchResponse: "not-started",
+          navigationIdentity: "not-required",
+          restoreResult: "not-required"
+        });
+      }
     },
     async collectRetiredProducts(
       shop: AllianceShop
@@ -963,15 +1007,24 @@ export function createAllianceRetiredBrowserDriver(input: {
       if (retiredTabId == null) {
         throw new AllianceRetiredDriverError("RETIRED_TAB_MISSING");
       }
-      const result = await stage<Extract<
-        AllianceRetiredStageResult,
-        { stage: "collect-retired-products" }
-      >>(
-        retiredTabId,
-        { stage: "collect-retired-products", expectedShop: shop },
-        "collect-retired-products"
-      );
-      return result.page;
+      try {
+        const result = await stage<Extract<
+          AllianceRetiredStageResult,
+          { stage: "collect-retired-products" }
+        >>(
+          retiredTabId,
+          { stage: "collect-retired-products", expectedShop: shop },
+          "collect-retired-products"
+        );
+        return result.page;
+      } catch (error) {
+        throw withAllianceDiagnostic(error, {
+          phase: "collect-retired-products",
+          switchResponse: "not-started",
+          navigationIdentity: "not-required",
+          restoreResult: "not-required"
+        });
+      }
     },
     async cleanupShopTabs() {
       const existing = new Set(
