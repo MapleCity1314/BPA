@@ -32,7 +32,7 @@ describe("Doudian inventory and retired-products background scheduling", () => {
       enabled: false,
       workflow: {
         id: "doudian.inventory.production-cycle",
-        version: "1.0.4"
+        version: "1.0.5"
       },
       concurrencyKey: "doudian-account:company-main",
       retryPolicy: "none",

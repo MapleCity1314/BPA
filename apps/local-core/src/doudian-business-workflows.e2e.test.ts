@@ -37,7 +37,7 @@ const inventoryShops = Array.from({ length:13 },(_,index) => ({
 }));
 const inventoryNodeAssets = [
   "nodes/core/doudian.inventory.shop.activate.node.yaml",
-  "nodes/core/doudian.inventory.product.snapshot.read@2.0.4.node.yaml",
+  "nodes/core/doudian.inventory.product.snapshot.read@2.0.5.node.yaml",
   "nodes/core/inventory.orders.freshness.read.node.yaml",
   "nodes/core/ecom.sales-demand.sync@2.0.0.node.yaml",
   "nodes/core/inventory.snapshot.persist.node.yaml",
@@ -525,14 +525,14 @@ function publishExperience(service:LocalCoreService):void {
 function seedExperienceBrowser(store:SqlitePersistence):void {
   seedBrowser(store,[
     {
-      id:"doudian.experience.shops.discover",version:"2.0.1",riskLevel:"R1",
+      id:"doudian.experience.shops.discover",version:"2.0.2",riskLevel:"R1",
       permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-      adapterId:"doudian-experience",adapterVersion:"2.0.1"
+      adapterId:"doudian-experience",adapterVersion:"2.0.2"
     },
     {
-      id:"doudian.experience.shop.snapshot.read",version:"2.0.1",riskLevel:"R1",
+      id:"doudian.experience.shop.snapshot.read",version:"2.0.2",riskLevel:"R1",
       permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-      adapterId:"doudian-experience",adapterVersion:"2.0.1"
+      adapterId:"doudian-experience",adapterVersion:"2.0.2"
     }
   ]);
 }
@@ -568,14 +568,14 @@ function seedInventoryBrowser(store:SqlitePersistence):void {
       adapterId:"doudian",adapterVersion:"1.2.0"
     },
     {
-      id:"doudian.inventory.shop.activate",version:"1.0.4",riskLevel:"R1",
+      id:"doudian.inventory.shop.activate",version:"1.0.5",riskLevel:"R1",
       permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-      adapterId:"doudian-inventory",adapterVersion:"2.0.4"
+      adapterId:"doudian-inventory",adapterVersion:"2.0.5"
     },
     {
-      id:"doudian.inventory.product.snapshot.read",version:"2.0.4",riskLevel:"R1",
+      id:"doudian.inventory.product.snapshot.read",version:"2.0.5",riskLevel:"R1",
       permissions:["browser.dom.read","browser.dom.write","browser.tabs.read"],
-      adapterId:"doudian-inventory",adapterVersion:"2.0.4"
+      adapterId:"doudian-inventory",adapterVersion:"2.0.5"
     }
   ]);
 }
@@ -732,14 +732,14 @@ describe("local Doudian business Workflow acceptance",() => {
         adapterId:"doudian-alliance",adapterVersion:"2.0.11"
       },
       {
-        id:"doudian.experience.shops.discover",version:"2.0.1",riskLevel:"R1",
+        id:"doudian.experience.shops.discover",version:"2.0.2",riskLevel:"R1",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-experience",adapterVersion:"2.0.1"
+        adapterId:"doudian-experience",adapterVersion:"2.0.2"
       },
       {
-        id:"doudian.experience.shop.snapshot.read",version:"2.0.1",riskLevel:"R1",
+        id:"doudian.experience.shop.snapshot.read",version:"2.0.2",riskLevel:"R1",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-experience",adapterVersion:"2.0.1"
+        adapterId:"doudian-experience",adapterVersion:"2.0.2"
       },
       {
         id:"doudian.shop.context.read",version:"1.3.0",riskLevel:"R0",
@@ -752,14 +752,14 @@ describe("local Doudian business Workflow acceptance",() => {
         adapterId:"doudian",adapterVersion:"1.2.0"
       },
       {
-        id:"doudian.inventory.shop.activate",version:"1.0.4",riskLevel:"R1",
+        id:"doudian.inventory.shop.activate",version:"1.0.5",riskLevel:"R1",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-inventory",adapterVersion:"2.0.4"
+        adapterId:"doudian-inventory",adapterVersion:"2.0.5"
       },
       {
-        id:"doudian.inventory.product.snapshot.read",version:"2.0.4",riskLevel:"R1",
+        id:"doudian.inventory.product.snapshot.read",version:"2.0.5",riskLevel:"R1",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read"],
-        adapterId:"doudian-inventory",adapterVersion:"2.0.4"
+        adapterId:"doudian-inventory",adapterVersion:"2.0.5"
       }
     ]);
 
@@ -809,7 +809,7 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const experience = await runTrigger(service,store,{
       id:"doudian-experience-local",appId:"experience-score-monitor",
-      workflowId:"doudian.experience-score.daily",workflowVersion:"2.0.1",
+      workflowId:"doudian.experience-score.daily",workflowVersion:"2.0.2",
       workflowInput:{ maxShops:100 }
     });
     expect(experience).toMatchObject({
@@ -851,7 +851,7 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const inventory = await runTrigger(service,store,{
       id:"doudian-inventory-local",appId:"inventory-monitor",
-      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.4",
+      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.5",
       workflowInput:{ expectedShopCount:13,shops:inventoryShops },
       externalDomainLease:true
     });
@@ -900,7 +900,7 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const result = await runTrigger(service,store,{
       id:"doudian-inventory-partial",appId:"inventory-monitor",
-      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.4",
+      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.5",
       workflowInput:{ expectedShopCount:13,shops:inventoryShops },
       externalDomainLease:true
     });
@@ -955,7 +955,7 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const result = await runTrigger(service,store,{
       id:"doudian-inventory-duplicate",appId:"inventory-monitor",
-      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.4",
+      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.5",
       workflowInput:{ expectedShopCount:13,shops },
       externalDomainLease:true
     });
@@ -991,7 +991,7 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const result = await runTrigger(service,store,{
       id:"doudian-inventory-forecast-uncertain",appId:"inventory-monitor",
-      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.4",
+      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.5",
       workflowInput:{ expectedShopCount:13,shops:inventoryShops },
       externalDomainLease:true
     });
@@ -1037,7 +1037,7 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const result = await runTrigger(service,store,{
       id:"doudian-experience-partial",appId:"experience-score-monitor",
-      workflowId:"doudian.experience-score.daily",workflowVersion:"2.0.1",
+      workflowId:"doudian.experience-score.daily",workflowVersion:"2.0.2",
       workflowInput:{ maxShops:100 }
     });
 
@@ -1086,7 +1086,7 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const result = await runTrigger(service,store,{
       id:"doudian-experience-no-score",appId:"experience-score-monitor",
-      workflowId:"doudian.experience-score.daily",workflowVersion:"2.0.1",
+      workflowId:"doudian.experience-score.daily",workflowVersion:"2.0.2",
       workflowInput:{ maxShops:100 }
     });
 
@@ -1128,7 +1128,7 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const result = await runTrigger(service,store,{
       id:"doudian-experience-active-no-id",appId:"experience-score-monitor",
-      workflowId:"doudian.experience-score.daily",workflowVersion:"2.0.1",
+      workflowId:"doudian.experience-score.daily",workflowVersion:"2.0.2",
       workflowInput:{ maxShops:100 }
     });
 
@@ -1174,7 +1174,7 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const result = await runTrigger(service,store,{
       id:"doudian-experience-zero",appId:"experience-score-monitor",
-      workflowId:"doudian.experience-score.daily",workflowVersion:"2.0.1",
+      workflowId:"doudian.experience-score.daily",workflowVersion:"2.0.2",
       workflowInput:{ maxShops:100 }
     });
 

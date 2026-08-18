@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha2
 kind: Node
 metadata:
   id: doudian.experience.shops.discover
-  version: 2.0.1
+  version: 2.0.2
   title: 发现抖店体验分店铺
   description: 在已绑定的抖店商品列表标签页枚举可切换店铺并冻结源店铺身份。
 runtime: browser
@@ -65,4 +65,4 @@ execution:
   cancellable: true
 errors: [AUTH_REQUIRED, BROWSER_DISCONNECTED, CAPTCHA_REQUIRED, COMMAND_CANCELLED, COMMAND_RESULT_TOO_LARGE, DEADLINE_EXCEEDED, DOUDIAN_EXPERIENCE_DISCOVERY_FAILED, DOUDIAN_EXPERIENCE_MAX_SHOPS_INVALID, PAGE_LOADING, PAGE_MISMATCH, RISK_CONTROL, SESSION_EXPIRED, SHOP_IDENTITY_AMBIGUOUS, SHOP_IDENTITY_UNCERTAIN, SHOP_IDENTITY_UNCONFIRMED, SHOP_LIMIT_EXCEEDED, SHOP_LIST_EMPTY, SHOP_LIST_INCOMPLETE]
 evidence: { required: [result, error] }
-adapter: { id: doudian-experience, versions: [2.0.1] }
+adapter: { id: doudian-experience, versions: [2.0.2] }
