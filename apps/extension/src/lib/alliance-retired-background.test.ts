@@ -1263,7 +1263,95 @@ describe("alliance retired-products browser navigation", () => {
         restoreResult: "succeeded"
       }
     });
-    expect(switchRequests).toEqual([targetShop.name]);
+    expect(switchRequests).toEqual([targetShop.name, targetShop.name]);
+  });
+
+  it("retries one unconfirmed switch before accepting the exact identity", async () => {
+    installBrowser(
+      [{
+        id: 1,
+        windowId: 10,
+        active: true,
+        status: "complete",
+        url: "https://fxg.jinritemai.com/ffa/g/list"
+      }],
+      () => undefined
+    );
+    const sourceShop = {
+      name: "甲食品旗舰店",
+      status: "active" as const,
+      statusText: "正常营业"
+    };
+    const targetShop = {
+      name: "乙食品专营店",
+      status: "active" as const,
+      statusText: "正常营业"
+    };
+    let currentShop = { id: "10001", name: sourceShop.name };
+    let targetAttempts = 0;
+    const originalSendMessage = browser.tabs.sendMessage;
+    browser.tabs.sendMessage = (async (
+      tabId: number,
+      message: {
+        type: string;
+        requestId?: string;
+        request?: { stage?: string; shop?: typeof sourceShop };
+      }
+    ) => {
+      if (message.type === "bpa.risk.preflight") return { riskSignals: [] };
+      if (message.type !== "bpa.doudian.alliance.stage") {
+        return originalSendMessage(tabId, message);
+      }
+      const stage = message.request?.stage;
+      if (stage === "discover-shops") {
+        return {
+          ok: true,
+          requestId: message.requestId,
+          result: { stage, currentShop, shops: [sourceShop, targetShop] }
+        };
+      }
+      if (stage === "switch-shop") {
+        if (message.request?.shop?.name === targetShop.name) {
+          targetAttempts += 1;
+          if (targetAttempts === 1) {
+            return {
+              ok: false,
+              requestId: message.requestId,
+              error: {
+                code: "SHOP_SWITCH_NOT_CONFIRMED",
+                message: "The first click was not confirmed."
+              }
+            };
+          }
+          currentShop = { id: "10002", name: targetShop.name };
+        } else {
+          currentShop = { id: "10001", name: sourceShop.name };
+        }
+        return {
+          ok: true,
+          requestId: message.requestId,
+          result: {
+            stage,
+            shopName: currentShop.name,
+            currentShop
+          }
+        };
+      }
+      return originalSendMessage(tabId, message);
+    }) as typeof browser.tabs.sendMessage;
+    const driver = createAllianceRetiredBrowserDriver({
+      sourceTabId: 1,
+      deadline: new Date(Date.now() + 10_000).toISOString()
+    });
+
+    await expect(driver.discoverShopContext()).resolves.toMatchObject({
+      shops: [
+        { id: "10001", name: sourceShop.name },
+        { id: "10002", name: targetShop.name }
+      ],
+      currentShop: { id: "10001", name: sourceShop.name }
+    });
+    expect(targetAttempts).toBe(2);
   });
 
   it("preserves switch, navigation, and restore error codes in discovery diagnostics", async () => {

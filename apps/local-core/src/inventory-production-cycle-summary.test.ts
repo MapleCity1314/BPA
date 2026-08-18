@@ -83,7 +83,7 @@ function record(
     run:{
       id:"run:private-identity",
       workflowId:"doudian.inventory.production-cycle",
-      workflowVersion:"1.0.6",
+      workflowVersion:"1.0.7",
       workflowDigest:"sha256:private-digest",
       status,
       revision:7,
@@ -214,7 +214,7 @@ describe("inventory production-cycle summary projection",() => {
   it("returns a fixed not-run response without internal identities",() => {
     expect(projectInventoryProductionCycleSummary(undefined)).toEqual({
       projectionVersion:"1",state:"not-run",
-      workflow:{ id:"doudian.inventory.production-cycle",version:"1.0.6" },
+      workflow:{ id:"doudian.inventory.production-cycle",version:"1.0.7" },
       expectedShopCount:13
     });
   });
@@ -227,7 +227,7 @@ describe("inventory production-cycle summary projection",() => {
       occurrenceStatus:"running"
     })).toEqual({
       projectionVersion:"1",state:"in-progress",
-      workflow:{ id:"doudian.inventory.production-cycle",version:"1.0.6" },
+      workflow:{ id:"doudian.inventory.production-cycle",version:"1.0.7" },
       expectedShopCount:13,
       run:{ status:"waiting_browser",scheduledAt,createdAt,updatedAt:terminalAt }
     });
@@ -235,7 +235,7 @@ describe("inventory production-cycle summary projection",() => {
       scheduledAt,occurrenceStatus:"pending"
     })).toEqual({
       projectionVersion:"1",state:"in-progress",
-      workflow:{ id:"doudian.inventory.production-cycle",version:"1.0.6" },
+      workflow:{ id:"doudian.inventory.production-cycle",version:"1.0.7" },
       expectedShopCount:13,
       trigger:{ status:"pending",scheduledAt }
     });
@@ -246,7 +246,7 @@ describe("inventory production-cycle summary projection",() => {
       scheduledAt,occurrenceStatus:"terminal",occurrenceTerminalOutcome:"blocked"
     })).toEqual({
       projectionVersion:"1",state:"not-produced",
-      workflow:{ id:"doudian.inventory.production-cycle",version:"1.0.6" },
+      workflow:{ id:"doudian.inventory.production-cycle",version:"1.0.7" },
       expectedShopCount:13,
       trigger:{ status:"terminal",terminalOutcome:"blocked",scheduledAt },
       reasonCode:"TRIGGER_TERMINATED_BEFORE_RUN"

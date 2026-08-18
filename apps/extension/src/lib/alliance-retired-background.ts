@@ -570,35 +570,52 @@ export function createAllianceRetiredBrowserDriver(input: {
     let switchResponse: AllianceRetiredStageDiagnostic["switchResponse"] =
       "not-started";
     let switchErrorCode: DoudianAllianceNodeErrorCode | undefined;
-    try {
-      switchResult = await stage<Extract<
-        AllianceRetiredStageResult,
-        { stage: "switch-shop" }
-      >>(
-        input.sourceTabId,
-        { stage: "switch-shop", shop },
-        "switch-shop"
-      );
-      switchResponse = "mismatched";
-    } catch (error) {
-      switchErrorCode = allianceErrorCode(error);
-      if (
-        !(error instanceof AllianceRetiredDriverError) ||
-        ![
-          "BROWSER_DISCONNECTED",
-          "PAGE_LOADING",
-          "SHOP_IDENTITY_UNCERTAIN"
-        ].includes(error.code)
-      ) {
-        throw withAllianceDiagnostic(error, {
-          ...diagnosticBase,
-          switchResponse: "failed",
-          navigationIdentity: "not-required",
-          restoreResult: "not-required",
-          ...(switchErrorCode === undefined ? {} : { switchErrorCode })
-        });
+    for (let switchAttempt = 1; switchAttempt <= 2; switchAttempt += 1) {
+      try {
+        switchResult = await stage<Extract<
+          AllianceRetiredStageResult,
+          { stage: "switch-shop" }
+        >>(
+          input.sourceTabId,
+          { stage: "switch-shop", shop },
+          "switch-shop"
+        );
+        switchResponse = "mismatched";
+        switchErrorCode = undefined;
+        break;
+      } catch (error) {
+        switchErrorCode = allianceErrorCode(error);
+        if (
+          error instanceof AllianceRetiredDriverError &&
+          error.code === "SHOP_SWITCH_NOT_CONFIRMED" &&
+          switchAttempt === 1
+        ) {
+          const remainingMs = Date.parse(input.deadline) - Date.now();
+          if (remainingMs <= 0) assertBeforeDeadline();
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.min(1_000, remainingMs))
+          );
+          continue;
+        }
+        if (
+          !(error instanceof AllianceRetiredDriverError) ||
+          ![
+            "BROWSER_DISCONNECTED",
+            "PAGE_LOADING",
+            "SHOP_IDENTITY_UNCERTAIN"
+          ].includes(error.code)
+        ) {
+          throw withAllianceDiagnostic(error, {
+            ...diagnosticBase,
+            switchResponse: "failed",
+            navigationIdentity: "not-required",
+            restoreResult: "not-required",
+            ...(switchErrorCode === undefined ? {} : { switchErrorCode })
+          });
+        }
+        switchResponse = "recoverable-error";
+        break;
       }
-      switchResponse = "recoverable-error";
     }
     const immediate = switchResult?.currentShop;
     const immediateMatches =
