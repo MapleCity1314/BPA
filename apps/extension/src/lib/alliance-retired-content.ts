@@ -159,6 +159,22 @@ function normalize(value: string): string {
   return value.normalize("NFKC").replace(/\s+/gu, "");
 }
 
+async function openShopSwitcherWhenStable(
+  doc: Document,
+  isCancelled: () => boolean
+): Promise<void> {
+  await waitUntil(
+    () => {
+      openDoudianShopSwitcher(doc);
+      return true;
+    },
+    8_000,
+    "SHOP_SWITCH_TRIGGER_AMBIGUOUS",
+    doc,
+    isCancelled
+  );
+}
+
 async function ensureShopDialog(
   doc: Document,
   isCancelled: () => boolean
@@ -169,7 +185,7 @@ async function ensureShopDialog(
     return;
   } catch {
     assertNotCancelled(isCancelled);
-    openDoudianShopSwitcher(doc);
+    await openShopSwitcherWhenStable(doc, isCancelled);
   }
   await waitUntil(
     () => {
@@ -208,7 +224,7 @@ async function readCurrentShopIdentity(
     } catch {
       // No switcher was open; continue through the authenticated header.
     }
-    openDoudianShopSwitcher(doc);
+    await openShopSwitcherWhenStable(doc, isCancelled);
   }
   return waitUntil(
     () => readDoudianHeaderShopIdentity(doc),

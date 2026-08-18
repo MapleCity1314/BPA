@@ -119,6 +119,39 @@ describe("alliance retired-products content stages", () => {
     });
   });
 
+  it("waits for a transient duplicate header trigger to leave before opening", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName stale"><span class="userName">甲食品旗舰店</span></div>
+        <div class="headerShopName active" data-shop-id="10001"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div id="drawer-host"></div>
+    `);
+    const active = document.querySelector<HTMLElement>(".active")!;
+    active.addEventListener("click", () => {
+      document.querySelector("#drawer-host")!.innerHTML = `
+        <div class="auxo-drawer auxo-drawer-open">
+          <div class="auxo-drawer-content-wrapper">
+            <button aria-label="Close"></button>
+            <div>切换组织/店铺</div>
+            <div class="roleItem"><span class="introName">甲食品旗舰店</span>店铺ID 10001 正常营业</div>
+          </div>
+        </div>`;
+    });
+    setTimeout(() => document.querySelector(".stale")?.remove(), 25);
+
+    await expect(
+      executeAllianceRetiredStage(
+        { stage: "discover-shops" },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      currentShop: { id: "10001", name: "甲食品旗舰店" },
+      shops: [{ id: "10001", name: "甲食品旗舰店" }]
+    });
+  });
+
   it("discovers shops when the current numeric ID is exposed only by the account popover", async () => {
     const document = doc(`
       <div id="fxg-pc-header">
