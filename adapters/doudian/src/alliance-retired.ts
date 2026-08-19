@@ -9,7 +9,7 @@ const BUYIN_RETIRED_PATH = "/dashboard/regulation/clear-out";
 const PRODUCT_ID_PATTERN = /(?:商品\s*ID|ID)[：:\s]*(\d{5,30})/iu;
 const NUMBER_PATTERN = /\d{5,30}/u;
 
-export const DOUDIAN_ALLIANCE_RUNTIME_VERSION = "2.0.13";
+export const DOUDIAN_ALLIANCE_RUNTIME_VERSION = "2.0.14";
 
 export type DoudianAllianceNodeErrorCode =
   | "ALLIANCE_CONTENT_RESPONSE_TIMEOUT"
@@ -606,10 +606,10 @@ function visibleWithinSwitcher(
     ? viewportRect.right
     : viewportLeft + viewportRect.width;
   return (
-    cardRect.bottom > viewportRect.top &&
-    cardRect.top < viewportRect.bottom &&
-    cardRight > viewportLeft &&
-    cardLeft < viewportRight
+    cardRect.top >= viewportRect.top &&
+    cardRect.bottom <= viewportRect.bottom &&
+    cardLeft >= viewportLeft &&
+    cardRight <= viewportRight
   );
 }
 
@@ -708,8 +708,9 @@ export function scrollDoudianShopSwitcher(doc: Document): boolean {
   if (!target) return false;
   const before = target.scrollTop;
   const maximum = Math.max(0, target.scrollHeight - target.clientHeight);
+  const increment = Math.max(120, Math.floor(target.clientHeight / 2));
   target.scrollTop = Math.min(
-    before + Math.max(300, target.clientHeight || 300),
+    before + increment,
     maximum
   );
   if (target.scrollTop === before) return false;

@@ -200,9 +200,9 @@ test("keeps WorkBuddy Windows installation progress machine-readable", async () 
   assert.match(workBuddyInstaller, /recordVerified = \$true/u);
   assert.match(
     workBuddyInstaller,
-    /workflow = "doudian\.alliance-retired-products-monitor@3\.0\.14"/u
+    /workflow = "doudian\.alliance-retired-products-monitor@3\.0\.15"/u
   );
-  assert.match(workBuddyInstaller, /"--version", "3\.0\.14"/u);
+  assert.match(workBuddyInstaller, /"--version", "3\.0\.15"/u);
   assert.match(
     workBuddyInstaller,
     /foreach \(\$Asset in \$RequiredAssets\)[\s\S]*?"validate"[\s\S]*?\}\s*foreach \(\$Asset in \$RequiredAssets\)[\s\S]*?"publish"/u

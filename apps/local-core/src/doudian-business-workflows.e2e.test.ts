@@ -476,7 +476,7 @@ function seedBrowser(
   store.openBrowserSession({
     session:{
       id:"session-doudian",browserInstanceId,
-      extensionId:"extension-doudian",extensionVersion:"0.6.6",
+      extensionId:"extension-doudian",extensionVersion:"0.6.7",
       protocolVersion:"2.0.0",incomingSeq:0,outgoingSeq:0,
       lastAckedCommandSeq:0,capabilityDigest:`sha256:${"a".repeat(64)}`,
       resumeTokenDigest:`sha256:${"b".repeat(64)}`,
@@ -722,14 +722,14 @@ describe("local Doudian business Workflow acceptance",() => {
 
     seedBrowser(store,[
       {
-        id:"doudian.alliance.shops.discover",version:"2.0.13",riskLevel:"R2",
+        id:"doudian.alliance.shops.discover",version:"2.0.14",riskLevel:"R2",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-alliance",adapterVersion:"2.0.13"
+        adapterId:"doudian-alliance",adapterVersion:"2.0.14"
       },
       {
-        id:"doudian.alliance.shop.retired-products.scan",version:"2.0.13",riskLevel:"R2",
+        id:"doudian.alliance.shop.retired-products.scan",version:"2.0.14",riskLevel:"R2",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-alliance",adapterVersion:"2.0.13"
+        adapterId:"doudian-alliance",adapterVersion:"2.0.14"
       },
       {
         id:"doudian.experience.shops.discover",version:"2.0.2",riskLevel:"R1",
@@ -766,7 +766,7 @@ describe("local Doudian business Workflow acceptance",() => {
     const retired = await runTrigger(service,store,{
       id:"doudian-retired-local",appId:"retired-products-monitor",
       workflowId:"doudian.alliance-retired-products-monitor",
-      workflowVersion:"3.0.14",workflowInput:{ maxShops:100 }
+      workflowVersion:"3.0.15",workflowInput:{ maxShops:100 }
     });
     expect(retired).toMatchObject({
       run:{ status:"succeeded",output:{ alert:true,dailyRecord:{ status:"complete_with_items" } } },
@@ -1224,21 +1224,21 @@ describe("local Doudian business Workflow acceptance",() => {
     );
     seedBrowser(store,[
       {
-        id:"doudian.alliance.shops.discover",version:"2.0.13",riskLevel:"R2",
+        id:"doudian.alliance.shops.discover",version:"2.0.14",riskLevel:"R2",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-alliance",adapterVersion:"2.0.13"
+        adapterId:"doudian-alliance",adapterVersion:"2.0.14"
       },
       {
-        id:"doudian.alliance.shop.retired-products.scan",version:"2.0.13",riskLevel:"R2",
+        id:"doudian.alliance.shop.retired-products.scan",version:"2.0.14",riskLevel:"R2",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-alliance",adapterVersion:"2.0.13"
+        adapterId:"doudian-alliance",adapterVersion:"2.0.14"
       }
     ]);
 
     const result = await runTrigger(service,store,{
       id:"doudian-retired-partial",appId:"retired-products-monitor",
       workflowId:"doudian.alliance-retired-products-monitor",
-      workflowVersion:"3.0.14",workflowInput:{ maxShops:100 }
+      workflowVersion:"3.0.15",workflowInput:{ maxShops:100 }
     });
 
     expect(result).toMatchObject({
@@ -1294,19 +1294,19 @@ describe("local Doudian business Workflow acceptance",() => {
       "workflows/examples/doudian.alliance-retired-products-monitor.workflow.yaml"
     );
     seedBrowser(store,[{
-      id:"doudian.alliance.shops.discover",version:"2.0.13",riskLevel:"R2",
+      id:"doudian.alliance.shops.discover",version:"2.0.14",riskLevel:"R2",
       permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-      adapterId:"doudian-alliance",adapterVersion:"2.0.13"
+      adapterId:"doudian-alliance",adapterVersion:"2.0.14"
     },{
-      id:"doudian.alliance.shop.retired-products.scan",version:"2.0.13",riskLevel:"R2",
+      id:"doudian.alliance.shop.retired-products.scan",version:"2.0.14",riskLevel:"R2",
       permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-      adapterId:"doudian-alliance",adapterVersion:"2.0.13"
+      adapterId:"doudian-alliance",adapterVersion:"2.0.14"
     }]);
 
     const result = await runTrigger(service,store,{
       id:"doudian-retired-active-no-id",appId:"retired-products-monitor",
       workflowId:"doudian.alliance-retired-products-monitor",
-      workflowVersion:"3.0.14",workflowInput:{ maxShops:100 }
+      workflowVersion:"3.0.15",workflowInput:{ maxShops:100 }
     });
     expect(result.run).toMatchObject({ status:"uncertain" });
     expect(store.getEngineCheckpoint(result.run.id)?.state).toMatchObject({
@@ -1348,18 +1348,18 @@ describe("local Doudian business Workflow acceptance",() => {
       "workflows/examples/doudian.alliance-retired-products-monitor.workflow.yaml"
     );
     seedBrowser(store,[{
-      id:"doudian.alliance.shops.discover",version:"2.0.13",riskLevel:"R2",
+      id:"doudian.alliance.shops.discover",version:"2.0.14",riskLevel:"R2",
       permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-      adapterId:"doudian-alliance",adapterVersion:"2.0.13"
+      adapterId:"doudian-alliance",adapterVersion:"2.0.14"
     },{
-      id:"doudian.alliance.shop.retired-products.scan",version:"2.0.13",riskLevel:"R2",
+      id:"doudian.alliance.shop.retired-products.scan",version:"2.0.14",riskLevel:"R2",
       permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-      adapterId:"doudian-alliance",adapterVersion:"2.0.13"
+      adapterId:"doudian-alliance",adapterVersion:"2.0.14"
     }]);
     const result = await runTrigger(service,store,{
       id:"doudian-retired-blocked-skip",appId:"retired-products-monitor",
       workflowId:"doudian.alliance-retired-products-monitor",
-      workflowVersion:"3.0.14",workflowInput:{ maxShops:100 }
+      workflowVersion:"3.0.15",workflowInput:{ maxShops:100 }
     });
     expect(result.run).toMatchObject({
       status:"succeeded",

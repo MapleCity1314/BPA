@@ -10,6 +10,7 @@ import {
   readBuyinRetiredProducts,
   readDoudianHeaderShopIdentity,
   readDoudianHeaderShopName,
+  scrollDoudianShopSwitcher,
   selectDoudianAllianceShop
 } from "./alliance-retired.js";
 
@@ -58,9 +59,9 @@ describe("Doudian alliance retired-products runtime", () => {
       )
       .digest("hex")}`;
 
-    expect(DOUDIAN_ALLIANCE_RUNTIME_VERSION).toBe("2.0.13");
-    expect(adapter.metadata.version).toBe("2.0.13");
-    expect(adapter.extension.minimumVersion).toBe("0.6.6");
+    expect(DOUDIAN_ALLIANCE_RUNTIME_VERSION).toBe("2.0.14");
+    expect(adapter.metadata.version).toBe("2.0.14");
+    expect(adapter.extension.minimumVersion).toBe("0.6.7");
     expect(adapter.capabilities).toHaveLength(2);
     expect(adapter.capabilities.map((capability) => capability.nodeId)).toEqual([
       "doudian.alliance.shops.discover",
@@ -68,8 +69,8 @@ describe("Doudian alliance retired-products runtime", () => {
     ]);
     for (const capability of adapter.capabilities) {
       expect(capability).toMatchObject({
-        nodeVersions: ["2.0.13"],
-        handlerVersion: "2.0.13",
+        nodeVersions: ["2.0.14"],
+        handlerVersion: "2.0.14",
         implementationDigest
       });
     }
@@ -317,6 +318,46 @@ describe("Doudian alliance retired-products runtime", () => {
       })
     ).toThrow("SHOP_TARGET_AMBIGUOUS");
     expect(click).not.toHaveBeenCalled();
+  });
+
+  it("scrolls by half a viewport before activating a partially visible shop card", () => {
+    const doc = documentOf(`
+      <div role="dialog">切换组织/店铺
+        <div class="roleItem target"><span class="introName">乙食品专营店</span>正常营业</div>
+      </div>
+    `);
+    const dialog = doc.querySelector<HTMLElement>("[role=dialog]")!;
+    const target = doc.querySelector<HTMLElement>(".target")!;
+    Object.defineProperties(dialog, {
+      clientHeight: { configurable: true, value: 382 },
+      scrollHeight: { configurable: true, value: 1_430 }
+    });
+    dialog.getBoundingClientRect = () =>
+      ({ left: 0, right: 400, top: 262, bottom: 644, width: 400, height: 382 }) as DOMRect;
+    target.getBoundingClientRect = () =>
+      ({
+        left: 20,
+        right: 380,
+        top: 592 - dialog.scrollTop,
+        bottom: 678 - dialog.scrollTop,
+        width: 360,
+        height: 86
+      }) as DOMRect;
+    const click = vi.fn();
+    target.addEventListener("click", click);
+    const shop = {
+      name: "乙食品专营店",
+      status: "active" as const,
+      statusText: "正常营业"
+    };
+
+    expect(() => selectDoudianAllianceShop(doc, shop)).toThrow(
+      "SHOP_TARGET_AMBIGUOUS"
+    );
+    expect(scrollDoudianShopSwitcher(doc)).toBe(true);
+    expect(dialog.scrollTop).toBe(191);
+    expect(() => selectDoudianAllianceShop(doc, shop)).not.toThrow();
+    expect(click).toHaveBeenCalledOnce();
   });
 
   it("uses the nested virtual scroller viewport instead of the outer dialog", () => {
