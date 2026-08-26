@@ -325,6 +325,24 @@ describe("Adapter Node registry", () => {
     expect(driver.cleanupShopTabs).toHaveBeenCalledOnce();
   });
 
+  it("fails closed when the activated shop cannot return to a stable product list", async () => {
+    driver.cleanupShopTabs.mockRejectedValueOnce(
+      new AllianceRetiredDriverError("DEADLINE_EXCEEDED")
+    );
+
+    const result = await executeRegisteredAdapterNode(
+      "doudian.inventory.shop.activate",
+      { targetShop: { id: targetShop.id, name: targetShop.name } },
+      context
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "DEADLINE_EXCEEDED", retryable: false }
+    });
+    expect(driver.cleanupShopTabs).toHaveBeenCalledTimes(2);
+  });
+
   it("fails alliance discovery when an active shop lacks a stable numeric id", async () => {
     driver.discoverShopContext.mockResolvedValue({
       currentShop: { id: "10001", name: "无ID店铺" },

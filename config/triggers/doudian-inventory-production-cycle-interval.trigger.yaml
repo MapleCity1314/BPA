@@ -5,7 +5,7 @@ appId: inventory-monitor
 kind: schedule
 workflow:
   id: doudian.inventory.production-cycle
-  version: 1.0.8
+  version: 1.0.9
 enabled: false
 inputSchemaVersion: doudian-inventory-production-cycle-interval/1
 input:

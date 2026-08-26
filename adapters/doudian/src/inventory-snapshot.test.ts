@@ -76,15 +76,15 @@ describe("doudian inventory snapshot", () => {
       ].map((path) => readFileSync(new URL(`../../../${path}`, import.meta.url)))
         .join("\n"))
       .digest("hex")}`;
-    expect(adapter.metadata.version).toBe("2.0.8");
-    expect(adapter.extension.minimumVersion).toBe("0.6.8");
+    expect(adapter.metadata.version).toBe("2.0.9");
+    expect(adapter.extension.minimumVersion).toBe("0.6.9");
     expect(adapter.capabilities).toHaveLength(2);
     expect(adapter.capabilities.map((capability) => capability.nodeId)).toEqual([
       "doudian.inventory.shop.activate",
       "doudian.inventory.product.snapshot.read"
     ]);
     expect(adapter.capabilities.map((capability) => capability.nodeVersions))
-      .toEqual([["1.0.8"], ["2.0.8"]]);
+      .toEqual([["1.0.9"], ["2.0.9"]]);
     for (const capability of adapter.capabilities) {
       expect(capability.implementationDigest).toBe(implementationDigest);
     }

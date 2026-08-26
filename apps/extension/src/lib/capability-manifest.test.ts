@@ -31,7 +31,7 @@ function canonicalJson(value: unknown): string {
 }
 
 describe("extension capability manifest", () => {
-  it("locks the inventory v2 capability to Runtime and Extension 0.6.8", () => {
+  it("locks the inventory v2 capability to Runtime and Extension 0.6.9", () => {
     for (const path of [
       "package.json",
       "apps/cli/package.json",
@@ -45,24 +45,24 @@ describe("extension capability manifest", () => {
       const packageJson = JSON.parse(
         readFileSync(new URL(path,repoRoot),"utf8")
       ) as { version:string };
-      expect(packageJson.version, path).toBe("0.6.8");
+      expect(packageJson.version, path).toBe("0.6.9");
     }
     expect(JSON.parse(readFileSync(
       new URL("apps/extension/package.json",repoRoot),"utf8"
-    )).version).toBe("0.6.8");
+    )).version).toBe("0.6.9");
     expect(
       readFileSync(new URL("apps/extension/wxt.config.ts",repoRoot),"utf8")
-    ).toContain('version: "0.6.8"');
+    ).toContain('version: "0.6.9"');
     const experienceAdapter = parse(readFileSync(
       new URL("adapters/doudian/doudian-experience.adapter.yaml",repoRoot),
       "utf8"
     )) as { extension:{ minimumVersion:string } };
-    expect(experienceAdapter.extension.minimumVersion).toBe("0.6.8");
+    expect(experienceAdapter.extension.minimumVersion).toBe("0.6.9");
     const inventoryAdapter = parse(readFileSync(
       new URL("adapters/doudian/doudian-inventory.adapter.yaml",repoRoot),
       "utf8"
     )) as { extension:{ minimumVersion:string } };
-    expect(inventoryAdapter.extension.minimumVersion).toBe("0.6.8");
+    expect(inventoryAdapter.extension.minimumVersion).toBe("0.6.9");
   });
 
   it("derives the complete protocol v2 report and digest from one registry", async () => {
@@ -84,8 +84,8 @@ describe("extension capability manifest", () => {
         expect.objectContaining({
           node_id: "doudian.alliance.shop.retired-products.scan",
           adapter_id: "doudian-alliance",
-          adapter_version: "2.0.15",
-          versions: ["2.0.15"],
+          adapter_version: "2.0.16",
+          versions: ["2.0.16"],
           routes: expect.arrayContaining([
             {
               origin: "https://fxg.jinritemai.com",
@@ -102,12 +102,12 @@ describe("extension capability manifest", () => {
         expect.objectContaining({
           node_id: "doudian.experience.shops.discover",
           adapter_id: "doudian-experience",
-          versions: ["2.0.3"]
+          versions: ["2.0.4"]
         }),
         expect.objectContaining({
           node_id: "doudian.experience.shop.snapshot.read",
           adapter_id: "doudian-experience",
-          versions: ["2.0.3"],
+          versions: ["2.0.4"],
           routes: [
             {
               origin: "https://fxg.jinritemai.com",
@@ -122,13 +122,13 @@ describe("extension capability manifest", () => {
         expect.objectContaining({
           node_id: "doudian.inventory.shop.activate",
           adapter_id: "doudian-inventory",
-          adapter_version: "2.0.8",
-          versions: ["1.0.8"]
+          adapter_version: "2.0.9",
+          versions: ["1.0.9"]
         }),
         expect.objectContaining({
           node_id: "doudian.inventory.product.snapshot.read",
           adapter_id: "doudian-inventory",
-          versions: ["2.0.8"]
+          versions: ["2.0.9"]
         })
       ])
     );
@@ -198,7 +198,7 @@ describe("extension capability manifest", () => {
     },
     {
       nodeId: "doudian.inventory.shop.activate",
-      nodeVersion: "1.0.8",
+      nodeVersion: "1.0.9",
       currentUrl: "https://fxg.jinritemai.com/ffa/g/list",
       grantedPermissions: [
         "browser.dom.read",
@@ -209,7 +209,7 @@ describe("extension capability manifest", () => {
     },
     {
       nodeId: "doudian.inventory.product.snapshot.read",
-      nodeVersion: "2.0.8",
+      nodeVersion: "2.0.9",
       currentUrl: "https://fxg.jinritemai.com/ffa/g/list",
       grantedPermissions: [
         "browser.dom.read",
@@ -236,7 +236,7 @@ describe("extension capability manifest", () => {
     },
     {
       nodeId: "doudian.alliance.shop.retired-products.scan",
-      nodeVersion: "2.0.15",
+      nodeVersion: "2.0.16",
       currentUrl: "https://fxg.jinritemai.com/ffa/g/list",
       grantedPermissions: [
         "browser.dom.read",
@@ -247,7 +247,7 @@ describe("extension capability manifest", () => {
     },
     {
       nodeId: "doudian.experience.shop.snapshot.read",
-      nodeVersion: "2.0.3",
+      nodeVersion: "2.0.4",
       currentUrl: "https://fxg.jinritemai.com/ffa/eco/experience-score",
       grantedPermissions: [
         "browser.dom.read",

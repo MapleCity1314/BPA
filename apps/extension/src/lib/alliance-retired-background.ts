@@ -278,6 +278,7 @@ export function createAllianceRetiredBrowserDriver(input: {
   readonly tabWaitTimeoutMs?: number;
   readonly shopIdentityWaitMs?: number;
   readonly restoreProductListAfterSwitch?: boolean;
+  readonly restoreStabilityMs?: number;
   readonly reserveManagedTab?: () => boolean;
   readonly releaseManagedTabReservation?: () => void;
   readonly onStageStarted?: (stage: {
@@ -520,6 +521,51 @@ export function createAllianceRetiredBrowserDriver(input: {
     throw lastError instanceof AllianceRetiredDriverError
       ? lastError
       : new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+  };
+
+  const restoreSourceProductListUntilStable = async (): Promise<void> => {
+    if (!sourceUrl) {
+      throw new AllianceRetiredDriverError("ALLIANCE_SOURCE_TAB_MISSING");
+    }
+    const stableForMs = input.restoreStabilityMs ?? 3_000;
+    let stableSince: number | undefined;
+    while (Date.now() < Date.parse(input.deadline)) {
+      assertNotCancelled();
+      const current = await browser.tabs
+        .get(input.sourceTabId)
+        .catch(() => undefined);
+      if (!current) {
+        throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+      }
+      if (current.url !== sourceUrl) {
+        await browser.tabs
+          .update(input.sourceTabId, { url: sourceUrl })
+          .catch(() => {
+            throw new AllianceRetiredDriverError("BROWSER_DISCONNECTED");
+          });
+        await waitForComplete(input.sourceTabId);
+        stableSince = undefined;
+      } else if (current.status === "complete") {
+        stableSince ??= Date.now();
+        if (Date.now() - stableSince >= stableForMs) {
+          await readShopContextAfterNavigation();
+          const confirmed = await browser.tabs
+            .get(input.sourceTabId)
+            .catch(() => undefined);
+          if (
+            confirmed?.url === sourceUrl &&
+            confirmed.status === "complete"
+          ) {
+            return;
+          }
+          stableSince = undefined;
+        }
+      } else {
+        stableSince = undefined;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new AllianceRetiredDriverError("DEADLINE_EXCEEDED");
   };
 
   const switchAndConfirmShop = async (
@@ -936,6 +982,12 @@ export function createAllianceRetiredBrowserDriver(input: {
       }
     },
     async cleanupShopTabs() {
+      if (sourceUrl && input.restoreProductListAfterSwitch) {
+        await restoreSourceProductListUntilStable();
+        promoteTabId = undefined;
+        retiredTabId = undefined;
+        return;
+      }
       const source = await browser.tabs
         .get(input.sourceTabId)
         .catch(() => undefined);
@@ -946,9 +998,6 @@ export function createAllianceRetiredBrowserDriver(input: {
       ) {
         await browser.tabs.update(source.id, { url: sourceUrl });
         await waitForComplete(source.id);
-      }
-      if (sourceUrl && input.restoreProductListAfterSwitch) {
-        await readShopContextAfterNavigation();
       }
       promoteTabId = undefined;
       retiredTabId = undefined;

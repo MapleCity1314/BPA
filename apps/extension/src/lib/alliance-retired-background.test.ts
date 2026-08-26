@@ -278,17 +278,25 @@ describe("alliance retired-products browser navigation", () => {
     const driver = createAllianceRetiredBrowserDriver({
       sourceTabId: 1,
       deadline: new Date(Date.now() + 10_000).toISOString(),
-      restoreProductListAfterSwitch: true
+      restoreProductListAfterSwitch: true,
+      restoreStabilityMs: 50
     });
 
     await driver.switchShop(shop);
+    setTimeout(() => {
+      state.tabs.set(1, {
+        ...state.tabs.get(1)!,
+        url: "https://fxg.jinritemai.com/ffa/mshop/homepage/index"
+      });
+    }, 20);
+    await driver.cleanupShopTabs();
 
     expect(state.tabs.get(1)?.url).toBe(sourceUrl);
     expect(
       state.sentMessages.filter(
         (message) => message.type === "bpa.doudian.alliance.stage"
       )
-    ).toHaveLength(2);
+    ).toHaveLength(3);
   });
 
   it("resumes id-less discovery after a shop switch reloads the source tab", async () => {

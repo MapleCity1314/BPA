@@ -2,8 +2,8 @@ import type { BridgeCapability } from "@bpa/browser-bridge";
 
 export const BROWSER_PROTOCOL = "bpa.browser/2";
 export const DOUDIAN_ADAPTER_VERSION = "1.2.0";
-export const DOUDIAN_INVENTORY_ADAPTER_VERSION = "2.0.8";
-export const DOUDIAN_ALLIANCE_ADAPTER_VERSION = "2.0.15";
+export const DOUDIAN_INVENTORY_ADAPTER_VERSION = "2.0.9";
+export const DOUDIAN_ALLIANCE_ADAPTER_VERSION = "2.0.16";
 export const DOUDIAN_ORIGIN = "https://fxg.jinritemai.com";
 export const DOUDIAN_BUYIN_ORIGIN = "https://buyin.jinritemai.com";
 export const CHANMAMA_ORIGIN = "https://www.chanmama.com";
@@ -152,7 +152,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   },
   {
     nodeId: "doudian.inventory.shop.activate",
-    versions: ["1.0.8"],
+    versions: ["1.0.9"],
     riskLevel: "R1",
     permissions: [
       "browser.dom.read",
@@ -175,7 +175,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   },
   {
     nodeId: "doudian.inventory.product.snapshot.read",
-    versions: ["2.0.8"],
+    versions: ["2.0.9"],
     riskLevel: "R1",
     permissions: [
       "browser.dom.read",
@@ -229,7 +229,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   },
   {
     nodeId: "doudian.alliance.shops.discover",
-    versions: ["2.0.15"],
+    versions: ["2.0.16"],
     riskLevel: "R2",
     permissions: [
       "browser.dom.read",
@@ -252,7 +252,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   },
   {
     nodeId: "doudian.alliance.shop.retired-products.scan",
-    versions: ["2.0.15"],
+    versions: ["2.0.16"],
     riskLevel: "R2",
     permissions: [
       "browser.dom.read",
@@ -280,7 +280,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   },
   {
     nodeId: "doudian.experience.shops.discover",
-    versions: ["2.0.3"],
+    versions: ["2.0.4"],
     riskLevel: "R1",
     permissions: [
       "browser.dom.read",
@@ -295,12 +295,12 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
         observerCapabilityId: "doudian.page"
       }
     ],
-    adapter: { id: "doudian-experience", version: "2.0.3" },
+    adapter: { id: "doudian-experience", version: "2.0.4" },
     executionTarget: "background"
   },
   {
     nodeId: "doudian.experience.shop.snapshot.read",
-    versions: ["2.0.3"],
+    versions: ["2.0.4"],
     riskLevel: "R1",
     permissions: [
       "browser.dom.read",
@@ -315,7 +315,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
         observerCapabilityId: "doudian.page"
       }
     ],
-    adapter: { id: "doudian-experience", version: "2.0.3" },
+    adapter: { id: "doudian-experience", version: "2.0.4" },
     executionTarget: "background"
   }
 ];

@@ -32,7 +32,7 @@ describe("Doudian inventory and retired-products background scheduling", () => {
       enabled: false,
       workflow: {
         id: "doudian.inventory.production-cycle",
-        version: "1.0.8"
+        version: "1.0.9"
       },
       concurrencyKey: "doudian-account:company-main",
       retryPolicy: "none",
@@ -52,7 +52,7 @@ describe("Doudian inventory and retired-products background scheduling", () => {
       enabled: false,
       workflow: {
         id: "doudian.alliance-retired-products-monitor",
-        version: "3.0.16"
+        version: "3.0.17"
       },
       concurrencyKey: "doudian-account:company-main",
       retryPolicy: "none",

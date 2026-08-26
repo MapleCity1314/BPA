@@ -665,6 +665,7 @@ const activateInventoryShop: AdapterNodeHandler = async (input, context) => {
   });
   try {
     await driver.switchShop(target);
+    await driver.cleanupShopTabs();
     const observedAt = new Date().toISOString();
     return {
       ok: true,
@@ -679,13 +680,12 @@ const activateInventoryShop: AdapterNodeHandler = async (input, context) => {
       }
     };
   } catch (error) {
+    await driver.cleanupShopTabs().catch(() => undefined);
     return allianceErrorResponse(
       error,
       "SHOP_SWITCH_NOT_CONFIRMED",
       INVENTORY_SHOP_ACTIVATION_ERRORS
     );
-  } finally {
-    await driver.cleanupShopTabs().catch(() => undefined);
   }
 };
 

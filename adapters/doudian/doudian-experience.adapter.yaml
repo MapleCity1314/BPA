@@ -2,24 +2,24 @@ apiVersion: bpa.adapter/v1alpha1
 kind: Adapter
 metadata:
   id: doudian-experience
-  version: 2.0.3
+  version: 2.0.4
   title: 抖店商家体验分只读采集 Adapter
   description: 在一个受管抖店标签页内完成店铺发现、逐店切换、体验分读取和源店铺恢复，不启动额外 Chrome 实例。
 platform: doudian
 origins:
   - https://fxg.jinritemai.com
 extension:
-  minimumVersion: 0.6.8
+  minimumVersion: 0.6.9
 capabilities:
   - nodeId: doudian.experience.shops.discover
-    nodeVersions: [2.0.3]
+    nodeVersions: [2.0.4]
     handlerId: doudian.experience.shops.discover
-    handlerVersion: 2.0.3
-    implementationDigest: sha256:4ecc517e38a914cb90b4945fe4b819e4ddbd50a96c669e3a77899e72beeea170
+    handlerVersion: 2.0.4
+    implementationDigest: sha256:b78c158f9612f3891f15a5b844c9e61111acb7a1d517796cf11100d5c159b6e2
     permissions: [browser.dom.read, browser.dom.write, browser.tabs.read, browser.tabs.navigate]
   - nodeId: doudian.experience.shop.snapshot.read
-    nodeVersions: [2.0.3]
+    nodeVersions: [2.0.4]
     handlerId: doudian.experience.shop.snapshot.read
-    handlerVersion: 2.0.3
-    implementationDigest: sha256:4ecc517e38a914cb90b4945fe4b819e4ddbd50a96c669e3a77899e72beeea170
+    handlerVersion: 2.0.4
+    implementationDigest: sha256:b78c158f9612f3891f15a5b844c9e61111acb7a1d517796cf11100d5c159b6e2
     permissions: [browser.dom.read, browser.dom.write, browser.tabs.read, browser.tabs.navigate]
