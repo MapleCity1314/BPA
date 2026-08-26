@@ -5,7 +5,7 @@ const EXPERIENCE_PATH = "/ffa/eco/experience-score";
 const SCORE_PATTERN = /(-?\d+(?:\.\d+)?)\s*分/u;
 const NUMBER_PATTERN = /-?\d+(?:\.\d+)?/u;
 
-export const DOUDIAN_EXPERIENCE_ADAPTER_VERSION = "2.0.2";
+export const DOUDIAN_EXPERIENCE_ADAPTER_VERSION = "2.0.3";
 
 export type DoudianExperienceErrorCode =
   | "EXPERIENCE_DIMENSION_INCOMPLETE"

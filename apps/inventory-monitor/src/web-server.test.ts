@@ -186,7 +186,7 @@ describe("inventory review server", () => {
         repository,
         runtimeProductionCycleSummary:vi.fn(async () => ({
           state:"in-progress" as const,
-          workflowVersion:"1.0.7" as const,
+          workflowVersion:"1.0.8" as const,
           scheduledAt:"2026-08-10T07:00:00.000Z",
           observedAt:null,
           reasonCode:null,
@@ -343,7 +343,7 @@ describe("inventory review server", () => {
     try {
       const unauthenticated = await fetch(
         `http://127.0.0.1:${server.port}/api/overview`,
-        { headers:{ "x-forwarded-for":"192.0.2.1" } }
+        { headers:{ "x-forwarded-for":"192.0.3.1" } }
       );
       expect(unauthenticated.status).toBe(401);
       expect(runtimeAttentionReminders).not.toHaveBeenCalled();

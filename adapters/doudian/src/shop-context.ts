@@ -8,6 +8,11 @@ export interface DoudianShopContext {
   url: string;
 }
 
+export interface DoudianExpectedShopIdentity {
+  readonly id: string;
+  readonly name: string;
+}
+
 const DOUDIAN_ORIGIN = "https://fxg.jinritemai.com";
 const DOUDIAN_LIST_PATH = "/ffa/g/list";
 const SHOP_NAME_PATTERN =
@@ -30,6 +35,17 @@ function normalizeShopName(value: string | null | undefined): string {
   return normalizeText((value ?? "").normalize("NFKC"))
     .replace(/[（(]\s*(?:当前|当前店铺)\s*[）)]$/u, "")
     .trim();
+}
+
+export function doudianShopContextMatchesExpected(
+  context: DoudianShopContext,
+  expected: DoudianExpectedShopIdentity
+): boolean {
+  if (!context.shop.identity_confirmed) return false;
+  if (normalizeShopName(context.shop.name) !== normalizeShopName(expected.name)) {
+    return false;
+  }
+  return !/^\d{5,30}$/u.test(context.shop.id) || context.shop.id === expected.id;
 }
 
 function visibleNearHeader(element: Element): boolean {

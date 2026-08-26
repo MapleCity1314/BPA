@@ -58,7 +58,7 @@ describe("Doudian experience-score adapter", () => {
         implementationDigest: string;
       }>;
     };
-    expect(adapter.metadata.version).toBe("2.0.2");
+    expect(adapter.metadata.version).toBe("2.0.3");
     expect(DOUDIAN_EXPERIENCE_ADAPTER_VERSION).toBe(
       adapter.metadata.version
     );
@@ -76,8 +76,8 @@ describe("Doudian experience-score adapter", () => {
       .digest("hex")}`;
     for (const capability of adapter.capabilities) {
       expect(capability).toMatchObject({
-        nodeVersions: ["2.0.2"],
-        handlerVersion: "2.0.2",
+        nodeVersions: ["2.0.3"],
+        handlerVersion: "2.0.3",
         implementationDigest
       });
     }
@@ -86,8 +86,8 @@ describe("Doudian experience-score adapter", () => {
       "nodes/core/doudian.experience.shop.snapshot.read.node.yaml"
     ]) {
       expect(asset(path)).toMatchObject({
-        metadata: { version: "2.0.2" },
-        adapter: { id: "doudian-experience", versions: ["2.0.2"] }
+        metadata: { version: "2.0.3" },
+        adapter: { id: "doudian-experience", versions: ["2.0.3"] }
       });
     }
     const discoverNode = asset(

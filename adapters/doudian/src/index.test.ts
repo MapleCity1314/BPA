@@ -1,6 +1,7 @@
 import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
 import {
+  doudianShopContextMatchesExpected,
   detectDoudianRiskSignals,
   readDoudianShopContext
 } from "./index.js";
@@ -75,6 +76,47 @@ describe("doudian adapter", () => {
           identity_confirmed: true
         }
       });
+  });
+
+  it("matches a previously activated numeric shop when the authenticated header omits its id", () => {
+    const context = {
+      supported: true,
+      shop: {
+        id: "name:59dcdd52",
+        name: "榆园儿食品专营店（当前店铺）",
+        identity_confirmed: true
+      },
+      url: "https://fxg.jinritemai.com/ffa/g/list"
+    };
+    expect(doudianShopContextMatchesExpected(context, {
+      id: "123456789",
+      name: "榆园儿食品专营店"
+    })).toBe(true);
+  });
+
+  it("rejects an unconfirmed, differently named, or conflicting numeric shop", () => {
+    const expected = { id: "123456789", name: "测试旗舰店" };
+    const base = {
+      supported: true,
+      shop: {
+        id: "name:4cf24bd7",
+        name: "测试旗舰店",
+        identity_confirmed: true
+      },
+      url: "https://fxg.jinritemai.com/ffa/g/list"
+    };
+    expect(doudianShopContextMatchesExpected({
+      ...base,
+      shop: { ...base.shop, identity_confirmed: false }
+    }, expected)).toBe(false);
+    expect(doudianShopContextMatchesExpected({
+      ...base,
+      shop: { ...base.shop, name: "其他旗舰店" }
+    }, expected)).toBe(false);
+    expect(doudianShopContextMatchesExpected({
+      ...base,
+      shop: { ...base.shop, id: "987654321" }
+    }, expected)).toBe(false);
   });
 
   it("keeps the observed header identity stable while the account popover is open", () => {

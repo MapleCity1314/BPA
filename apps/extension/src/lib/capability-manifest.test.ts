@@ -84,8 +84,8 @@ describe("extension capability manifest", () => {
         expect.objectContaining({
           node_id: "doudian.alliance.shop.retired-products.scan",
           adapter_id: "doudian-alliance",
-          adapter_version: "2.0.14",
-          versions: ["2.0.14"],
+          adapter_version: "2.0.15",
+          versions: ["2.0.15"],
           routes: expect.arrayContaining([
             {
               origin: "https://fxg.jinritemai.com",
@@ -102,12 +102,12 @@ describe("extension capability manifest", () => {
         expect.objectContaining({
           node_id: "doudian.experience.shops.discover",
           adapter_id: "doudian-experience",
-          versions: ["2.0.2"]
+          versions: ["2.0.3"]
         }),
         expect.objectContaining({
           node_id: "doudian.experience.shop.snapshot.read",
           adapter_id: "doudian-experience",
-          versions: ["2.0.2"],
+          versions: ["2.0.3"],
           routes: [
             {
               origin: "https://fxg.jinritemai.com",
@@ -122,13 +122,13 @@ describe("extension capability manifest", () => {
         expect.objectContaining({
           node_id: "doudian.inventory.shop.activate",
           adapter_id: "doudian-inventory",
-          adapter_version: "2.0.7",
-          versions: ["1.0.7"]
+          adapter_version: "2.0.8",
+          versions: ["1.0.8"]
         }),
         expect.objectContaining({
           node_id: "doudian.inventory.product.snapshot.read",
           adapter_id: "doudian-inventory",
-          versions: ["2.0.7"]
+          versions: ["2.0.8"]
         })
       ])
     );
@@ -198,7 +198,7 @@ describe("extension capability manifest", () => {
     },
     {
       nodeId: "doudian.inventory.shop.activate",
-      nodeVersion: "1.0.7",
+      nodeVersion: "1.0.8",
       currentUrl: "https://fxg.jinritemai.com/ffa/g/list",
       grantedPermissions: [
         "browser.dom.read",
@@ -209,7 +209,7 @@ describe("extension capability manifest", () => {
     },
     {
       nodeId: "doudian.inventory.product.snapshot.read",
-      nodeVersion: "2.0.7",
+      nodeVersion: "2.0.8",
       currentUrl: "https://fxg.jinritemai.com/ffa/g/list",
       grantedPermissions: [
         "browser.dom.read",
@@ -236,7 +236,7 @@ describe("extension capability manifest", () => {
     },
     {
       nodeId: "doudian.alliance.shop.retired-products.scan",
-      nodeVersion: "2.0.14",
+      nodeVersion: "2.0.15",
       currentUrl: "https://fxg.jinritemai.com/ffa/g/list",
       grantedPermissions: [
         "browser.dom.read",
@@ -247,7 +247,7 @@ describe("extension capability manifest", () => {
     },
     {
       nodeId: "doudian.experience.shop.snapshot.read",
-      nodeVersion: "2.0.2",
+      nodeVersion: "2.0.3",
       currentUrl: "https://fxg.jinritemai.com/ffa/eco/experience-score",
       grantedPermissions: [
         "browser.dom.read",

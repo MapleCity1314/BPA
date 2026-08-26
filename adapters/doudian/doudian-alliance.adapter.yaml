@@ -2,7 +2,7 @@ apiVersion: bpa.adapter/v1alpha1
 kind: Adapter
 metadata:
   id: doudian-alliance
-  version: 2.0.14
+  version: 2.0.15
   title: 抖店精选联盟已清退商品巡检 Adapter
   description: 固定从抖店登录上下文进入精选联盟、逐店切换、关闭已知广告弹窗和只读采集清退商品的跨域实现。
 platform: doudian
@@ -14,10 +14,10 @@ extension:
 capabilities:
   - nodeId: doudian.alliance.shops.discover
     nodeVersions:
-      - 2.0.14
+      - 2.0.15
     handlerId: doudian.alliance.shops.discover
-    handlerVersion: 2.0.14
-    implementationDigest: sha256:76590a4ac654face27ca7ed74d94b518d9f3f2cae6b7725c9536b8f4ed6548c1
+    handlerVersion: 2.0.15
+    implementationDigest: sha256:d4f865ae3f2c2e72b11a80e062b533e4794507c83b5aabc2b6808a2b8005e6a5
     permissions:
       - browser.dom.read
       - browser.dom.write
@@ -25,10 +25,10 @@ capabilities:
       - browser.tabs.navigate
   - nodeId: doudian.alliance.shop.retired-products.scan
     nodeVersions:
-      - 2.0.14
+      - 2.0.15
     handlerId: doudian.alliance.shop.retired-products.scan
-    handlerVersion: 2.0.14
-    implementationDigest: sha256:76590a4ac654face27ca7ed74d94b518d9f3f2cae6b7725c9536b8f4ed6548c1
+    handlerVersion: 2.0.15
+    implementationDigest: sha256:d4f865ae3f2c2e72b11a80e062b533e4794507c83b5aabc2b6808a2b8005e6a5
     permissions:
       - browser.dom.read
       - browser.dom.write

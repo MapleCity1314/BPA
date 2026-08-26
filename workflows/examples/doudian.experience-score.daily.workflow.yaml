@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: doudian.experience-score.daily
-  version: 2.0.2
+  version: 2.0.3
   title: 抖店每日多店体验分采集
   description: 复用一个已登录 Mac Chrome 标签页逐店读取体验分，每店成功后立即幂等持久化；完整或部分结果至少含一条事实时准备终态 Dataset 发布意图。
 spec:
@@ -37,7 +37,7 @@ spec:
     steps:
       - key: discover_shops
         kind: call
-        use: doudian.experience.shops.discover@2.0.2
+        use: doudian.experience.shops.discover@2.0.3
         with:
           maxShops: ${input.maxShops}
         timeout: 2m
@@ -75,7 +75,7 @@ spec:
           steps:
             - key: read_snapshot
               kind: call
-              use: doudian.experience.shop.snapshot.read@2.0.2
+              use: doudian.experience.shop.snapshot.read@2.0.3
               with:
                 shop: ${item}
                 sourceShop: ${steps.discover_shops.output.sourceShop}

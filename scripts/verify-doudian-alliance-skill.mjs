@@ -189,9 +189,9 @@ async function verifySource() {
   if (
     Object.keys(canonicalAssets).length !== 7 ||
     !installer.includes(
-      'workflow = "doudian.alliance-retired-products-monitor@3.0.15"'
+      'workflow = "doudian.alliance-retired-products-monitor@3.0.16"'
     ) ||
-    !installer.includes('"--version", "3.0.15"') ||
+    !installer.includes('"--version", "3.0.16"') ||
     !installer.includes("foreach ($Asset in $RequiredAssets)")
   ) {
     throw new Error(

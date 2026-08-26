@@ -1,6 +1,6 @@
 const CONTROL_TIMEOUT_MS = 2_000;
 const WORKFLOW_ID = "doudian.inventory.production-cycle";
-const WORKFLOW_VERSION = "1.0.7";
+const WORKFLOW_VERSION = "1.0.8";
 
 interface ProductionCycleControlClient {
   request(
@@ -21,7 +21,7 @@ export interface InventoryPanelProductionCycle {
     | "failed"
     | "rejected"
     | "cancelled";
-  readonly workflowVersion: "1.0.7";
+  readonly workflowVersion: "1.0.8";
   readonly scheduledAt: string | null;
   readonly observedAt: string | null;
   readonly reasonCode: string | null;

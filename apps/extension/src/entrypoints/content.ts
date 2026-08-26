@@ -5,6 +5,7 @@ import {
   doudianExperienceErrorPayload,
   inspectDoudianPriorityItems,
   legacyDoudianScopeCollectionResult,
+  doudianShopContextMatchesExpected,
   readDoudianShopContext,
   restoreDoudianProductScope,
   validateDoudianScopeRestoreTarget,
@@ -268,8 +269,12 @@ const handlers: ContentActionHandlers = {
     );
     const requestedShop = input.shop as { id?: unknown; name?: unknown };
     if (
-      requestedShop?.id !== ready.context.shop.id ||
-      requestedShop?.name !== ready.context.shop.name
+      typeof requestedShop?.id !== "string" ||
+      typeof requestedShop?.name !== "string" ||
+      !doudianShopContextMatchesExpected(ready.context, {
+        id: requestedShop.id,
+        name: requestedShop.name
+      })
     ) {
       throw new Error("SHOP_IDENTITY_MISMATCH");
     }
