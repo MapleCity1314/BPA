@@ -10,7 +10,7 @@ origins:
   - https://fxg.jinritemai.com
   - https://buyin.jinritemai.com
 extension:
-  minimumVersion: 0.6.7
+  minimumVersion: 0.6.8
 capabilities:
   - nodeId: doudian.alliance.shops.discover
     nodeVersions:

@@ -77,7 +77,7 @@ describe("doudian inventory snapshot", () => {
         .join("\n"))
       .digest("hex")}`;
     expect(adapter.metadata.version).toBe("2.0.8");
-    expect(adapter.extension.minimumVersion).toBe("0.6.2");
+    expect(adapter.extension.minimumVersion).toBe("0.6.8");
     expect(adapter.capabilities).toHaveLength(2);
     expect(adapter.capabilities.map((capability) => capability.nodeId)).toEqual([
       "doudian.inventory.shop.activate",

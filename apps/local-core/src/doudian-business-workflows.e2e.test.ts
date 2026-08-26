@@ -476,7 +476,7 @@ function seedBrowser(
   store.openBrowserSession({
     session:{
       id:"session-doudian",browserInstanceId,
-      extensionId:"extension-doudian",extensionVersion:"0.6.7",
+      extensionId:"extension-doudian",extensionVersion:"0.6.8",
       protocolVersion:"2.0.0",incomingSeq:0,outgoingSeq:0,
       lastAckedCommandSeq:0,capabilityDigest:`sha256:${"a".repeat(64)}`,
       resumeTokenDigest:`sha256:${"b".repeat(64)}`,

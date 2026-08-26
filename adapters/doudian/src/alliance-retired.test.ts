@@ -61,7 +61,7 @@ describe("Doudian alliance retired-products runtime", () => {
 
     expect(DOUDIAN_ALLIANCE_RUNTIME_VERSION).toBe("2.0.15");
     expect(adapter.metadata.version).toBe("2.0.15");
-    expect(adapter.extension.minimumVersion).toBe("0.6.7");
+    expect(adapter.extension.minimumVersion).toBe("0.6.8");
     expect(adapter.capabilities).toHaveLength(2);
     expect(adapter.capabilities.map((capability) => capability.nodeId)).toEqual([
       "doudian.alliance.shops.discover",

@@ -31,7 +31,7 @@ function canonicalJson(value: unknown): string {
 }
 
 describe("extension capability manifest", () => {
-  it("locks the inventory v2 capability to Runtime and Extension 0.6.7", () => {
+  it("locks the inventory v2 capability to Runtime and Extension 0.6.8", () => {
     for (const path of [
       "package.json",
       "apps/cli/package.json",
@@ -45,24 +45,24 @@ describe("extension capability manifest", () => {
       const packageJson = JSON.parse(
         readFileSync(new URL(path,repoRoot),"utf8")
       ) as { version:string };
-      expect(packageJson.version, path).toBe("0.6.7");
+      expect(packageJson.version, path).toBe("0.6.8");
     }
     expect(JSON.parse(readFileSync(
       new URL("apps/extension/package.json",repoRoot),"utf8"
-    )).version).toBe("0.6.7");
+    )).version).toBe("0.6.8");
     expect(
       readFileSync(new URL("apps/extension/wxt.config.ts",repoRoot),"utf8")
-    ).toContain('version: "0.6.7"');
+    ).toContain('version: "0.6.8"');
     const experienceAdapter = parse(readFileSync(
       new URL("adapters/doudian/doudian-experience.adapter.yaml",repoRoot),
       "utf8"
     )) as { extension:{ minimumVersion:string } };
-    expect(experienceAdapter.extension.minimumVersion).toBe("0.6.2");
+    expect(experienceAdapter.extension.minimumVersion).toBe("0.6.8");
     const inventoryAdapter = parse(readFileSync(
       new URL("adapters/doudian/doudian-inventory.adapter.yaml",repoRoot),
       "utf8"
     )) as { extension:{ minimumVersion:string } };
-    expect(inventoryAdapter.extension.minimumVersion).toBe("0.6.2");
+    expect(inventoryAdapter.extension.minimumVersion).toBe("0.6.8");
   });
 
   it("derives the complete protocol v2 report and digest from one registry", async () => {

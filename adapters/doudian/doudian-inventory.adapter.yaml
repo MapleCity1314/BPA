@@ -9,7 +9,7 @@ platform: doudian
 origins:
   - https://fxg.jinritemai.com
 extension:
-  minimumVersion: 0.6.2
+  minimumVersion: 0.6.8
 capabilities:
   - nodeId: doudian.inventory.shop.activate
     nodeVersions: [1.0.8]
