@@ -787,7 +787,8 @@ describe("staged WDT publication visibility",() => {
       const sql = String(sqlValue);
       expect(sql).toContain("source_kind='ecom-profit-mysql:wdt-stockout'");
       expect(sql).toContain("lineage->>'publicationProtocol'='staged-v1'");
-      expect(sql).toContain("ORDER BY observed_at DESC,created_at DESC");
+      expect(sql).toContain("ORDER BY created_at DESC,observed_at DESC");
+      expect(sql).toContain("FROM source.sync_run");
       return result([{
         server_now:new Date("2026-08-10T00:00:00.000Z"),
         dataset_id:null,data_version:null,source_kind:null,observed_at:null
@@ -835,6 +836,7 @@ describe("staged WDT publication visibility",() => {
       shop:{ id:"10461048",name:"一号店" },
       baseline:{
         status:"fresh_reused",
+        checkedAt:"2026-08-09T23:58:00.000Z",
         datasetId:"sales-demand-staged:10461048",
         dataVersion:"42:abcdefghijkl"
       }
@@ -854,10 +856,35 @@ describe("staged WDT publication visibility",() => {
       shop:{ id:"10461048",name:"一号店" },
       baseline:{
         status:"fresh_reused",
+        checkedAt:"2026-08-09T23:58:00.000Z",
         datasetId:"sales-demand-staged:10461048",
         dataVersion:"42:abcdefghijkl"
       }
     })).resolves.toMatchObject({ status:"fresh_reused" });
+  });
+
+  it("accepts a successful no-change sync completed after a stale baseline check",async () => {
+    const query = vi.fn(async () => result([{
+      server_now:new Date("2026-08-10T00:02:00.000Z"),
+      dataset_id:"sales-demand-staged:10461048",
+      data_version:"42:abcdefghijkl",
+      source_kind:"ecom-profit-mysql:wdt-stockout",
+      observed_at:new Date("2026-08-10T00:01:00.000Z")
+    }]));
+    const repository = new InventoryRepository({ query } as unknown as Pool);
+    await expect(repository.ordersFreshness({
+      shop:{ id:"10461048",name:"一号店" },
+      baseline:{
+        status:"refresh_required",
+        checkedAt:"2026-08-10T00:00:00.000Z",
+        datasetId:"sales-demand-staged:10461048",
+        dataVersion:"42:abcdefghijkl"
+      }
+    })).resolves.toMatchObject({
+      status:"refreshed",
+      latestObservedAt:"2026-08-10T00:01:00.000Z",
+      ageSeconds:60
+    });
   });
 
   it("limits forecast order facts to an exact staged-v1 WDT publication",async () => {
@@ -885,13 +912,49 @@ describe("staged WDT publication visibility",() => {
     );
     expect(publishedDatasetQuery).toContain("created_at");
     expect(publishedDatasetQuery).toContain(
-      "ORDER BY observed_at DESC,created_at DESC"
+      "ORDER BY created_at DESC,observed_at DESC"
     );
     for (const sql of queries.filter((value) => value.includes("source.order_line_fact"))) {
       expect(sql).toContain("source_system=");
       expect(sql).toContain("source_batch_id <=");
       expect(sql).toContain("updated_at <=");
     }
+  });
+
+  it("uses the successful sync time for forecast demand quality",async () => {
+    const query = vi.fn(async (sqlValue:unknown) => {
+      const sql = String(sqlValue);
+      if (sql.includes("SELECT platform_sku_id,merchant_code")) {
+        return result([{ platform_sku_id:"90001",merchant_code:"SKU-1" }]);
+      }
+      if (sql.includes("FROM dataset.version")) return result([{
+        dataset_id:"sales-demand-staged:10461048",
+        data_version:"42:abcdefghijkl",
+        source_kind:"ecom-profit-mysql:wdt-stockout",
+        source_digest:"sha256:orders",
+        observed_at:new Date("2026-08-09T12:00:00.000Z"),
+        created_at:new Date("2026-08-10T00:01:00.000Z"),
+        as_of:new Date("2026-08-09T15:59:59.999Z"),
+        watermark:"42",
+        last_sync_at:new Date("2026-08-10T00:01:00.000Z")
+      }]);
+      if (sql.includes("COALESCE(sum(demand_quantity)")) {
+        return result([{ quantity:"1" }]);
+      }
+      if (sql.includes("count(*)::int")) return result([{ count:1 }]);
+      if (sql.includes("date_trunc('hour',paid_at)")) return result();
+      if (sql.includes("FROM inventory.snapshot_channel")) return result();
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const repository = new InventoryRepository({ query } as unknown as Pool);
+    await expect(repository.forecastInputs({
+      shopId:"10461048",productId:"80001",asOf:"2026-08-10T00:02:00.000Z"
+    })).resolves.toMatchObject([{
+      demandQuality:{
+        recentObservedAt:"2026-08-10T00:01:00.000Z",
+        historicalCompleteThrough:"2026-08-09T15:59:59.999Z"
+      }
+    }]);
   });
 });
 

@@ -310,14 +310,19 @@ export class InventoryRepository {
     fresh: boolean;
   }> {
     const result = await this.pool.query<{ observed_at: Date; age_minutes: string }>(
-      `SELECT observed_at,
-              extract(epoch FROM (now()-observed_at))/60 AS age_minutes
-       FROM dataset.version
-       WHERE dataset_id=$1
-         AND source_kind='ecom-profit-mysql:wdt-stockout'
-         AND lineage->>'publicationProtocol'='staged-v1'
-       ORDER BY observed_at DESC LIMIT 1`,
-      [`sales-demand-staged:${shopId}`]
+      `SELECT completed_at AS observed_at,
+              extract(epoch FROM (now()-completed_at))/60 AS age_minutes
+       FROM source.sync_run
+       WHERE source_system='ecom-profit-mysql:wdt-stockout'
+         AND shop_id=$1 AND status='succeeded' AND completed_at IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM dataset.version
+           WHERE dataset_id='sales-demand-staged:' || $1
+             AND source_kind='ecom-profit-mysql:wdt-stockout'
+             AND lineage->>'publicationProtocol'='staged-v1'
+         )
+       ORDER BY completed_at DESC,sync_run_id DESC LIMIT 1`,
+      [shopId]
     );
     const latest = result.rows[0];
     if (!latest) return { fresh:false };
@@ -1885,6 +1890,7 @@ export class InventoryRepository {
     shop: { id: string; name: string };
     baseline?: {
       status: "fresh_reused" | "refresh_required" | "refreshed" | "degraded";
+      checkedAt: string;
       datasetId: string | null;
       dataVersion: string | null;
     };
@@ -1912,12 +1918,19 @@ export class InventoryRepository {
          WHERE dataset_id='sales-demand-staged:' || $1
            AND source_kind='ecom-profit-mysql:wdt-stockout'
            AND lineage->>'publicationProtocol'='staged-v1'
-         ORDER BY observed_at DESC,created_at DESC,dataset_id,data_version
+         ORDER BY created_at DESC,observed_at DESC,dataset_id,data_version
+         LIMIT 1
+       ), latest_sync AS (
+         SELECT completed_at
+         FROM source.sync_run
+         WHERE source_system='ecom-profit-mysql:wdt-stockout'
+           AND shop_id=$1 AND status='succeeded' AND completed_at IS NOT NULL
+         ORDER BY completed_at DESC,sync_run_id DESC
          LIMIT 1
        )
        SELECT clock.server_now,latest.dataset_id,latest.data_version,
-              latest.source_kind,latest.observed_at
-       FROM clock LEFT JOIN latest ON true`,
+              latest.source_kind,latest_sync.completed_at AS observed_at
+       FROM clock LEFT JOIN latest ON true LEFT JOIN latest_sync ON true`,
       [input.shop.id]
     );
     const freshness = row(result.rows,"orders freshness");
@@ -1934,7 +1947,9 @@ export class InventoryRepository {
         );
     const datasetId = freshness.dataset_id ?? null;
     const dataVersion = freshness.data_version ?? null;
-    const currentFresh = ageSeconds !== null && ageSeconds <= 7_200;
+    const currentFresh = Boolean(
+      datasetId && dataVersion && ageSeconds !== null && ageSeconds <= 7_200
+    );
     const versionChanged = Boolean(
       input.baseline &&
       datasetId &&
@@ -1948,6 +1963,11 @@ export class InventoryRepository {
       datasetId === input.baseline.datasetId &&
       dataVersion === input.baseline.dataVersion
     );
+    const refreshCompletedAfterBaseline = Boolean(
+      input.baseline &&
+      latestObservedAt &&
+      Date.parse(latestObservedAt) >= Date.parse(input.baseline.checkedAt)
+    );
     const status = input.baseline
       ? input.baseline.status === "fresh_reused"
         ? freshBaselineStillExact
@@ -1955,7 +1975,7 @@ export class InventoryRepository {
           : "degraded"
         : input.baseline.status === "refresh_required" &&
             currentFresh &&
-            versionChanged
+            (versionChanged || refreshCompletedAfterBaseline)
           ? "refreshed"
           : "degraded"
       : currentFresh
@@ -1996,15 +2016,19 @@ export class InventoryRepository {
       created_at: Date;
       as_of: Date;
       watermark: string;
+      last_sync_at: Date | null;
     }>(
       `SELECT dataset_id,data_version,source_kind,source_digest,observed_at,created_at,as_of,
-              lineage->>'watermark' AS watermark
+              lineage->>'watermark' AS watermark,
+              (SELECT max(completed_at) FROM source.sync_run
+               WHERE source_system='ecom-profit-mysql:wdt-stockout'
+                 AND shop_id=$3 AND status='succeeded') AS last_sync_at
        FROM dataset.version
        WHERE dataset_id=$1 AND source_kind='ecom-profit-mysql:wdt-stockout'
          AND lineage->>'publicationProtocol'='staged-v1'
          AND as_of <= $2 AND lineage->>'watermark' ~ '^[0-9]+$'
-       ORDER BY observed_at DESC,created_at DESC,data_version DESC LIMIT 1`,
-      [`sales-demand-staged:${input.shopId}`,input.asOf]
+       ORDER BY created_at DESC,observed_at DESC,data_version DESC LIMIT 1`,
+      [`sales-demand-staged:${input.shopId}`,input.asOf,input.shopId]
     );
     const dataset = datasetResult.rows[0] ?? {
       dataset_id:`sales-demand-staged:${input.shopId}`,data_version:"unavailable",
@@ -2013,7 +2037,8 @@ export class InventoryRepository {
       observed_at:new Date(0),
       created_at:new Date(0),
       as_of:new Date(0),
-      watermark:"-1"
+      watermark:"-1",
+      last_sync_at:null
     };
     const productFallback = await this.pool.query<{ quantity: string }>(
       `SELECT COALESCE(sum(demand_quantity),0)::text AS quantity
@@ -2067,8 +2092,8 @@ export class InventoryRepository {
         channelPoints: channels.rows.map((entry) => ({ at: entry.at.toISOString(), channelGoodsId: entry.channel_goods_id, stock: entry.stock })),
         sourceDataset: { id: dataset.dataset_id, version: dataset.data_version, digest: dataset.source_digest },
         demandQuality: {
-          ...(datasetResult.rows[0]?.observed_at
-            ? { recentObservedAt:datasetResult.rows[0].observed_at.toISOString() }
+          ...(datasetResult.rows[0]?.last_sync_at
+            ? { recentObservedAt:datasetResult.rows[0].last_sync_at.toISOString() }
             : {}),
           ...(datasetResult.rows[0]?.as_of
             ? { historicalCompleteThrough:datasetResult.rows[0].as_of.toISOString() }
@@ -2296,10 +2321,14 @@ export class InventoryRepository {
     }>(
       `SELECT
         (SELECT max(observed_at) FROM inventory.snapshot WHERE shop_id=$1) AS latest_inventory_at,
-        (SELECT max(observed_at) FROM dataset.version
-          WHERE dataset_id='sales-demand-staged:' || $1
-            AND source_kind='ecom-profit-mysql:wdt-stockout'
-            AND lineage->>'publicationProtocol'='staged-v1') AS latest_order_at,
+        (SELECT max(completed_at) FROM source.sync_run
+          WHERE shop_id=$1 AND source_system='ecom-profit-mysql:wdt-stockout'
+            AND status='succeeded' AND EXISTS (
+              SELECT 1 FROM dataset.version
+              WHERE dataset_id='sales-demand-staged:' || $1
+                AND source_kind='ecom-profit-mysql:wdt-stockout'
+                AND lineage->>'publicationProtocol'='staged-v1'
+            )) AS latest_order_at,
         (SELECT max(source_period_end) FROM source.order_line_fact WHERE shop_id=$1) AS historical_complete_through,
         (SELECT count(DISTINCT product_id)::int FROM inventory.snapshot WHERE shop_id=$1) AS product_count,
         (SELECT count(DISTINCT product_id)::int FROM inventory.snapshot

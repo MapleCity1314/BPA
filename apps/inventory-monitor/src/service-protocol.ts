@@ -472,6 +472,7 @@ export class InventoryServiceProtocol {
         ...(baseline ? { baseline:{
           status:baselineStatus as
             | "fresh_reused" | "refresh_required" | "refreshed" | "degraded",
+          checkedAt:text(baseline.checkedAt,"baseline.checkedAt",100),
           datasetId:nullableText(baseline.datasetId,"baseline.datasetId"),
           dataVersion:nullableText(baseline.dataVersion,"baseline.dataVersion")
         } } : {})

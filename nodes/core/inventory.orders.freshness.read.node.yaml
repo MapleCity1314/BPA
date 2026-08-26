@@ -4,7 +4,7 @@ metadata:
   id: inventory.orders.freshness.read
   version: 1.0.0
   title: 判定单店订单需求新鲜度
-  description: 以库存 PostgreSQL 服务端时钟判定固定两小时近期订单水位；复查时比较基线数据版本，精确区分 fresh_reused、refreshed 与 degraded。
+  description: 以库存 PostgreSQL 服务端时钟判定固定两小时订单同步水位；复查时确认数据版本变更或无变化同步已完成，精确区分 fresh_reused、refreshed 与 degraded。
 runtime: engine_builtin
 inputSchema:
   type: object
