@@ -285,6 +285,33 @@ function provider(
 }
 
 describe("InventoryDataRuntimeProvider", () => {
+  it("resolves an authenticated source-shop name hash without calling inventory services",async () => {
+    const writer = new FakeWriter();
+    const shops = Array.from({ length:13 },(_,index) => ({
+      id:String(10_001 + index),name:`测试店铺${index + 1}`
+    }));
+    const base = invocation({
+      observedShop:{
+        id:"name:c1640f37",name:"测试店铺1",identity_confirmed:true
+      },
+      configuredShops:shops
+    });
+    const result = await provider(state(),writer).invoke({
+      ...base,
+      node:{
+        ...base.node,
+        id:"inventory.production-cycle.source-shop.resolve",
+        version:"1.0.0"
+      },
+      permissionSnapshot:{ riskLevel:"R0",permissions:[],domains:[] }
+    },new AbortController().signal);
+    expect(result).toMatchObject({
+      status:"succeeded",
+      output:{ status:"resolved",shop:{ id:"10001",name:"测试店铺1" } }
+    });
+    expect(writer.calls).toEqual([]);
+  });
+
   it("rejects duplicate fixed-shop identity before any inventory service call",async () => {
     const writer = new FakeWriter();
     const duplicateShops = Array.from({ length:13 },(_,index) => ({

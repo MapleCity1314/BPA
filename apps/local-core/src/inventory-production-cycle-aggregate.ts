@@ -5,6 +5,20 @@ interface Shop {
   readonly name: string;
 }
 
+export type InventorySourceShopResolutionErrorCode =
+  | "INVENTORY_SOURCE_SHOP_INPUT_INVALID"
+  | "INVENTORY_SOURCE_SHOP_NOT_CONFIGURED"
+  | "INVENTORY_SOURCE_SHOP_AMBIGUOUS";
+
+export class InventorySourceShopResolutionError extends Error {
+  constructor(
+    readonly code: InventorySourceShopResolutionErrorCode,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
 interface Bucket {
   readonly count: number;
   readonly items: readonly Record<string, JsonValue>[];
@@ -46,6 +60,24 @@ function shop(value: JsonValue | undefined, label: string): Shop {
   return { id,name };
 }
 
+function normalizeShopName(value: string): string {
+  return value
+    .normalize("NFKC")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/[（(]\s*(?:当前|当前店铺)\s*[）)]$/u, "")
+    .trim();
+}
+
+function stableShopNameHash(value: string): string {
+  let hash = 2166136261;
+  for (const character of value) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8,"0");
+}
+
 export function validateInventoryProductionCycleConfiguration(
   expectedShopCount: JsonValue | undefined,
   configuredShopsValue: JsonValue | undefined
@@ -59,10 +91,95 @@ export function validateInventoryProductionCycleConfiguration(
     shop(value,`configuredShops[${index}]`)
   );
   if (new Set(configuredShops.map(({ id }) => id)).size !== 13 ||
-    new Set(configuredShops.map(({ name }) => name)).size !== 13) {
+    new Set(configuredShops.map(({ name }) => normalizeShopName(name))).size !== 13) {
     throw new Error("configured shops contain duplicate identity");
   }
   return configuredShops;
+}
+
+export function resolveInventoryProductionCycleSourceShop(
+  observedShopValue: JsonValue | undefined,
+  configuredShopsValue: JsonValue | undefined
+): JsonValue {
+  let observed: Record<string,JsonValue>;
+  let configuredShops: readonly Shop[];
+  try {
+    observed = object(observedShopValue,"observedShop");
+    exactKeys(observed,["id","name","identity_confirmed"],"observedShop");
+    configuredShops = validateInventoryProductionCycleConfiguration(
+      13,
+      configuredShopsValue
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("duplicate identity")) {
+      throw new InventorySourceShopResolutionError(
+        "INVENTORY_SOURCE_SHOP_AMBIGUOUS",
+        "Configured source shop identities are ambiguous."
+      );
+    }
+    throw new InventorySourceShopResolutionError(
+      "INVENTORY_SOURCE_SHOP_INPUT_INVALID",
+      "Source shop resolution input is not exact."
+    );
+  }
+  if (observed.identity_confirmed !== true) {
+    throw new InventorySourceShopResolutionError(
+      "INVENTORY_SOURCE_SHOP_INPUT_INVALID",
+      "Observed source shop identity is not confirmed."
+    );
+  }
+  let observedId: string;
+  let observedName: string;
+  try {
+    observedId = text(observed.id,"observedShop.id",30);
+    observedName = text(observed.name,"observedShop.name",80);
+  } catch {
+    throw new InventorySourceShopResolutionError(
+      "INVENTORY_SOURCE_SHOP_INPUT_INVALID",
+      "Observed source shop identity is invalid."
+    );
+  }
+  const normalizedName = normalizeShopName(observedName);
+  if (normalizedName.length < 2) {
+    throw new InventorySourceShopResolutionError(
+      "INVENTORY_SOURCE_SHOP_INPUT_INVALID",
+      "Observed source shop name is invalid."
+    );
+  }
+  const nameMatches = configuredShops.filter(
+    ({ name }) => normalizeShopName(name) === normalizedName
+  );
+  if (nameMatches.length > 1) {
+    throw new InventorySourceShopResolutionError(
+      "INVENTORY_SOURCE_SHOP_AMBIGUOUS",
+      "Observed source shop name matches multiple configured shops."
+    );
+  }
+  if (/^[0-9]{5,30}$/u.test(observedId)) {
+    const idMatch = configuredShops.find(({ id }) => id === observedId);
+    if (!idMatch || normalizeShopName(idMatch.name) !== normalizedName) {
+      throw new InventorySourceShopResolutionError(
+        "INVENTORY_SOURCE_SHOP_NOT_CONFIGURED",
+        "Observed source shop does not match a configured shop."
+      );
+    }
+    return { status:"resolved",shop:{ id:idMatch.id,name:idMatch.name } };
+  }
+  const expectedNameIdentity = `name:${stableShopNameHash(normalizedName)}`;
+  if (!/^name:[0-9a-f]{8}$/u.test(observedId) || observedId !== expectedNameIdentity) {
+    throw new InventorySourceShopResolutionError(
+      "INVENTORY_SOURCE_SHOP_INPUT_INVALID",
+      "Observed source shop name identity is malformed."
+    );
+  }
+  const match = nameMatches[0];
+  if (!match) {
+    throw new InventorySourceShopResolutionError(
+      "INVENTORY_SOURCE_SHOP_NOT_CONFIGURED",
+      "Observed source shop is not configured."
+    );
+  }
+  return { status:"resolved",shop:{ id:match.id,name:match.name } };
 }
 
 function bucket(value: JsonValue | undefined, label: string, kind: "succeeded" | "failed" | "unresolved"): Bucket {

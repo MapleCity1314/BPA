@@ -10,7 +10,7 @@ function available(): Record<string, unknown> {
     state: "available",
     workflow: {
       id: "doudian.inventory.production-cycle",
-      version: "1.0.10"
+      version: "1.0.11"
     },
     expectedShopCount: 13,
     run: {
@@ -89,7 +89,7 @@ describe("runtime production cycle summary", () => {
     );
     expect(result).toEqual({
       state: "degraded",
-      workflowVersion: "1.0.10",
+      workflowVersion: "1.0.11",
       scheduledAt: "2026-08-10T07:00:00.000Z",
       observedAt: "2026-08-10T07:19:00.000Z",
       reasonCode: null,
@@ -123,7 +123,7 @@ describe("runtime production cycle summary", () => {
       state: "in-progress",
       workflow: {
         id: "doudian.inventory.production-cycle",
-        version: "1.0.10"
+        version: "1.0.11"
       },
       expectedShopCount: 13,
       run: {
@@ -139,7 +139,7 @@ describe("runtime production cycle summary", () => {
     });
     expect(() => projectRuntimeProductionCycleSummary({
       projectionVersion:"1",state:"in-progress",
-      workflow:{ id:"doudian.inventory.production-cycle",version:"1.0.10" },
+      workflow:{ id:"doudian.inventory.production-cycle",version:"1.0.11" },
       expectedShopCount:13,
       trigger:{ status:"terminal",scheduledAt:"2026-08-10T07:00:00.000Z" }
     })).toThrow("INVENTORY_PRODUCTION_CYCLE_RESPONSE_INVALID");

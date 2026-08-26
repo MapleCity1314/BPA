@@ -1,0 +1,53 @@
+apiVersion: bpa/v1alpha1
+kind: Node
+metadata:
+  id: inventory.production-cycle.source-shop.resolve
+  version: 1.0.0
+  title: 解析库存生产周期源店铺
+  description: 将已确认的页面源店铺身份严格映射到已校验的固定 13 店数值 ID；拒绝未知、冲突、歧义或伪造的名称哈希。
+runtime: engine_builtin
+inputSchema:
+  type: object
+  additionalProperties: false
+  required: [observedShop, configuredShops]
+  properties:
+    observedShop:
+      type: object
+      additionalProperties: false
+      required: [id, name, identity_confirmed]
+      properties:
+        id: { type: string, minLength: 5, maxLength: 30 }
+        name: { type: string, minLength: 2, maxLength: 80 }
+        identity_confirmed: { const: true }
+    configuredShops:
+      type: array
+      minItems: 13
+      maxItems: 13
+      items:
+        type: object
+        additionalProperties: false
+        required: [id, name]
+        properties:
+          id: { type: string, pattern: "^[0-9]{5,30}$" }
+          name: { type: string, minLength: 2, maxLength: 80 }
+outputSchema:
+  type: object
+  additionalProperties: false
+  required: [status, shop]
+  properties:
+    status: { const: resolved }
+    shop:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: { type: string, pattern: "^[0-9]{5,30}$" }
+        name: { type: string, minLength: 2, maxLength: 80 }
+risk:
+  level: R0
+  permissions: []
+execution:
+  timeoutDefault: 5s
+  idempotency: pure
+  cancellable: true
+errors: [INVENTORY_SOURCE_SHOP_INPUT_INVALID, INVENTORY_SOURCE_SHOP_NOT_CONFIGURED, INVENTORY_SOURCE_SHOP_AMBIGUOUS]

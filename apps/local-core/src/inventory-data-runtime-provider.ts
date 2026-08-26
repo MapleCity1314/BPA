@@ -12,6 +12,8 @@ import {
 import type { ArtifactRef, JsonValue } from "@bpa/workflow-ir";
 import {
   aggregateInventoryProductionCycle,
+  InventorySourceShopResolutionError,
+  resolveInventoryProductionCycleSourceShop,
   validateInventoryProductionCycleConfiguration
 } from "./inventory-production-cycle-aggregate.js";
 
@@ -20,6 +22,8 @@ const LEASE_PROVIDER_ID = "inventory-postgres";
 const LEASE_DOMAIN_KEY = "inventory-production-cycle";
 const ORDERS_FRESHNESS_NODE = "inventory.orders.freshness.read@1.0.0";
 const PRODUCTION_CYCLE_VALIDATE_NODE = "inventory.production-cycle.input.validate@1.0.0";
+const PRODUCTION_CYCLE_SOURCE_SHOP_RESOLVE_NODE =
+  "inventory.production-cycle.source-shop.resolve@1.0.0";
 const PRODUCTION_CYCLE_AGGREGATE_NODE = "inventory.production-cycle.aggregate@1.0.0";
 
 export type InventoryWriteOperation =
@@ -80,6 +84,7 @@ export function isInventoryDataNode(id: string, version: string): boolean {
   return NODE_RULES.has(key) ||
     key === ORDERS_FRESHNESS_NODE ||
     key === PRODUCTION_CYCLE_VALIDATE_NODE ||
+    key === PRODUCTION_CYCLE_SOURCE_SHOP_RESOLVE_NODE ||
     key === PRODUCTION_CYCLE_AGGREGATE_NODE;
 }
 
@@ -341,9 +346,12 @@ export class InventoryDataRuntimeProvider implements RuntimeProvider {
     const rule = NODE_RULES.get(nodeKey);
     const ordersFreshness = nodeKey === ORDERS_FRESHNESS_NODE;
     const productionCycleValidate = nodeKey === PRODUCTION_CYCLE_VALIDATE_NODE;
+    const productionCycleSourceShopResolve =
+      nodeKey === PRODUCTION_CYCLE_SOURCE_SHOP_RESOLVE_NODE;
     const productionCycleAggregate = nodeKey === PRODUCTION_CYCLE_AGGREGATE_NODE;
     if (signal.aborted) return cancelled(rule?.operation);
     if (!rule && !ordersFreshness && !productionCycleValidate &&
+      !productionCycleSourceShopResolve &&
       !productionCycleAggregate) {
       return rejected(
         "INVENTORY_DATA_NODE_UNSUPPORTED",
@@ -352,12 +360,15 @@ export class InventoryDataRuntimeProvider implements RuntimeProvider {
     }
     if (
       invocation.permissionSnapshot.riskLevel !==
-        (ordersFreshness || productionCycleValidate || productionCycleAggregate
+        (ordersFreshness || productionCycleValidate ||
+          productionCycleSourceShopResolve || productionCycleAggregate
           ? "R0"
           : "R1") ||
       invocation.permissionSnapshot.permissions.length !==
-        (productionCycleValidate || productionCycleAggregate ? 0 : 1) ||
-      (!productionCycleValidate && !productionCycleAggregate &&
+        (productionCycleValidate || productionCycleSourceShopResolve ||
+          productionCycleAggregate ? 0 : 1) ||
+      (!productionCycleValidate && !productionCycleSourceShopResolve &&
+        !productionCycleAggregate &&
         invocation.permissionSnapshot.permissions[0] !==
         (ordersFreshness ? "inventory.service.orders.read" : rule!.permission)) ||
       invocation.permissionSnapshot.domains.length !== 0
@@ -397,6 +408,32 @@ export class InventoryDataRuntimeProvider implements RuntimeProvider {
               ? "INVENTORY_PRODUCTION_CYCLE_SHOP_COUNT_MISMATCH"
               : "INVENTORY_PRODUCTION_CYCLE_INPUT_INVALID",
           "Inventory production cycle configuration is not exact."
+        );
+      }
+    }
+
+    if (productionCycleSourceShopResolve) {
+      try {
+        const input = inputObject(invocation.input,"Source shop resolution");
+        exactKeys(
+          input,
+          ["observedShop","configuredShops"],
+          "Source shop resolution"
+        );
+        return {
+          status:"succeeded",
+          output:resolveInventoryProductionCycleSourceShop(
+            input.observedShop,
+            input.configuredShops
+          ),
+          evidence:[],riskSignals:[]
+        };
+      } catch (error) {
+        return rejected(
+          error instanceof InventorySourceShopResolutionError
+            ? error.code
+            : "INVENTORY_SOURCE_SHOP_INPUT_INVALID",
+          "Inventory source shop identity could not be resolved exactly."
         );
       }
     }

@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: doudian.inventory.production-cycle
-  version: 1.0.10
+  version: 1.0.11
   title: 抖店多店库存预测生产周期
   description: 在一个已认证 Mac Chrome 标签页和一个 Run 级库存领域租约内，串行完成固定 13 店的订单新鲜度、库存事实、预测与风险闭环，并恢复源店铺；已知单店实证最大商品数为 86，首版每店容量 250，超限失败关闭。
 spec:
@@ -72,6 +72,13 @@ spec:
         use: doudian.shop.context.read@1.3.0
         resourceMappings: { browser: inventory_browser }
         timeout: 15s
+      - key: resolve_source_shop
+        kind: call
+        use: inventory.production-cycle.source-shop.resolve@1.0.0
+        with:
+          observedShop: ${steps.read_source_shop.output.shop}
+          configuredShops: ${input.shops}
+        timeout: 5s
       - key: process_shops
         kind: foreach
         items: ${input.shops}
@@ -267,8 +274,8 @@ spec:
         use: doudian.inventory.shop.activate@1.0.10
         with:
           targetShop:
-            id: ${steps.read_source_shop.output.shop.id}
-            name: ${steps.read_source_shop.output.shop.name}
+            id: ${steps.resolve_source_shop.output.shop.id}
+            name: ${steps.resolve_source_shop.output.shop.name}
         resourceMappings: { browser: inventory_browser }
         timeout: 2m
         handlers:
@@ -300,8 +307,8 @@ spec:
           expectedShopCount: ${input.expectedShopCount}
           configuredShops: ${input.shops}
           sourceShop:
-            id: ${steps.read_source_shop.output.shop.id}
-            name: ${steps.read_source_shop.output.shop.name}
+            id: ${steps.resolve_source_shop.output.shop.id}
+            name: ${steps.resolve_source_shop.output.shop.name}
           foreachOutcome: ${steps.process_shops.output}
         timeout: 30s
         handlers:

@@ -43,6 +43,7 @@ const inventoryNodeAssets = [
   "nodes/core/inventory.snapshot.persist.node.yaml",
   "nodes/core/inventory.shop.forecast-risk.refresh.node.yaml",
   "nodes/core/inventory.production-cycle.input.validate.node.yaml",
+  "nodes/core/inventory.production-cycle.source-shop.resolve.node.yaml",
   "nodes/core/inventory.production-cycle.aggregate.node.yaml"
 ] as const;
 
@@ -278,7 +279,7 @@ class FixtureProvider implements RuntimeProvider {
       case "doudian.shop.context.read":
         return success({
           supported:true,
-          shop:{ id:"10001",name:"测试店铺1",identity_confirmed:true },
+          shop:{ id:"name:c1640f37",name:"测试店铺1",identity_confirmed:true },
           tab_ref:{
             browser_instance_id:browserInstanceId,tab_id:42,window_id:7,
             origin:"https://fxg.jinritemai.com"
@@ -851,7 +852,7 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const inventory = await runTrigger(service,store,{
       id:"doudian-inventory-local",appId:"inventory-monitor",
-      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.10",
+      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.11",
       workflowInput:{ expectedShopCount:13,shops:inventoryShops },
       externalDomainLease:true
     });
@@ -900,7 +901,7 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const result = await runTrigger(service,store,{
       id:"doudian-inventory-partial",appId:"inventory-monitor",
-      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.10",
+      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.11",
       workflowInput:{ expectedShopCount:13,shops:inventoryShops },
       externalDomainLease:true
     });
@@ -955,7 +956,7 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const result = await runTrigger(service,store,{
       id:"doudian-inventory-duplicate",appId:"inventory-monitor",
-      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.10",
+      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.11",
       workflowInput:{ expectedShopCount:13,shops },
       externalDomainLease:true
     });
@@ -991,7 +992,7 @@ describe("local Doudian business Workflow acceptance",() => {
 
     const result = await runTrigger(service,store,{
       id:"doudian-inventory-forecast-uncertain",appId:"inventory-monitor",
-      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.10",
+      workflowId:"doudian.inventory.production-cycle",workflowVersion:"1.0.11",
       workflowInput:{ expectedShopCount:13,shops:inventoryShops },
       externalDomainLease:true
     });

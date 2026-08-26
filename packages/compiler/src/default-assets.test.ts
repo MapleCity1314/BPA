@@ -248,7 +248,7 @@ describe("published default asset sources", () => {
     expect(inventoryPlan.resourceSlots?.inventory_browser?.continuity).toBe(
       "same_tab_origin"
     );
-    expect(estimateMaxStepExecutions(inventoryPlan)).toBe(9_889n);
+    expect(estimateMaxStepExecutions(inventoryPlan)).toBe(9_890n);
     expect(estimateMaxStepExecutions(inventoryPlan)).toBeLessThan(10_000n);
     const processInventoryShops = inventoryPlan.steps.process_shops;
     expect(processInventoryShops?.kind).toBe("foreach");
@@ -266,7 +266,7 @@ describe("published default asset sources", () => {
     belowRequiredBudget.spec.limits.maxStepExecutions = 9_888;
     expect(() =>
       compileCanonicalWorkflow(belowRequiredBudget, catalog)
-    ).toThrow(/9889 exceeds maxStepExecutions 9888/);
+    ).toThrow(/9890 exceeds maxStepExecutions 9888/);
 
     const forecastRiskNode = nodeMap.get(
       "inventory.shop.forecast-risk.refresh@1.0.0"

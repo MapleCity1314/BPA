@@ -186,7 +186,7 @@ describe("inventory review server", () => {
         repository,
         runtimeProductionCycleSummary:vi.fn(async () => ({
           state:"in-progress" as const,
-          workflowVersion:"1.0.10" as const,
+          workflowVersion:"1.0.11" as const,
           scheduledAt:"2026-08-10T07:00:00.000Z",
           observedAt:null,
           reasonCode:null,

@@ -1,12 +1,60 @@
 import { describe, expect, it } from "vitest";
 import type { JsonValue } from "@bpa/workflow-ir";
-import { aggregateInventoryProductionCycle } from "./inventory-production-cycle-aggregate.js";
+import {
+  aggregateInventoryProductionCycle,
+  InventorySourceShopResolutionError,
+  resolveInventoryProductionCycleSourceShop
+} from "./inventory-production-cycle-aggregate.js";
 
 const observedAt = "2026-08-10T00:00:00.000Z";
 const shops = Array.from({ length: 13 }, (_, index) => ({
   id: String(10_001 + index),
   name: `测试店铺${index + 1}`
 }));
+
+describe("inventory production-cycle source shop resolution",() => {
+  it("resolves the adapter name hash to the configured numeric shop identity",() => {
+    expect(resolveInventoryProductionCycleSourceShop({
+      id:"name:c1640f37",name:"测试店铺1",identity_confirmed:true
+    },shops)).toEqual({ status:"resolved",shop:shops[0] });
+  });
+
+  it("accepts an exact configured numeric identity",() => {
+    expect(resolveInventoryProductionCycleSourceShop({
+      id:"10001",name:"测试店铺1（当前店铺）",identity_confirmed:true
+    },shops)).toEqual({ status:"resolved",shop:shops[0] });
+  });
+
+  it.each([
+    {
+      observed:{ id:"name:c1640f37",name:"测试店铺1",identity_confirmed:false },
+      code:"INVENTORY_SOURCE_SHOP_INPUT_INVALID"
+    },
+    {
+      observed:{ id:"name:00000000",name:"测试店铺1",identity_confirmed:true },
+      code:"INVENTORY_SOURCE_SHOP_INPUT_INVALID"
+    },
+    {
+      observed:{ id:"10002",name:"测试店铺1",identity_confirmed:true },
+      code:"INVENTORY_SOURCE_SHOP_NOT_CONFIGURED"
+    }
+  ] as const)("rejects unsafe observed source identity as $code",({ observed,code }) => {
+    expect(() => resolveInventoryProductionCycleSourceShop(observed,shops))
+      .toThrowError(expect.objectContaining<Partial<InventorySourceShopResolutionError>>({ code }));
+  });
+
+  it("rejects configured names that collide after browser normalization",() => {
+    const ambiguous = shops.map((shop,index) => index === 1
+      ? { ...shop,name:"测试店铺1（当前）" }
+      : shop
+    );
+    expect(() => resolveInventoryProductionCycleSourceShop({
+      id:"name:c1640f37",name:"测试店铺1",identity_confirmed:true
+    },ambiguous)).toThrowError(expect.objectContaining<Partial<InventorySourceShopResolutionError>>({
+      code:"INVENTORY_SOURCE_SHOP_AMBIGUOUS"
+    }));
+  });
+});
 
 function forecastRisk(input: {
   attempted?: number;
