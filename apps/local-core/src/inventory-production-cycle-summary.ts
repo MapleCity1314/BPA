@@ -6,7 +6,7 @@ import type {
 
 const APP_ID="inventory-monitor";
 const WORKFLOW_ID="doudian.inventory.production-cycle";
-const WORKFLOW_VERSION="1.0.9";
+const WORKFLOW_VERSION="1.0.10";
 const EXPECTED_SHOP_COUNT=13;
 
 type CycleStatus="complete"|"complete_degraded"|"partial"|"failed";

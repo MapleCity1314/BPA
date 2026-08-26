@@ -491,6 +491,43 @@ describe("alliance retired-products content stages", () => {
     });
   });
 
+  it("does not switch when the account popover already confirms the target shop", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div class="auxo-popover">甲食品旗舰店 店铺ID 10001 切换组织/店铺</div>
+      <div role="dialog">切换组织/店铺
+        <div class="roleItem"><span class="introName">甲食品旗舰店</span>店铺ID 10001 正常营业</div>
+      </div>
+    `);
+    const cardClick = vi.spyOn(
+      document.querySelector<HTMLElement>(".roleItem")!,
+      "click"
+    );
+
+    await expect(
+      executeAllianceRetiredStage(
+        {
+          stage: "switch-shop",
+          shop: {
+            id: "10001",
+            name: "甲食品旗舰店",
+            status: "active",
+            statusText: "正常营业"
+          }
+        },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toEqual({
+      stage: "switch-shop",
+      shopName: "甲食品旗舰店",
+      currentShop: { id: "10001", name: "甲食品旗舰店" }
+    });
+    expect(cardClick).not.toHaveBeenCalled();
+  });
+
   it("accepts the numeric identity discovered after an id-less SPA shop switch", async () => {
     const document = doc(`
       <div id="fxg-pc-header">

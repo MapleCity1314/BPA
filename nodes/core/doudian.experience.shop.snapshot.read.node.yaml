@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha2
 kind: Node
 metadata:
   id: doudian.experience.shop.snapshot.read
-  version: 2.0.4
+  version: 2.0.5
   title: 读取单店抖店体验分快照
   description: 在同一受管标签页内切店、读取三维体验分并恢复源店铺，不创建额外 Chrome 实例。
 runtime: browser
@@ -66,4 +66,4 @@ execution:
     rateLimit: { scope: authentication_context, minIntervalMs: 1000, maxQueueMs: 10000 }
 errors: [AUTH_REQUIRED, BROWSER_DISCONNECTED, CAPTCHA_REQUIRED, COMMAND_CANCELLED, COMMAND_RESULT_TOO_LARGE, DEADLINE_EXCEEDED, EXPERIENCE_CONTENT_RESPONSE_TIMEOUT, EXPERIENCE_DIMENSION_INCOMPLETE, EXPERIENCE_PAGE_TIMEOUT, EXPERIENCE_SNAPSHOT_MISSING, EXPERIENCE_STAGE_FAILED, EXPERIENCE_TOTAL_SCORE_MISSING, PAGE_LOADING, PAGE_MISMATCH, PAGE_URL_INVALID, RISK_CONTROL, SESSION_EXPIRED, SHOP_CONTEXT_RESTORE_FAILED, SHOP_IDENTITY_MISMATCH, SHOP_IDENTITY_UNCERTAIN]
 evidence: { required: [result, error] }
-adapter: { id: doudian-experience, versions: [2.0.4] }
+adapter: { id: doudian-experience, versions: [2.0.5] }

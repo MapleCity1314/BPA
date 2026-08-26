@@ -59,9 +59,9 @@ describe("Doudian alliance retired-products runtime", () => {
       )
       .digest("hex")}`;
 
-    expect(DOUDIAN_ALLIANCE_RUNTIME_VERSION).toBe("2.0.16");
-    expect(adapter.metadata.version).toBe("2.0.16");
-    expect(adapter.extension.minimumVersion).toBe("0.6.9");
+    expect(DOUDIAN_ALLIANCE_RUNTIME_VERSION).toBe("2.0.17");
+    expect(adapter.metadata.version).toBe("2.0.17");
+    expect(adapter.extension.minimumVersion).toBe("0.6.10");
     expect(adapter.capabilities).toHaveLength(2);
     expect(adapter.capabilities.map((capability) => capability.nodeId)).toEqual([
       "doudian.alliance.shops.discover",
@@ -69,8 +69,8 @@ describe("Doudian alliance retired-products runtime", () => {
     ]);
     for (const capability of adapter.capabilities) {
       expect(capability).toMatchObject({
-        nodeVersions: ["2.0.16"],
-        handlerVersion: "2.0.16",
+        nodeVersions: ["2.0.17"],
+        handlerVersion: "2.0.17",
         implementationDigest
       });
     }

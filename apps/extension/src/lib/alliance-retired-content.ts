@@ -340,17 +340,32 @@ export async function executeAllianceRetiredStage(
   if (request.stage === "switch-shop") {
     assertDoudianProductListPage(pageUrl);
     const current = readDoudianHeaderShopName(doc);
-    if (
-      !request.shop.id &&
-      normalize(current) === normalize(request.shop.name)
-    ) {
+    if (normalize(current) === normalize(request.shop.name)) {
+      let currentShop:
+        | { readonly id: string; readonly name: string }
+        | undefined;
       try {
-        closeDoudianShopSwitcher(doc);
-      } catch {
-        // The switcher is already closed.
+        currentShop = await readCurrentShopIdentity(doc, isCancelled);
+      } catch (error) {
+        if (
+          error instanceof DoudianAllianceError &&
+          error.code === "COMMAND_CANCELLED"
+        ) {
+          throw error;
+        }
+        // The normal switch path below can still establish the target identity.
       }
-      const currentShop = await readCurrentShopIdentity(doc, isCancelled);
-      return { stage: request.stage, shopName: current, currentShop };
+      if (
+        currentShop &&
+        (request.shop.id === undefined || currentShop.id === request.shop.id)
+      ) {
+        try {
+          closeDoudianShopSwitcher(doc);
+        } catch {
+          // The switcher is already closed.
+        }
+        return { stage: request.stage, shopName: current, currentShop };
+      }
     }
     await ensureShopDialog(doc, isCancelled);
     await selectShopAcrossVirtualList(doc, request.shop, isCancelled);
