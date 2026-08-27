@@ -21,7 +21,8 @@ describe("inventory Feishu report",() => {
     expect(body).toContain("库存风险报告｜全店日报 · 1 家店铺");
     expect(body).toContain("3720154950123258166");
     expect(body).toContain("channel-1");
-    expect(body).toContain("P90 需求预计将耗尽当前库存");
+    expect(body).toContain("按近期销量偏高情况估算，当前库存可能很快用完");
+    expect(body).not.toContain("P90");
     expect(body).not.toContain("P90 demand exhausts stock");
     expect(body).not.toContain("webhook");
   });

@@ -62,6 +62,29 @@ describe("dashboard analytics", () => {
     }));
   });
 
+  it("uses operational language for a prediction calibration reminder",() => {
+    const backtest = buildStoreDemandBacktest([]);
+    const result = buildOperationalReminders({
+      now:"2026-08-04T07:00:00.000Z",
+      latestInventoryAt:"2026-08-04T06:30:00.000Z",
+      latestOrderAt:"2026-08-04T06:30:00.000Z",
+      productCount:1,
+      freshProductCount:1,
+      scheduleCount:1,
+      incidents:[],
+      backtest:{
+        ...backtest,
+        metrics:{ ...backtest.metrics,p90Coverage:0.8 }
+      }
+    });
+    const reminder = result.find((item) => item.id === "backtest-p90-coverage");
+    expect(reminder).toEqual(expect.objectContaining({
+      title:"偏高销量预测需要校准",
+      detail:"当前店铺的偏高销量预测命中率为 80%，正常范围为 85%–95%。"
+    }));
+    expect(JSON.stringify(reminder)).not.toContain("P90");
+  });
+
   it("shows an in-progress collection as a warning instead of a severe outage",() => {
     const result = buildOperationalReminders({
       now:"2026-08-04T07:00:00.000Z",

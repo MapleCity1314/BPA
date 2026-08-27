@@ -302,7 +302,8 @@ const MULTI_SHOP_HTML = HTML
   .replace('<h2>当前风险事件</h2>','<h2>风险处置队列</h2>')
   .replace('<h2>运营提醒</h2>','<h2>店铺状态与运营提醒</h2>')
   .replace('<h2>数据与冷启动</h2>','<h2>数据质量与预测可用性</h2>')
-  .replace('<h2>需求预测滚动回测</h2>','<h2>P90 预测回测</h2>');
+  .replace('<span class="p50">P50</span><span class="p90">P90</span>','<span class="p50">常规销量参考</span><span class="p90">偏高销量参考</span>')
+  .replace('<h2>需求预测滚动回测</h2>','<h2>偏高销量预测回测</h2>');
 const MULTI_SHOP_CSS = `${CSS}.shop-picker{display:flex;align-items:center;gap:7px;margin:0;color:var(--muted);font-size:11px;white-space:nowrap}.shop-picker select{width:auto;min-width:180px;margin:0;padding:8px 30px 8px 10px;background:#fff;color:var(--navy);font-weight:650}`;
 
 export async function startInventoryWebServer(input: {

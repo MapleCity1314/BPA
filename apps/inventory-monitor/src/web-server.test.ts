@@ -64,8 +64,9 @@ describe("inventory review server", () => {
       const pageBody = await page.text();
       expect(pageBody).toContain("库存风险指挥台");
       expect(pageBody).toContain("风险处置队列");
-      expect(pageBody.indexOf("风险处置队列")).toBeLessThan(pageBody.indexOf("P90 预测回测"));
-      expect(pageBody).toContain("P90 预测回测");
+      expect(pageBody.indexOf("风险处置队列")).toBeLessThan(pageBody.indexOf("偏高销量预测回测"));
+      expect(pageBody).toContain("偏高销量预测回测");
+      expect(pageBody).not.toContain("P90");
       expect(pageBody).toContain("正式库存周期");
       expect(pageBody).not.toContain("影子");
       const clientScript = await fetch(`http://127.0.0.1:${server.port}/app.js`).then((response) => response.text());
@@ -73,6 +74,10 @@ describe("inventory review server", () => {
       expect(pageBody).not.toContain('id="shopSelect"');
       expect(clientScript).toContain("selectedShopId='all'");
       expect(clientScript).toContain("incidentTableAllStores");
+      expect(clientScript).toContain("偏高销量预测命中率");
+      expect(clientScript).toContain("按近期销量偏高情况估算");
+      expect(clientScript).not.toContain("P90 覆盖率");
+      expect(clientScript).not.toContain("小时 P90 需求");
       expect(() => new Function(clientScript)).not.toThrow();
       const clientStyles = await fetch(`http://127.0.0.1:${server.port}/app-v2.css`).then((response) => response.text());
       expect(clientStyles).toContain(".priority-grid");

@@ -2554,8 +2554,8 @@ export class InventoryRepository {
       },
       rules: {
         policyVersion: "库存均衡策略 v1.0",
-        skuChannelCritical: "P90 需求在 2 小时内耗尽",
-        skuChannelWarning: "P90 需求在 6 小时内耗尽，且连续两个快照",
+        skuChannelCritical: "按偏高销量估算，库存可能在 2 小时内用完",
+        skuChannelWarning: "按偏高销量估算，库存可能在 6 小时内用完，且连续两次出现",
         reserveCritical: "未占用库存不能补足全部渠道未来 6 小时缺口",
         reserveWarning: "未占用库存不能补足全部渠道未来 24 小时缺口，且连续两个快照",
         legacyComparison: "库存 < 200（仅对照，不触发正式风险）"

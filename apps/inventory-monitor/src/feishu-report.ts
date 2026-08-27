@@ -83,13 +83,13 @@ function riskReason(value: unknown): string {
     "Channel consumption estimate is unavailable.":"渠道消耗估算暂不可用。",
     "Channel mapping exists but no reliable consumption share is available.":"渠道映射已建立，但消耗份额仍待积累。",
     "SKU forecast is missing.":"SKU 销量预测尚未建立。",
-    "P90 demand exhausts stock":"P90 需求预计将耗尽当前库存。"
+    "P90 demand exhausts stock":"按近期销量偏高情况估算，当前库存可能很快用完。"
   };
   if (exact[reason]) return exact[reason];
   let match = reason.match(/^SKU stock does not cover the (2|6)-hour P90 demand\.$/u);
-  if (match) return `SKU 库存无法覆盖未来 ${match[1]} 小时 P90 需求。`;
+  if (match) return `按近期销量偏高情况估算，当前 SKU 库存可能撑不过未来 ${match[1]} 小时。`;
   match = reason.match(/^Channel stock does not cover the (2|6)-hour allocated P90 demand\.$/u);
-  if (match) return `渠道库存无法覆盖未来 ${match[1]} 小时分配后的 P90 需求。`;
+  if (match) return `按近期销量偏高情况估算，当前渠道库存可能撑不过未来 ${match[1]} 小时。`;
   match = reason.match(/^Unoccupied reserve cannot cover all channel top-up deficits for (6|24) hours\.$/u);
   if (match) return `未占用库存无法覆盖全部渠道未来 ${match[1]} 小时补足缺口。`;
   return /[A-Za-z]{4}/u.test(reason) ? "风险证据已记录，请在库存指挥台查看明细。" : text(reason || "等待风险证据",180);

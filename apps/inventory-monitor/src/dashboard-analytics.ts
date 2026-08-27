@@ -151,7 +151,7 @@ export function buildStoreDemandBacktest(
       )
     },
     diagnostics: [
-      "按自然日执行一步前推回测；P90 使用历史正残差滚动校准。",
+      "按自然日执行一步前推回测；偏高销量预测使用历史偏高误差滚动校准。",
       "该曲线衡量店铺总需求基线，SKU 级模型在库存身份映射建立后单独评估。"
     ]
   };
@@ -239,8 +239,8 @@ export function buildOperationalReminders(input: {
     reminders.push({
       id: "backtest-p90-coverage",
       severity: "warning",
-      title: "P90 覆盖率需要校准",
-      detail: `当前店铺级滚动回测覆盖率为 ${round(coverage * 100,1)}%，目标区间为 85%–95%。`,
+      title: "偏高销量预测需要校准",
+      detail: `当前店铺的偏高销量预测命中率为 ${round(coverage * 100,1)}%，正常范围为 85%–95%。`,
       action: "检查近期突发增长并重新校准残差窗口",
       source: "回测放行门槛"
     });
