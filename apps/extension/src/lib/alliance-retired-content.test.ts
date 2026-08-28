@@ -353,6 +353,95 @@ describe("alliance retired-products content stages", () => {
     expect(name.textContent).toBe("甲食品旗舰店");
   });
 
+  it("uses a unique known-shop identity when the page omits numeric ids", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div class="auxo-modal-wrap">
+        <button aria-label="Close"></button>
+        <div class="roleItem"><span class="introName">甲食品旗舰店</span>正常营业</div>
+        <div class="roleItem"><span class="introName">乙食品专营店</span>正常营业</div>
+      </div>
+    `);
+
+    await expect(
+      executeAllianceRetiredStage(
+        {
+          stage: "discover-shops",
+          knownShops: [
+            { id: "10001", name: "甲食品旗舰店" },
+            { id: "10002", name: "乙食品专营店" }
+          ]
+        },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      currentShop: { id: "10001", name: "甲食品旗舰店" },
+      shops: [
+        { id: "10001", name: "甲食品旗舰店" },
+        { id: "10002", name: "乙食品专营店" }
+      ]
+    });
+  });
+
+  it.each([
+    { knownShops: [{ id: "10001", name: "其他店铺" }] },
+    {
+      knownShops: [
+        { id: "10001", name: "甲食品旗舰店" },
+        { id: "10002", name: "甲食品旗舰店" }
+      ]
+    }
+  ])("fails closed when the header has no unique known-shop match", async ({ knownShops }) => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div class="auxo-modal-wrap">
+        <div class="roleItem"><span class="introName">甲食品旗舰店</span>正常营业</div>
+      </div>
+    `);
+
+    await expect(
+      executeAllianceRetiredStage(
+        { stage: "discover-shops", knownShops },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).rejects.toThrow("SHOP_IDENTITY_UNCERTAIN");
+  });
+
+  it("leaves an unknown discovered shop unresolved for guarded switching", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+      <div class="auxo-modal-wrap">
+        <button aria-label="Close"></button>
+        <div class="roleItem"><span class="introName">甲食品旗舰店</span>正常营业</div>
+        <div class="roleItem"><span class="introName">新增未知店铺</span>正常营业</div>
+      </div>
+    `);
+
+    await expect(
+      executeAllianceRetiredStage(
+        {
+          stage: "discover-shops",
+          knownShops: [{ id: "10001", name: "甲食品旗舰店" }]
+        },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      shops: [
+        { id: "10001", name: "甲食品旗舰店" },
+        { name: "新增未知店铺" }
+      ]
+    });
+  });
+
   it("preserves ordinal identity for same-name id-less cards", async () => {
     const document = doc(`
       <div id="fxg-pc-header">

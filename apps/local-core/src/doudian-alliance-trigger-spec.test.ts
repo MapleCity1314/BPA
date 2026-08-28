@@ -26,10 +26,15 @@ describe("Doudian alliance retired-products TriggerSpec template", () => {
       kind: "schedule",
       workflow: {
         id: "doudian.alliance-retired-products-monitor",
-        version: "3.0.18"
+        version: "3.0.20"
       },
       enabled: false,
-      input: { maxShops: 100 },
+      input: {
+        maxShops: 100,
+        knownShops: expect.arrayContaining([
+          { id: "10001", name: "deployment-placeholder-shop-01" }
+        ])
+      },
       concurrencyKey: "doudian-account:company-main",
       idempotencyPolicy: "occurrence",
       retryPolicy: "none",

@@ -2,7 +2,7 @@ apiVersion: bpa/v1alpha3
 kind: Workflow
 metadata:
   id: doudian.alliance-retired-products-monitor
-  version: 3.0.18
+  version: 3.0.20
   title: 抖店精选联盟逐店清退商品巡检
   description: 枚举店铺后逐店读取清退商品，每店成功后立即形成不可变事实；Core 聚合完整性并为完整或部分结果准备终态 Dataset 发布意图。
 spec:
@@ -10,9 +10,20 @@ spec:
   inputSchema:
     type: object
     additionalProperties: false
-    required: [maxShops]
+    required: [maxShops, knownShops]
     properties:
       maxShops: { type: integer, minimum: 1, maximum: 100, default: 100 }
+      knownShops:
+        type: array
+        minItems: 1
+        maxItems: 100
+        items:
+          type: object
+          additionalProperties: false
+          required: [id, name]
+          properties:
+            id: { type: string, pattern: "^[0-9]{5,30}$" }
+            name: { type: string, minLength: 2, maxLength: 80 }
   outputSchema:
     type: object
     additionalProperties: false
@@ -48,10 +59,11 @@ spec:
     steps:
       - key: discover_shops
         kind: call
-        use: doudian.alliance.shops.discover@2.0.17
+        use: doudian.alliance.shops.discover@2.0.18
         with:
           maxShops: ${input.maxShops}
-        timeout: 10m
+          knownShops: ${input.knownShops}
+        timeout: 30m
         resourceMappings: { browser: alliance_browser }
         retry:
           maxAttempts: 2
@@ -93,10 +105,11 @@ spec:
           steps:
             - key: scan_shop
               kind: call
-              use: doudian.alliance.shop.retired-products.scan@2.0.17
+              use: doudian.alliance.shop.retired-products.scan@2.0.18
               with:
                 shop: ${item}
                 sourceShop: ${steps.discover_shops.output.sourceShop}
+                knownShops: ${input.knownShops}
               timeout: 12m
               resourceMappings: { browser: alliance_browser }
               retry:

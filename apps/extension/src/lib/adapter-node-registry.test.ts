@@ -78,6 +78,11 @@ const context = {
   deadline: "2026-07-31T23:00:00.000Z"
 };
 
+const knownShops = [
+  { id: "10001", name: "测试店铺一" },
+  { id: "10002", name: "测试店铺二" }
+];
+
 const sourceShop = {
   id: "12345678",
   name: "源食品旗舰店",
@@ -353,7 +358,7 @@ describe("Adapter Node registry", () => {
 
     const result = await executeRegisteredAdapterNode(
       "doudian.alliance.shops.discover",
-      { maxShops: 100 },
+      { maxShops: 100, knownShops },
       context
     );
 
@@ -373,7 +378,7 @@ describe("Adapter Node registry", () => {
     });
     const discovery = await executeRegisteredAdapterNode(
       "doudian.alliance.shops.discover",
-      { maxShops: 100 },
+      { maxShops: 100, knownShops },
       context
     );
     const scan = await executeRegisteredAdapterNode(
@@ -384,7 +389,8 @@ describe("Adapter Node registry", () => {
           status: "blocked",
           statusText: "已停业"
         },
-        sourceShop
+        sourceShop,
+        knownShops
       },
       context
     );
@@ -424,7 +430,7 @@ describe("Adapter Node registry", () => {
 
     const result = await executeRegisteredAdapterNode(
       "doudian.alliance.shop.retired-products.scan",
-      { shop: targetShop, sourceShop },
+      { shop: targetShop, sourceShop, knownShops },
       context
     );
 
@@ -467,7 +473,7 @@ describe("Adapter Node registry", () => {
 
     const result = await executeRegisteredAdapterNode(
       "doudian.alliance.shop.retired-products.scan",
-      { shop: targetShop, sourceShop },
+      { shop: targetShop, sourceShop, knownShops },
       context
     );
 
@@ -496,7 +502,7 @@ describe("Adapter Node registry", () => {
 
     const result = await executeRegisteredAdapterNode(
       "doudian.alliance.shop.retired-products.scan",
-      { shop: targetShop, sourceShop },
+      { shop: targetShop, sourceShop, knownShops },
       context
     );
 
@@ -562,7 +568,7 @@ describe("Adapter Node registry", () => {
       );
       const result = await executeRegisteredAdapterNode(
         "doudian.alliance.shops.discover",
-        { maxShops: 100 },
+        { maxShops: 100, knownShops },
         context
       );
       expect(result?.error?.code).toBe(code);
@@ -581,7 +587,7 @@ describe("Adapter Node registry", () => {
       );
       const result = await executeRegisteredAdapterNode(
         "doudian.alliance.shop.retired-products.scan",
-        { shop: targetShop, sourceShop },
+        { shop: targetShop, sourceShop, knownShops },
         context
       );
       expect(result?.error?.code).toBe(code);
@@ -600,7 +606,7 @@ describe("Adapter Node registry", () => {
     );
     const response = await executeRegisteredAdapterNode(
       "doudian.alliance.shop.retired-products.scan",
-      { shop: targetShop, sourceShop },
+      { shop: targetShop, sourceShop, knownShops },
       context
     );
 
@@ -624,12 +630,12 @@ describe("Adapter Node registry", () => {
 
     const discovery = await executeRegisteredAdapterNode(
       "doudian.alliance.shops.discover",
-      { maxShops: 100 },
+      { maxShops: 100, knownShops },
       context
     );
     const scan = await executeRegisteredAdapterNode(
       "doudian.alliance.shop.retired-products.scan",
-      { shop: targetShop, sourceShop },
+      { shop: targetShop, sourceShop, knownShops },
       context
     );
 
@@ -663,7 +669,7 @@ describe("Adapter Node registry", () => {
 
     const result = await executeRegisteredAdapterNode(
       "doudian.alliance.shops.discover",
-      { maxShops: 100 },
+      { maxShops: 100, knownShops },
       context
     );
 
@@ -700,7 +706,8 @@ describe("Adapter Node registry", () => {
           name: "源店铺",
           status: "active",
           statusText: "正常营业"
-        }
+        },
+        knownShops
       },
       context
     );

@@ -5,11 +5,25 @@ appId: retired-products-monitor
 kind: schedule
 workflow:
   id: doudian.alliance-retired-products-monitor
-  version: 3.0.18
+  version: 3.0.20
 enabled: false
 inputSchemaVersion: doudian-alliance-retired-products-daily/1
 input:
   maxShops: 100
+  knownShops:
+    - { id: "10001", name: deployment-placeholder-shop-01 }
+    - { id: "10002", name: deployment-placeholder-shop-02 }
+    - { id: "10003", name: deployment-placeholder-shop-03 }
+    - { id: "10004", name: deployment-placeholder-shop-04 }
+    - { id: "10005", name: deployment-placeholder-shop-05 }
+    - { id: "10006", name: deployment-placeholder-shop-06 }
+    - { id: "10007", name: deployment-placeholder-shop-07 }
+    - { id: "10008", name: deployment-placeholder-shop-08 }
+    - { id: "10009", name: deployment-placeholder-shop-09 }
+    - { id: "10010", name: deployment-placeholder-shop-10 }
+    - { id: "10011", name: deployment-placeholder-shop-11 }
+    - { id: "10012", name: deployment-placeholder-shop-12 }
+    - { id: "10013", name: deployment-placeholder-shop-13 }
 concurrencyKey: doudian-account:company-main
 browserInstanceId: deployment-placeholder:replace-with-company-mac-browser-instance
 idempotencyPolicy: occurrence

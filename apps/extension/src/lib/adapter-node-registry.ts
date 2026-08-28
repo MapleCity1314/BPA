@@ -1,6 +1,7 @@
 import type {
   AllianceShop,
   DoudianAllianceNodeErrorCode,
+  KnownAllianceShop,
   RetiredProductsPage
 } from "@bpa/adapter-doudian";
 import type { RiskSignal } from "@bpa/schemas";
@@ -136,6 +137,34 @@ function shopOutput(shop: AllianceShop): Record<string, unknown> {
 }
 
 const NUMERIC_SHOP_ID = /^\d{5,30}$/u;
+
+function knownAllianceShops(value: unknown): readonly KnownAllianceShop[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 100) {
+    throw new AllianceRetiredDriverError("SHOP_IDENTITY_UNCERTAIN");
+  }
+  const shops = value.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new AllianceRetiredDriverError("SHOP_IDENTITY_UNCERTAIN");
+    }
+    const candidate = item as Record<string, unknown>;
+    if (
+      typeof candidate.id !== "string" ||
+      !NUMERIC_SHOP_ID.test(candidate.id) ||
+      typeof candidate.name !== "string" ||
+      normalize(candidate.name).length < 2
+    ) {
+      throw new AllianceRetiredDriverError("SHOP_IDENTITY_UNCERTAIN");
+    }
+    return { id: candidate.id, name: candidate.name };
+  });
+  if (
+    new Set(shops.map((shop) => shop.id)).size !== shops.length ||
+    new Set(shops.map((shop) => normalize(shop.name))).size !== shops.length
+  ) {
+    throw new AllianceRetiredDriverError("SHOP_IDENTITY_AMBIGUOUS");
+  }
+  return shops;
+}
 
 function experienceShopOutput(shop: AllianceShop): Record<string, unknown> {
   const id = shop.id && NUMERIC_SHOP_ID.test(shop.id) ? shop.id : undefined;
@@ -379,9 +408,20 @@ const discoverAllianceShops: AdapterNodeHandler = async (input, context) => {
       ALLIANCE_DISCOVERY_ERRORS
     );
   }
+  let knownShops: readonly KnownAllianceShop[];
+  try {
+    knownShops = knownAllianceShops(input.knownShops);
+  } catch (error) {
+    return allianceErrorResponse(
+      error,
+      "DOUDIAN_ALLIANCE_DISCOVERY_FAILED",
+      ALLIANCE_DISCOVERY_ERRORS
+    );
+  }
   const driver = createAllianceRetiredBrowserDriver({
     sourceTabId: context.sourceTabId,
     deadline: context.deadline,
+    knownShops,
     ...(context.isCancelled ? { isCancelled: context.isCancelled } : {}),
     ...(context.reserveManagedTab
       ? { reserveManagedTab: context.reserveManagedTab }
@@ -471,9 +511,11 @@ const scanAllianceShop: AdapterNodeHandler = async (input, context) => {
   const startedAt = Date.now();
   let shop: AllianceShop;
   let sourceShop: AllianceShop;
+  let knownShops: readonly KnownAllianceShop[];
   try {
     shop = allianceShop(input.shop, "SHOP");
     sourceShop = allianceShop(input.sourceShop, "SOURCE_SHOP");
+    knownShops = knownAllianceShops(input.knownShops);
   } catch (error) {
     return allianceErrorResponse(
       error,
@@ -496,6 +538,7 @@ const scanAllianceShop: AdapterNodeHandler = async (input, context) => {
   const driver = createAllianceRetiredBrowserDriver({
     sourceTabId: context.sourceTabId,
     deadline: context.deadline,
+    knownShops,
     ...(context.isCancelled ? { isCancelled: context.isCancelled } : {}),
     ...(context.reserveManagedTab
       ? { reserveManagedTab: context.reserveManagedTab }

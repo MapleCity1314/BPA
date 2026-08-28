@@ -23,15 +23,23 @@ import {
   selectDoudianAllianceShop,
   type AllianceShop,
   type DoudianAllianceNodeErrorCode,
+  type KnownAllianceShop,
   type RetiredProductsPage
 } from "@bpa/adapter-doudian";
 
 export type AllianceRetiredStageRequest =
-  | { readonly stage: "discover-shops" }
-  | { readonly stage: "read-shop-context" }
+  | {
+      readonly stage: "discover-shops";
+      readonly knownShops?: readonly KnownAllianceShop[];
+    }
+  | {
+      readonly stage: "read-shop-context";
+      readonly knownShops?: readonly KnownAllianceShop[];
+    }
   | {
       readonly stage: "switch-shop";
       readonly shop: AllianceShop;
+      readonly knownShops?: readonly KnownAllianceShop[];
     }
   | { readonly stage: "open-promotion" }
   | { readonly stage: "open-product-promotion" }
@@ -159,6 +167,33 @@ function normalize(value: string): string {
   return value.normalize("NFKC").replace(/\s+/gu, "");
 }
 
+function readKnownShopIdentity(
+  doc: Document,
+  knownShops: readonly KnownAllianceShop[]
+): { readonly id: string; readonly name: string } {
+  const headerName = readDoudianHeaderShopName(doc);
+  const matches = knownShops.filter(
+    (shop) => normalize(shop.name) === normalize(headerName)
+  );
+  if (matches.length !== 1) {
+    throw new DoudianAllianceError("SHOP_IDENTITY_UNCERTAIN");
+  }
+  return { id: matches[0]!.id, name: headerName };
+}
+
+function applyKnownShopIdentities(
+  shops: readonly AllianceShop[],
+  knownShops: readonly KnownAllianceShop[]
+): readonly AllianceShop[] {
+  return shops.map((shop) => {
+    if (shop.id !== undefined) return shop;
+    const matches = knownShops.filter(
+      (known) => normalize(known.name) === normalize(shop.name)
+    );
+    return matches.length === 1 ? { ...shop, id: matches[0]!.id } : shop;
+  });
+}
+
 async function openShopSwitcherWhenStable(
   doc: Document,
   isCancelled: () => boolean
@@ -206,7 +241,8 @@ async function ensureShopDialog(
 
 async function readCurrentShopIdentity(
   doc: Document,
-  isCancelled: () => boolean
+  isCancelled: () => boolean,
+  knownShops: readonly KnownAllianceShop[] = []
 ): Promise<{ readonly id: string; readonly name: string }> {
   assertNotCancelled(isCancelled);
   try {
@@ -217,6 +253,9 @@ async function readCurrentShopIdentity(
       error.code !== "SHOP_IDENTITY_UNCERTAIN"
     ) {
       throw error;
+    }
+    if (knownShops.length > 0) {
+      return readKnownShopIdentity(doc, knownShops);
     }
     try {
       closeDoudianShopSwitcher(doc);
@@ -325,16 +364,27 @@ export async function executeAllianceRetiredStage(
   assertNotCancelled(isCancelled);
   if (request.stage === "discover-shops") {
     assertDoudianProductListPage(pageUrl);
-    const currentShop = await readCurrentShopIdentity(doc, isCancelled);
+    const currentShop = await readCurrentShopIdentity(
+      doc,
+      isCancelled,
+      request.knownShops ?? []
+    );
     await ensureShopDialog(doc, isCancelled);
-    const discovered = await discoverAllShops(doc, currentShop, isCancelled);
+    const discovered = applyKnownShopIdentities(
+      await discoverAllShops(doc, currentShop, isCancelled),
+      request.knownShops ?? []
+    );
     assertNotCancelled(isCancelled);
     closeDoudianShopSwitcher(doc);
     return { stage: request.stage, shops: discovered, currentShop };
   }
   if (request.stage === "read-shop-context") {
     assertDoudianProductListPage(pageUrl);
-    const currentShop = await readCurrentShopIdentity(doc, isCancelled);
+    const currentShop = await readCurrentShopIdentity(
+      doc,
+      isCancelled,
+      request.knownShops
+    );
     return { stage: request.stage, currentShop };
   }
   if (request.stage === "switch-shop") {
@@ -345,7 +395,11 @@ export async function executeAllianceRetiredStage(
         | { readonly id: string; readonly name: string }
         | undefined;
       try {
-        currentShop = await readCurrentShopIdentity(doc, isCancelled);
+        currentShop = await readCurrentShopIdentity(
+          doc,
+          isCancelled,
+          request.knownShops
+        );
       } catch (error) {
         if (
           error instanceof DoudianAllianceError &&
@@ -383,7 +437,11 @@ export async function executeAllianceRetiredStage(
       isCancelled
     );
     assertNotCancelled(isCancelled);
-    const identity = await readCurrentShopIdentity(doc, isCancelled);
+    const identity = await readCurrentShopIdentity(
+      doc,
+      isCancelled,
+      request.knownShops
+    );
     if (request.shop.id !== undefined && identity.id !== request.shop.id) {
       throw new DoudianAllianceError("SHOP_IDENTITY_MISMATCH");
     }

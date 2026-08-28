@@ -1,6 +1,7 @@
 import type {
   AllianceShop,
   DoudianAllianceNodeErrorCode,
+  KnownAllianceShop,
   RetiredProductsPage
 } from "@bpa/adapter-doudian";
 import { DOUDIAN_ALLIANCE_NODE_ERROR_CODES } from "@bpa/adapter-doudian";
@@ -273,6 +274,7 @@ function normalizeShopName(value: string): string {
 export function createAllianceRetiredBrowserDriver(input: {
   readonly sourceTabId: number;
   readonly deadline: string;
+  readonly knownShops?: readonly KnownAllianceShop[];
   readonly isCancelled?: () => boolean;
   readonly stageResponseTimeoutMs?: number;
   readonly tabWaitTimeoutMs?: number;
@@ -486,7 +488,10 @@ export function createAllianceRetiredBrowserDriver(input: {
           { stage: "read-shop-context" }
         >>(
           input.sourceTabId,
-          { stage: "read-shop-context" },
+          {
+            stage: "read-shop-context",
+            ...(input.knownShops ? { knownShops: input.knownShops } : {})
+          },
           "read-shop-context"
         );
         if (
@@ -623,7 +628,11 @@ export function createAllianceRetiredBrowserDriver(input: {
           { stage: "switch-shop" }
         >>(
           input.sourceTabId,
-          { stage: "switch-shop", shop },
+          {
+            stage: "switch-shop",
+            shop,
+            ...(input.knownShops ? { knownShops: input.knownShops } : {})
+          },
           "switch-shop"
         );
         switchResponse = "mismatched";
@@ -855,7 +864,10 @@ export function createAllianceRetiredBrowserDriver(input: {
     try {
       result = await stage(
         input.sourceTabId,
-        { stage: "discover-shops" },
+        {
+          stage: "discover-shops",
+          knownShops: input.knownShops ?? []
+        },
         "discover-shops"
       );
     } catch (error) {
