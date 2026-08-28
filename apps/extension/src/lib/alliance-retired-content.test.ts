@@ -6,7 +6,9 @@ import {
 } from "./alliance-retired-content.js";
 
 function doc(body: string): Document {
-  const dom = new JSDOM(`<body>${body}</body>`);
+  const dom = new JSDOM(`<body>${body}</body>`, {
+    url: "https://fxg.jinritemai.com/ffa/g/list"
+  });
   dom.window.Element.prototype.getBoundingClientRect = () => ({
     x: 0,
     y: 20,
@@ -383,6 +385,40 @@ describe("alliance retired-products content stages", () => {
         { id: "10001", name: "甲食品旗舰店" },
         { id: "10002", name: "乙食品专营店" }
       ]
+    });
+  });
+
+  it("uses agreeing authenticated session identities outside the known-shop roster", async () => {
+    const document = doc(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">新增食品店</span></div>
+      </div>
+      <div class="auxo-modal-wrap">
+        <button aria-label="Close"></button>
+        <div class="roleItem"><span class="introName">新增食品店</span>正常营业</div>
+      </div>
+    `);
+    document.defaultView!.sessionStorage.setItem(
+      "initialUserInfo",
+      JSON.stringify({ data: { id: "10003", shop_name: "新增食品店" } })
+    );
+    document.defaultView!.sessionStorage.setItem(
+      "storeGetters",
+      JSON.stringify({ user: { id: "10003", shop_name: "新增食品店" } })
+    );
+
+    await expect(
+      executeAllianceRetiredStage(
+        {
+          stage: "discover-shops",
+          knownShops: [{ id: "10001", name: "甲食品旗舰店" }]
+        },
+        document,
+        "https://fxg.jinritemai.com/ffa/g/list"
+      )
+    ).resolves.toMatchObject({
+      currentShop: { id: "10003", name: "新增食品店" },
+      shops: [{ name: "新增食品店" }]
     });
   });
 

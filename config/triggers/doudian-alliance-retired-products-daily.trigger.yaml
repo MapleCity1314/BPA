@@ -5,7 +5,7 @@ appId: retired-products-monitor
 kind: schedule
 workflow:
   id: doudian.alliance-retired-products-monitor
-  version: 3.0.20
+  version: 3.0.21
 enabled: false
 inputSchemaVersion: doudian-alliance-retired-products-daily/1
 input:

@@ -15,7 +15,9 @@ import {
 } from "./alliance-retired.js";
 
 function documentOf(body: string): Document {
-  const dom = new JSDOM(`<body>${body}</body>`);
+  const dom = new JSDOM(`<body>${body}</body>`, {
+    url: "https://fxg.jinritemai.com/ffa/g/list"
+  });
   dom.window.Element.prototype.getBoundingClientRect = () =>
     ({ top: 20, bottom: 44, width: 160, height: 24 }) as DOMRect;
   return dom.window.document;
@@ -59,8 +61,8 @@ describe("Doudian alliance retired-products runtime", () => {
       )
       .digest("hex")}`;
 
-    expect(DOUDIAN_ALLIANCE_RUNTIME_VERSION).toBe("2.0.18");
-    expect(adapter.metadata.version).toBe("2.0.18");
+    expect(DOUDIAN_ALLIANCE_RUNTIME_VERSION).toBe("2.0.19");
+    expect(adapter.metadata.version).toBe("2.0.19");
     expect(adapter.extension.minimumVersion).toBe("0.6.10");
     expect(adapter.capabilities).toHaveLength(2);
     expect(adapter.capabilities.map((capability) => capability.nodeId)).toEqual([
@@ -69,8 +71,8 @@ describe("Doudian alliance retired-products runtime", () => {
     ]);
     for (const capability of adapter.capabilities) {
       expect(capability).toMatchObject({
-        nodeVersions: ["2.0.18"],
-        handlerVersion: "2.0.18",
+        nodeVersions: ["2.0.19"],
+        handlerVersion: "2.0.19",
         implementationDigest
       });
     }
@@ -469,6 +471,62 @@ describe("Doudian alliance retired-products runtime", () => {
       id: "10001",
       name: "甲食品旗舰店"
     });
+  });
+
+  it("binds the header to two agreeing authenticated session identities", () => {
+    const doc = documentOf(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+    `);
+    doc.defaultView!.sessionStorage.setItem(
+      "initialUserInfo",
+      JSON.stringify({ data: { id: "10001", shop_name: "甲食品旗舰店" } })
+    );
+    doc.defaultView!.sessionStorage.setItem(
+      "storeGetters",
+      JSON.stringify({ user: { id: "10001", shop_name: "甲食品旗舰店" } })
+    );
+
+    expect(readDoudianHeaderShopIdentity(doc)).toEqual({
+      id: "10001",
+      name: "甲食品旗舰店"
+    });
+  });
+
+  it.each([
+    {
+      initial: { id: "10001", shop_name: "甲食品旗舰店" },
+      getters: undefined
+    },
+    {
+      initial: { id: "10001", shop_name: "甲食品旗舰店" },
+      getters: { id: "10002", shop_name: "甲食品旗舰店" }
+    },
+    {
+      initial: { id: "10001", shop_name: "乙食品专营店" },
+      getters: { id: "10001", shop_name: "乙食品专营店" }
+    }
+  ])("rejects incomplete or disagreeing authenticated session identity", ({ initial, getters }) => {
+    const doc = documentOf(`
+      <div id="fxg-pc-header">
+        <div class="headerShopName"><span class="userName">甲食品旗舰店</span></div>
+      </div>
+    `);
+    doc.defaultView!.sessionStorage.setItem(
+      "initialUserInfo",
+      JSON.stringify({ data: initial })
+    );
+    if (getters) {
+      doc.defaultView!.sessionStorage.setItem(
+        "storeGetters",
+        JSON.stringify({ user: getters })
+      );
+    }
+
+    expect(() => readDoudianHeaderShopIdentity(doc)).toThrow(
+      "SHOP_IDENTITY_UNCERTAIN"
+    );
   });
 
   it("dispatches the pointer and mouse sequence on semantic account and switch-row containers", () => {

@@ -9,7 +9,7 @@ const BUYIN_RETIRED_PATH = "/dashboard/regulation/clear-out";
 const PRODUCT_ID_PATTERN = /(?:商品\s*ID|ID)[：:\s]*(\d{5,30})/iu;
 const NUMBER_PATTERN = /\d{5,30}/u;
 
-export const DOUDIAN_ALLIANCE_RUNTIME_VERSION = "2.0.18";
+export const DOUDIAN_ALLIANCE_RUNTIME_VERSION = "2.0.19";
 
 export type DoudianAllianceNodeErrorCode =
   | "ALLIANCE_CONTENT_RESPONSE_TIMEOUT"
@@ -295,11 +295,68 @@ export function readDoudianHeaderShopIdentity(doc: Document): {
   }
   const stableId =
     readNumericShopIdNearHeaderElement(identity.element) ??
-    readCurrentAccountPopoverShopId(doc, identity.name);
+    readCurrentAccountPopoverShopId(doc, identity.name) ??
+    readAuthenticatedSessionShopIdentity(doc, identity.name)?.id;
   if (!stableId) {
     throw new DoudianAllianceError("SHOP_IDENTITY_UNCERTAIN");
   }
   return { id: stableId, name: identity.name };
+}
+
+function readAuthenticatedSessionShopIdentity(
+  doc: Document,
+  headerShopName: string
+): { readonly id: string; readonly name: string } | undefined {
+  let storage: Storage;
+  try {
+    if (!doc.defaultView) return undefined;
+    storage = doc.defaultView.sessionStorage;
+  } catch {
+    return undefined;
+  }
+  const readCandidate = (
+    key: string,
+    property: "data" | "user"
+  ): { readonly id: string; readonly name: string } | undefined => {
+    const raw = storage.getItem(key);
+    if (!raw) return undefined;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return undefined;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const value = (parsed as Record<string, unknown>)[property];
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return undefined;
+    }
+    const candidate = value as Record<string, unknown>;
+    if (
+      typeof candidate.id !== "string" ||
+      !/^\d{5,30}$/u.test(candidate.id) ||
+      typeof candidate.shop_name !== "string" ||
+      compactText(candidate.shop_name).length < 2
+    ) {
+      return undefined;
+    }
+    return { id: candidate.id, name: normalizeText(candidate.shop_name) };
+  };
+  const initial = readCandidate("initialUserInfo", "data");
+  const getters = readCandidate("storeGetters", "user");
+  if (!initial && !getters) return undefined;
+  if (
+    !initial ||
+    !getters ||
+    initial.id !== getters.id ||
+    compactText(initial.name) !== compactText(getters.name) ||
+    compactText(initial.name) !== compactText(headerShopName)
+  ) {
+    throw new DoudianAllianceError("SHOP_IDENTITY_UNCERTAIN");
+  }
+  return initial;
 }
 
 function readNumericShopIdNearHeaderElement(
