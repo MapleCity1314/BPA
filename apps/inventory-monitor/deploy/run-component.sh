@@ -20,7 +20,7 @@ case "$component" in
   core)
     exec "$BPA_NODE_BIN" --import tsx apps/local-core/src/main.ts
     ;;
-  service)
+  inventory-service)
     exec "$BPA_NODE_BIN" --import tsx apps/inventory-monitor/src/main.ts
     ;;
   feishu-report)

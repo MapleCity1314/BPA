@@ -203,7 +203,7 @@ async function main(): Promise<void> {
       (Date.parse(database.databaseNow) - Date.parse(observedAt)) / 1_000,
     launchd: {
       corePid: pids.get("com.bpa.core") ?? null,
-      monitorPid: pids.get("com.bpa.inventory-monitor") ?? null,
+      servicePid: pids.get("com.bpa.inventory-service") ?? null,
       recoveryPid: pids.get("com.bpa.inventory-multishop-recovery") ?? null
     },
     statusFile: recoveryStatus,

@@ -10,7 +10,7 @@ function idleSnapshot(): InventoryProductionSnapshot {
   return {
     observedAt: "2026-08-06T12:00:00.000Z",
     databaseClockOffsetSeconds: 0.2,
-    launchd: { corePid: 100, monitorPid: 101, recoveryPid: null },
+    launchd: { corePid: 100, servicePid: 101, recoveryPid: null },
     statusFile: {
       state: "succeeded",
       updatedAt: "2026-08-06T11:30:00.000Z"
@@ -118,6 +118,19 @@ describe("inventory production readiness", () => {
     expect(result.eligibleForCoreCutover).toBe(true);
     expect(result.eligibleForOneRecoveryTrigger).toBe(false);
     expect(result.blockers).toContain("BROWSER_BRIDGE_NOT_READY");
+  });
+
+  it("blocks a recovery trigger when the headless inventory service is absent", () => {
+    const snapshot = idleSnapshot();
+    const result = evaluateInventoryProductionReadiness({
+      ...snapshot,
+      launchd: { ...snapshot.launchd, servicePid: null }
+    });
+
+    expect(result.mode).toBe("idle_ready");
+    expect(result.eligibleForCoreCutover).toBe(true);
+    expect(result.eligibleForOneRecoveryTrigger).toBe(false);
+    expect(result.blockers).toContain("INVENTORY_SERVICE_UNAVAILABLE");
   });
 
   it("rejects an unrecognized status-file state", () => {

@@ -3,7 +3,7 @@ export interface InventoryProductionSnapshot {
   readonly databaseClockOffsetSeconds: number | null;
   readonly launchd: {
     readonly corePid: number | null;
-    readonly monitorPid: number | null;
+    readonly servicePid: number | null;
     readonly recoveryPid: number | null;
   };
   readonly statusFile: {
@@ -107,6 +107,9 @@ export function evaluateInventoryProductionReadiness(
 
   const eligibleForCoreCutover = blockers.length === 0;
   const triggerBlockers = [...blockers];
+  if (snapshot.launchd.servicePid === null) {
+    triggerBlockers.push("INVENTORY_SERVICE_UNAVAILABLE");
+  }
   if (!snapshot.core.browserReady) {
     triggerBlockers.push("BROWSER_BRIDGE_NOT_READY");
   }

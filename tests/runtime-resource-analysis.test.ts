@@ -42,7 +42,7 @@ function sample(
         rssKiB,
         elapsed: "01:00"
       },
-      "com.bpa.inventory-monitor": {
+      "com.bpa.inventory-service": {
         pid: 20,
         parentPid: 1,
         cpuPercent: 0.5,
@@ -372,8 +372,8 @@ describe("runtime resource analysis", () => {
       continuityComplete: true,
       corePidStable: true,
       coreRuntimeIdentityStable: true,
-      inventoryMonitorComplete: true,
-      inventoryMonitorPidStable: true,
+      inventoryServiceComplete: true,
+      inventoryServicePidStable: true,
       chromeProfileComplete: true,
       nodeAndChromeMeasurable: true,
       coreResidentMeasurable: true,
@@ -818,8 +818,8 @@ describe("runtime resource analysis", () => {
     const input = join(root, "samples.jsonl");
     const first = sample("2026-08-05T00:00:00.000Z", 10, 100, 4096);
     const last = sample("2026-08-06T00:00:00.000Z", 10, 120, 8192);
-    first.services["com.bpa.inventory-monitor"] = null;
-    last.services["com.bpa.inventory-monitor"] = null;
+    first.services["com.bpa.inventory-service"] = null;
+    last.services["com.bpa.inventory-service"] = null;
     writeFileSync(
       input,
       `${JSON.stringify(first)}\n${JSON.stringify(last)}\n`
@@ -839,23 +839,23 @@ describe("runtime resource analysis", () => {
     );
 
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain("inventory_monitor_samples_missing");
+    expect(result.stderr).toContain("inventory_service_samples_missing");
     expect(JSON.parse(result.stdout).conclusionGate).toMatchObject({
-      inventoryMonitorComplete: false,
-      inventoryMonitorPidStable: false,
+      inventoryServiceComplete: false,
+      inventoryServicePidStable: false,
       nodeAndChromeMeasurable: false,
       phaseZeroResourceMeasurementComplete: false,
-      blockers: ["inventory_monitor_samples_missing"]
+      blockers: ["inventory_service_samples_missing"]
     });
   });
 
-  it("fails closed when an inventory monitor sample is missing mid-window", () => {
+  it("fails closed when an inventory service sample is missing mid-window", () => {
     const root = mkdtempSync(join(tmpdir(), "bpa-runtime-analysis-"));
     const input = join(root, "samples.jsonl");
     const first = sample("2026-08-05T00:00:00.000Z", 10, 100, 4096);
     const middle = sample("2026-08-05T12:00:00.000Z", 10, 110, 6144);
     const last = sample("2026-08-06T00:00:00.000Z", 10, 120, 8192);
-    middle.services["com.bpa.inventory-monitor"] = null;
+    middle.services["com.bpa.inventory-service"] = null;
     writeFileSync(
       input,
       `${JSON.stringify(first)}\n${JSON.stringify(middle)}\n${JSON.stringify(last)}\n`
@@ -875,25 +875,25 @@ describe("runtime resource analysis", () => {
       )
     );
 
-    expect(result.services["com.bpa.inventory-monitor"]).toMatchObject({
+    expect(result.services["com.bpa.inventory-service"]).toMatchObject({
       availableSamples: 2,
       missingSamples: 1
     });
     expect(result.conclusionGate).toMatchObject({
-      inventoryMonitorComplete: false,
-      inventoryMonitorPidStable: false,
+      inventoryServiceComplete: false,
+      inventoryServicePidStable: false,
       nodeAndChromeMeasurable: false,
       phaseZeroResourceMeasurementComplete: false,
-      blockers: ["inventory_monitor_samples_missing"]
+      blockers: ["inventory_service_samples_missing"]
     });
   });
 
-  it("fails closed when the inventory monitor PID changes", () => {
+  it("fails closed when the inventory service PID changes", () => {
     const root = mkdtempSync(join(tmpdir(), "bpa-runtime-analysis-"));
     const input = join(root, "samples.jsonl");
     const first = sample("2026-08-05T00:00:00.000Z", 10, 100, 4096);
     const last = sample("2026-08-06T00:00:00.000Z", 10, 120, 8192);
-    last.services["com.bpa.inventory-monitor"]!.pid = 21;
+    last.services["com.bpa.inventory-service"]!.pid = 21;
     writeFileSync(
       input,
       `${JSON.stringify(first)}\n${JSON.stringify(last)}\n`
@@ -913,17 +913,17 @@ describe("runtime resource analysis", () => {
       )
     );
 
-    expect(result.services["com.bpa.inventory-monitor"]).toMatchObject({
+    expect(result.services["com.bpa.inventory-service"]).toMatchObject({
       missingSamples: 0,
       uniquePids: [20, 21],
       pidChanges: 1
     });
     expect(result.conclusionGate).toMatchObject({
-      inventoryMonitorComplete: true,
-      inventoryMonitorPidStable: false,
+      inventoryServiceComplete: true,
+      inventoryServicePidStable: false,
       nodeAndChromeMeasurable: false,
       phaseZeroResourceMeasurementComplete: false,
-      blockers: ["inventory_monitor_pid_changed"]
+      blockers: ["inventory_service_pid_changed"]
     });
   });
 

@@ -299,7 +299,7 @@ describe("runtime resource collector", () => {
     ];
     const services = {
       "com.bpa.core": { pid: 10 },
-      "com.bpa.inventory-monitor": { pid: 20 }
+      "com.bpa.inventory-service": { pid: 20 }
     };
     const metrics = {
       status: "available",

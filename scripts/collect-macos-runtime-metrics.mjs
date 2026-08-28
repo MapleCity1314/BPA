@@ -13,7 +13,7 @@ import { pathToFileURL } from "node:url";
 const SCHEMA = "bpa.runtime-resource-sample/2";
 const DEFAULT_LABELS = [
   "com.bpa.core",
-  "com.bpa.inventory-monitor",
+  "com.bpa.inventory-service",
   "com.bpa.inventory-chrome"
 ];
 
@@ -172,7 +172,7 @@ export function classifyRuntimeProcesses(processes, services, metrics) {
       : null;
   const rootPids = [
     services["com.bpa.core"]?.pid,
-    services["com.bpa.inventory-monitor"]?.pid
+    services["com.bpa.inventory-service"]?.pid
   ].filter((pid) => Number.isSafeInteger(pid) && pid > 0);
   const descendantPids = new Set();
   let changed = true;

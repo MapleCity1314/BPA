@@ -55,7 +55,7 @@ Core 的 v4 快照还从同一 SQLite 连接记录 active Run、Trigger、待处
 采样缺口或任一中途活动都会重置窗口。本代码候选尚未取得真实 marker，不能把单元测试当作
 灰度排空证据。v4 还记录与 Native Host 连接绑定的 PID，以及 Core 实际 `spawn()` 的 Team
 Worker PID、状态和未完成调用数；采集器与 OS 进程表交叉核对声明 PID，并只用脱敏进程字段
-汇总 Core/Inventory Monitor 进程树内的其他 Node 子进程，命令行不会进入证据。任一声明 PID
+汇总 Core/Inventory Service 进程树内的其他 Node 子进程，命令行不会进入证据。任一声明 PID
 缺失或任一样本不是恰好一个 Native Host 都会阻断阶段 0 门禁。本机当前没有 BPA launchd/
 进程，因此这些仍只是仓库形态与合成反例，不能当作公司 Mac 当前进程曲线或生产事实。灰度
 候选、预算与停止线见阶段 1 计划。
@@ -196,20 +196,20 @@ Bridge connected/ready，1 个活动 Session、2 个 `authenticated + ready` 页
 旧资源样本跨越 Core PID 切换，已经终止并保留；新 24 小时窗口从 Core PID 47140
 重新计时，同时采集同连接 `sqlite3_db_status64`。截至 2026-08-07 00:03，120 个样本
 覆盖约 1.99 小时，最大间隔 61 秒，无超过 120 秒的断点或缺失服务 PID；120/120 Core
-metrics 可用，Core、Chrome 和库存 Monitor PID 均未变化，Runtime identity 固定为
+metrics 可用，Core、Chrome 和库存 Service PID 均未变化，Runtime identity 固定为
 生产闭包，同连接 cache 使用值保持稳定。该窗口仍不足 24 小时，不能据此得出长期稳定
 或内存泄漏结论。
 
 2026-08-09 回读完整样本得到 1439 个连续样本，覆盖 23.9972 小时；最大间隔约 60.19
-秒，Core PID、Runtime identity、库存 Monitor PID、Chrome profile 和同连接 SQLite
+秒，Core PID、Runtime identity、库存 Service PID、Chrome profile 和同连接 SQLite
 page cache 均完整且稳定，RSS 起止与线性斜率没有显示单调爬升。但严格门禁仍只返回
 `minimum_duration_not_reached`：采集循环把每次命令耗时累积到间隔中，并在下一间隔会
 超过 deadline 时提前结束，最终比 24 小时少约 10 秒。因此这批证据只能判定“结构完整
 且接近 24 小时”，不能判定阶段 0 通过。当前候选改为以首个样本为绝对起点，并强制在
 deadline 当时或之后记录最后一个样本；虚拟时钟测试覆盖单次采集耗时存在时仍达到请求
-窗口。分析门禁同时要求 `com.bpa.inventory-monitor` 每个样本都可测且 PID 不变化；库存
-Monitor 整段或局部缺失时返回 `inventory_monitor_samples_missing`，中途重启时返回
-`inventory_monitor_pid_changed`，不能把两个 PID 的 RSS 拼接成一条平稳曲线，也不能只凭
+窗口。分析门禁同时要求 `com.bpa.inventory-service` 每个样本都可测且 PID 不变化；库存
+Service 整段或局部缺失时返回 `inventory_service_samples_missing`，中途重启时返回
+`inventory_service_pid_changed`，不能把两个 PID 的 RSS 拼接成一条平稳曲线，也不能只凭
 Core、Chrome 和 SQLite 完整就宣称阶段 0 三桶测量完成。该修复尚未部署，新的严格 24
 小时生产窗口仍待执行。
 
