@@ -723,14 +723,14 @@ describe("local Doudian business Workflow acceptance",() => {
 
     seedBrowser(store,[
       {
-        id:"doudian.alliance.shops.discover",version:"2.0.19",riskLevel:"R2",
+        id:"doudian.alliance.shops.discover",version:"2.0.20",riskLevel:"R2",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-alliance",adapterVersion:"2.0.19"
+        adapterId:"doudian-alliance",adapterVersion:"2.0.20"
       },
       {
-        id:"doudian.alliance.shop.retired-products.scan",version:"2.0.19",riskLevel:"R2",
+        id:"doudian.alliance.shop.retired-products.scan",version:"2.0.20",riskLevel:"R2",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-alliance",adapterVersion:"2.0.19"
+        adapterId:"doudian-alliance",adapterVersion:"2.0.20"
       },
       {
         id:"doudian.experience.shops.discover",version:"2.0.5",riskLevel:"R1",
@@ -767,7 +767,7 @@ describe("local Doudian business Workflow acceptance",() => {
     const retired = await runTrigger(service,store,{
       id:"doudian-retired-local",appId:"retired-products-monitor",
       workflowId:"doudian.alliance-retired-products-monitor",
-      workflowVersion:"3.0.21",workflowInput:{
+      workflowVersion:"3.0.22",workflowInput:{
         maxShops:100,knownShops:[{ id:"10001",name:"测试店铺一" }]
       }
     });
@@ -1227,21 +1227,21 @@ describe("local Doudian business Workflow acceptance",() => {
     );
     seedBrowser(store,[
       {
-        id:"doudian.alliance.shops.discover",version:"2.0.19",riskLevel:"R2",
+        id:"doudian.alliance.shops.discover",version:"2.0.20",riskLevel:"R2",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-alliance",adapterVersion:"2.0.19"
+        adapterId:"doudian-alliance",adapterVersion:"2.0.20"
       },
       {
-        id:"doudian.alliance.shop.retired-products.scan",version:"2.0.19",riskLevel:"R2",
+        id:"doudian.alliance.shop.retired-products.scan",version:"2.0.20",riskLevel:"R2",
         permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-        adapterId:"doudian-alliance",adapterVersion:"2.0.19"
+        adapterId:"doudian-alliance",adapterVersion:"2.0.20"
       }
     ]);
 
     const result = await runTrigger(service,store,{
       id:"doudian-retired-partial",appId:"retired-products-monitor",
       workflowId:"doudian.alliance-retired-products-monitor",
-      workflowVersion:"3.0.21",workflowInput:{
+      workflowVersion:"3.0.22",workflowInput:{
         maxShops:100,knownShops:[{ id:"10001",name:"测试店铺一" }]
       }
     });
@@ -1299,19 +1299,19 @@ describe("local Doudian business Workflow acceptance",() => {
       "workflows/examples/doudian.alliance-retired-products-monitor.workflow.yaml"
     );
     seedBrowser(store,[{
-      id:"doudian.alliance.shops.discover",version:"2.0.19",riskLevel:"R2",
+      id:"doudian.alliance.shops.discover",version:"2.0.20",riskLevel:"R2",
       permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-      adapterId:"doudian-alliance",adapterVersion:"2.0.19"
+      adapterId:"doudian-alliance",adapterVersion:"2.0.20"
     },{
-      id:"doudian.alliance.shop.retired-products.scan",version:"2.0.19",riskLevel:"R2",
+      id:"doudian.alliance.shop.retired-products.scan",version:"2.0.20",riskLevel:"R2",
       permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-      adapterId:"doudian-alliance",adapterVersion:"2.0.19"
+      adapterId:"doudian-alliance",adapterVersion:"2.0.20"
     }]);
 
     const result = await runTrigger(service,store,{
       id:"doudian-retired-active-no-id",appId:"retired-products-monitor",
       workflowId:"doudian.alliance-retired-products-monitor",
-      workflowVersion:"3.0.21",workflowInput:{
+      workflowVersion:"3.0.22",workflowInput:{
         maxShops:100,knownShops:[{ id:"10001",name:"测试店铺一" }]
       }
     });
@@ -1355,18 +1355,18 @@ describe("local Doudian business Workflow acceptance",() => {
       "workflows/examples/doudian.alliance-retired-products-monitor.workflow.yaml"
     );
     seedBrowser(store,[{
-      id:"doudian.alliance.shops.discover",version:"2.0.19",riskLevel:"R2",
+      id:"doudian.alliance.shops.discover",version:"2.0.20",riskLevel:"R2",
       permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-      adapterId:"doudian-alliance",adapterVersion:"2.0.19"
+      adapterId:"doudian-alliance",adapterVersion:"2.0.20"
     },{
-      id:"doudian.alliance.shop.retired-products.scan",version:"2.0.19",riskLevel:"R2",
+      id:"doudian.alliance.shop.retired-products.scan",version:"2.0.20",riskLevel:"R2",
       permissions:["browser.dom.read","browser.dom.write","browser.tabs.read","browser.tabs.navigate"],
-      adapterId:"doudian-alliance",adapterVersion:"2.0.19"
+      adapterId:"doudian-alliance",adapterVersion:"2.0.20"
     }]);
     const result = await runTrigger(service,store,{
       id:"doudian-retired-blocked-skip",appId:"retired-products-monitor",
       workflowId:"doudian.alliance-retired-products-monitor",
-      workflowVersion:"3.0.21",workflowInput:{
+      workflowVersion:"3.0.22",workflowInput:{
         maxShops:100,knownShops:[{ id:"10001",name:"测试店铺一" }]
       }
     });

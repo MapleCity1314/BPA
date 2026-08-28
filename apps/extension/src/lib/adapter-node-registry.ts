@@ -575,12 +575,20 @@ const scanAllianceShop: AdapterNodeHandler = async (input, context) => {
   try {
     await driver.cleanupShopTabs();
     await driver.switchShop(sourceShop);
-  } catch {
+  } catch (restoreError) {
     // A failed restore invalidates the browser context for every remaining
     // shop. It must take precedence over the original collection error so
     // the Workflow stops with the correct blocking recovery instruction.
+    const diagnostic =
+      restoreError instanceof AllianceRetiredDriverError
+        ? restoreError.diagnostic
+        : undefined;
     return allianceErrorResponse(
-      new AllianceRetiredDriverError("SHOP_CONTEXT_RESTORE_FAILED"),
+      new AllianceRetiredDriverError(
+        "SHOP_CONTEXT_RESTORE_FAILED",
+        [],
+        diagnostic
+      ),
       "ALLIANCE_STAGE_FAILED",
       ALLIANCE_SCAN_ERRORS
     );

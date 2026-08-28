@@ -688,9 +688,21 @@ describe("Adapter Node registry", () => {
 
   it("reports source-shop restoration failure ahead of an earlier scan error", async () => {
     driver.openPromotion.mockRejectedValueOnce(new Error("PAGE_MISMATCH"));
-    driver.cleanupShopTabs.mockRejectedValueOnce(
-      new Error("ALLIANCE_TAB_TIMEOUT")
-    );
+    driver.switchShop
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(
+        new AllianceRetiredDriverError(
+          "SHOP_IDENTITY_UNCONFIRMED",
+          [],
+          {
+            phase: "resolve-shop",
+            shopOrdinal: 4,
+            switchResponse: "recoverable-error",
+            navigationIdentity: "unavailable",
+            restoreResult: "not-required"
+          }
+        )
+      );
 
     const result = await executeRegisteredAdapterNode(
       "doudian.alliance.shop.retired-products.scan",
@@ -716,6 +728,11 @@ describe("Adapter Node registry", () => {
       ok: false,
       error: {
         code: "SHOP_CONTEXT_RESTORE_FAILED",
+        message:
+          "safe:SHOP_CONTEXT_RESTORE_FAILED " +
+          "[phase=resolve-shop;shop_ordinal=4;" +
+          "switch_response=recoverable-error;" +
+          "navigation_identity=unavailable;restore_result=not-required]",
         retryable: false
       },
       riskSignals: [

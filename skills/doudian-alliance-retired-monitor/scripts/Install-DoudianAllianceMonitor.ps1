@@ -207,12 +207,12 @@ $RequiredAssets = @(
   @{
     type = "node"
     file = "doudian.alliance.shops.discover.node.yaml"
-    sha256 = "e43256686c74dbf8d9c6ed11fecd7e5dfe22dfae73c8e5557e2c13d547c53318"
+    sha256 = "340f0a316925b853e5bf6d35a14f309b39de1d613f5455feeac5da54ba6e507c"
   },
   @{
     type = "node"
     file = "doudian.alliance.shop.retired-products.scan.node.yaml"
-    sha256 = "c45249d7d91b8f9c0c42de699283b1e83bfa3181d9a2875b73bc717f3ee643ef"
+    sha256 = "53159fe80ee0bec65ec6215108e4e9c81b3070f152d9e90dda9dbdbbbc403756"
   },
   @{
     type = "node"
@@ -232,12 +232,12 @@ $RequiredAssets = @(
   @{
     type = "adapter"
     file = "doudian-alliance.adapter.yaml"
-    sha256 = "a691abde106177495c549c4e1f33180ece69dc4fcdb30f3b1be25af06afd94d7"
+    sha256 = "fd7031d587bfa52fa8df8f2d5f4ad765861108b99528c7c5f5553f8028c9fd62"
   },
   @{
     type = "workflow"
     file = "doudian.alliance-retired-products-monitor.workflow.yaml"
-    sha256 = "da0d7b2d3dabeb79f12517216e45be0cc1f41988f11930c7b8f4fdeddfecf382"
+    sha256 = "2b26ce97d7bcac0b40aaa40ceed2c70c7b9e9c0dc4bb0ec43b2d8a09ec3b8a78"
   }
 )
 foreach ($Asset in $RequiredAssets) {
@@ -379,7 +379,7 @@ $CapableSessions = @(
     -not $DisconnectedAt -and $CapabilityDigest -and
     @($Capabilities | Where-Object {
       $_.nodeId -eq "doudian.alliance.shops.discover" -and
-      $_.nodeVersion -eq "2.0.19"
+      $_.nodeVersion -eq "2.0.20"
     }).Count -gt 0
   }
 )
